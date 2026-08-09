@@ -1,0 +1,11 @@
+{
+  "name": "plex-db-ex-docs",
+  "private": true,
+  "scripts": {
+    "docs:dev": "vitepress dev docs --port 5193"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "vitepress": "^1.6.4"
+  }
+}

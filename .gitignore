@@ -1,0 +1,13 @@
+.env
+*.local.*
+data/
+tmp/
+node_modules/
+docs/.vitepress/cache
+docs/.vitepress/dist
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
