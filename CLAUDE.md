@@ -58,8 +58,9 @@ Keep these in sync as you work:
 | `docs/roadmap.md` | Direction shifts, something ships, or a question gets answered |
 | `docs/file-map.md` | Major files or folders are added, removed, or moved |
 
-Don't write new top-level planning or phase docs in `docs/` — file an issue instead.
-`roadmap.md` is the only forward-looking doc.
+Don't write new top-level planning or phase docs in `docs/` — file an issue on
+[the tracker](https://github.com/McBrideMusings/plex-db-ex/issues) instead. `roadmap.md` is the
+only forward-looking doc.
 
 ## Tasks
 

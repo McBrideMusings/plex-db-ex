@@ -40,6 +40,11 @@ export default defineConfig({
       ],
     },
     search: { provider: 'local' },
+    socialLinks: [{ icon: 'github', link: 'https://github.com/McBrideMusings/plex-db-ex' }],
+    editLink: {
+      pattern: 'https://github.com/McBrideMusings/plex-db-ex/edit/main/docs/:path',
+      text: 'Edit this page on GitHub',
+    },
   },
   vite: {
     server: { host: '0.0.0.0', port: 5193 },
