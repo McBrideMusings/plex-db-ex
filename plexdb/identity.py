@@ -88,13 +88,23 @@ def derive_item_id(
         canonical: the already-canonicalised path, used only when no recognised
             namespace is present.
 
+    An empty or whitespace-only value is not an identity — it is treated as
+    absent, so that namespace is skipped and the next one in priority order is
+    considered. A value that is otherwise usable is used verbatim: surrounding
+    whitespace is not trimmed, so `" tt1375666 "` and `"tt1375666"` remain
+    distinct ids ([issue #17](https://github.com/McBrideMusings/plex-db-ex/issues/17)).
+
     Returns:
-        `"{namespace}:{value}"` for the strongest namespace present — e.g.
-        `imdb:tt1375666` — else `"fs:"` and the path hash as 16 hex digits.
+        `"{namespace}:{value}"` for the strongest namespace with a usable
+        value — e.g. `imdb:tt1375666` — else `"fs:"` and the path hash as 16
+        hex digits.
     """
     pairs = list(external_ids)
     for namespace in PRIORITY:
         for ns, value in pairs:
-            if ns == namespace:
-                return f"{namespace}:{value}"
+            if ns != namespace:
+                continue
+            if not value.strip():
+                continue
+            return f"{namespace}:{value}"
     return f"fs:{fnv1a_64(canonical):016x}"
