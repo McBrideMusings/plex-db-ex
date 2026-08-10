@@ -119,6 +119,31 @@ class LivePlexClient:
         metadata: list[dict[str, Any]] = container.get("Metadata", [])
         return metadata
 
+    def collections(self, section_key: str) -> list[dict[str, Any]]:
+        """Every collection Plex lists for one section, smart and regular alike.
+
+        The `smart` flag Plex returns — an auto-generated saved search versus
+        a set someone actually built — is a caller's decision, not filtered
+        here. Confirmed live against a real server: `smart` comes back as the
+        string `"1"` on a saved search and is absent (`None`) on a regular
+        collection, never a JSON boolean.
+        """
+        container = self._get(f"/library/sections/{section_key}/collections")
+        metadata: list[dict[str, Any]] = container.get("Metadata", [])
+        return metadata
+
+    def collection_children(self, collection_key: str) -> list[dict[str, Any]]:
+        """The member records of one collection, addressed by its own `ratingKey`.
+
+        This is the same `/library/metadata/<ratingKey>/children` endpoint
+        Plex uses for a show's seasons, since a collection is a container like
+        any other. Confirmed live: each member record carries its own
+        `ratingKey`, resolvable through `plex_items`.
+        """
+        container = self._get(f"/library/metadata/{collection_key}/children")
+        metadata: list[dict[str, Any]] = container.get("Metadata", [])
+        return metadata
+
     def history(self, *, since_viewed_at: int | None = None) -> list[dict[str, Any]]:
         """Every history event at or newer than `since_viewed_at`, newest
         first.
