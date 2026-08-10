@@ -23,6 +23,7 @@ plex-db-ex/
 │   ├── plex_client.py     read-only Plex HTTP client behind a PlexSource protocol
 │   ├── reconcile_etv.py   compares item_id against etv-station's entry_id, joined by Plex rating key; read-only on both stores, reports and never fixes
 │   ├── tmdb_client.py     read-only TMDB client (keywords, recommendations, similar) behind a TMDbSource protocol
+│   ├── tmdb_common.py     media_type_for / is_stale / MAX_CONSECUTIVE_FAILURES / DEFAULT_STALE_DAYS shared by enrich_tmdb.py and tmdb_edges.py
 │   ├── tmdb_edges.py      TMDB recommendations/similar sweep: two edge types, replace-wholesale per (from_id, edge_type), cached via a tmdb_edges enrichment cursor
 │   ├── walk.py            the library walk: Plex sections into items, external_ids, plex_items
 │   ├── schema.py          the DDL and the append-only migration list
