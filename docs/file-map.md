@@ -5,6 +5,9 @@ plex-db-ex/
 ├── CLAUDE.md              project rules — the ones easy to violate by accident
 ├── admin.toml             task runner manifest (admin build | dev | test | vet | …)
 ├── .env.example           every variable, with placeholders; real values live in .env
+├── Cargo.toml             Rust workspace manifest — members: crates/plexdb-reader
+├── crates/                the Rust workspace
+│   └── plexdb-reader/     read-only typed Rust reader over plexdb.db (ADR-0003): enrichment, edges, taste vector; opened SQLITE_OPEN_READ_ONLY and schema-version gated. No collection-membership accessor yet — that table is not built. Tested against a fixture store built by `plexdb init`; no live Plex, no network, no consumer repo
 ├── plexdb/                the Python package — the only writer of plexdb.db
 │   ├── cli.py             the `plexdb` command line; discovers and registers each module under commands/, holds no command itself
 │   ├── commands/          one module per subcommand; a new command is one new file here, no edit to cli.py
