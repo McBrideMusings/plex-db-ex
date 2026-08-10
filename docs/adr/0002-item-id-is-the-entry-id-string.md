@@ -27,3 +27,18 @@ sides instead of one.
 
 `external_ids` is also where a Trakt slug, a Letterboxd URL, and a resolved Reddit free-text
 title land, which is the mapping `curator/resolve/` maintains today.
+
+## Amendment: an empty or whitespace-only GUID value is absent
+
+A GUID value that is empty or whitespace-only is not an identity — `imdb:` is the absence of
+one wearing a prefix, not a value. Derivation skips such a value, considers the next namespace
+in priority order, and reaches the path-hash fallback when nothing usable remains. A value that
+is otherwise usable is still used verbatim: surrounding whitespace is not trimmed, so
+`" tt1375666 "` and `"tt1375666"` remain distinct ids
+([issue #17](https://github.com/McBrideMusings/plex-db-ex/issues/17)).
+
+Before this amendment, a present-but-empty GUID formatted straight through (`imdb:`), so two
+unrelated titles that both carried an empty IMDb GUID collided onto the same `item_id`. Both
+`plex-db-ex` (`plexdb/identity.py`) and `etv-station`
+(`crates/etv-station/src/catalog/identity.rs`) implement this rule identically, checked against
+the shared fixture (ADR-0006).

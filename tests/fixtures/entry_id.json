@@ -82,6 +82,30 @@
       "external_ids": [],
       "canonical_path": "movies/amélie.mkv",
       "expect": "fs:6fc7bb383bcb49ef"
+    },
+    {
+      "name": "an empty guid value is treated as absent, so the next namespace wins",
+      "external_ids": [["imdb", ""], ["tmdb", "27205"]],
+      "canonical_path": "movies/inception.mkv",
+      "expect": "tmdb:27205"
+    },
+    {
+      "name": "a whitespace-only guid value is treated as absent, so the next namespace wins",
+      "external_ids": [["imdb", "   "], ["tmdb", "27205"]],
+      "canonical_path": "movies/inception.mkv",
+      "expect": "tmdb:27205"
+    },
+    {
+      "name": "a title whose only guid is empty falls through to the path hash",
+      "external_ids": [["imdb", ""]],
+      "canonical_path": "movies/blank-guid.mkv",
+      "expect": "fs:6c4178a0a255eaf1"
+    },
+    {
+      "name": "surrounding whitespace on an otherwise-usable value is not trimmed",
+      "external_ids": [["imdb", " tt1375666 "]],
+      "canonical_path": "movies/inception.mkv",
+      "expect": "imdb: tt1375666 "
     }
   ],
 
