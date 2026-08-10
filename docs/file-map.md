@@ -11,6 +11,7 @@ plex-db-ex/
 │   ├── errors.py          the errors a user is meant to see, as one `error: …` line
 │   ├── identity.py        item_id derivation — mirrored in etv-station, guarded by a fixture
 │   ├── enrich_tmdb.py     TMDB keyword sweep: namespaced, cached, staleness-gated
+│   ├── plays.py           watch-history ingest: Plex history into plays, incrementally
 │   ├── plex_client.py     read-only Plex HTTP client behind a PlexSource protocol
 │   ├── tmdb_client.py     read-only TMDB client (keywords) behind a TMDbSource protocol
 │   ├── walk.py            the library walk: Plex sections into items, external_ids, plex_items
