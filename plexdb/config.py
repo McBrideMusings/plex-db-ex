@@ -58,6 +58,13 @@ class Config:
     #: re-fetch. Documented default sits mid-range of the 30-60 day window
     #: `docs/schema.md` sets for every external source.
     tmdb_keywords_stale_days: int
+    #: Path to `etv-station`'s `catalog.db`, opened read-only by `plexdb
+    #: reconcile-etv` (issue #5) to compare `item_id` against `entry_id`.
+    #: `None` when unset — like `snapshot_path`, this carries no default that
+    #: points anywhere real, so a person is never silently pointed at
+    #: whichever checkout happens to sit next to this one; the check that
+    #: it's present lives at the point of use, the `reconcile-etv` command.
+    etv_catalog_path: Path | None
 
     @classmethod
     def from_env(cls, *, env_file: Path | None = None) -> Config:
@@ -84,6 +91,8 @@ class Config:
                 ) from err
         else:
             stale_days = _DEFAULT_TMDB_KEYWORDS_STALE_DAYS
+        etv_catalog_raw = os.environ.get("ETV_CATALOG_PATH", "").strip()
+        etv_catalog_path = Path(etv_catalog_raw).expanduser() if etv_catalog_raw else None
         return cls(
             store_path=Path(raw).expanduser(),
             snapshot_path=snapshot_path,
@@ -92,4 +101,5 @@ class Config:
             source_roots=source_roots,
             tmdb_api_key=os.environ.get("TMDB_API_KEY", "").strip(),
             tmdb_keywords_stale_days=stale_days,
+            etv_catalog_path=etv_catalog_path,
         )
