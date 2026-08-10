@@ -24,7 +24,7 @@ the measurement that proves it, and the reason the rest of this milestone exists
 Milestone: **Edges, history, and the first consumer**. Deliberately sketchy — what
 [#5](https://github.com/McBrideMusings/plex-db-ex/issues/5) finds changes several of their shapes.
 
-- [ ] [#6](https://github.com/McBrideMusings/plex-db-ex/issues/6) Affinity edges from TMDB recommendations and similar
+- [x] [#6](https://github.com/McBrideMusings/plex-db-ex/issues/6) Affinity edges from TMDB recommendations and similar
 - [ ] [#7](https://github.com/McBrideMusings/plex-db-ex/issues/7) Local edges from Plex collection co-membership
 - [x] [#8](https://github.com/McBrideMusings/plex-db-ex/issues/8) Ingest watch history from Plex into `plays`
 - [ ] [#9](https://github.com/McBrideMusings/plex-db-ex/issues/9) Tautulli history adapter: IP, completion, paused time

@@ -8,6 +8,7 @@ plex-db-ex/
 ├── plexdb/                the Python package — the only writer of plexdb.db
 │   ├── cli.py             the `plexdb` command line; discovers and registers each module under commands/, holds no command itself
 │   ├── commands/          one module per subcommand; a new command is one new file here, no edit to cli.py
+│   │   ├── enrich_tmdb_edges.py
 │   │   ├── enrich_tmdb_keywords.py
 │   │   ├── ingest_plays.py
 │   │   ├── init.py
@@ -19,7 +20,8 @@ plex-db-ex/
 │   ├── enrich_tmdb.py     TMDB keyword sweep: namespaced, cached, staleness-gated, tolerant of a failing title (aborts after 3 in a row)
 │   ├── plays.py           watch-history ingest: Plex history into plays, incrementally
 │   ├── plex_client.py     read-only Plex HTTP client behind a PlexSource protocol
-│   ├── tmdb_client.py     read-only TMDB client (keywords) behind a TMDbSource protocol
+│   ├── tmdb_client.py     read-only TMDB client (keywords, recommendations, similar) behind a TMDbSource protocol
+│   ├── tmdb_edges.py      TMDB recommendations/similar sweep: two edge types, replace-wholesale per (from_id, edge_type), cached via a tmdb_edges enrichment cursor
 │   ├── walk.py            the library walk: Plex sections into items, external_ids, plex_items
 │   ├── schema.py          the DDL and the append-only migration list
 │   └── store.py           opening the store, and publishing the read-only snapshot consumers open
