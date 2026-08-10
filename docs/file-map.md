@@ -6,6 +6,12 @@ plex-db-ex/
 ├── admin.toml             task runner manifest (admin build | dev | test | vet | …)
 ├── .env.example           every variable, with placeholders; real values live in .env
 ├── plexdb/                the Python package — the only writer of plexdb.db
+│   ├── cli.py             the `plexdb` command line; subcommands land here as slices ship
+│   ├── config.py          settings from .env; never a default for a URL or a token
+│   ├── errors.py          the errors a user is meant to see, as one `error: …` line
+│   ├── schema.py          the DDL and the append-only migration list
+│   └── store.py           opening the store, for writing and read-only
+├── tests/                 pytest; no test reaches the network
 ├── data/                  plexdb.db lives here (gitignored)
 └── docs/
     ├── index.md           docs home
