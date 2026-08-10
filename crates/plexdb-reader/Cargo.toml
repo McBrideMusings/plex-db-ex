@@ -1,0 +1,16 @@
+[package]
+name = "plexdb-reader"
+version = "0.1.0"
+edition = "2024"
+description = "Read-only typed access to a plexdb.db store (ADR-0003)."
+
+[dependencies]
+rusqlite = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lib]
+name = "plexdb_reader"
+path = "src/lib.rs"
