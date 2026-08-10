@@ -38,7 +38,11 @@ is otherwise usable is still used verbatim: surrounding whitespace is not trimme
 ([issue #17](https://github.com/McBrideMusings/plex-db-ex/issues/17)).
 
 Before this amendment, a present-but-empty GUID formatted straight through (`imdb:`), so two
-unrelated titles that both carried an empty IMDb GUID collided onto the same `item_id`. Both
-`plex-db-ex` (`plexdb/identity.py`) and `etv-station`
-(`crates/etv-station/src/catalog/identity.rs`) implement this rule identically, checked against
-the shared fixture (ADR-0006).
+unrelated titles that both carried an empty IMDb GUID collided onto the same `item_id`.
+
+**The two implementations are knowingly divergent until `etv-station` catches up.** This repo
+applies the rule as of `plexdb/identity.py`; the Rust half is
+[etv-station#184](https://github.com/McBrideMusings/etv-station/issues/184) and has not landed.
+The shared fixture (ADR-0006) has moved here, so that repo's recorded hash is now stale by
+design — the guard going red is the signal to land the other half, not a fault. Nothing has
+walked a real library yet, so no persisted id is affected by the gap.
