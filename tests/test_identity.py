@@ -22,7 +22,7 @@ FIXTURE = Path(__file__).parent / "fixtures" / "entry_id.json"
 #: one copy of the file without the other turns BOTH suites red — which is the
 #: whole mechanism (ADR-0006). Updating this constant alone defeats it: change
 #: the fixture in both repos, then update the hash in both.
-FIXTURE_SHA256 = "73fd792cb8e84a88fd577f4d7c0966db1c0240b88db7c939f54c9374fdbb4daf"
+FIXTURE_SHA256 = "e2bb9bb35e9d33924bf2bf0c48fffd84c8704da6bc3bdd7f6cf971b3a1adcb88"
 
 
 def _fixture() -> dict[str, Any]:
