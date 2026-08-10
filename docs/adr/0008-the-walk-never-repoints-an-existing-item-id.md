@@ -30,6 +30,32 @@ not to produce.
   searchable — satisfying both halves of issue #3's requirement ("keeps its identity ... rather
   than silently forking"), and counted (`identity_kept_on_guid_change`) rather than silent.
 
+## Amendment: an existing identity is found by external id first, then by rating key
+
+The original rule looked up only the **rating key**. `etv-station` refuses to repoint too, but
+looks up **each external id** in turn (`crates/etv-station/src/catalog/ingest/plex.rs`,
+`resolve_existing`), falling back to a path match. Same intent, different key — and they disagree
+in two real situations:
+
+- **A re-match replaces the GUID set wholesale, rating key unchanged.** Keying on the rating key
+  keeps the identity; keying on external ids does not, and mints a new one.
+- **A remove-and-re-add changes the rating key, GUIDs intact.** Keying on external ids keeps the
+  identity; keying on the rating key does not, and leaves no record that the two rating keys are
+  the same title.
+
+Neither raises. The symptom is a join returning nothing — the failure ADR-0002 and the shared
+fixture exist to prevent, one level up, in storage policy rather than derivation. The fixture
+cannot catch it: both sides pass every case in it.
+
+**Resolved: try both, external id first, then rating key.** External id is the stronger signal and
+survives rating-key churn; the rating key catches the wholesale re-match that external ids miss.
+This is a strict superset of `etv-station`'s rule, so the two agree everywhere that repo has an
+opinion, and this store simply retains identity in one case it does not.
+
+Matching on external id means two Plex rating keys sharing an external id resolve to one identity.
+That is already this store's behaviour — a title with two copies in the library already maps two
+rating keys to one `item_id` — so this extends an existing property rather than introducing one.
+
 ## Consequences
 
 An `item_id` can stop matching what `derive_item_id` would produce from a title's *current* GUID
