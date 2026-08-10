@@ -28,8 +28,8 @@ plex-db-ex/
 │   ├── local_edges.py     collection co-membership sweep: replace-wholesale, no staleness, Plex's smart collections excluded
 │   ├── plays.py           watch-history ingest: Plex history into plays, incrementally, plus the Tautulli match that enriches them
 │   ├── clusters.py        clusters a shared account's plays into latent users by fingerprint, and scores keyword overlap between them over show/movie units — a show counts once however many episodes were watched (issue #25); read-only, persists nothing
-│   ├── tautulli_client.py read-only Tautulli client (get_history) behind a TautulliSource protocol
-│   ├── plex_client.py     read-only Plex HTTP client behind a PlexSource protocol
+│   ├── tautulli_client.py read-only Tautulli client (get_history, get_users) behind TautulliSource/TautulliUserSource protocols
+│   ├── plex_client.py     read-only Plex HTTP client behind PlexSource/PlexAccountSource protocols
 │   ├── reconcile_etv.py   compares item_id against etv-station's entry_id, joined by Plex rating key; read-only on both stores, reports and never fixes
 │   ├── tmdb_client.py     read-only TMDB client (keywords, recommendations, similar) behind a TMDbSource protocol
 │   ├── tmdb_common.py     media_type_for / is_stale / MAX_CONSECUTIVE_FAILURES / DEFAULT_STALE_DAYS shared by enrich_tmdb.py and tmdb_edges.py
