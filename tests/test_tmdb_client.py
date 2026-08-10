@@ -96,3 +96,31 @@ def test_an_error_response_never_leaks_the_api_key_into_the_raised_message() -> 
         client.keywords("155", "movie")
 
     assert "the-real-secret-key" not in str(exc_info.value)
+
+
+def test_the_api_key_never_reaches_a_traceback() -> None:
+    """The message was already clean; the exception *chain* was not.
+
+    `raise ... from err` keeps httpx's own error as `__cause__`, and httpx
+    formats its message with the full request URL — query string included. So
+    the key stayed reachable through any traceback: an unhandled crash, a
+    logger with `exc_info`, a CI failure dump. Severing the chain is what keeps
+    it out, and only a traceback-level assertion catches a regression.
+    """
+    import traceback
+
+    key = "SECRET-KEY-DO-NOT-LEAK"
+    http = httpx.Client(
+        transport=httpx.MockTransport(lambda _request: httpx.Response(401, json={}))
+    )
+    client = LiveTMDbClient(key, http=http)
+
+    try:
+        client.keywords("155", "movie")
+    except TMDbError:
+        rendered = traceback.format_exc()
+    else:  # pragma: no cover - the 401 above always raises
+        raise AssertionError("expected TMDbError")
+
+    assert key not in rendered
+    assert "api_key=" not in rendered

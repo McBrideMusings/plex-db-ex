@@ -56,17 +56,25 @@ class LiveTMDbClient:
         # formats its message as `"... for url '{response.url}'"`, and that
         # URL includes the query string, so stringifying the exception itself
         # would print the live API key to stderr on any 401/429/5xx.
+        #
+        # `from None`, not `from err`, for the same reason one level deeper: a
+        # chained cause travels with the exception, so `raise ... from err`
+        # leaves httpx's key-bearing message reachable through `__cause__` and
+        # printed by any traceback — an unhandled crash, a logger with
+        # `exc_info`, a CI failure dump. Severing the chain is what actually
+        # keeps the key out; the status code and URL below carry everything the
+        # message needed from it anyway.
         url = f"{_BASE}/{path}/{tmdb_id}/keywords"
         try:
             resp = self._http.get(url, params={"api_key": self._key})
         except httpx.HTTPError as err:
-            raise TMDbError(f"cannot reach TMDB at {url}: {type(err).__name__}") from err
+            raise TMDbError(f"cannot reach TMDB at {url}: {type(err).__name__}") from None
         if resp.status_code == 404:
             return []
         try:
             resp.raise_for_status()
-        except httpx.HTTPError as err:
-            raise TMDbError(f"TMDB returned {resp.status_code} for {url}") from err
+        except httpx.HTTPError:
+            raise TMDbError(f"TMDB returned {resp.status_code} for {url}") from None
         body: dict[str, Any] = resp.json()
         raw = body.get("keywords") if path == "movie" else body.get("results")
         return [str(entry["name"]) for entry in (raw or []) if entry.get("name")]
