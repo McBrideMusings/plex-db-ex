@@ -32,6 +32,17 @@ class Config:
     #: default that points anywhere real, so a consumer can never be pointed
     #: at a path nobody chose.
     snapshot_path: Path | None
+    #: The Plex server `plexdb walk` reads from (ADR-0005). Empty when unset
+    #: — `init` and `publish` don't need it, so the check that it is present
+    #: lives at the point of use (the `walk` command), not here.
+    plex_url: str
+    plex_token: str
+    #: Mount roots to strip from a Plex playback path when deriving a
+    #: path-based item_id for a title with no recognised external GUID
+    #: (`identity.canonical_path`). Comma-separated in `PLEX_SOURCE_ROOTS`;
+    #: empty by default, which means no stripping — always a safe default,
+    #: never a wrong one.
+    source_roots: tuple[str, ...]
 
     @classmethod
     def from_env(cls, *, env_file: Path | None = None) -> Config:
@@ -46,4 +57,12 @@ class Config:
             raise ConfigError("PLEXDB_PATH is set but empty; unset it or give it a path")
         snapshot_raw = os.environ.get("PLEXDB_SNAPSHOT_PATH", "").strip()
         snapshot_path = Path(snapshot_raw).expanduser() if snapshot_raw else None
-        return cls(store_path=Path(raw).expanduser(), snapshot_path=snapshot_path)
+        source_roots_raw = os.environ.get("PLEX_SOURCE_ROOTS", "")
+        source_roots = tuple(root.strip() for root in source_roots_raw.split(",") if root.strip())
+        return cls(
+            store_path=Path(raw).expanduser(),
+            snapshot_path=snapshot_path,
+            plex_url=os.environ.get("PLEX_URL", "").strip(),
+            plex_token=os.environ.get("PLEX_TOKEN", "").strip(),
+            source_roots=source_roots,
+        )

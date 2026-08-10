@@ -1,6 +1,6 @@
 """The `plexdb` command line.
 
-Subcommands are added as slices land. Today there are two: `init` and `publish`.
+Subcommands are added as slices land. Today there are three: `init`, `walk`, and `publish`.
 """
 
 from __future__ import annotations
@@ -13,8 +13,11 @@ from collections.abc import Sequence
 from . import __version__, schema
 from .config import Config
 from .errors import ConfigError, PlexdbError
+from .plex_client import LivePlexClient
 from .store import init as init_store
+from .store import open_store
 from .store import publish as publish_snapshot
+from .walk import walk_all
 
 
 def _cmd_init(_args: argparse.Namespace) -> int:
@@ -27,6 +30,26 @@ def _cmd_init(_args: argparse.Namespace) -> int:
         print(f"created store at schema v{now}: {where}")
     else:
         print(f"migrated store v{was} -> v{now}: {where}")
+    return 0
+
+
+def _cmd_walk(args: argparse.Namespace) -> int:
+    config = Config.from_env()
+    if not config.plex_url or not config.plex_token:
+        raise ConfigError("PLEX_URL and PLEX_TOKEN must be set in .env to walk the library")
+    client = LivePlexClient(config.plex_url, config.plex_token)
+    with open_store(config.store_path) as conn:
+        stats = walk_all(conn, client, config.source_roots, section_key=args.section)
+    print(
+        f"walked {stats.sections_walked} section(s): "
+        f"{stats.titles_seen} title(s) seen, {stats.titles_written} written, "
+        f"{stats.fallback_to_path} fell back to a path-derived id"
+    )
+    if stats.identity_kept_on_guid_change:
+        print(
+            f"{stats.identity_kept_on_guid_change} title(s) had a changed GUID set "
+            "since the last walk; kept their existing item_id rather than forking a new row"
+        )
     return 0
 
 
@@ -59,6 +82,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="create the store and apply the schema; safe to re-run",
     )
     init_parser.set_defaults(func=_cmd_init)
+
+    walk_parser = sub.add_parser(
+        "walk",
+        help="walk the Plex library into items, external_ids, and the rating-key map; "
+        "safe to re-run",
+    )
+    walk_parser.add_argument(
+        "--section",
+        metavar="KEY",
+        default=None,
+        help="walk only this section key; default: every movie- and show-shaped section",
+    )
+    walk_parser.set_defaults(func=_cmd_walk)
 
     publish_parser = sub.add_parser(
         "publish",

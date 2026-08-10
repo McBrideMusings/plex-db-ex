@@ -5,6 +5,7 @@ description = "Extended Plex metadata and affinity store"
 requires-python = ">=3.11"
 dependencies = [
     "python-dotenv>=1.0",
+    "httpx>=0.27",
 ]
 
 [project.scripts]
