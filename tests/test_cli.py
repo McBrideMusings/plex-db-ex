@@ -97,3 +97,46 @@ def test_config_rejects_a_blank_path(monkeypatch: pytest.MonkeyPatch) -> None:
 
     with pytest.raises(ConfigError):
         Config.from_env(env_file=Path("/nonexistent/.env"))
+
+
+def test_config_defaults_the_snapshot_path_to_nothing_real(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("PLEXDB_SNAPSHOT_PATH", raising=False)
+
+    config = Config.from_env(env_file=Path("/nonexistent/.env"))
+
+    assert config.snapshot_path is None
+
+
+def test_publish_writes_a_snapshot_and_says_where(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    store = tmp_path / "plexdb.db"
+    snapshot = tmp_path / "plexdb.snapshot.db"
+    monkeypatch.setenv("PLEXDB_PATH", str(store))
+    monkeypatch.setenv("PLEXDB_SNAPSHOT_PATH", str(snapshot))
+    main(["init"])
+    capsys.readouterr()
+
+    assert main(["publish"]) == 0
+
+    out = capsys.readouterr().out
+    assert "published snapshot" in out
+    assert str(snapshot.resolve()) in out
+    assert snapshot.exists()
+
+
+def test_publish_without_a_snapshot_path_configured_is_an_error_not_a_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    store = tmp_path / "plexdb.db"
+    monkeypatch.setenv("PLEXDB_PATH", str(store))
+    monkeypatch.delenv("PLEXDB_SNAPSHOT_PATH", raising=False)
+    main(["init"])
+    capsys.readouterr()
+
+    assert main(["publish"]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("error: ")
+    assert "PLEXDB_SNAPSHOT_PATH" in err

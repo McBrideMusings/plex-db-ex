@@ -75,8 +75,11 @@ CREATE TABLE enrichment (
 assuming the primary key is one. It is also where a Trakt slug, a Letterboxd URL, and a
 resolved free-text Reddit title land.
 
-Foreign keys are enforced (`PRAGMA foreign_keys = ON`) and the store runs in WAL mode, so a
-consumer can read while the writer is mid-sweep.
+Foreign keys are enforced (`PRAGMA foreign_keys = ON`) and the live store runs in WAL mode for
+the writer's own benefit. Consumers never open that file. `plexdb publish` writes a consistent,
+single-file copy with `VACUUM INTO` — no `-wal` or `-shm` sidecars — and every consumer opens
+*that* file, read-only, including from a directory with no write permission
+([ADR-0007](./adr/0007-readers-get-a-snapshot-not-the-live-store)).
 
 ## Not yet built
 

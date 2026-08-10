@@ -24,6 +24,14 @@ def _configure(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA foreign_keys = ON")
 
 
+def _ensure_parent(path: Path) -> None:
+    """Make the directory `path` will live in, reporting failure as `StoreError`."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as err:
+        raise StoreError(f"cannot create {path.parent}: {err.strerror}") from err
+
+
 @contextmanager
 def open_store(path: Path, *, create: bool = False) -> Iterator[sqlite3.Connection]:
     """Open the store for writing.
@@ -37,10 +45,7 @@ def open_store(path: Path, *, create: bool = False) -> Iterator[sqlite3.Connecti
     if path.is_dir():
         raise StoreError(f"{path} is a directory, not a store — point PLEXDB_PATH at a file")
     if create:
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-        except OSError as err:
-            raise StoreError(f"cannot create {path.parent}: {err.strerror}") from err
+        _ensure_parent(path)
     elif not path.exists():
         raise FileNotFoundError(f"no store at {path} — run `plexdb init` first")
 
@@ -103,3 +108,39 @@ def init(path: Path) -> tuple[int, int]:
     """
     with open_store(path, create=True) as conn:
         return schema.apply(conn)
+
+
+def publish(store_path: Path, snapshot_path: Path) -> tuple[int, int]:
+    """Publish a read-only snapshot of the store for consumers (ADR-0007).
+
+    `VACUUM INTO` writes a compacted, self-contained copy of the store with no
+    `-wal` or `-shm` sidecars — confirmed empirically: a database vacuumed out
+    of a WAL-mode source lands in SQLite's default `DELETE` journal mode
+    regardless of the source's mode, which is what lets the copy be opened
+    read-only from a directory with no write permission.
+
+    The copy is written under a temporary name beside `snapshot_path` and then
+    renamed into place. A rename within one filesystem is atomic and a handle
+    already open on the old file keeps reading it, so a consumer opening
+    `snapshot_path` never observes a half-written file, and a second publish
+    replaces the snapshot rather than erroring.
+
+    Returns the schema version and the byte size of the file written.
+    """
+    _ensure_parent(snapshot_path)
+
+    tmp_path = snapshot_path.with_name(snapshot_path.name + ".tmp")
+    # VACUUM INTO refuses to write over an existing file, so clear one left
+    # behind by a publish that crashed mid-write before starting a new one.
+    tmp_path.unlink(missing_ok=True)
+
+    with open_store(store_path) as conn:
+        try:
+            conn.execute("VACUUM INTO ?", (str(tmp_path),))
+        except sqlite3.Error as err:
+            tmp_path.unlink(missing_ok=True)
+            raise StoreError(f"cannot publish snapshot: {err}") from err
+        version = schema.current_version(conn)
+
+    tmp_path.replace(snapshot_path)
+    return version, snapshot_path.stat().st_size
