@@ -29,6 +29,16 @@ on a pipeline.
 - **`etv-station` as the single named owner**, with this repo vendoring a copy. Equivalent in
   mechanism; the ownership arrow adds nothing while both repos are edited by the same person.
 
+## What it caught immediately
+
+Cross-checking the first version of the fixture against `etv-station`'s real derivation found
+that neither repo had ever verified value-level agreement: that repo's tests pin the `fs:`
+*format* — prefix plus sixteen hex digits — and the priority rules, but no concrete hash. Both
+implementations could have produced different ids for the same GUID-less file and every test in
+both repos would still have passed.
+
+All 24 cases agree. The point is that this was previously unknown, not assumed.
+
 ## Consequences
 
 Changing the derivation rule is now a two-repo commit, on purpose. The hash constant is what makes
