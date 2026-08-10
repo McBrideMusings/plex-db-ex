@@ -18,7 +18,7 @@ Opening a store whose version is **higher** than the running build understands i
 outright, because a newer writer may have added rows this build cannot see. A store carrying a
 `schema_version` table with no row is reported as damaged rather than treated as empty.
 
-**Versions 1 and 2 are live.** Everything under "Not yet built" is the target for later
+**Versions 1, 2 and 3 are live.** Everything under "Not yet built" is the target for later
 slices.
 
 ## Version 1 — identity and enrichment
@@ -81,6 +81,7 @@ resolved free-text Reddit title land.
 | Namespace | Writer | Keys |
 |---|---|---|
 | `tmdb_keywords` | `plexdb enrich-tmdb-keywords` | `keyword` (one row per keyword, `value` is the keyword text) and a sentinel `_fetched` row (`value` = `"1"`) so a title with zero keywords still has a `fetched_at` to check staleness against. Only `items.type` `movie` and `show` are enriched — TMDB has no keywords endpoint for an episode. |
+| `tmdb_edges` | `plexdb enrich-tmdb-edges` | Bookkeeping only, not relationship data — that lives in `edges` (below). `_fetched_recommendations` and `_fetched_similar` sentinel rows (`value` = `"1"`), one per title per edge type, so a title whose result was empty or entirely outside the library still has a `fetched_at` to check staleness against even though it left no `edges` row behind. |
 
 `enrich-tmdb-keywords` re-fetches a title only once its row is older than `TMDB_KEYWORDS_STALE_DAYS`
 (default 45 days). `--rewipe` deletes every `tmdb_keywords` row before a sweep, forcing a full
@@ -146,20 +147,60 @@ degraded one. Measured against a live server: of 268 plays finished at 90% or mo
 in Plex's own history; of 17 plays abandoned under 40%, only 3 do — so a Plex-only ingest
 delivers positive signal only.
 
+## Version 3 — affinity edges
+
+Directed, typed, ranked item-to-item relationships
+([issue #6](https://github.com/McBrideMusings/plex-db-ex/issues/6)), written by
+`plexdb enrich-tmdb-edges`.
+
+```sql
+CREATE TABLE edges (
+    from_id    TEXT NOT NULL REFERENCES items(item_id) ON DELETE CASCADE,
+    to_id      TEXT NOT NULL REFERENCES items(item_id) ON DELETE CASCADE,
+    edge_type  TEXT NOT NULL,
+    rank       INTEGER NOT NULL,
+    fetched_at TEXT NOT NULL,
+    PRIMARY KEY (from_id, to_id, edge_type)
+);
+```
+
+**Edges are snapshots, not facts.** On re-pull, the whole `(from_id, edge_type)` set is deleted
+and rewritten inside one transaction — a run interrupted partway through never leaves a
+half-replaced set. Additions and removals fall out on their own: a title the source stopped
+recommending simply isn't in the new set. `rank` is the source's own ordering, stored verbatim —
+never collapsed to a boolean — so a #2 recommendation stays distinguishable from a #20.
+
+**Both `from_id` and `to_id` reference `items`.** `items` is populated only by `plexdb walk`
+([ADR-0005](./adr/0005-the-store-walks-plex-itself-and-augments-never-replaces)), so a
+recommendation pointing at a title this library has never walked has no `item_id` to land on. Such
+a result is dropped and counted, never stored under an invented id
+([ADR-0009](./adr/0009-an-edge-only-connects-two-items-this-store-already-knows)).
+
+### Edge types in use
+
+| Edge type | Writer | Signal |
+|---|---|---|
+| `tmdb_recommendations` | `plexdb enrich-tmdb-edges` | TMDB's `/recommendations` endpoint — behavioural: "people who engaged with this also engaged with that". |
+| `tmdb_similar` | `plexdb enrich-tmdb-edges` | TMDB's `/similar` endpoint — content-derived, not behavioural. Kept as a distinct type from `tmdb_recommendations` because the two measure different things. |
+
+`enrich-tmdb-edges` re-fetches a title's edge set only once it is older than
+`TMDB_EDGES_STALE_DAYS` (default 45 days, tracked separately from `TMDB_KEYWORDS_STALE_DAYS`).
+`--rewipe` deletes every row of one run's edge types before a sweep, forcing a full re-fetch,
+without touching any other edge type. The per-title fetch cursor this staleness check reads lives
+in the `tmdb_edges` `enrichment` namespace, not in `edges` itself — a title whose result is empty,
+or entirely outside the library, still needs a `fetched_at` to check next sweep, and `edges` alone
+cannot carry one for a title with no rows.
+
 ## Not yet built
 
 ```sql
-edges(from_id, to_id, edge_type, rank, fetched_at)
 collection_membership(collection_id, item_id, weight, source, observed_at)
 ```
 
-Three rules that are easy to break by accident:
+Two rules that are easy to break by accident:
 
 - **Namespaces are hard partitions.** A writer may wipe and rewrite only its own rows. Values
   are opaque — the store indexes and serves, it never interprets.
-- **Edges are snapshots.** On re-pull, replace the whole `(from_id, edge_type)` set rather than
-  appending; additions and removals then fall out on their own. Uniqueness is
-  `(from_id, to_id, edge_type)`. Keep the source's rank — a #2 recommendation is not a #20.
 - **Enrich once**, keyed by external id, with `fetched_at`. Never re-fetch a row that exists
   and is inside its threshold. Roughly 30–60 days for external sources; local edges recompute
   free on every sweep and never expire.

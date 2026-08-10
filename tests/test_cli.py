@@ -17,6 +17,7 @@ from plex_fixtures import (
 from tmdb_fixtures import FakeTMDbSource
 
 from plexdb.cli import _register_commands, build_parser, main
+from plexdb.commands import enrich_tmdb_edges as enrich_tmdb_edges_cmd
 from plexdb.commands import enrich_tmdb_keywords as enrich_tmdb_keywords_cmd
 from plexdb.commands import ingest_plays as ingest_plays_cmd
 from plexdb.commands import walk as walk_cmd
@@ -25,12 +26,26 @@ from plexdb.store import init as init_store
 from plexdb.store import open_store
 from plexdb.walk import walk_all
 
-EXPECTED_COMMANDS = {"init", "walk", "publish", "enrich-tmdb-keywords", "ingest-plays"}
+EXPECTED_COMMANDS = {
+    "init",
+    "walk",
+    "publish",
+    "enrich-tmdb-keywords",
+    "enrich-tmdb-edges",
+    "ingest-plays",
+}
 
 # The order someone runs them in: create the store, fill it, publish it, then
 # the sources that enrich it. Each module owns its own ORDER, so this list is
 # the only place the sequence is written down.
-EXPECTED_COMMAND_ORDER = ["init", "walk", "publish", "enrich-tmdb-keywords", "ingest-plays"]
+EXPECTED_COMMAND_ORDER = [
+    "init",
+    "walk",
+    "publish",
+    "enrich-tmdb-keywords",
+    "enrich-tmdb-edges",
+    "ingest-plays",
+]
 
 
 def _subcommand_order(parser: argparse.ArgumentParser) -> list[str]:
@@ -506,6 +521,107 @@ def test_enrich_tmdb_keywords_aborts_after_three_consecutive_failures(
     assert fake.calls == [("1", "movie"), ("2", "movie"), ("3", "movie")]
 
 
+def _configure_enrich_edges(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake: FakeTMDbSource
+) -> Path:
+    """Point the CLI at a store under `tmp_path`, with a TMDB key set and
+    `fake` standing in for `LiveTMDbClient`. No network."""
+    store = tmp_path / "plexdb.db"
+    monkeypatch.setenv("PLEXDB_PATH", str(store))
+    monkeypatch.setenv("TMDB_API_KEY", "test-tmdb-key")
+
+    def _fixture_backed_client(api_key: str) -> FakeTMDbSource:
+        assert api_key == "test-tmdb-key", "enrich-tmdb-edges must pass the configured key"
+        return fake
+
+    monkeypatch.setattr(enrich_tmdb_edges_cmd, "LiveTMDbClient", _fixture_backed_client)
+    return store
+
+
+def test_enrich_tmdb_edges_writes_rows_and_reports_a_summary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake = FakeTMDbSource(recommendations_by_id={("155", "movie"): ["272"]})
+    store = _configure_enrich_edges(tmp_path, monkeypatch, fake)
+    main(["init"])
+    _seed_one_movie(store)
+    with sqlite3.connect(store) as conn:
+        conn.execute(
+            "INSERT INTO items (item_id, type, title) VALUES "
+            "('imdb:tt0372784', 'movie', 'Batman Begins')"
+        )
+        conn.execute(
+            "INSERT INTO external_ids (item_id, ns, value) VALUES ('imdb:tt0372784', 'tmdb', '272')"
+        )
+    capsys.readouterr()
+
+    assert main(["enrich-tmdb-edges"]) == 0
+
+    out = capsys.readouterr().out
+    assert "tmdb_recommendations:" in out
+    assert "tmdb_similar:" in out
+    assert "1 edge(s) written" in out
+
+    with sqlite3.connect(store) as conn:
+        count = conn.execute(
+            "SELECT count(*) FROM edges WHERE edge_type = 'tmdb_recommendations'"
+        ).fetchone()[0]
+    assert count == 1
+
+
+def test_a_second_enrich_tmdb_edges_run_does_not_refetch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake = FakeTMDbSource(recommendations_by_id={("155", "movie"): []})
+    store = _configure_enrich_edges(tmp_path, monkeypatch, fake)
+    main(["init"])
+    _seed_one_movie(store)
+    capsys.readouterr()
+    main(["enrich-tmdb-edges"])
+    capsys.readouterr()
+
+    assert main(["enrich-tmdb-edges"]) == 0
+
+    out = capsys.readouterr().out
+    assert "0 fetched" in out
+    assert "1 already cached" in out
+    assert fake.recommendation_calls == [("155", "movie")]
+    assert fake.similar_calls == [("155", "movie")]
+
+
+def test_enrich_tmdb_edges_rewipe_forces_a_full_refetch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake = FakeTMDbSource(recommendations_by_id={("155", "movie"): []})
+    store = _configure_enrich_edges(tmp_path, monkeypatch, fake)
+    main(["init"])
+    _seed_one_movie(store)
+    main(["enrich-tmdb-edges"])
+    capsys.readouterr()
+
+    assert main(["enrich-tmdb-edges", "--rewipe"]) == 0
+
+    out = capsys.readouterr().out
+    assert "wiped" in out
+    assert fake.recommendation_calls == [("155", "movie"), ("155", "movie")]
+
+
+def test_enrich_tmdb_edges_without_an_api_key_is_an_error_not_a_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    store = tmp_path / "plexdb.db"
+    monkeypatch.setenv("PLEXDB_PATH", str(store))
+    monkeypatch.setenv("TMDB_API_KEY", "")
+    main(["init"])
+    capsys.readouterr()
+
+    assert main(["enrich-tmdb-edges"]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("error: ")
+    assert "TMDB_API_KEY" in err
+    assert "Traceback" not in err
+
+
 def test_ingest_plays_writes_rows_and_reports_a_summary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -577,6 +693,31 @@ def test_config_defaults_the_tmdb_stale_days_to_45(monkeypatch: pytest.MonkeyPat
 
 def test_config_rejects_a_non_numeric_tmdb_stale_days(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TMDB_KEYWORDS_STALE_DAYS", "soon")
+
+    with pytest.raises(ConfigError):
+        Config.from_env(env_file=Path("/nonexistent/.env"))
+
+
+def test_config_reads_the_tmdb_edges_stale_days_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TMDB_EDGES_STALE_DAYS", "20")
+
+    config = Config.from_env(env_file=Path("/nonexistent/.env"))
+
+    assert config.tmdb_edges_stale_days == 20
+
+
+def test_config_defaults_the_tmdb_edges_stale_days_to_45(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("TMDB_EDGES_STALE_DAYS", raising=False)
+
+    config = Config.from_env(env_file=Path("/nonexistent/.env"))
+
+    assert config.tmdb_edges_stale_days == 45
+
+
+def test_config_rejects_a_non_numeric_tmdb_edges_stale_days(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TMDB_EDGES_STALE_DAYS", "soon")
 
     with pytest.raises(ConfigError):
         Config.from_env(env_file=Path("/nonexistent/.env"))

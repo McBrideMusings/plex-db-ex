@@ -1,0 +1,107 @@
+{
+  "page": 1,
+  "results": [
+    {
+      "id": 268,
+      "title": "Batman",
+      "media_type": "movie"
+    },
+    {
+      "id": 49026,
+      "title": "The Dark Knight Rises",
+      "media_type": "movie"
+    },
+    {
+      "id": 272,
+      "title": "Batman Begins",
+      "media_type": "movie"
+    },
+    {
+      "id": 414906,
+      "title": "The Batman",
+      "media_type": "movie"
+    },
+    {
+      "id": 232842,
+      "title": "The Flash",
+      "media_type": "movie"
+    },
+    {
+      "id": 69735,
+      "title": "Batman: Year One",
+      "media_type": "movie"
+    },
+    {
+      "id": 408648,
+      "title": "Batman and Harley Quinn",
+      "media_type": "movie"
+    },
+    {
+      "id": 854467,
+      "title": "Indemnity",
+      "media_type": "movie"
+    },
+    {
+      "id": 242643,
+      "title": "Batman: Assault on Arkham",
+      "media_type": "movie"
+    },
+    {
+      "id": 46529,
+      "title": "I Am Number Four",
+      "media_type": "movie"
+    },
+    {
+      "id": 1319895,
+      "title": "Hostile Takeover",
+      "media_type": "movie"
+    },
+    {
+      "id": 5174,
+      "title": "Rush Hour 3",
+      "media_type": "movie"
+    },
+    {
+      "id": 5175,
+      "title": "Rush Hour 2",
+      "media_type": "movie"
+    },
+    {
+      "id": 823625,
+      "title": "Blacklight",
+      "media_type": "movie"
+    },
+    {
+      "id": 21683,
+      "title": "Batman: Mystery of the Batwoman",
+      "media_type": "movie"
+    },
+    {
+      "id": 262500,
+      "title": "Insurgent",
+      "media_type": "movie"
+    },
+    {
+      "id": 522016,
+      "title": "The 355",
+      "media_type": "movie"
+    },
+    {
+      "id": 32080,
+      "title": "The Seven-Ups",
+      "media_type": "movie"
+    },
+    {
+      "id": 13387,
+      "title": "Transporter 3",
+      "media_type": "movie"
+    },
+    {
+      "id": 46041,
+      "title": "The Quiller Memorandum",
+      "media_type": "movie"
+    }
+  ],
+  "total_pages": 18,
+  "total_results": 348
+}

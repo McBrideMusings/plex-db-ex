@@ -13,3 +13,4 @@ ADR wins; [the PRD](../PRD) already reflects them.
 | [0006](./0006-the-identity-fixture-is-duplicated-and-guarded-by-a-hash) | The identity fixture is duplicated in both repos and guarded by a hash |
 | [0007](./0007-readers-get-a-snapshot-not-the-live-store) | Readers get a snapshot, not the live store |
 | [0008](./0008-the-walk-never-repoints-an-existing-item-id) | The walk never repoints an existing `item_id` when a title's GUID set changes |
+| [0009](./0009-an-edge-only-connects-two-items-this-store-already-knows) | An edge only connects two items this store already knows |

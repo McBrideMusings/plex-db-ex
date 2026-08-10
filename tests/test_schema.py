@@ -14,6 +14,7 @@ from plexdb.store import init, open_readonly, open_store
 
 V1_TABLES = {"items", "external_ids", "plex_items", "enrichment"}
 V2_TABLES = {"plays", "plays_ingest_cursor"}
+V3_TABLES = {"edges"}
 
 
 def _tables_from_batch(batch: str) -> set[str]:
@@ -58,6 +59,13 @@ def test_v2_carries_exactly_the_plays_and_cursor_tables() -> None:
     assert _tables_from_batch(schema._V1 + schema._V2) - V1_TABLES == V2_TABLES
 
 
+def test_v3_carries_exactly_the_edges_table() -> None:
+    assert (
+        _tables_from_batch(schema._V1 + schema._V2 + schema._V3) - V1_TABLES - V2_TABLES
+        == V3_TABLES
+    )
+
+
 def test_a_current_store_carries_every_migrations_tables_and_nothing_else(
     tmp_path: Path,
 ) -> None:
@@ -67,7 +75,7 @@ def test_a_current_store_carries_every_migrations_tables_and_nothing_else(
     # Every table every shipped migration introduces, plus the bookkeeping
     # table `apply` itself creates — a table arriving early (or never
     # arriving) is a scope leak worth failing on.
-    assert _tables(store) == V1_TABLES | V2_TABLES | {"schema_version"}
+    assert _tables(store) == V1_TABLES | V2_TABLES | V3_TABLES | {"schema_version"}
 
 
 def test_the_columns_the_first_slice_depends_on_are_present(tmp_path: Path) -> None:
@@ -96,6 +104,13 @@ def test_the_columns_the_plays_slice_depends_on_are_present(tmp_path: Path) -> N
         "paused_counter",
     } <= _columns(store, "plays")
     assert {"id", "since_viewed_at"} <= _columns(store, "plays_ingest_cursor")
+
+
+def test_the_columns_the_edges_slice_depends_on_are_present(tmp_path: Path) -> None:
+    store = tmp_path / "plexdb.db"
+    init(store)
+
+    assert {"from_id", "to_id", "edge_type", "rank", "fetched_at"} <= _columns(store, "edges")
 
 
 def test_init_is_idempotent(tmp_path: Path) -> None:
@@ -212,4 +227,49 @@ def test_foreign_keys_are_enforced(tmp_path: Path) -> None:
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute(
                 "INSERT INTO external_ids (item_id, ns, value) VALUES ('missing', 'imdb', 'tt1')"
+            )
+
+
+def test_edges_foreign_keys_are_enforced_on_both_from_and_to(tmp_path: Path) -> None:
+    store = tmp_path / "plexdb.db"
+    init(store)
+
+    with open_store(store) as conn:
+        conn.execute("INSERT INTO items (item_id, type, title) VALUES ('imdb:tt1', 'movie', 'A')")
+        conn.commit()
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO edges (from_id, to_id, edge_type, rank, fetched_at) "
+                "VALUES ('imdb:tt1', 'missing', 'tmdb_similar', 1, '2026-01-01T00:00:00+00:00')"
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO edges (from_id, to_id, edge_type, rank, fetched_at) "
+                "VALUES ('missing', 'imdb:tt1', 'tmdb_similar', 1, '2026-01-01T00:00:00+00:00')"
+            )
+
+
+def test_edges_uniqueness_is_from_id_to_id_edge_type(tmp_path: Path) -> None:
+    store = tmp_path / "plexdb.db"
+    init(store)
+
+    with open_store(store) as conn:
+        conn.execute("INSERT INTO items (item_id, type, title) VALUES ('imdb:tt1', 'movie', 'A')")
+        conn.execute("INSERT INTO items (item_id, type, title) VALUES ('imdb:tt2', 'movie', 'B')")
+        conn.commit()
+        conn.execute(
+            "INSERT INTO edges (from_id, to_id, edge_type, rank, fetched_at) "
+            "VALUES ('imdb:tt1', 'imdb:tt2', 'tmdb_similar', 1, '2026-01-01T00:00:00+00:00')"
+        )
+        # A different edge_type between the same pair is a distinct row.
+        conn.execute(
+            "INSERT INTO edges (from_id, to_id, edge_type, rank, fetched_at) "
+            "VALUES ('imdb:tt1', 'imdb:tt2', 'tmdb_recommendations', 1, "
+            "'2026-01-01T00:00:00+00:00')"
+        )
+        conn.commit()
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO edges (from_id, to_id, edge_type, rank, fetched_at) "
+                "VALUES ('imdb:tt1', 'imdb:tt2', 'tmdb_similar', 2, '2026-01-01T00:00:00+00:00')"
             )

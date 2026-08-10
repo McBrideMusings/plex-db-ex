@@ -27,6 +27,29 @@ DEFAULT_STORE_PATH = "./data/plexdb.db"
 #: leaf like `errors.py` and `schema.py`, and imports no feature module.
 _DEFAULT_TMDB_KEYWORDS_STALE_DAYS = 45
 
+#: Same documented default, duplicated for the same reason as the keywords
+#: constant above — a separate knob from `tmdb_keywords_stale_days` so an
+#: operator can dial edges and keywords staleness independently even though
+#: both come from TMDB.
+_DEFAULT_TMDB_EDGES_STALE_DAYS = 45
+
+
+def _stale_days_from_env(var: str, default: int) -> int:
+    """Read one whole-number staleness knob, falling back to its documented
+    default when the variable is unset or empty.
+
+    Shared by every `*_STALE_DAYS` knob so a second one cannot drift into a
+    different rejection message or a silent `0` for a typo — the variable name
+    is the only thing that differs between them.
+    """
+    raw = os.environ.get(var, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError as err:
+        raise ConfigError(f"{var} must be a whole number of days, got {raw!r}") from err
+
 
 @dataclass(frozen=True)
 class Config:
@@ -58,6 +81,10 @@ class Config:
     #: re-fetch. Documented default sits mid-range of the 30-60 day window
     #: `docs/schema.md` sets for every external source.
     tmdb_keywords_stale_days: int
+    #: Days a `tmdb_recommendations`/`tmdb_similar` edge set stays fresh
+    #: before `plexdb enrich-tmdb-edges` re-fetches it. Same documented
+    #: default and window as `tmdb_keywords_stale_days`, tracked separately.
+    tmdb_edges_stale_days: int
 
     @classmethod
     def from_env(cls, *, env_file: Path | None = None) -> Config:
@@ -74,16 +101,6 @@ class Config:
         snapshot_path = Path(snapshot_raw).expanduser() if snapshot_raw else None
         source_roots_raw = os.environ.get("PLEX_SOURCE_ROOTS", "")
         source_roots = tuple(root.strip() for root in source_roots_raw.split(",") if root.strip())
-        stale_raw = os.environ.get("TMDB_KEYWORDS_STALE_DAYS", "").strip()
-        if stale_raw:
-            try:
-                stale_days = int(stale_raw)
-            except ValueError as err:
-                raise ConfigError(
-                    f"TMDB_KEYWORDS_STALE_DAYS must be a whole number of days, got {stale_raw!r}"
-                ) from err
-        else:
-            stale_days = _DEFAULT_TMDB_KEYWORDS_STALE_DAYS
         return cls(
             store_path=Path(raw).expanduser(),
             snapshot_path=snapshot_path,
@@ -91,5 +108,10 @@ class Config:
             plex_token=os.environ.get("PLEX_TOKEN", "").strip(),
             source_roots=source_roots,
             tmdb_api_key=os.environ.get("TMDB_API_KEY", "").strip(),
-            tmdb_keywords_stale_days=stale_days,
+            tmdb_keywords_stale_days=_stale_days_from_env(
+                "TMDB_KEYWORDS_STALE_DAYS", _DEFAULT_TMDB_KEYWORDS_STALE_DAYS
+            ),
+            tmdb_edges_stale_days=_stale_days_from_env(
+                "TMDB_EDGES_STALE_DAYS", _DEFAULT_TMDB_EDGES_STALE_DAYS
+            ),
         )

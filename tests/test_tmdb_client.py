@@ -21,6 +21,11 @@ from plexdb.tmdb_client import LiveTMDbClient
 _RECORDED = {
     "/3/movie/155/keywords": "movie_155_keywords.json",
     "/3/tv/1396/keywords": "tv_1396_keywords.json",
+    "/3/movie/155/recommendations": "movie_155_recommendations.json",
+    "/3/movie/155/similar": "movie_155_similar.json",
+    "/3/tv/1396/recommendations": "tv_1396_recommendations.json",
+    "/3/tv/1396/similar": "tv_1396_similar.json",
+    "/3/movie/424783/recommendations": "movie_zero_recommendations.json",
 }
 
 
@@ -56,6 +61,47 @@ def test_an_id_tmdb_has_never_heard_of_returns_no_keywords_not_an_error() -> Non
     names = _client().keywords("999999999", "movie")
 
     assert names == []
+
+
+def test_movie_recommendations_come_back_as_ordered_tmdb_ids() -> None:
+    ids = _client().recommendations("155", "movie")
+
+    assert len(ids) == 20
+    assert ids[0] == "268"  # Batman (1989) — TMDB's own top recommendation
+    assert all(isinstance(i, str) for i in ids)
+
+
+def test_tv_recommendations_come_back_as_ordered_tmdb_ids() -> None:
+    ids = _client().recommendations("1396", "tv")
+
+    assert len(ids) == 20
+    assert ids[0] == "60059"  # Better Call Saul
+
+
+def test_movie_similar_comes_back_as_ordered_tmdb_ids() -> None:
+    ids = _client().similar("155", "movie")
+
+    assert len(ids) == 20
+    assert ids[0] == "29764"
+
+
+def test_tv_similar_comes_back_as_ordered_tmdb_ids() -> None:
+    ids = _client().similar("1396", "tv")
+
+    assert len(ids) == 20
+    assert ids[0] == "89"  # Titus
+
+
+def test_an_id_tmdb_has_never_heard_of_returns_no_recommendations_not_an_error() -> None:
+    ids = _client().recommendations("999999999", "movie")
+
+    assert ids == []
+
+
+def test_a_title_with_zero_recommendations_returns_an_empty_list() -> None:
+    ids = _client().recommendations("424783", "movie")
+
+    assert ids == []
 
 
 def test_an_unreachable_server_raises_tmdb_error_not_a_raw_httpx_error() -> None:

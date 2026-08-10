@@ -1,0 +1,107 @@
+{
+  "page": 1,
+  "results": [
+    {
+      "id": 60059,
+      "name": "Better Call Saul",
+      "media_type": "tv"
+    },
+    {
+      "id": 80968,
+      "name": "Narcos: Mexico",
+      "media_type": "tv"
+    },
+    {
+      "id": 71694,
+      "name": "Snowfall",
+      "media_type": "tv"
+    },
+    {
+      "id": 63351,
+      "name": "Narcos",
+      "media_type": "tv"
+    },
+    {
+      "id": 128904,
+      "name": "Dark Winds",
+      "media_type": "tv"
+    },
+    {
+      "id": 66025,
+      "name": "Animal Kingdom",
+      "media_type": "tv"
+    },
+    {
+      "id": 66676,
+      "name": "Queen of the South",
+      "media_type": "tv"
+    },
+    {
+      "id": 81358,
+      "name": "Mr Inbetween",
+      "media_type": "tv"
+    },
+    {
+      "id": 40008,
+      "name": "Hannibal",
+      "media_type": "tv"
+    },
+    {
+      "id": 137893,
+      "name": "Griselda",
+      "media_type": "tv"
+    },
+    {
+      "id": 194764,
+      "name": "The Penguin",
+      "media_type": "tv"
+    },
+    {
+      "id": 70168,
+      "name": "Too Old to Die Young",
+      "media_type": "tv"
+    },
+    {
+      "id": 153312,
+      "name": "Tulsa King",
+      "media_type": "tv"
+    },
+    {
+      "id": 241549,
+      "name": "Murder in a Small Town",
+      "media_type": "tv"
+    },
+    {
+      "id": 71715,
+      "name": "Good Girls",
+      "media_type": "tv"
+    },
+    {
+      "id": 225171,
+      "name": "Pluribus",
+      "media_type": "tv"
+    },
+    {
+      "id": 64199,
+      "name": "Sneaky Pete",
+      "media_type": "tv"
+    },
+    {
+      "id": 100010,
+      "name": "Big Sky",
+      "media_type": "tv"
+    },
+    {
+      "id": 85385,
+      "name": "L.A.'s Finest",
+      "media_type": "tv"
+    },
+    {
+      "id": 86588,
+      "name": "Hightown",
+      "media_type": "tv"
+    }
+  ],
+  "total_pages": 48,
+  "total_results": 952
+}
