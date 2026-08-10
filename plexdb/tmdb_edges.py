@@ -38,6 +38,7 @@ from datetime import UTC, datetime, timedelta
 
 from .errors import TMDbError
 from .tmdb_client import TMDbSource
+from .tmdb_common import DEFAULT_STALE_DAYS, MAX_CONSECUTIVE_FAILURES, is_stale, media_type_for
 
 #: This module's two edge types. Distinct, and never merged into one.
 RECOMMENDATIONS_EDGE_TYPE = "tmdb_recommendations"
@@ -51,14 +52,6 @@ _CURSOR_KEYS: dict[str, str] = {
     SIMILAR_EDGE_TYPE: "_fetched_similar",
 }
 _SENTINEL_VALUE = "1"
-
-#: Documented default: mid-range of the 30-60 day window `docs/schema.md` sets
-#: for every external source's enrichment.
-DEFAULT_STALE_DAYS = 45
-
-#: Consecutive TMDB failures before a sweep gives up on the rest of the
-#: library — same threshold and reasoning as `enrich_tmdb.py`.
-_MAX_CONSECUTIVE_FAILURES = 3
 
 #: A bound `TMDbSource` method returning ordered TMDB ids for one title, best
 #: match first — `source.recommendations` or `source.similar`. Bound, so a
@@ -83,21 +76,6 @@ class EdgeStats:
     #: title pointing at itself. Not an error; expected on any library that
     #: does not own everything TMDB recommends.
     edges_skipped_not_in_library: int = 0
-
-
-def _media_type_for(item_type: str) -> str | None:
-    """`items.type` -> the TMDB path segment, or `None` for a type this sweep
-    does not cover. Identical rule to `enrich_tmdb._media_type_for` — TMDB's
-    recommendations/similar endpoints exist only for movies and shows."""
-    if item_type == "movie":
-        return "movie"
-    if item_type == "show":
-        return "tv"
-    return None
-
-
-def _is_stale(fetched_at: str, cutoff: datetime) -> bool:
-    return datetime.fromisoformat(fetched_at) < cutoff
 
 
 def wipe_edge_type(conn: sqlite3.Connection, edge_type: str) -> tuple[int, int]:
@@ -189,14 +167,14 @@ def _sweep(
     for row in candidates:
         stats.titles_seen += 1
         item_id = row["item_id"]
-        media_type = _media_type_for(row["type"])
+        media_type = media_type_for(row["type"])
         tmdb_id = row["tmdb_id"]
         if media_type is None or tmdb_id is None:
             stats.titles_skipped_no_tmdb_id += 1
             continue
 
         fetched_at = cached_fetched_at.get(item_id)
-        if fetched_at is not None and not _is_stale(fetched_at, cutoff):
+        if fetched_at is not None and not is_stale(fetched_at, cutoff):
             stats.titles_cached += 1
             continue
 
@@ -205,9 +183,9 @@ def _sweep(
         except TMDbError as err:
             stats.titles_failed += 1
             consecutive_failures += 1
-            if consecutive_failures >= _MAX_CONSECUTIVE_FAILURES:
+            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
                 raise TMDbError(
-                    f"aborting after {_MAX_CONSECUTIVE_FAILURES} consecutive failures: "
+                    f"aborting after {MAX_CONSECUTIVE_FAILURES} consecutive failures: "
                     f"{stats.titles_seen} title(s) processed, {stats.titles_failed} failed; "
                     f"tripping error: {err}"
                 ) from err
