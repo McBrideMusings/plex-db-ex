@@ -14,6 +14,7 @@ import pytest
 
 from plexdb.clusters import (
     MIN_IP_OCCURRENCES,
+    DiscountedJoinIp,
     KeywordProfile,
     account_ids_with_plays,
     account_units,
@@ -106,12 +107,12 @@ def test_client_identifier_is_the_primary_cluster_key(store: sqlite3.Connection)
     assert {c.key_value for c in result.clusters} == {"device-a", "device-b"}
 
 
-def test_it_never_merges_two_different_client_identifiers_even_over_the_same_ip(
+def test_devices_sharing_a_recurring_ip_are_joined_into_one_cluster(
     store: sqlite3.Connection,
 ) -> None:
-    """The issue names this as a caveat to encode, not solve: two people on
-    one household IP still collapse into two clusters, one per device, never
-    merged down to one."""
+    """Issue #27: two devices at the same recurring, single-account IP merge
+    into one cluster, and the report can name the IP that joined them."""
+    assert MIN_IP_OCCURRENCES == 2, "test assumes the documented floor"
     _seed_item(store, "item:1")
     _seed_item(store, "item:2")
     _seed_play(
@@ -123,8 +124,121 @@ def test_it_never_merges_two_different_client_identifiers_even_over_the_same_ip(
 
     result = cluster_account_plays(store, ACCOUNT)
 
+    assert len(result.clusters) == 1
+    cluster = result.clusters[0]
+    assert cluster.key_tier == "client_identifier"
+    assert cluster.key_value == "device-a"  # canonical: alphabetically smallest member
+    assert cluster.client_identifiers == ("device-a", "device-b")
+    assert cluster.joined_by_ips == ("10.0.0.5",)
+    assert cluster.play_count == 2
+
+
+def test_a_device_seen_at_only_one_ip_is_not_joined_to_anything(
+    store: sqlite3.Connection,
+) -> None:
+    """Two devices that never share an IP stay two clusters, and neither
+    carries a `joined_by_ips` — joining is a bridge, not a default merge."""
+    _seed_item(store, "item:1")
+    _seed_item(store, "item:2")
+    _seed_play(
+        store, history_key="h1", item_id="item:1", client_identifier="device-a", ip="10.0.0.5"
+    )
+    _seed_play(
+        store, history_key="h2", item_id="item:2", client_identifier="device-b", ip="10.0.0.6"
+    )
+
+    result = cluster_account_plays(store, ACCOUNT)
+
     assert len(result.clusters) == 2
     assert {c.key_tier for c in result.clusters} == {"client_identifier"}
+    assert all(c.joined_by_ips == () for c in result.clusters)
+
+
+def test_joining_is_transitive_across_two_different_ips(store: sqlite3.Connection) -> None:
+    """device-a and device-b share ip1; device-b and device-c share ip2 — all
+    three land in one cluster, joined by both IPs, even though device-a and
+    device-c never shared an address directly."""
+    _seed_item(store, "item:1")
+    _seed_item(store, "item:2")
+    _seed_item(store, "item:3")
+    _seed_item(store, "item:4")
+    _seed_play(
+        store, history_key="h1", item_id="item:1", client_identifier="device-a", ip="10.0.0.5"
+    )
+    _seed_play(
+        store, history_key="h2", item_id="item:2", client_identifier="device-b", ip="10.0.0.5"
+    )
+    _seed_play(
+        store, history_key="h3", item_id="item:3", client_identifier="device-b", ip="10.0.0.6"
+    )
+    _seed_play(
+        store, history_key="h4", item_id="item:4", client_identifier="device-c", ip="10.0.0.6"
+    )
+
+    result = cluster_account_plays(store, ACCOUNT)
+
+    assert len(result.clusters) == 1
+    cluster = result.clusters[0]
+    assert cluster.client_identifiers == ("device-a", "device-b", "device-c")
+    assert cluster.joined_by_ips == ("10.0.0.5", "10.0.0.6")
+
+
+def test_a_join_ip_seen_under_more_than_one_account_is_discounted(
+    store: sqlite3.Connection,
+) -> None:
+    """An IP that also shows up under a different Plex account is shared
+    infrastructure, not household evidence for this account — it must not
+    join anything, and the report says it was discounted."""
+    OTHER_ACCOUNT = 2
+    _seed_item(store, "item:1")
+    _seed_item(store, "item:2")
+    _seed_item(store, "item:3")
+    _seed_play(
+        store, history_key="h1", item_id="item:1", client_identifier="device-a", ip="10.0.0.5"
+    )
+    _seed_play(
+        store, history_key="h2", item_id="item:2", client_identifier="device-b", ip="10.0.0.5"
+    )
+    _seed_play(
+        store,
+        history_key="h3",
+        item_id="item:3",
+        account=OTHER_ACCOUNT,
+        client_identifier="device-z",
+        ip="10.0.0.5",
+    )
+
+    result = cluster_account_plays(store, ACCOUNT)
+
+    assert len(result.clusters) == 2
+    assert all(c.joined_by_ips == () for c in result.clusters)
+    assert result.discounted_join_ips == (
+        DiscountedJoinIp(
+            ip="10.0.0.5",
+            reason="seen under 2 different accounts, so treated as shared infrastructure "
+            "rather than a household",
+        ),
+    )
+
+
+def test_join_merge_is_deterministic_regardless_of_union_order(store: sqlite3.Connection) -> None:
+    """The canonical group key is the alphabetically smallest member, not
+    whichever id a union-find pass happens to leave as its root — so this is
+    stable across repeated runs, matching #10's determinism guarantee."""
+    _seed_item(store, "item:1")
+    _seed_item(store, "item:2")
+    _seed_play(
+        store, history_key="h1", item_id="item:1", client_identifier="device-z", ip="10.0.0.5"
+    )
+    _seed_play(
+        store, history_key="h2", item_id="item:2", client_identifier="device-a", ip="10.0.0.5"
+    )
+
+    first = cluster_account_plays(store, ACCOUNT)
+    second = cluster_account_plays(store, ACCOUNT)
+
+    assert first == second
+    assert first.clusters[0].key_value == "device-a"
 
 
 def test_ip_is_only_a_fallback_for_plays_with_no_client_identifier(
@@ -441,6 +555,47 @@ def test_render_report_names_transient_ips_and_why(store: sqlite3.Connection) ->
 
     assert "203.0.113.9" in report
     assert "transient" in report.lower()
+
+
+def test_render_report_names_the_ip_that_joined_a_cluster(store: sqlite3.Connection) -> None:
+    _seed_item(store, "item:1")
+    _seed_item(store, "item:2")
+    _seed_play(
+        store, history_key="h1", item_id="item:1", client_identifier="device-a", ip="10.0.0.5"
+    )
+    _seed_play(
+        store, history_key="h2", item_id="item:2", client_identifier="device-b", ip="10.0.0.5"
+    )
+
+    report = render_report(store, shared_account_ids=[ACCOUNT])
+
+    assert "joined by ip(s): 10.0.0.5" in report
+    assert "1 cluster(s)" in report
+
+
+def test_render_report_names_a_discounted_join_ip_and_why(store: sqlite3.Connection) -> None:
+    _seed_item(store, "item:1")
+    _seed_item(store, "item:2")
+    _seed_item(store, "item:3")
+    _seed_play(
+        store, history_key="h1", item_id="item:1", client_identifier="device-a", ip="10.0.0.5"
+    )
+    _seed_play(
+        store, history_key="h2", item_id="item:2", client_identifier="device-b", ip="10.0.0.5"
+    )
+    _seed_play(
+        store,
+        history_key="h3",
+        item_id="item:3",
+        account=2,
+        client_identifier="device-z",
+        ip="10.0.0.5",
+    )
+
+    report = render_report(store, shared_account_ids=[ACCOUNT])
+
+    assert "IP(s) discounted from joining devices" in report
+    assert "10.0.0.5: seen under 2 different accounts" in report
 
 
 def test_render_report_says_na_with_fewer_than_two_clusters(store: sqlite3.Connection) -> None:

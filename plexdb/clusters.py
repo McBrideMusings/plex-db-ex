@@ -6,18 +6,31 @@ numbers a human reads to decide whether the clustering is good enough to
 build on. That call, and any future latent-user table, are explicitly out of
 scope (see the issue).
 
-**The fingerprint tuple, applied as a fallback chain, not a merge.** Per
+**The fingerprint tuple, applied as a fallback chain for a play with no
+`client_identifier` — plus one deliberate merge on top (issue #27).** Per
 `docs/CONTEXT.md`'s "Fingerprint" entry: client machine id first, then IP as
 a coarse household bucket, then platform as a weak tiebreak, with device
 display name excluded everywhere (the schema does not even carry Plex's
 device display name past `plexdb.plays`, so there is nothing to exclude in
 code). A play's cluster key is its `client_identifier` when present; only a
 play with none falls through to IP, and only a play with neither falls
-through to platform. **This never merges two different `client_identifier`
-values into one cluster** — the issue names that as a caveat to encode, not
-solve: a reinstall forks an identity, and two people sharing one physical
-client still collapse. Trying to bridge either with IP or platform would be
-solving what the issue says to leave alone.
+through to platform.
+
+**Two different `client_identifier` values *do* merge, but only across one
+specific bridge: a recurring IP neither of them shares with any other Plex
+account.** Issue #10 built the chain as a strict fallback and never merged
+two real devices; issue #27 asks for exactly that merge, because within a
+shared account two devices seen at the same recurring address are probably
+one household member, not two strangers. This is still not a general
+merge — platform never bridges two `client_identifier`s, and an IP that
+recurs for only one device (the fallback case above) never gains a second
+one retroactively. See "Joining devices on a recurring IP" below for the
+eligibility rule and why it reuses `MIN_IP_OCCURRENCES`. Two caveats from
+#10 remain genuinely unsolved, not addressed by the IP bridge: a client
+machine id is stable per *install*, so a reinstall forks an identity into
+two clusters the IP bridge may or may not happen to reconnect; and two
+people sharing one physical client still collapse into one cluster no
+matter what IP it used.
 
 **Transient IPs are excluded from the fallback tier, not down-weighted in
 the profile.** An IP that appears on exactly one client-identifier-less play
@@ -26,6 +39,60 @@ cellular address passing through once. `MIN_IP_OCCURRENCES` is the floor
 below which an IP is treated as though it were absent, falling through to
 the platform tier (or the unclustered bucket) instead of becoming its own
 one-play cluster.
+
+**Joining devices on a recurring IP (issue #27), and the two ways an IP is
+disqualified from doing so.** This is a second, independent use of IP data
+from the fallback tier above — it looks at *every* play with a
+`client_identifier`, not only the ones missing one, asking a different
+question: did two distinct devices both recur at the same address? An IP
+qualifies to join the devices it connects only if both hold:
+
+1. **It recurs at least `MIN_IP_OCCURRENCES` times within this account.**
+   The join threshold reuses the fallback tier's constant rather than
+   defining its own. Both ask the identical question — has this IP shown up
+   enough to be trusted as signal, rather than one passing touch — just
+   applied to a different situation, and measured against the live store
+   (2,563 plays on account 1, 7,551 on account 3670670) there is no cliff in
+   the data arguing for a different number: every genuine multi-device IP
+   that survives criterion 2 below already clears `MIN_IP_OCCURRENCES` by at
+   least one full play. The risk specific to joining — that a coincidental
+   or generic IP pairs two devices that are not actually the same person —
+   is not what a higher occurrence floor would catch anyway; it is caught by
+   criterion 2.
+2. **It is not seen under more than `MAX_IP_ACCOUNTS_TO_JOIN` distinct
+   `plex_account_id`s anywhere in the store.** An IP one account's household
+   router assigns is, by construction, that account's alone; an IP that
+   turns up under a second account is either shared upstream infrastructure
+   (CGNAT, a VPN exit) or, on the live store, `127.0.0.1` and default
+   `192.168.0.x` router ranges that unrelated households happen to reuse —
+   in both cases, evidence about a different account, not about this one.
+   Measured on the live store: 807 of 850 IPs used by more than one client
+   belong to exactly one `plex_account_id`; only 44 cross an account
+   boundary, and every one inspected was either loopback, an RFC1918
+   default, or a genuine public IP shared between the *two* shared accounts
+   themselves (plausibly the same physical household running both). None of
+   the 44 is trustworthy evidence that two devices *within one account* are
+   the same person, so the bar is the strictest one that still admits every
+   IP actually private to one account: more than one account disqualifies
+   it, full stop.
+
+An IP that connects two or more devices but fails either check is reported
+as discounted, with which check it failed, rather than silently dropped —
+per the acceptance criteria. In practice, on the live store, every
+multi-device IP that fails does so on criterion 2; criterion 1 can only ever
+discount a multi-device IP if `MIN_IP_OCCURRENCES` is raised above 2, since
+two distinct devices imply at least two plays by construction — it is kept
+for that future, not because it fires today.
+
+A join is a true merge, not a new tier: the merged devices' plays still key
+on `"client_identifier"`, just on a canonical representative (the
+alphabetically smallest `client_identifier` in the merged group) instead of
+each device's own id, so `key_tier` and the tier-ordering/sort behavior are
+unchanged. Which IP(s) did the joining is carried separately, on
+`Cluster.joined_by_ips`, so the report can name them without disturbing
+`key_value`. The canonical representative — not whichever id a union-find
+pass happens to leave as its internal root — is what makes the merge
+deterministic across runs regardless of dict/set iteration order.
 
 **The unit of taste analysis is the show, not the episode (issue #25).**
 `tmdb_keywords` enrichment is only ever written for movies and shows
@@ -71,10 +138,23 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from itertools import combinations
 
-#: An IP must recur on at least this many plays lacking a `client_identifier`
-#: before it is trusted as a household bucket for that account. Below this,
-#: it is excluded from clustering entirely — see the module docstring.
+#: An IP must recur on at least this many plays before it is trusted as
+#: signal for that account — below this, it is excluded entirely. Two
+#: independent uses share this one floor (see the module docstring): as a
+#: household-bucket fallback key for plays lacking a `client_identifier`
+#: (issue #10), and as the recurrence check for joining two different
+#: `client_identifier`s that share an IP (issue #27). Both ask the same
+#: question — has this IP shown up enough to be trusted — so one constant
+#: covers both rather than a second, undemonstrated number.
 MIN_IP_OCCURRENCES = 2
+
+#: An IP may join devices within an account only if it appears under no more
+#: than this many distinct `plex_account_id`s anywhere in the store. Above
+#: this, it reads as shared infrastructure (CGNAT, a VPN exit, a
+#: coincidentally reused private-range default) rather than one account's
+#: household — see the module docstring's "Joining devices on a recurring
+#: IP" section for the live-store numbers behind this bar.
+MAX_IP_ACCOUNTS_TO_JOIN = 1
 
 #: How many keywords a cluster's profile keeps, ranked by how many distinct
 #: units in the cluster carry them (ties broken alphabetically, so the
@@ -108,6 +188,13 @@ class Cluster:
     play; a show is the sum of its episodes' plays). Sorted by unit id for
     determinism. See the module docstring for why a unit contributes its
     keywords once regardless of depth.
+
+    `joined_by_ips` is every IP that caused two or more `client_identifier`s
+    to merge into this cluster (issue #27) — empty for a cluster that is a
+    single, unmerged device, or that landed here via the `"ip"`, `"platform"`,
+    or `"unclustered"` tier instead. Sorted for determinism; see the module
+    docstring's "Joining devices on a recurring IP" section for how an IP
+    earns a place here.
     """
 
     key_tier: str
@@ -118,6 +205,21 @@ class Cluster:
     item_ids: tuple[str, ...]
     units: tuple[tuple[str, int], ...]
     play_count: int
+    joined_by_ips: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class DiscountedJoinIp:
+    """An IP seen at two or more `client_identifier`s within an account, but
+    excluded from joining them anyway — reported so a reader can see what
+    was discounted and why, per issue #27's acceptance criteria. `reason` is
+    a complete, human-readable sentence fragment, not a code — the two
+    reasons (too rare, seen under more than one account) are prose because
+    there are only two of them and a symbolic reason code would just be
+    re-encoding this same string elsewhere."""
+
+    ip: str
+    reason: str
 
 
 @dataclass(frozen=True)
@@ -133,6 +235,9 @@ class AccountClusters:
     #: reported so a reader can see what was excluded and why, per the
     #: acceptance criteria.
     transient_ips: tuple[str, ...]
+    #: IPs that connected two or more devices but were discounted from
+    #: joining them — see `DiscountedJoinIp`. Sorted by ip for determinism.
+    discounted_join_ips: tuple[DiscountedJoinIp, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -195,13 +300,126 @@ def _account_play_rows(conn: sqlite3.Connection, plex_account_id: int) -> list[s
     ).fetchall()
 
 
-def cluster_account_plays(conn: sqlite3.Connection, plex_account_id: int) -> AccountClusters:
-    """Cluster one account's plays on the fingerprint fallback chain.
+def _ip_account_counts(conn: sqlite3.Connection) -> dict[str, int]:
+    """How many distinct `plex_account_id`s each IP appears under, across
+    every account in the store — not just the one being clustered. This is
+    the cross-account guard issue #27 asks for: an IP tied to more than one
+    account is shared infrastructure, not one account's household, and must
+    never join two devices even if it recurs plenty within a single account.
+    See the module docstring for the live-store numbers behind this check.
+    """
+    rows = conn.execute(
+        "SELECT ip, COUNT(DISTINCT plex_account_id) AS n FROM plays "
+        "WHERE ip IS NOT NULL GROUP BY ip"
+    ).fetchall()
+    return {row["ip"]: int(row["n"]) for row in rows}
 
-    Deterministic: the only inputs are `plays` rows for this account, and the
-    output ordering never depends on `plays`' own row order (queried without
-    one, then sorted explicitly below) — running this twice over an unchanged
-    store produces byte-identical `Cluster` tuples.
+
+def _find(parent: dict[str, str], x: str) -> str:
+    """Union-find root lookup with path compression."""
+    parent.setdefault(x, x)
+    root = x
+    while parent[root] != root:
+        root = parent[root]
+    while parent[x] != root:
+        parent[x], x = root, parent[x]
+    return root
+
+
+def _union(parent: dict[str, str], a: str, b: str) -> None:
+    ra, rb = _find(parent, a), _find(parent, b)
+    if ra != rb:
+        parent[ra] = rb
+
+
+def _join_devices_on_recurring_ips(
+    rows: list[sqlite3.Row], ip_account_counts: Mapping[str, int]
+) -> tuple[dict[str, str], dict[str, tuple[str, ...]], tuple[DiscountedJoinIp, ...]]:
+    """Decide which `client_identifier`s merge, on which IPs, and which
+    candidate IPs were discounted — the issue #27 half of clustering. See
+    the module docstring's "Joining devices on a recurring IP" section for
+    the eligibility rule.
+
+    Returns `(canonical, joined_by, discounted)`:
+    - `canonical` maps every `client_identifier` seen in `rows` to its
+      merged group's representative (itself, if it merged with nothing) —
+      the alphabetically smallest id in the group, chosen after union-find
+      settles so it does not depend on union call order.
+    - `joined_by` maps each representative to the sorted IPs that produced
+      its merge (absent, or empty, for a group that never merged).
+    - `discounted` is every candidate IP excluded from joining, sorted by ip.
+    """
+    distinct_client_identifiers = {r["client_identifier"] for r in rows if r["client_identifier"]}
+
+    ip_join_occurrences: Counter[str] = Counter()
+    ip_join_clients: dict[str, set[str]] = defaultdict(set)
+    for r in rows:
+        if r["client_identifier"] is not None and r["ip"] is not None:
+            ip_join_occurrences[r["ip"]] += 1
+            ip_join_clients[r["ip"]].add(r["client_identifier"])
+
+    parent: dict[str, str] = {}
+    joining_ips_by_client: dict[str, set[str]] = defaultdict(set)
+    discounted: list[DiscountedJoinIp] = []
+    for ip, clients in sorted(ip_join_clients.items()):
+        if len(clients) < 2:
+            continue  # not a join candidate at all — only one device ever used it
+        if ip_join_occurrences[ip] < MIN_IP_OCCURRENCES:
+            discounted.append(
+                DiscountedJoinIp(
+                    ip=ip, reason=f"seen on only {ip_join_occurrences[ip]} play(s) across devices"
+                )
+            )
+            continue
+        if ip_account_counts.get(ip, 0) > MAX_IP_ACCOUNTS_TO_JOIN:
+            discounted.append(
+                DiscountedJoinIp(
+                    ip=ip,
+                    reason=(
+                        f"seen under {ip_account_counts[ip]} different accounts, so treated "
+                        "as shared infrastructure rather than a household"
+                    ),
+                )
+            )
+            continue
+        ordered = sorted(clients)
+        for other in ordered[1:]:
+            _union(parent, ordered[0], other)
+        for client in ordered:
+            joining_ips_by_client[client].add(ip)
+
+    # Canonical representative per merged group: the alphabetically smallest
+    # member, independent of which id union-find happened to leave as root —
+    # see the module docstring for why this is what keeps the merge
+    # deterministic across runs.
+    groups: dict[str, set[str]] = defaultdict(set)
+    for client in distinct_client_identifiers:
+        groups[_find(parent, client)].add(client)
+    canonical: dict[str, str] = {}
+    for members in groups.values():
+        rep = min(members)
+        for member in members:
+            canonical[member] = rep
+
+    joined_by: dict[str, tuple[str, ...]] = defaultdict(tuple)
+    joined_by_sets: dict[str, set[str]] = defaultdict(set)
+    for client, ips in joining_ips_by_client.items():
+        joined_by_sets[canonical[client]].update(ips)
+    for rep, ips in joined_by_sets.items():
+        joined_by[rep] = tuple(sorted(ips))
+
+    return canonical, joined_by, tuple(sorted(discounted, key=lambda d: d.ip))
+
+
+def cluster_account_plays(conn: sqlite3.Connection, plex_account_id: int) -> AccountClusters:
+    """Cluster one account's plays on the fingerprint fallback chain, then
+    merge devices that share a recurring, single-account IP.
+
+    Deterministic: the only inputs are `plays` rows for this account (plus,
+    for the cross-account join check, the whole store's `ip` -> account-count
+    map), and the output ordering never depends on `plays`' own row order
+    (queried without one, then sorted explicitly below) — running this twice
+    over an unchanged store produces byte-identical `Cluster` tuples.
     """
     rows = _account_play_rows(conn, plex_account_id)
 
@@ -217,10 +435,18 @@ def cluster_account_plays(conn: sqlite3.Connection, plex_account_id: int) -> Acc
     eligible_ips = {ip for ip, count in ip_occurrences.items() if count >= MIN_IP_OCCURRENCES}
     transient_ips = tuple(sorted(ip for ip in ip_occurrences if ip not in eligible_ips))
 
+    ip_account_counts = _ip_account_counts(conn)
+    canonical, joined_by, discounted_join_ips = _join_devices_on_recurring_ips(
+        rows, ip_account_counts
+    )
+
     buckets: dict[tuple[str, str | None], list[sqlite3.Row]] = defaultdict(list)
     for row in rows:
         if row["client_identifier"] is not None:
-            key: tuple[str, str | None] = ("client_identifier", row["client_identifier"])
+            key: tuple[str, str | None] = (
+                "client_identifier",
+                canonical[row["client_identifier"]],
+            )
         elif row["ip"] is not None and row["ip"] in eligible_ips:
             key = ("ip", row["ip"])
         elif row["platform"] is not None:
@@ -241,6 +467,11 @@ def cluster_account_plays(conn: sqlite3.Connection, plex_account_id: int) -> Acc
             item_ids=tuple(sorted({r["item_id"] for r in members})),
             units=tuple(sorted(Counter(r["unit_id"] for r in members).items())),
             play_count=len(members),
+            joined_by_ips=(
+                joined_by.get(value, ())
+                if tier == "client_identifier" and value is not None
+                else ()
+            ),
         )
         for (tier, value), members in buckets.items()
     ]
@@ -254,6 +485,7 @@ def cluster_account_plays(conn: sqlite3.Connection, plex_account_id: int) -> Acc
         distinct_client_identifiers=len(distinct_client_identifiers),
         clusters=tuple(clusters),
         transient_ips=transient_ips,
+        discounted_join_ips=discounted_join_ips,
     )
 
 
@@ -364,9 +596,9 @@ def _render_shared_account(
     conn: sqlite3.Connection, plex_account_id: int, account_names: Mapping[int, str]
 ) -> str:
     """The full report for a configured shared account: structural
-    baseline, per-cluster keyword profile, and pairwise overlap — unchanged
-    from before issue #27, which only narrowed *which* accounts reach this
-    path."""
+    baseline, per-cluster keyword profile, and pairwise overlap, plus (issue
+    #27) which IPs joined devices into a cluster and which candidate IPs
+    were discounted from doing so."""
     account = cluster_account_plays(conn, plex_account_id)
     lines = [
         _account_header(plex_account_id, account_names),
@@ -380,6 +612,10 @@ def _render_shared_account(
             "plays with no client_identifier, so treated as passing traffic rather than "
             f"a household): {', '.join(account.transient_ips)}"
         )
+    if account.discounted_join_ips:
+        lines.append("IP(s) discounted from joining devices:")
+        for discounted in account.discounted_join_ips:
+            lines.append(f"  {discounted.ip}: {discounted.reason}")
 
     profiles: dict[int, KeywordProfile] = {}
     for index, cluster in enumerate(account.clusters, start=1):
@@ -390,6 +626,8 @@ def _render_shared_account(
         lines.append(f"cluster {index} [{cluster.key_tier}={cluster.key_value!r}]")
         devices = ", ".join(cluster.client_identifiers) or "(none)"
         lines.append(f"  client_identifier(s): {devices}")
+        if cluster.joined_by_ips:
+            lines.append(f"  joined by ip(s): {', '.join(cluster.joined_by_ips)}")
         lines.append(f"  ip(s) seen: {', '.join(cluster.ips) or '(none)'}")
         lines.append(f"  platform(s): {', '.join(cluster.platforms) or '(none)'}")
         lines.append(

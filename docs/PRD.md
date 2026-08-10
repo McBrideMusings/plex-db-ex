@@ -146,6 +146,13 @@ one device genuinely serves two different people, which does not describe this u
 that the Android machine id already embeds the product, so the third tier is partly redundant
 with the first.
 
+**A recurring, single-account IP also joins two different client machine ids into one cluster**,
+on top of the fallback chain above — within a shared account, two devices seen at the same
+address are probably one household member. An IP seen under more than one Plex account anywhere
+in the store never joins anything, since that means it is shared infrastructure (CGNAT, a VPN
+exit, a coincidentally reused private-range default) rather than evidence about one account's
+household.
+
 **The negative-signal floor measures footage actually watched net of pause** — a sampled play
 showed 182 seconds of paused time against an otherwise identical duration. No play under roughly
 30 seconds of real footage counts at all, and even above the floor it stays low-confidence until
