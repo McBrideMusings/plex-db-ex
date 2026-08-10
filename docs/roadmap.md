@@ -17,7 +17,7 @@ the measurement that proves it, and the reason the rest of this milestone exists
 - [x] [#16](https://github.com/McBrideMusings/plex-db-ex/issues/16) Set the busy timeout explicitly instead of inheriting it
 - [x] [#3](https://github.com/McBrideMusings/plex-db-ex/issues/3) Walk the Plex library into items and external ids
 - [x] [#4](https://github.com/McBrideMusings/plex-db-ex/issues/4) Fetch TMDB keywords into namespaced enrichment, cached
-- [ ] [#5](https://github.com/McBrideMusings/plex-db-ex/issues/5) Reconcile derived identities against `etv-station`'s catalog
+- [x] [#5](https://github.com/McBrideMusings/plex-db-ex/issues/5) Reconcile derived identities against `etv-station`'s catalog
 
 ## Next
 

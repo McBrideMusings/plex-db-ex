@@ -13,6 +13,7 @@ plex-db-ex/
 │   │   ├── ingest_plays.py
 │   │   ├── init.py
 │   │   ├── publish.py
+│   │   ├── reconcile_etv.py
 │   │   └── walk.py
 │   ├── config.py          settings from .env; never a default for a URL or a token
 │   ├── errors.py          the errors a user is meant to see, as one `error: …` line
@@ -20,6 +21,7 @@ plex-db-ex/
 │   ├── enrich_tmdb.py     TMDB keyword sweep: namespaced, cached, staleness-gated, tolerant of a failing title (aborts after 3 in a row)
 │   ├── plays.py           watch-history ingest: Plex history into plays, incrementally
 │   ├── plex_client.py     read-only Plex HTTP client behind a PlexSource protocol
+│   ├── reconcile_etv.py   compares item_id against etv-station's entry_id, joined by Plex rating key; read-only on both stores, reports and never fixes
 │   ├── tmdb_client.py     read-only TMDB client (keywords, recommendations, similar) behind a TMDbSource protocol
 │   ├── tmdb_edges.py      TMDB recommendations/similar sweep: two edge types, replace-wholesale per (from_id, edge_type), cached via a tmdb_edges enrichment cursor
 │   ├── walk.py            the library walk: Plex sections into items, external_ids, plex_items
