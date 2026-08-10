@@ -38,6 +38,7 @@ EXPECTED_COMMANDS = {
     "local-edges",
     "ingest-plays",
     "enrich-tautulli-plays",
+    "latent-users",
     "reconcile-etv",
 }
 
@@ -53,6 +54,7 @@ EXPECTED_COMMAND_ORDER = [
     "local-edges",
     "ingest-plays",
     "enrich-tautulli-plays",
+    "latent-users",
     "reconcile-etv",
 ]
 
@@ -751,6 +753,76 @@ def test_ingest_plays_a_second_time_adds_no_duplicate_rows(
     with sqlite3.connect(store) as conn:
         count = conn.execute("SELECT count(*) FROM plays").fetchone()[0]
     assert count == 3
+
+
+def test_latent_users_reports_clusters_from_the_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    store = tmp_path / "plexdb.db"
+    monkeypatch.setenv("PLEXDB_PATH", str(store))
+    init_store(store)
+    with open_store(store) as conn:
+        conn.execute(
+            "INSERT INTO items (item_id, type, title) VALUES ('imdb:tt0096734', 'movie', ?)",
+            ("The 'Burbs",),
+        )
+        conn.execute(
+            "INSERT INTO plays (history_key, item_id, plex_account_id, client_identifier, "
+            "viewed_at) VALUES ('h1', 'imdb:tt0096734', 7, 'device-alpha-001', 1700000000)"
+        )
+        conn.commit()
+    capsys.readouterr()
+
+    assert main(["latent-users"]) == 0
+
+    out = capsys.readouterr().out
+    assert "== account 7 ==" in out
+    assert "structural baseline: 1 play(s), 1 distinct client_identifier(s), 1 cluster(s)" in out
+    assert "cluster 1 [client_identifier='device-alpha-001']" in out
+
+
+def test_latent_users_never_writes_the_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Guards the read-only claim end to end: a store with zero plays is
+    untouched by running the command, not merely "reported as empty"."""
+    store = tmp_path / "plexdb.db"
+    monkeypatch.setenv("PLEXDB_PATH", str(store))
+    init_store(store)
+    before = store.stat().st_mtime_ns
+    capsys.readouterr()
+
+    assert main(["latent-users"]) == 0
+
+    out = capsys.readouterr().out
+    assert out == "\n"
+    assert store.stat().st_mtime_ns == before
+
+
+def test_latent_users_can_be_scoped_to_one_account(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    store = tmp_path / "plexdb.db"
+    monkeypatch.setenv("PLEXDB_PATH", str(store))
+    init_store(store)
+    with open_store(store) as conn:
+        conn.execute("INSERT INTO items (item_id, type, title) VALUES ('imdb:tt1', 'movie', 'A')")
+        conn.execute(
+            "INSERT INTO plays (history_key, item_id, plex_account_id, client_identifier, "
+            "viewed_at) VALUES ('h1', 'imdb:tt1', 1, 'd1', 1700000000)"
+        )
+        conn.execute(
+            "INSERT INTO plays (history_key, item_id, plex_account_id, client_identifier, "
+            "viewed_at) VALUES ('h2', 'imdb:tt1', 2, 'd2', 1700000000)"
+        )
+        conn.commit()
+    capsys.readouterr()
+
+    assert main(["latent-users", "--account", "2"]) == 0
+
+    out = capsys.readouterr().out
+    assert "account 2" in out
+    assert "account 1" not in out
 
 
 def test_enrich_tmdb_keywords_without_an_api_key_is_an_error_not_a_default(
