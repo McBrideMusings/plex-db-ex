@@ -37,9 +37,16 @@ def store(tmp_path: Path) -> sqlite3.Connection:
     conn.close()
 
 
-def _seed_item(conn: sqlite3.Connection, item_id: str) -> None:
+def _seed_item(
+    conn: sqlite3.Connection,
+    item_id: str,
+    *,
+    item_type: str = "movie",
+    show_item_id: str | None = None,
+) -> None:
     conn.execute(
-        "INSERT INTO items (item_id, type, title) VALUES (?, 'movie', ?)", (item_id, item_id)
+        "INSERT INTO items (item_id, type, title, show_item_id) VALUES (?, ?, ?, ?)",
+        (item_id, item_type, item_id, show_item_id),
     )
 
 
@@ -215,10 +222,55 @@ def test_clustering_is_deterministic_across_repeated_calls(store: sqlite3.Connec
     assert [c.key_value for c in first.clusters] == ["device-a", "device-b"]
 
 
+def test_episode_plays_roll_up_to_one_unit_keyed_by_show_item_id(
+    store: sqlite3.Connection,
+) -> None:
+    """Issue #25's decided rule: an episode's unit is its show, and depth is
+    the number of episode plays that rolled into it."""
+    _seed_item(store, "show:office", item_type="show")
+    _seed_item(store, "ep:office:s1e1", item_type="episode", show_item_id="show:office")
+    _seed_item(store, "ep:office:s1e2", item_type="episode", show_item_id="show:office")
+    _seed_play(store, history_key="h1", item_id="ep:office:s1e1", client_identifier="device-a")
+    _seed_play(store, history_key="h2", item_id="ep:office:s1e2", client_identifier="device-a")
+
+    result = cluster_account_plays(store, ACCOUNT)
+
+    assert len(result.clusters) == 1
+    cluster = result.clusters[0]
+    # Two distinct episodes literally played...
+    assert len(cluster.item_ids) == 2
+    # ...but one unit (the show), with depth 2.
+    assert cluster.units == (("show:office", 2),)
+
+
+def test_a_movie_is_its_own_unit_with_depth_from_rewatches(store: sqlite3.Connection) -> None:
+    _seed_item(store, "movie:1")
+    _seed_play(store, history_key="h1", item_id="movie:1", client_identifier="device-a")
+    _seed_play(store, history_key="h2", item_id="movie:1", client_identifier="device-a")
+
+    result = cluster_account_plays(store, ACCOUNT)
+
+    assert len(result.clusters) == 1
+    assert result.clusters[0].units == (("movie:1", 2),)
+
+
+def test_a_mixed_cluster_units_shows_and_movies_separately(store: sqlite3.Connection) -> None:
+    _seed_item(store, "show:office", item_type="show")
+    _seed_item(store, "ep:office:s1e1", item_type="episode", show_item_id="show:office")
+    _seed_item(store, "movie:1")
+    _seed_play(store, history_key="h1", item_id="ep:office:s1e1", client_identifier="device-a")
+    _seed_play(store, history_key="h2", item_id="movie:1", client_identifier="device-a")
+
+    result = cluster_account_plays(store, ACCOUNT)
+
+    assert len(result.clusters) == 1
+    assert result.clusters[0].units == (("movie:1", 1), ("show:office", 1))
+
+
 # --- build_keyword_profile / profile_overlap ----------------------------
 
 
-def test_keyword_profile_counts_each_item_at_most_once_per_keyword(
+def test_keyword_profile_counts_each_unit_at_most_once_per_keyword(
     store: sqlite3.Connection,
 ) -> None:
     _seed_item(store, "item:1")
@@ -227,12 +279,12 @@ def test_keyword_profile_counts_each_item_at_most_once_per_keyword(
     _seed_keyword(store, "item:1", "gotham city")
     _seed_keyword(store, "item:2", "superhero")
 
-    profile = build_keyword_profile(store, ["item:1", "item:2"])
+    profile = build_keyword_profile(store, [("item:1", 1), ("item:2", 1)])
 
-    assert profile.items_total == 2
-    assert profile.items_with_coverage == 2
+    assert profile.units_total == 2
+    assert profile.units_with_coverage == 2
     assert dict(profile.top_keywords) == {"superhero": 2, "gotham city": 1}
-    # Ranked by item-count desc, then alphabetically.
+    # Ranked by unit-count desc, then alphabetically.
     assert profile.top_keywords[0] == ("superhero", 2)
 
 
@@ -242,10 +294,10 @@ def test_keyword_profile_reports_zero_coverage_rather_than_an_empty_profile(
     _seed_item(store, "item:1")
     # No enrichment row at all for item:1 — never enriched.
 
-    profile = build_keyword_profile(store, ["item:1"])
+    profile = build_keyword_profile(store, [("item:1", 1)])
 
-    assert profile.items_total == 1
-    assert profile.items_with_coverage == 0
+    assert profile.units_total == 1
+    assert profile.units_with_coverage == 0
     assert profile.top_keywords == ()
     assert profile.has_coverage is False
 
@@ -261,37 +313,85 @@ def test_keyword_profile_treats_fetched_but_empty_the_same_as_never_fetched(
     _seed_item(store, "item:1")
     _mark_enriched_with_no_keywords(store, "item:1")
 
-    profile = build_keyword_profile(store, ["item:1"])
+    profile = build_keyword_profile(store, [("item:1", 1)])
 
-    assert profile.items_with_coverage == 0
+    assert profile.units_with_coverage == 0
     assert profile.has_coverage is False
 
 
-def test_keyword_profile_of_no_items_is_empty_not_an_error(store: sqlite3.Connection) -> None:
+def test_keyword_profile_of_no_units_is_empty_not_an_error(store: sqlite3.Connection) -> None:
     profile = build_keyword_profile(store, [])
 
-    assert profile == KeywordProfile(items_total=0, items_with_coverage=0, top_keywords=())
+    assert profile == KeywordProfile(
+        units_total=0, units_with_coverage=0, total_depth=0, covered_depth=0, top_keywords=()
+    )
+
+
+def test_keyword_profile_counts_a_show_once_regardless_of_episode_depth(
+    store: sqlite3.Connection,
+) -> None:
+    """The decided rule (issue #25 comment): a show contributes its keyword
+    set once per cluster no matter how many episodes were played — a depth
+    of 10 must not make the show's keywords outweigh a movie's."""
+    _seed_item(store, "show:office", item_type="show")
+    _seed_item(store, "movie:1")
+    _seed_keyword(store, "show:office", "workplace comedy")
+    _seed_keyword(store, "movie:1", "heist")
+
+    # The show has depth 10 (ten episode plays); the movie has depth 1.
+    profile = build_keyword_profile(store, [("show:office", 10), ("movie:1", 1)])
+
+    assert profile.units_total == 2
+    assert profile.units_with_coverage == 2
+    assert profile.total_depth == 11
+    assert profile.covered_depth == 11
+    # Each unit contributes its keyword(s) exactly once, so both keywords
+    # tie at a count of 1 despite the tenfold difference in depth.
+    assert dict(profile.top_keywords) == {"workplace comedy": 1, "heist": 1}
+
+
+def test_keyword_profile_covered_depth_reflects_only_covered_units(
+    store: sqlite3.Connection,
+) -> None:
+    _seed_item(store, "show:office", item_type="show")
+    _seed_item(store, "show:uncovered", item_type="show")
+    _seed_keyword(store, "show:office", "workplace comedy")
+    # show:uncovered never enriched.
+
+    profile = build_keyword_profile(store, [("show:office", 10), ("show:uncovered", 5)])
+
+    assert profile.total_depth == 15
+    assert profile.covered_depth == 10
+
+
+def _profile(*keywords: str) -> KeywordProfile:
+    """A one-unit, one-play-deep profile carrying `keywords`, each at a count
+    of 1. `profile_overlap` reads only `top_keywords` and `has_coverage`, so
+    the coverage fields follow from whether any keyword was given: no
+    keywords means the unit carries no `tmdb_keywords` at all."""
+    covered = 1 if keywords else 0
+    return KeywordProfile(
+        units_total=1,
+        units_with_coverage=covered,
+        total_depth=1,
+        covered_depth=covered,
+        top_keywords=tuple((keyword, 1) for keyword in keywords),
+    )
 
 
 def test_profile_overlap_of_identical_profiles_is_one(store: sqlite3.Connection) -> None:
-    a = KeywordProfile(items_total=1, items_with_coverage=1, top_keywords=(("horror", 1),))
-    b = KeywordProfile(items_total=1, items_with_coverage=1, top_keywords=(("horror", 1),))
-
-    assert profile_overlap(a, b) == 1.0
+    assert profile_overlap(_profile("horror"), _profile("horror")) == 1.0
 
 
 def test_profile_overlap_of_disjoint_profiles_is_zero(store: sqlite3.Connection) -> None:
-    a = KeywordProfile(items_total=1, items_with_coverage=1, top_keywords=(("horror", 1),))
-    b = KeywordProfile(items_total=1, items_with_coverage=1, top_keywords=(("romance", 1),))
-
-    assert profile_overlap(a, b) == 0.0
+    assert profile_overlap(_profile("horror"), _profile("romance")) == 0.0
 
 
 def test_profile_overlap_is_none_when_either_side_has_no_coverage(
     store: sqlite3.Connection,
 ) -> None:
-    covered = KeywordProfile(items_total=1, items_with_coverage=1, top_keywords=(("horror", 1),))
-    uncovered = KeywordProfile(items_total=1, items_with_coverage=0, top_keywords=())
+    covered = _profile("horror")
+    uncovered = _profile()
 
     assert profile_overlap(covered, uncovered) is None
     assert profile_overlap(uncovered, covered) is None
@@ -320,7 +420,7 @@ def test_render_report_states_coverage_for_a_cluster_with_none(store: sqlite3.Co
     report = render_report(store)
 
     assert "no enrichment coverage" in report
-    assert "0/1 item(s) carry tmdb_keywords" in report
+    assert "0/1 unit(s) carry tmdb_keywords" in report
 
 
 def test_render_report_names_transient_ips_and_why(store: sqlite3.Connection) -> None:
@@ -377,6 +477,47 @@ def test_render_report_reports_na_overlap_when_one_cluster_has_no_coverage(
     report = render_report(store)
 
     assert "no enrichment coverage on one or both" in report
+
+
+def test_render_report_covers_an_episode_only_cluster_via_its_shows_keywords(
+    store: sqlite3.Connection,
+) -> None:
+    """Before issue #25's fix this cluster read 'no enrichment coverage' —
+    the episodes it played never carry `tmdb_keywords` themselves. After
+    the rollup to `show_item_id`, the show's keywords cover it."""
+    _seed_item(store, "show:office", item_type="show")
+    _seed_item(store, "ep:office:s1e1", item_type="episode", show_item_id="show:office")
+    _seed_item(store, "ep:office:s1e2", item_type="episode", show_item_id="show:office")
+    _seed_keyword(store, "show:office", "workplace comedy")
+    _seed_play(store, history_key="h1", item_id="ep:office:s1e1", client_identifier="device-a")
+    _seed_play(store, history_key="h2", item_id="ep:office:s1e2", client_identifier="device-a")
+
+    report = render_report(store)
+
+    assert "no enrichment coverage" not in report
+    assert "workplace comedy" in report
+    assert "1/1 unit(s) with tmdb_keywords coverage, spanning 2/2 play(s) deep" in report
+
+
+def test_render_report_overlap_is_real_between_two_episode_only_clusters(
+    store: sqlite3.Connection,
+) -> None:
+    """The issue's headline complaint: pairwise overlap between two
+    all-episode clusters printed 'n/a' before the rollup. It must be a real
+    number once both clusters' shows carry keywords."""
+    _seed_item(store, "show:office", item_type="show")
+    _seed_item(store, "ep:office:s1e1", item_type="episode", show_item_id="show:office")
+    _seed_item(store, "show:parks", item_type="show")
+    _seed_item(store, "ep:parks:s1e1", item_type="episode", show_item_id="show:parks")
+    _seed_keyword(store, "show:office", "workplace comedy")
+    _seed_keyword(store, "show:parks", "workplace comedy")
+    _seed_play(store, history_key="h1", item_id="ep:office:s1e1", client_identifier="device-a")
+    _seed_play(store, history_key="h2", item_id="ep:parks:s1e1", client_identifier="device-b")
+
+    report = render_report(store)
+
+    assert "no enrichment coverage on one or both" not in report
+    assert "cluster 1 vs cluster 2: 1.00" in report
 
 
 def test_render_report_scopes_to_the_requested_accounts(store: sqlite3.Connection) -> None:

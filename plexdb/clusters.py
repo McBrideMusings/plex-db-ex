@@ -26,6 +26,25 @@ cellular address passing through once. `MIN_IP_OCCURRENCES` is the floor
 below which an IP is treated as though it were absent, falling through to
 the platform tier (or the unclustered bucket) instead of becoming its own
 one-play cluster.
+
+**The unit of taste analysis is the show, not the episode (issue #25).**
+`tmdb_keywords` enrichment is only ever written for movies and shows
+(`enrich_tmdb_keywords.py`) — an episode's own `item_id` never carries it.
+90.5% of plays are episodes, so building a keyword profile from the played
+`item_id` directly reads coverage for under 10% of plays. Every episode
+carries `items.show_item_id`, so the profile is built from
+`coalesce(show_item_id, item_id)` instead: a "unit". A movie has no
+`show_item_id` and is its own unit under the same expression.
+
+A unit contributes its keyword set **once** to a cluster's profile no
+matter how many episodes of it were played — never once per episode. The
+alternative (once per episode play) was rejected: on this server, one show
+alone accounts for 5% of all plays ever recorded, and repeating its keyword
+set once per episode would let that single binge outweigh every film an
+account ever watched, describing the show instead of the person. Depth —
+how many plays rolled into each unit — is tracked alongside (`Cluster.units`)
+and reported next to coverage, but it never re-weights which keywords rank
+in the profile.
 """
 
 from __future__ import annotations
@@ -42,7 +61,7 @@ from itertools import combinations
 MIN_IP_OCCURRENCES = 2
 
 #: How many keywords a cluster's profile keeps, ranked by how many distinct
-#: items in the cluster carry them (ties broken alphabetically, so the
+#: units in the cluster carry them (ties broken alphabetically, so the
 #: profile — and therefore the overlap computed from it — is stable across
 #: runs over unchanged data).
 TOP_N_KEYWORDS = 20
@@ -64,6 +83,15 @@ class Cluster:
     every distinct value of that field seen among the cluster's plays, sorted
     for determinism — informational for a human reading the report, never
     used as a second clustering pass.
+
+    `item_ids` is every distinct item literally played (an episode and its
+    show are different entries here) — structural, unrelated to taste
+    analysis. `units` is the taste-analysis view: every distinct
+    `coalesce(show_item_id, item_id)` played, each paired with its depth —
+    the number of plays that rolled into it (an episode counts its own
+    play; a show is the sum of its episodes' plays). Sorted by unit id for
+    determinism. See the module docstring for why a unit contributes its
+    keywords once regardless of depth.
     """
 
     key_tier: str
@@ -72,6 +100,7 @@ class Cluster:
     ips: tuple[str, ...]
     platforms: tuple[str, ...]
     item_ids: tuple[str, ...]
+    units: tuple[tuple[str, int], ...]
     play_count: int
 
 
@@ -92,17 +121,29 @@ class AccountClusters:
 
 @dataclass(frozen=True)
 class KeywordProfile:
-    """A cluster's top-N keyword profile, and the coverage it was built
-    from. `items_with_coverage` can be zero — that is a real, reportable
-    result (the acceptance criteria calls it out explicitly), not an error."""
+    """A cluster's top-N keyword profile, built over units (see the module
+    docstring), and the coverage it was built from. `units_with_coverage`
+    can be zero — that is a real, reportable result (the acceptance
+    criteria calls it out explicitly), not an error.
 
-    items_total: int
-    items_with_coverage: int
+    `total_depth` and `covered_depth` are play counts, not unit counts: how
+    many of the cluster's plays rolled into any unit, and how many rolled
+    into a unit that actually carries `tmdb_keywords`. This is the figure
+    the issue itself measures coverage by (9.3% of *plays* today, 92.4%
+    after the rollup) — unit counts alone would understate how much of the
+    account's actual viewing the profile now accounts for, since a single
+    covered show can carry hundreds of plays.
+    """
+
+    units_total: int
+    units_with_coverage: int
+    total_depth: int
+    covered_depth: int
     top_keywords: tuple[tuple[str, int], ...]
 
     @property
     def has_coverage(self) -> bool:
-        return self.items_with_coverage > 0
+        return self.units_with_coverage > 0
 
 
 def account_ids_with_plays(conn: sqlite3.Connection) -> list[int]:
@@ -127,8 +168,14 @@ def cluster_account_plays(conn: sqlite3.Connection, plex_account_id: int) -> Acc
     one, then sorted explicitly below) — running this twice over an unchanged
     store produces byte-identical `Cluster` tuples.
     """
+    # INNER JOIN, not LEFT: plays.item_id is NOT NULL REFERENCES items(item_id)
+    # ON DELETE CASCADE, so every play row has a matching items row by
+    # construction — there is no play whose unit this join could drop.
     rows = conn.execute(
-        "SELECT item_id, client_identifier, ip, platform FROM plays WHERE plex_account_id = ?",
+        "SELECT p.item_id, p.client_identifier, p.ip, p.platform, "
+        "COALESCE(i.show_item_id, p.item_id) AS unit_id "
+        "FROM plays p JOIN items i ON i.item_id = p.item_id "
+        "WHERE p.plex_account_id = ?",
         (plex_account_id,),
     ).fetchall()
 
@@ -166,6 +213,7 @@ def cluster_account_plays(conn: sqlite3.Connection, plex_account_id: int) -> Acc
             ips=tuple(sorted({r["ip"] for r in members if r["ip"]})),
             platforms=tuple(sorted({r["platform"] for r in members if r["platform"]})),
             item_ids=tuple(sorted({r["item_id"] for r in members})),
+            units=tuple(sorted(Counter(r["unit_id"] for r in members).items())),
             play_count=len(members),
         )
         for (tier, value), members in buckets.items()
@@ -185,38 +233,46 @@ def cluster_account_plays(conn: sqlite3.Connection, plex_account_id: int) -> Acc
 
 def build_keyword_profile(
     conn: sqlite3.Connection,
-    item_ids: Sequence[str],
+    units: Sequence[tuple[str, int]],
     *,
     top_n: int = TOP_N_KEYWORDS,
 ) -> KeywordProfile:
-    """The top-`top_n` `tmdb_keywords` keywords across `item_ids`, ranked by
-    how many distinct items in the set carry each one.
+    """The top-`top_n` `tmdb_keywords` keywords across `units`, ranked by how
+    many distinct units carry each one.
 
-    Each item contributes a keyword at most once regardless of how many
-    times that item was replayed — `item_ids` is already the cluster's
-    distinct-item set, not its play list, so a rewatched title cannot crowd
-    out the rest of the profile.
+    `units` is a cluster's `(unit_id, depth)` pairs — `unit_id` is
+    `coalesce(show_item_id, item_id)`, already deduplicated to one entry per
+    show or movie regardless of episode count (see the module docstring for
+    why). A unit contributes a keyword at most once no matter its depth, so
+    a heavily-binged show cannot crowd out the rest of the profile any more
+    than a title played twice could before this change.
     """
-    if not item_ids:
-        return KeywordProfile(items_total=0, items_with_coverage=0, top_keywords=())
+    if not units:
+        return KeywordProfile(
+            units_total=0, units_with_coverage=0, total_depth=0, covered_depth=0, top_keywords=()
+        )
 
-    placeholders = ",".join("?" for _ in item_ids)
+    depth_by_unit = dict(units)
+
+    placeholders = ",".join("?" for _ in depth_by_unit)
     rows = conn.execute(
         "SELECT item_id, value FROM enrichment "
         f"WHERE namespace = ? AND key = ? AND item_id IN ({placeholders})",
-        (_TMDB_KEYWORDS_NAMESPACE, _KEYWORD_KEY, *item_ids),
+        (_TMDB_KEYWORDS_NAMESPACE, _KEYWORD_KEY, *depth_by_unit.keys()),
     ).fetchall()
 
     counts: Counter[str] = Counter()
-    covered_items: set[str] = set()
+    covered_units: set[str] = set()
     for row in rows:
         counts[row["value"]] += 1
-        covered_items.add(row["item_id"])
+        covered_units.add(row["item_id"])
 
     top_keywords = tuple(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:top_n])
     return KeywordProfile(
-        items_total=len(item_ids),
-        items_with_coverage=len(covered_items),
+        units_total=len(depth_by_unit),
+        units_with_coverage=len(covered_units),
+        total_depth=sum(depth_by_unit.values()),
+        covered_depth=sum(depth_by_unit[unit_id] for unit_id in covered_units),
         top_keywords=top_keywords,
     )
 
@@ -271,7 +327,7 @@ def render_report(conn: sqlite3.Connection, plex_account_ids: Sequence[int] | No
 
         profiles: dict[int, KeywordProfile] = {}
         for index, cluster in enumerate(account.clusters, start=1):
-            profile = build_keyword_profile(conn, cluster.item_ids)
+            profile = build_keyword_profile(conn, cluster.units)
             profiles[index] = profile
 
             lines.append("")
@@ -280,17 +336,21 @@ def render_report(conn: sqlite3.Connection, plex_account_ids: Sequence[int] | No
             lines.append(f"  client_identifier(s): {devices}")
             lines.append(f"  ip(s) seen: {', '.join(cluster.ips) or '(none)'}")
             lines.append(f"  platform(s): {', '.join(cluster.platforms) or '(none)'}")
-            lines.append(f"  plays: {cluster.play_count}, distinct items: {len(cluster.item_ids)}")
+            lines.append(
+                f"  plays: {cluster.play_count}, distinct items: {len(cluster.item_ids)}, "
+                f"distinct units (a show counts once, not once per episode): {len(cluster.units)}"
+            )
             if profile.has_coverage:
                 top = ", ".join(f"{keyword} ({count})" for keyword, count in profile.top_keywords)
                 lines.append(
-                    f"  keyword profile ({profile.items_with_coverage}/{profile.items_total} "
-                    f"item(s) with tmdb_keywords coverage): {top}"
+                    f"  keyword profile ({profile.units_with_coverage}/{profile.units_total} "
+                    f"unit(s) with tmdb_keywords coverage, spanning "
+                    f"{profile.covered_depth}/{profile.total_depth} play(s) deep): {top}"
                 )
             else:
                 lines.append(
                     f"  keyword profile: no enrichment coverage "
-                    f"(0/{profile.items_total} item(s) carry tmdb_keywords)"
+                    f"(0/{profile.units_total} unit(s) carry tmdb_keywords)"
                 )
 
         lines.append("")
