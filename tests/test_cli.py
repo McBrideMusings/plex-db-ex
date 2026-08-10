@@ -18,6 +18,7 @@ from plex_fixtures import (
 from tmdb_fixtures import FakeTMDbSource
 
 from plexdb.cli import _register_commands, build_parser, main
+from plexdb.clusters import LATENT_USER_FLOOR
 from plexdb.commands import enrich_tmdb_edges as enrich_tmdb_edges_cmd
 from plexdb.commands import enrich_tmdb_keywords as enrich_tmdb_keywords_cmd
 from plexdb.commands import ingest_plays as ingest_plays_cmd
@@ -837,10 +838,15 @@ def test_latent_users_reports_a_shared_account_with_its_structural_baseline(
             "INSERT INTO items (item_id, type, title) VALUES ('imdb:tt0096734', 'movie', ?)",
             ("The 'Burbs",),
         )
-        conn.execute(
-            "INSERT INTO plays (history_key, item_id, plex_account_id, client_identifier, "
-            "viewed_at) VALUES ('h1', 'imdb:tt0096734', 7, 'device-alpha-001', 1700000000)"
-        )
+        # LATENT_USER_FLOOR plays, so this cluster clears the floor (issue
+        # #28) and is still reported as a latent user, not folded into the
+        # unattributed bucket.
+        for i in range(LATENT_USER_FLOOR):
+            conn.execute(
+                "INSERT INTO plays (history_key, item_id, plex_account_id, client_identifier, "
+                "viewed_at) VALUES (?, 'imdb:tt0096734', 7, 'device-alpha-001', 1700000000)",
+                (f"h{i}",),
+            )
         conn.commit()
     capsys.readouterr()
 
@@ -848,7 +854,10 @@ def test_latent_users_reports_a_shared_account_with_its_structural_baseline(
 
     out = capsys.readouterr().out
     assert "== account 7 ==" in out
-    assert "structural baseline: 1 play(s), 1 distinct client_identifier(s), 1 cluster(s)" in out
+    assert (
+        f"structural baseline: {LATENT_USER_FLOOR} play(s), 1 distinct client_identifier(s), "
+        f"1 cluster(s) found, 1 at or above the {LATENT_USER_FLOOR}-play floor" in out
+    )
     assert "cluster 1 [client_identifier='device-alpha-001']" in out
 
 

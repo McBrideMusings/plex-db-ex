@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from plexdb.clusters import (
+    LATENT_USER_FLOOR,
     MIN_IP_OCCURRENCES,
     DiscountedJoinIp,
     KeywordProfile,
@@ -68,6 +69,34 @@ def _seed_play(
         "platform, viewed_at, ip) VALUES (?, ?, ?, ?, ?, ?, ?)",
         (history_key, item_id, account, client_identifier, platform, viewed_at, ip),
     )
+
+
+def _seed_plays_at_floor(
+    conn: sqlite3.Connection,
+    *,
+    history_key_prefix: str,
+    item_id: str,
+    count: int = LATENT_USER_FLOOR,
+    account: int = ACCOUNT,
+    client_identifier: str | None = None,
+    ip: str | None = None,
+    platform: str | None = None,
+) -> None:
+    """Seed `count` plays of the same item/device so a test cluster clears
+    `LATENT_USER_FLOOR` and is reported as a latent user rather than folded
+    into the `unattributed` bucket (issue #28). Defaults to exactly the
+    floor; a cluster this module reports on the boundary is at the floor,
+    never one under it — see `_split_by_floor`."""
+    for i in range(count):
+        _seed_play(
+            conn,
+            history_key=f"{history_key_prefix}-{i}",
+            item_id=item_id,
+            account=account,
+            client_identifier=client_identifier,
+            ip=ip,
+            platform=platform,
+        )
 
 
 def _seed_keyword(conn: sqlite3.Connection, item_id: str, keyword: str) -> None:
@@ -532,7 +561,9 @@ def test_render_report_is_byte_identical_across_repeated_calls(
 
 def test_render_report_states_coverage_for_a_cluster_with_none(store: sqlite3.Connection) -> None:
     _seed_item(store, "item:1")
-    _seed_play(store, history_key="h1", item_id="item:1", client_identifier="device-a")
+    _seed_plays_at_floor(
+        store, history_key_prefix="h", item_id="item:1", client_identifier="device-a"
+    )
 
     report = render_report(store, shared_account_ids=[ACCOUNT])
 
@@ -560,17 +591,29 @@ def test_render_report_names_transient_ips_and_why(store: sqlite3.Connection) ->
 def test_render_report_names_the_ip_that_joined_a_cluster(store: sqlite3.Connection) -> None:
     _seed_item(store, "item:1")
     _seed_item(store, "item:2")
-    _seed_play(
-        store, history_key="h1", item_id="item:1", client_identifier="device-a", ip="10.0.0.5"
+    # 10 plays each, all sharing the joining IP, so the merged cluster's
+    # total (20) clears LATENT_USER_FLOOR and is reported as a latent user.
+    _seed_plays_at_floor(
+        store,
+        history_key_prefix="h1",
+        item_id="item:1",
+        count=10,
+        client_identifier="device-a",
+        ip="10.0.0.5",
     )
-    _seed_play(
-        store, history_key="h2", item_id="item:2", client_identifier="device-b", ip="10.0.0.5"
+    _seed_plays_at_floor(
+        store,
+        history_key_prefix="h2",
+        item_id="item:2",
+        count=10,
+        client_identifier="device-b",
+        ip="10.0.0.5",
     )
 
     report = render_report(store, shared_account_ids=[ACCOUNT])
 
     assert "joined by ip(s): 10.0.0.5" in report
-    assert "1 cluster(s)" in report
+    assert f"1 cluster(s) found, 1 at or above the {LATENT_USER_FLOOR}-play floor" in report
 
 
 def test_render_report_names_a_discounted_join_ip_and_why(store: sqlite3.Connection) -> None:
@@ -614,8 +657,12 @@ def test_render_report_computes_pairwise_overlap_between_clusters(
     _seed_item(store, "item:2")
     _seed_keyword(store, "item:1", "superhero")
     _seed_keyword(store, "item:2", "superhero")
-    _seed_play(store, history_key="h1", item_id="item:1", client_identifier="device-a")
-    _seed_play(store, history_key="h2", item_id="item:2", client_identifier="device-b")
+    _seed_plays_at_floor(
+        store, history_key_prefix="h1", item_id="item:1", client_identifier="device-a"
+    )
+    _seed_plays_at_floor(
+        store, history_key_prefix="h2", item_id="item:2", client_identifier="device-b"
+    )
 
     report = render_report(store, shared_account_ids=[ACCOUNT])
 
@@ -629,8 +676,12 @@ def test_render_report_reports_na_overlap_when_one_cluster_has_no_coverage(
     _seed_item(store, "item:2")
     _seed_keyword(store, "item:1", "superhero")
     # item:2 never enriched.
-    _seed_play(store, history_key="h1", item_id="item:1", client_identifier="device-a")
-    _seed_play(store, history_key="h2", item_id="item:2", client_identifier="device-b")
+    _seed_plays_at_floor(
+        store, history_key_prefix="h1", item_id="item:1", client_identifier="device-a"
+    )
+    _seed_plays_at_floor(
+        store, history_key_prefix="h2", item_id="item:2", client_identifier="device-b"
+    )
 
     report = render_report(store, shared_account_ids=[ACCOUNT])
 
@@ -647,14 +698,27 @@ def test_render_report_covers_an_episode_only_cluster_via_its_shows_keywords(
     _seed_item(store, "ep:office:s1e1", item_type="episode", show_item_id="show:office")
     _seed_item(store, "ep:office:s1e2", item_type="episode", show_item_id="show:office")
     _seed_keyword(store, "show:office", "workplace comedy")
-    _seed_play(store, history_key="h1", item_id="ep:office:s1e1", client_identifier="device-a")
-    _seed_play(store, history_key="h2", item_id="ep:office:s1e2", client_identifier="device-a")
+    # 10 plays of each episode — 20 plays total, one unit — clears the floor.
+    _seed_plays_at_floor(
+        store,
+        history_key_prefix="h1",
+        item_id="ep:office:s1e1",
+        count=10,
+        client_identifier="device-a",
+    )
+    _seed_plays_at_floor(
+        store,
+        history_key_prefix="h2",
+        item_id="ep:office:s1e2",
+        count=10,
+        client_identifier="device-a",
+    )
 
     report = render_report(store, shared_account_ids=[ACCOUNT])
 
     assert "no enrichment coverage" not in report
     assert "workplace comedy" in report
-    assert "1/1 unit(s) with tmdb_keywords coverage, spanning 2/2 play(s) deep" in report
+    assert "1/1 unit(s) with tmdb_keywords coverage, spanning 20/20 play(s) deep" in report
 
 
 def test_render_report_overlap_is_real_between_two_episode_only_clusters(
@@ -669,8 +733,12 @@ def test_render_report_overlap_is_real_between_two_episode_only_clusters(
     _seed_item(store, "ep:parks:s1e1", item_type="episode", show_item_id="show:parks")
     _seed_keyword(store, "show:office", "workplace comedy")
     _seed_keyword(store, "show:parks", "workplace comedy")
-    _seed_play(store, history_key="h1", item_id="ep:office:s1e1", client_identifier="device-a")
-    _seed_play(store, history_key="h2", item_id="ep:parks:s1e1", client_identifier="device-b")
+    _seed_plays_at_floor(
+        store, history_key_prefix="h1", item_id="ep:office:s1e1", client_identifier="device-a"
+    )
+    _seed_plays_at_floor(
+        store, history_key_prefix="h2", item_id="ep:parks:s1e1", client_identifier="device-b"
+    )
 
     report = render_report(store, shared_account_ids=[ACCOUNT])
 
@@ -687,6 +755,126 @@ def test_render_report_scopes_to_the_requested_accounts(store: sqlite3.Connectio
 
     assert "account 2" in report
     assert "account 1" not in report
+
+
+# --- render_report: the latent-user floor (issue #28) ---------------------
+
+
+def test_render_report_does_not_list_a_sub_floor_cluster_as_a_latent_user(
+    store: sqlite3.Connection,
+) -> None:
+    """A cluster with fewer than LATENT_USER_FLOOR plays never gets its own
+    'cluster N' section — the decided acceptance criterion."""
+    _seed_item(store, "item:1")
+    _seed_play(store, history_key="h1", item_id="item:1", client_identifier="device-a")
+
+    report = render_report(store, shared_account_ids=[ACCOUNT])
+
+    assert "cluster 1 [" not in report
+
+
+def test_render_report_folds_sub_floor_clusters_into_one_unattributed_bucket(
+    store: sqlite3.Connection,
+) -> None:
+    """Sub-floor plays are never dropped: they are named as one bucket per
+    account, stating the play count and the device count it covers."""
+    _seed_item(store, "item:1")
+    _seed_item(store, "item:2")
+    _seed_item(store, "item:3")
+    # Three separate one-play devices, none reaching the floor on its own.
+    _seed_play(store, history_key="h1", item_id="item:1", client_identifier="device-a")
+    _seed_play(store, history_key="h2", item_id="item:2", client_identifier="device-b")
+    _seed_play(store, history_key="h3", item_id="item:3", client_identifier="device-c")
+
+    report = render_report(store, shared_account_ids=[ACCOUNT])
+
+    assert (
+        f"unattributed: 3 play(s) across 3 cluster(s) under the {LATENT_USER_FLOOR}-play "
+        "floor (3 device(s))" in report
+    )
+
+
+def test_render_report_unattributed_bucket_carries_no_keyword_profile_or_overlap(
+    store: sqlite3.Connection,
+) -> None:
+    """The unattributed bucket is not a latent user: it must never gain a
+    keyword-profile line or enter the pairwise-overlap section, even when
+    the folded clusters' items carry tmdb_keywords."""
+    _seed_item(store, "item:1")
+    _seed_item(store, "item:2")
+    _seed_keyword(store, "item:1", "superhero")
+    _seed_keyword(store, "item:2", "superhero")
+    _seed_play(store, history_key="h1", item_id="item:1", client_identifier="device-a")
+    _seed_play(store, history_key="h2", item_id="item:2", client_identifier="device-b")
+
+    report = render_report(store, shared_account_ids=[ACCOUNT])
+
+    assert "unattributed" in report
+    assert "superhero" not in report
+    # No per-cluster keyword-profile line was rendered for either folded
+    # cluster (the fixed "no keyword profile" phrase inside the bucket
+    # summary line itself is expected and is not this).
+    assert "unit(s) with tmdb_keywords" not in report
+    assert "unit(s) carry tmdb_keywords" not in report
+    assert "pairwise overlap: n/a (fewer than two clusters)" in report
+
+
+def test_render_report_states_both_cluster_counts_in_the_structural_baseline(
+    store: sqlite3.Connection,
+) -> None:
+    """The gap between clusters found and clusters reported as latent users
+    must be visible, not implied — one below the floor, one at it."""
+    _seed_item(store, "item:1")
+    _seed_item(store, "item:2")
+    _seed_play(store, history_key="h1", item_id="item:1", client_identifier="device-a")
+    _seed_plays_at_floor(
+        store, history_key_prefix="h2", item_id="item:2", client_identifier="device-b"
+    )
+
+    report = render_report(store, shared_account_ids=[ACCOUNT])
+
+    assert f"2 cluster(s) found, 1 at or above the {LATENT_USER_FLOOR}-play floor" in report
+
+
+def test_render_report_of_an_account_entirely_under_the_floor_reports_the_bucket_not_nothing(
+    store: sqlite3.Connection,
+) -> None:
+    """An account whose every cluster is sub-floor still prints a real
+    report — the header, baseline, and unattributed bucket — never an empty
+    section, per the decided acceptance criterion."""
+    _seed_item(store, "item:1")
+    _seed_play(store, history_key="h1", item_id="item:1", client_identifier="device-a")
+
+    report = render_report(store, [ACCOUNT], shared_account_ids=[ACCOUNT])
+
+    assert "== account 1 ==" in report
+    assert "structural baseline" in report
+    assert "unattributed: 1 play(s) across 1 cluster(s)" in report
+    assert "cluster 1 [" not in report
+
+
+def test_render_report_floor_is_twenty(store: sqlite3.Connection) -> None:
+    """The decided floor value (issue #28) — a bare literal elsewhere in
+    this test file assumes this, so pin it explicitly."""
+    assert LATENT_USER_FLOOR == 20
+
+
+def test_render_report_is_stable_across_repeated_calls_with_sub_floor_clusters(
+    store: sqlite3.Connection,
+) -> None:
+    """Running the report twice over unchanged plays produces the same
+    output, including the unattributed bucket line."""
+    _seed_item(store, "item:1")
+    _seed_item(store, "item:2")
+    _seed_play(store, history_key="h1", item_id="item:1", client_identifier="device-a")
+    _seed_plays_at_floor(
+        store, history_key_prefix="h2", item_id="item:2", client_identifier="device-b"
+    )
+
+    first = render_report(store, shared_account_ids=[ACCOUNT])
+    second = render_report(store, shared_account_ids=[ACCOUNT])
+
+    assert first == second
 
 
 # --- account_units --------------------------------------------------------
@@ -776,15 +964,22 @@ def test_render_report_shared_account_keeps_the_full_structural_report(
 ) -> None:
     """A configured shared account's report is unchanged by issue #27: the
     structural baseline, per-cluster breakdown, and pairwise overlap all
-    still print."""
+    still print — for clusters at or above the floor (issue #28)."""
     _seed_item(store, "item:1")
     _seed_item(store, "item:2")
-    _seed_play(store, history_key="h1", item_id="item:1", client_identifier="device-a")
-    _seed_play(store, history_key="h2", item_id="item:2", client_identifier="device-b")
+    _seed_plays_at_floor(
+        store, history_key_prefix="h1", item_id="item:1", client_identifier="device-a"
+    )
+    _seed_plays_at_floor(
+        store, history_key_prefix="h2", item_id="item:2", client_identifier="device-b"
+    )
 
     report = render_report(store, [ACCOUNT], shared_account_ids=[ACCOUNT])
 
-    assert "structural baseline: 2 play(s), 2 distinct client_identifier(s), 2 cluster(s)" in report
+    assert (
+        "structural baseline: 40 play(s), 2 distinct client_identifier(s), "
+        "2 cluster(s) found, 2 at or above the 20-play floor" in report
+    )
     assert "cluster 1 [client_identifier='device-a']" in report
     assert "cluster 2 [client_identifier='device-b']" in report
     assert "pairwise" in report

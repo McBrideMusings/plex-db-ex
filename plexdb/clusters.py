@@ -128,6 +128,23 @@ for (`cluster_account_plays`, `AccountClusters`) still run in full, but
 only for an account in the caller-supplied `shared_account_ids` set; this
 module never guesses that set itself; `plexdb latent_users` sources it
 from `Config.shared_account_ids`.
+
+**A cluster under `LATENT_USER_FLOOR` plays is not reported as a latent
+user (issue #28).** `bboy2448` clusters into 126 groups and
+`McBrideMusings` into 39 — half of `bboy2448`'s are a handful of plays: a
+friend's TV signed in once, a borrowed browser session. A human reading 126
+rows cannot tell which ones are household members, so the *report* (never
+the clustering — `cluster_account_plays` computes the identical clusters
+either way, and nothing is persisted regardless) declines to call a
+sub-floor cluster a person. Its plays are not dropped: every cluster under
+the floor is folded into one `unattributed` bucket per account, printed
+with the play count and device count it covers, so a reader can see the
+size of what the report declined to name. The bucket is not itself a
+latent user — it carries no keyword profile and enters no pairwise overlap
+(there is nothing coherent to profile: it is a grab-bag of unrelated
+sub-floor clusters, not one person's plays). See `LATENT_USER_FLOOR` for
+the measurement behind 20 specifically, and `_split_by_floor` for the
+device-count definition.
 """
 
 from __future__ import annotations
@@ -155,6 +172,25 @@ MIN_IP_OCCURRENCES = 2
 #: household — see the module docstring's "Joining devices on a recurring
 #: IP" section for the live-store numbers behind this bar.
 MAX_IP_ACCOUNTS_TO_JOIN = 1
+
+#: A cluster with fewer than this many plays is not reported as a latent
+#: user — its plays are folded into the account's `unattributed` bucket
+#: instead (issue #28). Measured on the live store, comparing candidate
+#: floors by people reported vs. viewing discarded:
+#:
+#:     bboy2448 (126 clusters, 7,551 plays)          McBrideMusings (39 clusters, 2,563 plays)
+#:     floor  people  plays kept  % of viewing        floor  people  plays kept  % of viewing
+#:         5      77       7,452         98%              5      23       2,533         98%
+#:        20      50       7,177         95%             20      15       2,458         95%
+#:        50      31       6,497         86%             50       8       2,161         84%
+#:       100      19       5,773         76%            100       6       2,039         79%
+#:
+#: 100 gives the most plausible people count but discards 24% of
+#: `bboy2448`'s viewing — too much thrown away for a tidier number. 20 keeps
+#: 95% of viewing on both accounts while still cutting the one-off-device
+#: noise a reader cannot tell from a household member. Decided in the issue;
+#: not reopened here.
+LATENT_USER_FLOOR = 20
 
 #: How many keywords a cluster's profile keeps, ranked by how many distinct
 #: units in the cluster carry them (ties broken alphabetically, so the
@@ -220,6 +256,25 @@ class DiscountedJoinIp:
 
     ip: str
     reason: str
+
+
+@dataclass(frozen=True)
+class UnattributedBucket:
+    """Every cluster under `LATENT_USER_FLOOR` plays, folded into one bucket
+    per account instead of being listed as its own latent user or silently
+    dropped (issue #28). Not a latent user: it carries no `KeywordProfile`
+    and is never a party to pairwise overlap — see `_split_by_floor`.
+
+    `device_count` sums, per folded cluster, `len(client_identifiers)` if
+    the cluster has any, else 1 — a `"client_identifier"`-tier cluster
+    already knows how many distinct devices merged into it (issue #27); an
+    `"ip"`/`"platform"`/`"unclustered"`-tier cluster has no client id to
+    count, but is still one device-shaped grouping whose identity chain
+    fell through the fingerprint tiers, so it contributes exactly one."""
+
+    cluster_count: int
+    play_count: int
+    device_count: int
 
 
 @dataclass(frozen=True)
@@ -592,20 +647,53 @@ def _render_keyword_profile_lines(profile: KeywordProfile, *, indent: str = "") 
     ]
 
 
+def _split_by_floor(
+    clusters: Sequence[Cluster],
+) -> tuple[tuple[Cluster, ...], UnattributedBucket]:
+    """Partition an account's clusters at `LATENT_USER_FLOOR` (issue #28):
+    clusters at or above the floor, reported individually as latent users,
+    and everything under it, folded into one `UnattributedBucket`. Pure
+    report-layer filtering — `cluster_account_plays` itself is untouched, so
+    the clusters computed are identical whether or not this runs, per the
+    module docstring."""
+    kept = tuple(c for c in clusters if c.play_count >= LATENT_USER_FLOOR)
+    sub_floor = tuple(c for c in clusters if c.play_count < LATENT_USER_FLOOR)
+    bucket = UnattributedBucket(
+        cluster_count=len(sub_floor),
+        play_count=sum(c.play_count for c in sub_floor),
+        device_count=sum(max(len(c.client_identifiers), 1) for c in sub_floor),
+    )
+    return kept, bucket
+
+
 def _render_shared_account(
     conn: sqlite3.Connection, plex_account_id: int, account_names: Mapping[int, str]
 ) -> str:
     """The full report for a configured shared account: structural
-    baseline, per-cluster keyword profile, and pairwise overlap, plus (issue
-    #27) which IPs joined devices into a cluster and which candidate IPs
-    were discounted from doing so."""
+    baseline, the `unattributed` bucket for clusters under
+    `LATENT_USER_FLOOR` plays (issue #28), per-cluster keyword profile, and
+    pairwise overlap, plus (issue #27) which IPs joined devices into a
+    cluster and which candidate IPs were discounted from doing so.
+
+    Every cluster and pairwise-overlap line below is drawn from `kept` — the
+    clusters at or above the floor — never from `account.clusters` directly,
+    so a sub-floor cluster is never listed as its own latent user."""
     account = cluster_account_plays(conn, plex_account_id)
+    kept, unattributed = _split_by_floor(account.clusters)
     lines = [
         _account_header(plex_account_id, account_names),
         f"structural baseline: {account.play_count} play(s), "
         f"{account.distinct_client_identifiers} distinct client_identifier(s), "
-        f"{len(account.clusters)} cluster(s)",
+        f"{len(account.clusters)} cluster(s) found, {len(kept)} at or above the "
+        f"{LATENT_USER_FLOOR}-play floor",
     ]
+    if unattributed.cluster_count:
+        lines.append(
+            f"unattributed: {unattributed.play_count} play(s) across "
+            f"{unattributed.cluster_count} cluster(s) under the {LATENT_USER_FLOOR}-play "
+            f"floor ({unattributed.device_count} device(s)) — not a latent user, no "
+            "keyword profile, no pairwise overlap"
+        )
     if account.transient_ips:
         lines.append(
             f"transient IP(s) excluded from clustering (fewer than {MIN_IP_OCCURRENCES} "
@@ -618,7 +706,7 @@ def _render_shared_account(
             lines.append(f"  {discounted.ip}: {discounted.reason}")
 
     profiles: dict[int, KeywordProfile] = {}
-    for index, cluster in enumerate(account.clusters, start=1):
+    for index, cluster in enumerate(kept, start=1):
         profile = build_keyword_profile(conn, cluster.units)
         profiles[index] = profile
 
@@ -637,13 +725,13 @@ def _render_shared_account(
         lines.extend(_render_keyword_profile_lines(profile, indent="  "))
 
     lines.append("")
-    if len(account.clusters) < 2:
+    if len(kept) < 2:
         lines.append("pairwise overlap: n/a (fewer than two clusters)")
     else:
         lines.append(
             f"pairwise keyword-profile overlap (Jaccard over top-{TOP_N_KEYWORDS} keywords):"
         )
-        for i, j in combinations(range(1, len(account.clusters) + 1), 2):
+        for i, j in combinations(range(1, len(kept) + 1), 2):
             overlap = profile_overlap(profiles[i], profiles[j])
             if overlap is None:
                 lines.append(

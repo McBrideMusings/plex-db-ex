@@ -65,6 +65,12 @@ inferred from device or IP counts — a personal account can show more devices t
 one. Every account not listed is one named person; `plexdb latent-users` reports it as a
 single user with no device or cluster numbers at all.
 
+**Unattributed**:
+The one bucket per shared account that `plexdb latent-users` folds every cluster under
+`LATENT_USER_FLOOR` (20) plays into, instead of listing each as its own latent user or
+dropping its plays — issue #28. Not a latent user: no keyword profile, no pairwise overlap.
+The report names both the play count and the device count it covers.
+
 **Projection**:
 The one-way, booleanized, prefix-namespaced write-back of enrichment into Plex labels,
 for the benefit of tools that only speak Plex. Never a round trip.
