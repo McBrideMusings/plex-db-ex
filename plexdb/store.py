@@ -15,12 +15,23 @@ from pathlib import Path
 from . import schema
 from .errors import StoreError
 
+# A write batch — one BEGIN IMMEDIATE ... COMMIT, e.g. one page of walk() upserts
+# — holds the write lock for well under a second; an enrichment sweep spans
+# minutes but as many such batches, never one held transaction (ADR-0007). 5000ms
+# gives a second writer generous room to wait out one batch instead of failing
+# immediately, while still surfacing a genuinely stuck writer within a few
+# seconds. This is also the value `sqlite3.connect`'s own default (timeout=5.0)
+# already produced; stating it here turns that into a choice instead of an
+# inherited default.
+BUSY_TIMEOUT_MS = 5000
+
 
 def _configure(conn: sqlite3.Connection) -> None:
     conn.row_factory = sqlite3.Row
     # WAL lets a reader work while the writer is mid-sweep, which is the normal
     # state of this store: one long enrichment pass, several consumers reading.
     conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
     conn.execute("PRAGMA foreign_keys = ON")
 
 
@@ -86,6 +97,7 @@ def open_readonly(path: Path) -> Iterator[sqlite3.Connection]:
         raise StoreError(f"cannot open {path} read-only: {err}") from err
     try:
         conn.row_factory = sqlite3.Row
+        conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
         # Touch the store before handing it over, so a file that is not a
         # database — or a WAL store whose directory is not writable — fails here
         # as a StoreError rather than leaking a raw sqlite3 error into a caller
