@@ -113,6 +113,60 @@ def test_a_non_200_response_raises_plex_error() -> None:
         client.sections()
 
 
+def test_collections_lists_every_collection_a_section_reports() -> None:
+    def _handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/library/sections/1/collections"
+        return httpx.Response(
+            200,
+            json={
+                "MediaContainer": {
+                    "Metadata": [
+                        {"ratingKey": "500", "title": "Batman", "smart": None, "childCount": 2},
+                        {
+                            "ratingKey": "501",
+                            "title": "Recently Released Movies",
+                            "smart": "1",
+                            "childCount": 30,
+                        },
+                    ]
+                }
+            },
+        )
+
+    http = httpx.Client(transport=httpx.MockTransport(_handler))
+    client = LivePlexClient("http://plex.example:32400", "t", http=http)
+
+    collections = client.collections("1")
+
+    assert [(c["ratingKey"], c["title"], c.get("smart")) for c in collections] == [
+        ("500", "Batman", None),
+        ("501", "Recently Released Movies", "1"),
+    ]
+
+
+def test_collection_children_lists_every_member_of_one_collection() -> None:
+    def _handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/library/metadata/500/children"
+        return httpx.Response(
+            200,
+            json={
+                "MediaContainer": {
+                    "Metadata": [
+                        {"ratingKey": "100", "title": "The Dark Knight", "type": "movie"},
+                        {"ratingKey": "101", "title": "Batman Begins", "type": "movie"},
+                    ]
+                }
+            },
+        )
+
+    http = httpx.Client(transport=httpx.MockTransport(_handler))
+    client = LivePlexClient("http://plex.example:32400", "t", http=http)
+
+    children = client.collection_children("500")
+
+    assert [c["title"] for c in children] == ["The Dark Knight", "Batman Begins"]
+
+
 def test_devices_lists_every_device_with_its_client_identifier_and_platform() -> None:
     devices = _client().devices()
 
