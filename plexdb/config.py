@@ -13,6 +13,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from .enrich_tmdb import DEFAULT_STALE_DAYS
 from .errors import ConfigError
 
 __all__ = ["DEFAULT_STORE_PATH", "Config", "ConfigError"]
@@ -43,6 +44,15 @@ class Config:
     #: empty by default, which means no stripping — always a safe default,
     #: never a wrong one.
     source_roots: tuple[str, ...]
+    #: The TMDB v3 API key `plexdb enrich-tmdb-keywords` authenticates with
+    #: (ADR-0004-style optional-source pattern: enrichment needs it, `init`
+    #: and `walk` don't, so the check that it's present lives at the point of
+    #: use). Empty when unset.
+    tmdb_api_key: str
+    #: Days a `tmdb_keywords` row stays fresh before it's eligible for
+    #: re-fetch. Documented default sits mid-range of the 30-60 day window
+    #: `docs/schema.md` sets for every external source.
+    tmdb_keywords_stale_days: int
 
     @classmethod
     def from_env(cls, *, env_file: Path | None = None) -> Config:
@@ -59,10 +69,22 @@ class Config:
         snapshot_path = Path(snapshot_raw).expanduser() if snapshot_raw else None
         source_roots_raw = os.environ.get("PLEX_SOURCE_ROOTS", "")
         source_roots = tuple(root.strip() for root in source_roots_raw.split(",") if root.strip())
+        stale_raw = os.environ.get("TMDB_KEYWORDS_STALE_DAYS", "").strip()
+        if stale_raw:
+            try:
+                stale_days = int(stale_raw)
+            except ValueError as err:
+                raise ConfigError(
+                    f"TMDB_KEYWORDS_STALE_DAYS must be a whole number of days, got {stale_raw!r}"
+                ) from err
+        else:
+            stale_days = DEFAULT_STALE_DAYS
         return cls(
             store_path=Path(raw).expanduser(),
             snapshot_path=snapshot_path,
             plex_url=os.environ.get("PLEX_URL", "").strip(),
             plex_token=os.environ.get("PLEX_TOKEN", "").strip(),
             source_roots=source_roots,
+            tmdb_api_key=os.environ.get("TMDB_API_KEY", "").strip(),
+            tmdb_keywords_stale_days=stale_days,
         )

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from plex_fixtures import FakeSource, recorded_source
+from tmdb_fixtures import FakeTMDbSource
 
 from plexdb import cli
 from plexdb.cli import main
@@ -261,3 +262,132 @@ def test_walk_without_a_store_says_so_not_a_traceback(
     assert err.startswith("error: ")
     assert "plexdb init" in err
     assert "Traceback" not in err
+
+
+def _configure_enrich(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake: FakeTMDbSource
+) -> Path:
+    """Point the CLI at a store under `tmp_path`, with a TMDB key set and
+    `fake` standing in for `LiveTMDbClient`. No network."""
+    store = tmp_path / "plexdb.db"
+    monkeypatch.setenv("PLEXDB_PATH", str(store))
+    monkeypatch.setenv("TMDB_API_KEY", "test-tmdb-key")
+
+    def _fixture_backed_client(api_key: str) -> FakeTMDbSource:
+        assert api_key == "test-tmdb-key", "enrich-tmdb-keywords must pass the configured key"
+        return fake
+
+    monkeypatch.setattr(cli, "LiveTMDbClient", _fixture_backed_client)
+    return store
+
+
+def _seed_one_movie(store: Path) -> None:
+    with sqlite3.connect(store) as conn:
+        conn.execute(
+            "INSERT INTO items (item_id, type, title) VALUES "
+            "('imdb:tt0468569', 'movie', 'The Dark Knight')"
+        )
+        conn.execute(
+            "INSERT INTO external_ids (item_id, ns, value) VALUES ('imdb:tt0468569', 'tmdb', '155')"
+        )
+
+
+def test_enrich_tmdb_keywords_writes_rows_and_reports_a_summary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake = FakeTMDbSource(keywords_by_id={("155", "movie"): ["superhero", "gotham city"]})
+    store = _configure_enrich(tmp_path, monkeypatch, fake)
+    main(["init"])
+    _seed_one_movie(store)
+    capsys.readouterr()
+
+    assert main(["enrich-tmdb-keywords"]) == 0
+
+    out = capsys.readouterr().out
+    assert "1 title(s) seen" in out
+    assert "1 fetched" in out
+    assert "2 keyword(s) written" in out
+
+    with sqlite3.connect(store) as conn:
+        count = conn.execute(
+            "SELECT count(*) FROM enrichment WHERE namespace = 'tmdb_keywords'"
+        ).fetchone()[0]
+    assert count == 3  # the sentinel row plus the two keyword rows
+
+
+def test_a_second_enrich_tmdb_keywords_run_does_not_refetch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake = FakeTMDbSource(keywords_by_id={("155", "movie"): ["superhero"]})
+    store = _configure_enrich(tmp_path, monkeypatch, fake)
+    main(["init"])
+    _seed_one_movie(store)
+    capsys.readouterr()
+    main(["enrich-tmdb-keywords"])
+    capsys.readouterr()
+
+    assert main(["enrich-tmdb-keywords"]) == 0
+
+    out = capsys.readouterr().out
+    assert "0 fetched" in out
+    assert "1 already cached" in out
+    assert fake.calls == [("155", "movie")]
+
+
+def test_enrich_tmdb_keywords_rewipe_forces_a_full_refetch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake = FakeTMDbSource(keywords_by_id={("155", "movie"): ["superhero"]})
+    store = _configure_enrich(tmp_path, monkeypatch, fake)
+    main(["init"])
+    _seed_one_movie(store)
+    main(["enrich-tmdb-keywords"])
+    capsys.readouterr()
+
+    assert main(["enrich-tmdb-keywords", "--rewipe"]) == 0
+
+    out = capsys.readouterr().out
+    assert "wiped" in out
+    assert "1 fetched" in out
+    assert fake.calls == [("155", "movie"), ("155", "movie")]
+
+
+def test_enrich_tmdb_keywords_without_an_api_key_is_an_error_not_a_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    store = tmp_path / "plexdb.db"
+    monkeypatch.setenv("PLEXDB_PATH", str(store))
+    # Set (not delete): see the matching comment on the walk test above —
+    # deleting would let the worktree's own `.env` leak a real key back in.
+    monkeypatch.setenv("TMDB_API_KEY", "")
+    main(["init"])
+    capsys.readouterr()
+
+    assert main(["enrich-tmdb-keywords"]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("error: ")
+    assert "TMDB_API_KEY" in err
+    assert "Traceback" not in err
+
+
+def test_config_reads_the_tmdb_stale_days_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TMDB_KEYWORDS_STALE_DAYS", "10")
+
+    config = Config.from_env(env_file=Path("/nonexistent/.env"))
+
+    assert config.tmdb_keywords_stale_days == 10
+
+
+def test_config_defaults_the_tmdb_stale_days_to_45(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("TMDB_KEYWORDS_STALE_DAYS", raising=False)
+
+    config = Config.from_env(env_file=Path("/nonexistent/.env"))
+
+    assert config.tmdb_keywords_stale_days == 45
+
+
+def test_config_rejects_a_non_numeric_tmdb_stale_days(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TMDB_KEYWORDS_STALE_DAYS", "soon")
+
+    with pytest.raises(ConfigError):
+        Config.from_env(env_file=Path("/nonexistent/.env"))
