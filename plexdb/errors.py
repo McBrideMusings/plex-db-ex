@@ -32,3 +32,7 @@ class TMDbError(PlexdbError):
     that as zero keywords, not an error, so a stale or wrong id doesn't stop
     a sweep over the rest of the library.
     """
+
+
+class TautulliError(PlexdbError):
+    """Tautulli could not be reached, or returned something unusable."""

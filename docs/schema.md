@@ -18,7 +18,7 @@ Opening a store whose version is **higher** than the running build understands i
 outright, because a newer writer may have added rows this build cannot see. A store carrying a
 `schema_version` table with no row is reported as damaged rather than treated as empty.
 
-**Versions 1, 2 and 3 are live.** Everything under "Not yet built" is the target for later
+**Versions 1, 2, 3 and 4 are live.** Everything under "Not yet built" is the target for later
 slices.
 
 ## Version 1 — identity and enrichment
@@ -141,11 +141,11 @@ event comes back on every run — which `ON CONFLICT` absorbs for free.
 
 `plex_account_id` and `client_identifier`+`platform` come from Plex directly, the latter via a
 join against `/devices` (cached per ingest — a play references a device far more often than the
-device list changes). `ip`, `percent_complete`, and `paused_counter` are filled only by the
-Tautulli adapter (issue #9) and are null on a Plex-only deployment — the normal state, not a
-degraded one. Measured against a live server: of 268 plays finished at 90% or more, 261 appear
-in Plex's own history; of 17 plays abandoned under 40%, only 3 do — so a Plex-only ingest
-delivers positive signal only.
+device list changes). `ip`, `percent_complete`, and `paused_counter` are filled only by
+`plexdb enrich-tautulli-plays` (issue #9, Version 4 below) and are null on a Plex-only
+deployment — the normal state, not a degraded one. Measured against a live server: of 268 plays
+finished at 90% or more, 261 appear in Plex's own history; of 17 plays abandoned under 40%, only
+3 do — so a Plex-only ingest delivers positive signal only.
 
 ## Version 3 — affinity edges
 
@@ -190,6 +190,38 @@ without touching any other edge type. The per-title fetch cursor this staleness 
 in the `tmdb_edges` `enrichment` namespace, not in `edges` itself — a title whose result is empty,
 or entirely outside the library, still needs a `fetched_at` to check next sweep, and `edges` alone
 cannot carry one for a title with no rows.
+
+## Version 4 — the Tautulli history adapter
+
+Two columns added to the existing `plays` table ([issue #9](https://github.com/McBrideMusings/plex-db-ex/issues/9)),
+written by `plexdb enrich-tautulli-plays` — an optional adapter, same as `ip` and
+`percent_complete` above; the store still runs with neither Tautulli column populated.
+
+```sql
+ALTER TABLE plays ADD COLUMN seconds_watched INTEGER;
+ALTER TABLE plays ADD COLUMN tautulli_id INTEGER;
+CREATE UNIQUE INDEX idx_plays_tautulli_id ON plays(tautulli_id) WHERE tautulli_id IS NOT NULL;
+```
+
+**`seconds_watched` is Tautulli's `duration` copied verbatim.** `duration` is already net of
+paused time — measured over 151 completed history rows, `stopped - started - duration -
+paused_counter` lands within 0-2 seconds of zero, rounding only — so computing `duration -
+paused_counter` would subtract pause a second time and roughly halve the footage on exactly the
+paused-heavy rows this column exists to measure. There is no stored floor and no stored
+completion flag: **the floor a play must clear to "count" is the reader's choice, made at query
+time** (`WHERE seconds_watched >= 30`, or whatever threshold that reader wants), never baked into
+this schema — a stored `counts_as_signal` boolean would freeze today's threshold into every row,
+and changing it later would mean rewriting history. Do not re-add one.
+
+**A Tautulli row finds its play by composite match, not a shared key.** Plex's `historyKey` has
+no equivalent in Tautulli's `get_history` response, so `enrich-tautulli-plays` matches on
+`rating_key` (resolved through `plex_items`, same as `ingest_plays`) + `plex_account_id` +
+`client_identifier` as hard keys, then takes the play whose `viewed_at` is nearest the Tautulli
+row's `stopped`, within ±900 seconds (measured against the live server: this window matched 145
+of 151 matchable rows that had any candidate play at all; ±300s would have matched only 110). The
+Tautulli row's own `id` is stored in `tautulli_id`, guarded by the partial unique index above — a
+re-run is idempotent, and a play already carrying a different `tautulli_id` is never re-matched.
+A Tautulli row with a null `id` is an in-progress session, not history, and is skipped.
 
 ## Not yet built
 
