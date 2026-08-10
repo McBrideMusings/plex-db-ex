@@ -205,6 +205,39 @@ def test_history_sends_the_since_viewed_at_cutoff_as_plexs_own_filter_operator()
     assert "viewedAt%3E=1700000000" in seen_query
 
 
+def test_accounts_lists_every_account_including_the_id_zero_placeholder() -> None:
+    """Confirmed live (2026-08-10): `/accounts` returns `MediaContainer.Account`
+    with `id` and `name`; id 0 is a placeholder with an empty `name` on the
+    live server. Synthetic ids/names here, same reasoning as `devices.json`
+    and `history.json` — an account list is personal data."""
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/accounts"
+        return httpx.Response(
+            200,
+            json={
+                "MediaContainer": {
+                    "Account": [
+                        {"id": 0, "name": ""},
+                        {"id": 1, "name": "server-owner"},
+                        {"id": 4242424, "name": "shared-user"},
+                    ]
+                }
+            },
+        )
+
+    http = httpx.Client(transport=httpx.MockTransport(_handler))
+    client = LivePlexClient("http://plex.example:32400", "t", http=http)
+
+    accounts = client.accounts()
+
+    assert [(a["id"], a["name"]) for a in accounts] == [
+        (0, ""),
+        (1, "server-owner"),
+        (4242424, "shared-user"),
+    ]
+
+
 def test_history_paginates_until_total_size_is_reached(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

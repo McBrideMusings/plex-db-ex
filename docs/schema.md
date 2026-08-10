@@ -224,6 +224,17 @@ Tautulli row's own `id` is stored in `tautulli_id`, guarded by the partial uniqu
 re-run is idempotent, and a play already carrying a different `tautulli_id` is never re-matched.
 A Tautulli row with a null `id` is an in-progress session, not history, and is skipped.
 
+**The server owner's account id differs between Plex and Tautulli, and is resolved before the
+match, not inside it** ([issue #26](https://github.com/McBrideMusings/plex-db-ex/issues/26)).
+`plays.plex_account_id` and Tautulli's `user_id` are the same id space for every account except
+one: Plex's history stores whoever owns the server under the local account id `1`, while Tautulli
+reports that same person under their plex.tv account id instead — confirmed against the live
+server, where every other account already carries the identical numeric id on both sides.
+`enrich-tautulli-plays` fetches Plex's `/accounts` and Tautulli's `get_users` every run and joins
+them on account name (the one field both systems report identically) to build a
+`tautulli_user_id -> plex_account_id` map; a Tautulli row's `user_id` is translated through that
+map before it becomes part of the match key above. See ADR-0010.
+
 ## Not yet built
 
 ```sql

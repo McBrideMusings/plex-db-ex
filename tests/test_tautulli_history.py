@@ -1,5 +1,8 @@
 """Enriching `plays` from Tautulli's `get_history` (issue #9): IP, completion
-percentage, paused time, and the seconds actually watched.
+percentage, paused time, and the seconds actually watched. Also the server
+owner's id resolution across systems (issue #26): Plex's history stores the
+owner under local account id `1`; Tautulli reports the same person under
+their plex.tv id instead.
 
 Drives `match_tautulli_history` against a minimal store built directly with
 SQL — items, plex_items, and plays rows inserted by hand rather than through
@@ -18,7 +21,13 @@ from typing import Any
 
 import pytest
 
-from plexdb.plays import MATCH_WINDOW_SECONDS, TautulliMatchStats, match_tautulli_history
+from plexdb.plays import (
+    MATCH_WINDOW_SECONDS,
+    AccountIdMap,
+    TautulliMatchStats,
+    build_account_id_map,
+    match_tautulli_history,
+)
 from plexdb.store import init as init_store
 from plexdb.store import open_store
 
@@ -512,3 +521,163 @@ def test_the_stored_tautulli_id_can_never_land_on_two_plays_at_the_schema_level(
                 "UPDATE plays SET tautulli_id = 42 WHERE history_key = ?",
                 ("/status/sessions/history/2",),
             )
+
+
+# --- Owner account id resolution (issue #26) --------------------------------
+
+
+def test_build_account_id_map_joins_on_name_and_excludes_placeholder_id_zero() -> None:
+    plex_accounts = [
+        {"id": 0, "name": ""},
+        {"id": 1, "name": "McBrideMusings"},
+        {"id": 3670670, "name": "bboy2448"},
+    ]
+    tautulli_users = [
+        {"user_id": 0, "username": "Local"},
+        {"user_id": 22831969, "username": "McBrideMusings"},
+        {"user_id": 3670670, "username": "bboy2448"},
+    ]
+
+    result = build_account_id_map(plex_accounts, tautulli_users)
+
+    # The owner's differing id is resolved; the account that already shares
+    # an id on both sides maps to itself, a same-id no-op.
+    assert result.by_tautulli_user_id == {22831969: 1, 3670670: 3670670}
+    # Neither placeholder (id 0 on either side) appears anywhere in the map
+    # or the reported mismatches.
+    assert result.tautulli_only_names == []
+    assert result.plex_only_names == []
+
+
+def test_build_account_id_map_reports_a_name_present_on_only_one_side() -> None:
+    """Acceptance: an account present on one side and absent on the other
+    must be reported, not silently skipped."""
+    plex_accounts = [
+        {"id": 1, "name": "McBrideMusings"},
+        {"id": 321912630, "name": "Madi"},
+    ]
+    tautulli_users = [
+        {"user_id": 22831969, "username": "McBrideMusings"},
+        {"user_id": 999999, "username": "Ghost"},
+    ]
+
+    result = build_account_id_map(plex_accounts, tautulli_users)
+
+    assert result.by_tautulli_user_id == {22831969: 1}
+    assert result.tautulli_only_names == ["Ghost"]
+    assert result.plex_only_names == ["Madi"]
+
+
+def test_a_matched_row_resolves_the_owners_differing_id_via_the_account_map(
+    tmp_path: Path,
+) -> None:
+    """The regression this module exists to prevent (issue #26): a play
+    recorded under Plex's local owner id (1) must still match a Tautulli row
+    reporting that same person under their plex.tv id (22831969), once the
+    account map resolves the two."""
+    store = tmp_path / "plexdb.db"
+    with _open(store) as conn:
+        _seed_item(conn, "imdb:tt1", "9001")
+        _seed_play(
+            conn,
+            history_key="/status/sessions/history/1",
+            item_id="imdb:tt1",
+            plex_account_id=1,
+            client_identifier="device-alpha-001",
+            viewed_at=1700000400,
+        )
+        conn.commit()
+
+        account_id_map = build_account_id_map(
+            plex_accounts=[{"id": 1, "name": "McBrideMusings"}],
+            tautulli_users=[{"user_id": 22831969, "username": "McBrideMusings"}],
+        )
+        source = _FakeTautulliSource(
+            rows=[
+                _tautulli_row(
+                    row_id=9001,
+                    rating_key=9001,
+                    user_id=22831969,
+                    machine_id="device-alpha-001",
+                    stopped=1700000450,
+                )
+            ]
+        )
+
+        stats = match_tautulli_history(conn, source, account_id_map)
+
+        assert stats.rows_matched == 1
+        play = _play(conn, "/status/sessions/history/1")
+        assert play["tautulli_id"] == 9001
+
+
+def test_with_no_account_map_the_owners_differing_id_finds_no_match(tmp_path: Path) -> None:
+    """Documents the bug issue #26 exists to fix, and pins the fallback: no
+    map (the default) means every `user_id` is used as-is, exactly as
+    before — so a play under account 1 stays unmatched against a Tautulli
+    row reporting the owner's plex.tv id."""
+    store = tmp_path / "plexdb.db"
+    with _open(store) as conn:
+        _seed_item(conn, "imdb:tt1", "9001")
+        _seed_play(
+            conn,
+            history_key="/status/sessions/history/1",
+            item_id="imdb:tt1",
+            plex_account_id=1,
+            client_identifier="device-alpha-001",
+            viewed_at=1700000400,
+        )
+        conn.commit()
+
+        source = _FakeTautulliSource(
+            rows=[
+                _tautulli_row(
+                    row_id=9001,
+                    rating_key=9001,
+                    user_id=22831969,
+                    machine_id="device-alpha-001",
+                    stopped=1700000450,
+                )
+            ]
+        )
+
+        stats = match_tautulli_history(conn, source)
+
+        assert stats.rows_matched == 0
+        assert stats.rows_unmatched == 1
+
+
+def test_an_account_id_map_default_is_empty_and_never_remaps_a_shared_id(
+    tmp_path: Path,
+) -> None:
+    """A non-owner account already shares its id on both sides; an empty
+    `AccountIdMap()` must leave that match exactly as `.get(user_id,
+    user_id)`'s identity fallback implies."""
+    store = tmp_path / "plexdb.db"
+    with _open(store) as conn:
+        _seed_item(conn, "imdb:tt1", "9001")
+        _seed_play(
+            conn,
+            history_key="/status/sessions/history/1",
+            item_id="imdb:tt1",
+            plex_account_id=3670670,
+            client_identifier="device-alpha-001",
+            viewed_at=1700000400,
+        )
+        conn.commit()
+
+        source = _FakeTautulliSource(
+            rows=[
+                _tautulli_row(
+                    row_id=9001,
+                    rating_key=9001,
+                    user_id=3670670,
+                    machine_id="device-alpha-001",
+                    stopped=1700000450,
+                )
+            ]
+        )
+
+        stats = match_tautulli_history(conn, source, AccountIdMap())
+
+        assert stats.rows_matched == 1

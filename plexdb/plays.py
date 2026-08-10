@@ -41,7 +41,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 
@@ -203,7 +203,11 @@ def ingest_plays(conn: sqlite3.Connection, source: HistorySource) -> PlaysStats:
 # is composite instead, measured against the live server (see issue #9):
 #
 # - `plays.plex_account_id` and Tautulli's `user_id` are the same id space,
-#   byte-identical.
+#   byte-identical — with one exception (issue #26): Plex's own history
+#   stores whoever *owns the server* under the local account id `1`, while
+#   Tautulli reports that same person under their plex.tv account id
+#   instead. Every other account carries the identical numeric id on both
+#   sides, confirmed against the live server.
 # - `plays.client_identifier` and Tautulli's `machine_id` are the same id
 #   space, byte-identical.
 # - Only the timestamp is soft: Plex's `viewed_at` sits close to, but not
@@ -214,6 +218,14 @@ def ingest_plays(conn: sqlite3.Connection, source: HistorySource) -> PlaysStats:
 # within MATCH_WINDOW_SECONDS. Tautulli's own row `id` is stored on the play
 # it lands on, which is what makes a re-run idempotent and stops one Tautulli
 # row from enriching two different plays.
+#
+# The owner's differing id is resolved before that hard-match, not inside
+# it: `AccountIdMap` joins Plex's `/accounts` and Tautulli's `get_users` on
+# account *name* — the one field both systems report identically — and
+# `match_tautulli_history` looks up each row's `user_id` in that map before
+# building its match key. Every non-owner account's name-join is a same-id
+# no-op, so this needs no special case for "the owner" specifically; it is
+# just what a name join produces when an id happens to differ.
 
 #: ±900 seconds. Measured against the live server over 197 completed rows:
 #: this window matched 145 of the 151 that had any candidate play at all;
@@ -230,6 +242,62 @@ class TautulliSource(Protocol):
         """Every history row Tautulli currently holds, completed and
         in-progress alike, in any order."""
         ...
+
+
+@dataclass
+class AccountIdMap:
+    """`tautulli_user_id -> plex_account_id`, derived once per sweep by
+    joining Plex's `/accounts` and Tautulli's `get_users` on account name —
+    resolving the one account whose id differs between the two systems, the
+    server owner (issue #26).
+
+    Also carries what the join could not resolve: an account name present
+    on only one side, reported by the caller rather than silently skipped
+    (issue #26's acceptance criterion). Defaults to empty, so a sweep run
+    with no map behaves exactly as before the fix — every `user_id` matches
+    by its own value, unchanged.
+    """
+
+    by_tautulli_user_id: dict[int, int] = field(default_factory=dict)
+    #: Account names Tautulli reports that no Plex account name matches.
+    tautulli_only_names: list[str] = field(default_factory=list)
+    #: Account names Plex reports that no Tautulli user name matches.
+    plex_only_names: list[str] = field(default_factory=list)
+
+
+def build_account_id_map(
+    plex_accounts: list[dict[str, Any]], tautulli_users: list[dict[str, Any]]
+) -> AccountIdMap:
+    """Join Plex's `/accounts` and Tautulli's `get_users` on account name.
+
+    Account id 0 is excluded on both sides before the join: it is a
+    placeholder on each system (Plex's own internal account, empty `name`
+    on the live server; Tautulli's "Local" row for unauthenticated
+    sessions), never a person, and joining two placeholders on an id-0 ==
+    id-0 basis would pair them as though they were the same account.
+    """
+    plex_by_name = {
+        account["name"]: account["id"]
+        for account in plex_accounts
+        if account.get("id") not in (None, 0) and account.get("name")
+    }
+    tautulli_by_name = {
+        user["username"]: user["user_id"]
+        for user in tautulli_users
+        if user.get("user_id") not in (None, 0) and user.get("username")
+    }
+
+    by_tautulli_user_id = {
+        user_id: plex_by_name[name]
+        for name, user_id in tautulli_by_name.items()
+        if name in plex_by_name
+    }
+
+    return AccountIdMap(
+        by_tautulli_user_id=by_tautulli_user_id,
+        tautulli_only_names=sorted(set(tautulli_by_name) - set(plex_by_name)),
+        plex_only_names=sorted(set(plex_by_name) - set(tautulli_by_name)),
+    )
 
 
 @dataclass
@@ -286,15 +354,26 @@ def _candidate_plays(
     return buckets
 
 
-def match_tautulli_history(conn: sqlite3.Connection, source: TautulliSource) -> TautulliMatchStats:
+def match_tautulli_history(
+    conn: sqlite3.Connection,
+    source: TautulliSource,
+    account_id_map: AccountIdMap | None = None,
+) -> TautulliMatchStats:
     """Enrich existing `plays` rows with Tautulli's `ip`, `percent_complete`,
     `paused_counter`, and `seconds_watched`.
+
+    `account_id_map` resolves a Tautulli row's `user_id` to the
+    `plex_account_id` it must match against — needed only for the server
+    owner (issue #26), whose id differs between the two systems. `None`
+    (the default) means no mapping is available and every `user_id` is used
+    as-is, exactly as before the fix.
 
     Never creates a `plays` row — only `ingest_plays` does that. One
     transaction for the whole pass: a failure partway through leaves the
     store exactly as it was before this sweep started.
     """
     stats = TautulliMatchStats()
+    account_id_map = account_id_map or AccountIdMap()
 
     resolved_by_rating_key = {
         row["rating_key"]: row["item_id"]
@@ -326,7 +405,8 @@ def match_tautulli_history(conn: sqlite3.Connection, source: TautulliSource) -> 
             # Same "empty is absent" treatment ingest_plays gives an empty
             # Plex clientIdentifier.
             machine_id = tautulli_row.get("machine_id") or None
-            key = (item_id, user_id, machine_id)
+            mapped_account_id = account_id_map.by_tautulli_user_id.get(user_id, user_id)
+            key = (item_id, mapped_account_id, machine_id)
 
             best: tuple[int, dict[str, Any]] | None = None
             for play in candidates.get(key, ()):

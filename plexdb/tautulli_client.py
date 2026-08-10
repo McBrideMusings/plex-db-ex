@@ -17,6 +17,12 @@ are all present on a completed row. `duration` is already net of paused time
 — confirmed over 151 completed rows, `stopped - started - duration -
 paused_counter` lands within 0-2 seconds of zero, rounding only.
 
+`get_users` (issue #26) is shaped differently: `response.data` is the bare
+list of user records itself, not `get_history`'s `{"data": [...]}`
+DataTables wrapper — confirmed live (2026-08-10). Each record carries
+`user_id` and `username`; `user_id 0` is Tautulli's own "Local" placeholder
+for unauthenticated/local sessions, not a person.
+
 This client hands back whatever the API returned, unfiltered and
 uninterpreted — deciding what a null `id` or a missing hard key means is
 `plays.match_tautulli_history`'s job, the same division `plex_client.py`
@@ -49,10 +55,22 @@ class TautulliSource(Protocol):
         ...
 
 
+class TautulliUserSource(Protocol):
+    """The read surface `enrich-tautulli-plays` needs from Tautulli to
+    resolve the server owner's account id across systems (issue #26) — real
+    or recorded, independent of `TautulliSource`'s history surface."""
+
+    def users(self) -> list[dict[str, Any]]:
+        """Every user Tautulli's `get_users` reports, including `user_id
+        0`'s "Local" placeholder row."""
+        ...
+
+
 class LiveTautulliClient:
-    """The one `TautulliSource` that reaches a real Tautulli server, over
-    `httpx`. Read-only by construction: the only call this makes is
-    `get_history`, and nothing here can mutate anything Tautulli holds.
+    """The one `TautulliSource`/`TautulliUserSource` that reaches a real
+    Tautulli server, over `httpx`. Read-only by construction: the only calls
+    this makes are `get_history` and `get_users`, and nothing here can
+    mutate anything Tautulli holds.
     """
 
     def __init__(self, base_url: str, api_key: str, http: httpx.Client | None = None) -> None:
@@ -83,7 +101,19 @@ class LiveTautulliClient:
             start += len(page)
         return rows
 
-    def _call(self, cmd: str, **params: Any) -> dict[str, Any]:
+    def users(self) -> list[dict[str, Any]]:
+        """Every user Tautulli holds via `get_users`, verbatim.
+
+        Unlike `history()`, `get_users`'s `response.data` is the bare user
+        list itself — no `{"data": [...]}` DataTables wrapper — so this does
+        not reuse `history()`'s `data.get("data", [])` unwrap.
+        """
+        data = self._call("get_users")
+        if isinstance(data, list):
+            return data
+        return []
+
+    def _call(self, cmd: str, **params: Any) -> Any:
         """GET one Tautulli `cmd`, returning `response.data`.
 
         The key rides in the query string — Tautulli's `/api/v2` has no
@@ -115,5 +145,4 @@ class LiveTautulliClient:
             raise TautulliError(
                 f"Tautulli reported failure for cmd={cmd}: {response.get('message')}"
             )
-        data: dict[str, Any] = response.get("data", {})
-        return data
+        return response.get("data", {})

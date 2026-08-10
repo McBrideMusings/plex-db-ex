@@ -196,3 +196,31 @@ class LivePlexClient:
         container = self._get("/devices")
         devices: list[dict[str, Any]] = container.get("Device", [])
         return devices
+
+    def accounts(self) -> list[dict[str, Any]]:
+        """Every Plex account this server has ever attached — owner, home,
+        and shared users alike — `/accounts` verbatim, including id 0.
+
+        Confirmed live (2026-08-10): `MediaContainer.Account` entries carry
+        `id` and `name`; id 0 is a placeholder account (empty `name` on this
+        server) rather than a person. A caller excludes it by id, not by
+        name — `enrich-tautulli-plays` needs this to resolve the server
+        owner's id across systems (issue #26): Plex's history stores the
+        owner under the local account id `1`, while Tautulli reports the
+        same person under their plex.tv id, and this is the only endpoint
+        that names both.
+        """
+        container = self._get("/accounts")
+        accounts: list[dict[str, Any]] = container.get("Account", [])
+        return accounts
+
+
+class PlexAccountSource(Protocol):
+    """The read surface `enrich-tautulli-plays` needs from Plex to resolve
+    the server owner's account id across systems (issue #26) — real or
+    recorded, independent of `PlexSource`'s library-walk surface."""
+
+    def accounts(self) -> list[dict[str, Any]]:
+        """Every Plex account this server has ever attached, including id
+        0's placeholder record."""
+        ...

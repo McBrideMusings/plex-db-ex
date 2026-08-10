@@ -132,6 +132,52 @@ def test_a_page_shorter_than_requested_stops_pagination_without_a_second_call(
     assert calls == 1
 
 
+def test_users_returns_the_bare_list_get_users_reports_not_a_datatables_wrapper() -> None:
+    """Confirmed live (2026-08-10): unlike `get_history`, `get_users`'s
+    `response.data` is the user list itself, with no `{"data": [...]}`
+    wrapper. Synthetic ids/names, same reasoning as `history.json` — a user
+    list is personal data."""
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["apikey"] == "the-test-key"
+        assert request.url.params["cmd"] == "get_users"
+        return httpx.Response(
+            200,
+            json={
+                "response": {
+                    "result": "success",
+                    "data": [
+                        {"user_id": 0, "username": "Local", "is_admin": 0},
+                        {"user_id": 987654321, "username": "server-owner", "is_admin": 1},
+                        {"user_id": 501, "username": "shared-user", "is_admin": 0},
+                    ],
+                }
+            },
+        )
+
+    http = httpx.Client(transport=httpx.MockTransport(_handler))
+    users = _client(http).users()
+
+    assert [(u["user_id"], u["username"]) for u in users] == [
+        (0, "Local"),
+        (987654321, "server-owner"),
+        (501, "shared-user"),
+    ]
+
+
+def test_users_returns_an_empty_list_if_the_response_shape_is_unexpected() -> None:
+    """`_call` falls back to `{}` for a missing `data` key (the same default
+    `history()` relies on for its own unwrap); `users()` must not raise on a
+    non-list `data`, just report nothing."""
+    http = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda _r: httpx.Response(200, json={"response": {"result": "success"}})
+        )
+    )
+
+    assert _client(http).users() == []
+
+
 def test_an_unreachable_server_raises_tautulli_error_not_a_raw_httpx_error() -> None:
     def _broken(_request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("connection refused")
