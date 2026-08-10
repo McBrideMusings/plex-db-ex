@@ -1,0 +1,20 @@
+{
+  "MediaContainer": {
+    "Metadata": [
+      {
+        "ratingKey": "81044",
+        "key": "/library/metadata/81044",
+        "type": "show",
+        "title": "1923",
+        "year": 2022,
+        "contentRating": "TV-MA",
+        "studio": "Bosque Ranch Productions",
+        "Guid": [
+          { "id": "imdb://tt18335752" },
+          { "id": "tmdb://157744" },
+          { "id": "tvdb://416491" }
+        ]
+      }
+    ]
+  }
+}

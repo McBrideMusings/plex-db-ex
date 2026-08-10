@@ -1,0 +1,10 @@
+{
+  "MediaContainer": {
+    "Directory": [
+      { "key": "1", "type": "movie", "title": "Movies" },
+      { "key": "2", "type": "show", "title": "TV Shows" },
+      { "key": "4", "type": "movie", "title": "Concerts" },
+      { "key": "3", "type": "movie", "title": "Power Hours" }
+    ]
+  }
+}

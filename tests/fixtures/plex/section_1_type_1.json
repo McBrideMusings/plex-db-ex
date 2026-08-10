@@ -1,0 +1,48 @@
+{
+  "MediaContainer": {
+    "Metadata": [
+      {
+        "ratingKey": "13714",
+        "key": "/library/metadata/13714",
+        "type": "movie",
+        "title": "The 'Burbs",
+        "titleSort": "'Burbs",
+        "year": 1989,
+        "duration": 6100386,
+        "contentRating": "PG",
+        "studio": "Universal Pictures",
+        "Guid": [
+          { "id": "imdb://tt0096734" },
+          { "id": "tmdb://11974" },
+          { "id": "tvdb://5869" }
+        ],
+        "Media": [
+          {
+            "Part": [
+              {
+                "file": "/media/movies/The 'Burbs (1989) {imdb-tt0096734}/The 'Burbs (1989) Bluray-1080p.mkv"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "ratingKey": "70936",
+        "key": "/library/metadata/70936",
+        "type": "movie",
+        "title": "Air Mater",
+        "year": 2011,
+        "duration": 312896,
+        "Media": [
+          {
+            "Part": [
+              {
+                "file": "/media/movies/Air Mater (2011) {imdb-tt2100093}/Air Mater (2011).mkv"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

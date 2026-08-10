@@ -1,0 +1,88 @@
+{
+  "MediaContainer": {
+    "Metadata": [
+      {
+        "ratingKey": "81290",
+        "key": "/library/metadata/81290",
+        "type": "episode",
+        "title": "1923",
+        "grandparentRatingKey": "81044",
+        "grandparentTitle": "1923",
+        "parentIndex": 1,
+        "index": 1,
+        "year": 2022,
+        "duration": 3631675,
+        "contentRating": "TV-MA",
+        "Guid": [
+          { "id": "imdb://tt18469978" },
+          { "id": "tmdb://4014249" },
+          { "id": "tvdb://9032340" }
+        ],
+        "Media": [
+          {
+            "Part": [
+              {
+                "file": "/media/television/1923 (2022) {imdb-tt18335752}/Season 01/1923.(2022).S01E01.1923.Bluray-1080p.x265.EAC3.5.1.iVy.mkv"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "ratingKey": "81291",
+        "key": "/library/metadata/81291",
+        "type": "episode",
+        "title": "Nature's Empty Throne",
+        "grandparentRatingKey": "81044",
+        "grandparentTitle": "1923",
+        "parentIndex": 1,
+        "index": 2,
+        "year": 2022,
+        "duration": 2864784,
+        "contentRating": "TV-MA",
+        "Guid": [
+          { "id": "imdb://tt23214792" },
+          { "id": "tmdb://4053246" },
+          { "id": "tvdb://9490191" }
+        ],
+        "Media": [
+          {
+            "Part": [
+              {
+                "file": "/media/television/1923 (2022) {imdb-tt18335752}/Season 01/1923.(2022).S01E02.Natures.Empty.Throne.Bluray-1080p.x265.EAC3.5.1.iVy.mkv"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "ratingKey": "81046",
+        "key": "/library/metadata/81046",
+        "type": "episode",
+        "title": "The Killing Season",
+        "titleSort": "Killing Season",
+        "grandparentRatingKey": "81044",
+        "grandparentTitle": "1923",
+        "parentIndex": 2,
+        "index": 1,
+        "year": 2025,
+        "duration": 3490779,
+        "contentRating": "TV-MA",
+        "Guid": [
+          { "id": "imdb://tt26608270" },
+          { "id": "tmdb://5815247" },
+          { "id": "tvdb://10226504" }
+        ],
+        "Media": [
+          {
+            "Part": [
+              {
+                "file": "/media/television/1923 (2022) {imdb-tt18335752}/Season 02/1923.(2022).S02E01.The.Killing.Season.WEBDL-1080p.h264.EAC3.5.1.1+10.mkv"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -97,3 +97,6 @@ A project that uses the Store — today `etv-station` (via plugin only) and `cur
   identity fixture is duplicated in both repos and guarded by a hash.
 - [ADR-0007](./adr/0007-readers-get-a-snapshot-not-the-live-store.md) — Readers get a
   Snapshot, not the live Store.
+- [ADR-0008](./adr/0008-the-walk-never-repoints-an-existing-item-id.md) — the walk never
+  repoints an existing `item_id` when a title's GUID set changes; it keeps the identity and
+  records the new GUID alongside it.

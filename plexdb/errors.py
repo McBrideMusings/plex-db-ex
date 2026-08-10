@@ -19,3 +19,7 @@ class ConfigError(PlexdbError):
 
 class StoreError(PlexdbError):
     """The store could not be opened, created, or trusted."""
+
+
+class PlexError(PlexdbError):
+    """The Plex server could not be reached, or returned something unusable."""
