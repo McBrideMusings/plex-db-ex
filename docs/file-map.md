@@ -6,7 +6,13 @@ plex-db-ex/
 ├── admin.toml             task runner manifest (admin build | dev | test | vet | …)
 ├── .env.example           every variable, with placeholders; real values live in .env
 ├── plexdb/                the Python package — the only writer of plexdb.db
-│   ├── cli.py             the `plexdb` command line; subcommands land here as slices ship
+│   ├── cli.py             the `plexdb` command line; discovers and registers each module under commands/, holds no command itself
+│   ├── commands/          one module per subcommand; a new command is one new file here, no edit to cli.py
+│   │   ├── enrich_tmdb_keywords.py
+│   │   ├── ingest_plays.py
+│   │   ├── init.py
+│   │   ├── publish.py
+│   │   └── walk.py
 │   ├── config.py          settings from .env; never a default for a URL or a token
 │   ├── errors.py          the errors a user is meant to see, as one `error: …` line
 │   ├── identity.py        item_id derivation — mirrored in etv-station, guarded by a fixture
