@@ -72,6 +72,12 @@ class Config:
     #: empty by default, which means no stripping — always a safe default,
     #: never a wrong one.
     source_roots: tuple[str, ...]
+    #: The Tautulli server `plexdb enrich-tautulli-plays` reads `get_history`
+    #: from (issue #9, ADR-0004's optional-source pattern: only that command
+    #: needs it, so the check that it's present lives at the point of use).
+    #: Empty when unset.
+    tautulli_url: str
+    tautulli_api_key: str
     #: The TMDB v3 API key `plexdb enrich-tmdb-keywords` authenticates with
     #: (ADR-0004-style optional-source pattern: enrichment needs it, `init`
     #: and `walk` don't, so the check that it's present lives at the point of
@@ -116,6 +122,8 @@ class Config:
             plex_url=os.environ.get("PLEX_URL", "").strip(),
             plex_token=os.environ.get("PLEX_TOKEN", "").strip(),
             source_roots=source_roots,
+            tautulli_url=os.environ.get("TAUTULLI_URL", "").strip(),
+            tautulli_api_key=os.environ.get("TAUTULLI_API_KEY", "").strip(),
             tmdb_api_key=os.environ.get("TMDB_API_KEY", "").strip(),
             tmdb_keywords_stale_days=_stale_days_from_env(
                 "TMDB_KEYWORDS_STALE_DAYS", _DEFAULT_TMDB_KEYWORDS_STALE_DAYS

@@ -15,6 +15,8 @@ from plexdb.store import init, open_readonly, open_store
 V1_TABLES = {"items", "external_ids", "plex_items", "enrichment"}
 V2_TABLES = {"plays", "plays_ingest_cursor"}
 V3_TABLES = {"edges"}
+#: V4 adds no new table — it only alters the existing `plays` table and adds
+#: an index (issue #9).
 
 
 def _tables_from_batch(batch: str) -> set[str]:
@@ -111,6 +113,43 @@ def test_the_columns_the_edges_slice_depends_on_are_present(tmp_path: Path) -> N
     init(store)
 
     assert {"from_id", "to_id", "edge_type", "rank", "fetched_at"} <= _columns(store, "edges")
+
+
+def test_v4_adds_seconds_watched_and_tautulli_id_to_plays(tmp_path: Path) -> None:
+    store = tmp_path / "plexdb.db"
+    init(store)
+
+    assert {"seconds_watched", "tautulli_id"} <= _columns(store, "plays")
+
+
+def test_a_second_play_cannot_reuse_a_tautulli_id_already_claimed(tmp_path: Path) -> None:
+    """The partial unique index backing issue #9's idempotency guarantee: a
+    Tautulli row's own id can never land on two different plays."""
+    store = tmp_path / "plexdb.db"
+    init(store)
+
+    with open_store(store) as conn:
+        conn.execute("INSERT INTO items (item_id, type, title) VALUES ('imdb:tt1', 'movie', 'A')")
+        conn.execute(
+            "INSERT INTO plays (history_key, item_id, plex_account_id, viewed_at, tautulli_id) "
+            "VALUES ('h1', 'imdb:tt1', 1, 100, 42)"
+        )
+        conn.commit()
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO plays (history_key, item_id, plex_account_id, viewed_at, tautulli_id) "
+                "VALUES ('h2', 'imdb:tt1', 1, 200, 42)"
+            )
+        # NULL is not "claimed" — many plays with no Tautulli match yet is
+        # the normal state, not a constraint violation.
+        conn.execute(
+            "INSERT INTO plays (history_key, item_id, plex_account_id, viewed_at) "
+            "VALUES ('h3', 'imdb:tt1', 1, 300)"
+        )
+        conn.execute(
+            "INSERT INTO plays (history_key, item_id, plex_account_id, viewed_at) "
+            "VALUES ('h4', 'imdb:tt1', 1, 400)"
+        )
 
 
 def test_init_is_idempotent(tmp_path: Path) -> None:

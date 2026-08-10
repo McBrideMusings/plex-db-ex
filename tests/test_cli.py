@@ -33,6 +33,7 @@ EXPECTED_COMMANDS = {
     "enrich-tmdb-keywords",
     "enrich-tmdb-edges",
     "ingest-plays",
+    "enrich-tautulli-plays",
     "reconcile-etv",
 }
 
@@ -46,6 +47,7 @@ EXPECTED_COMMAND_ORDER = [
     "enrich-tmdb-keywords",
     "enrich-tmdb-edges",
     "ingest-plays",
+    "enrich-tautulli-plays",
     "reconcile-etv",
 ]
 

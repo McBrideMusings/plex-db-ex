@@ -1,9 +1,11 @@
-"""Ingesting Plex watch history into `plays`.
+"""Ingesting Plex watch history into `plays`, and enriching it from Tautulli.
 
 ADR-0004: the store owns watch history itself, with Plex as the source that
 always works and Tautulli an optional adapter that fills in what Plex's
-history cannot. `HistorySource` is the seam the Tautulli adapter (issue #9)
-plugs into later; this module is the Plex implementation.
+history cannot. `HistorySource` is the seam `ingest_plays` uses for the Plex
+implementation; `TautulliSource` and `match_tautulli_history` below are
+issue #9's adapter, layered on top of whatever `ingest_plays` already wrote —
+Tautulli never creates a `plays` row, only fills columns on one that exists.
 
 **Plex history is a watched-it ledger, not a play log.** Measured against a
 live server: of 268 plays finished at 90% or more, 261 appear in Plex's
@@ -38,6 +40,7 @@ advance, to the newest event that run actually saw.
 from __future__ import annotations
 
 import sqlite3
+from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -188,5 +191,186 @@ def ingest_plays(conn: sqlite3.Connection, source: HistorySource) -> PlaysStats:
         elif newest_seen is not None:
             _advance_cursor(conn, newest_seen)
         # Nothing seen at all: leave the cursor exactly where it was.
+
+    return stats
+
+
+# --- Tautulli adapter (issue #9) -------------------------------------------
+#
+# Plex's own history has no equivalent of `historyKey` in Tautulli's
+# `get_history` response, so a Tautulli row cannot be resolved to a `plays`
+# row by a shared primary key the way a re-ingested Plex event can. The match
+# is composite instead, measured against the live server (see issue #9):
+#
+# - `plays.plex_account_id` and Tautulli's `user_id` are the same id space,
+#   byte-identical.
+# - `plays.client_identifier` and Tautulli's `machine_id` are the same id
+#   space, byte-identical.
+# - Only the timestamp is soft: Plex's `viewed_at` sits close to, but not
+#   exactly on, Tautulli's `stopped` (~218s before, at the median).
+#
+# So: hard-match on (item_id via rating_key, plex_account_id, client_identifier),
+# then take the play whose `viewed_at` is nearest to the row's `stopped`,
+# within MATCH_WINDOW_SECONDS. Tautulli's own row `id` is stored on the play
+# it lands on, which is what makes a re-run idempotent and stops one Tautulli
+# row from enriching two different plays.
+
+#: ±900 seconds. Measured against the live server over 197 completed rows:
+#: this window matched 145 of the 151 that had any candidate play at all;
+#: ±300s would have matched only 110. A named constant, not a magic number,
+#: because the measurement behind it is the reason for the value, not taste.
+MATCH_WINDOW_SECONDS = 900
+
+
+class TautulliSource(Protocol):
+    """The read surface `match_tautulli_history` needs from Tautulli — real
+    or recorded."""
+
+    def history(self) -> list[dict[str, Any]]:
+        """Every history row Tautulli currently holds, completed and
+        in-progress alike, in any order."""
+        ...
+
+
+@dataclass
+class TautulliMatchStats:
+    """What one Tautulli match sweep touched — the summary
+    `plexdb enrich-tautulli-plays` prints."""
+
+    rows_seen: int = 0
+    #: `id` is null: an in-progress or paused session Tautulli has not yet
+    #: written to its own history table. Not history yet; skipped, not
+    #: counted as unmatched.
+    rows_in_progress: int = 0
+    rows_matched: int = 0
+    #: Already carries this exact tautulli_id from a prior run. Expected on
+    #: every run after the first that re-lists an already-matched session.
+    rows_already_matched: int = 0
+    #: A completed row this sweep could not attach to any play: its hard
+    #: keys match no play, every hard-key match sits outside
+    #: MATCH_WINDOW_SECONDS, or every candidate is already claimed by a
+    #: different Tautulli row.
+    rows_unmatched: int = 0
+    #: `plays` rows carrying no Tautulli data at all, counted fresh from the
+    #: store after this sweep — not just what this run left unmatched, so it
+    #: also reflects plays from before the adapter was ever configured. The
+    #: number a silently-empty match would otherwise hide.
+    plays_without_tautulli_data: int = 0
+
+
+def _candidate_plays(
+    conn: sqlite3.Connection,
+) -> dict[tuple[str, int, str | None], list[dict[str, Any]]]:
+    """Every existing play, bucketed by the hard-key tuple a Tautulli row
+    must share to be a candidate match: `(item_id, plex_account_id,
+    client_identifier)`.
+
+    Plain dicts, not `sqlite3.Row`, so a successful match can flip a
+    candidate's `tautulli_id` in place — the in-memory claim a later row in
+    the same sweep must see, since the DB write alone would not be visible
+    without re-querying mid-loop.
+    """
+    buckets: dict[tuple[str, int, str | None], list[dict[str, Any]]] = defaultdict(list)
+    for row in conn.execute(
+        "SELECT history_key, item_id, plex_account_id, client_identifier, viewed_at, "
+        "tautulli_id FROM plays ORDER BY viewed_at"
+    ):
+        key = (row["item_id"], row["plex_account_id"], row["client_identifier"])
+        buckets[key].append(
+            {
+                "history_key": row["history_key"],
+                "viewed_at": row["viewed_at"],
+                "tautulli_id": row["tautulli_id"],
+            }
+        )
+    return buckets
+
+
+def match_tautulli_history(conn: sqlite3.Connection, source: TautulliSource) -> TautulliMatchStats:
+    """Enrich existing `plays` rows with Tautulli's `ip`, `percent_complete`,
+    `paused_counter`, and `seconds_watched`.
+
+    Never creates a `plays` row — only `ingest_plays` does that. One
+    transaction for the whole pass: a failure partway through leaves the
+    store exactly as it was before this sweep started.
+    """
+    stats = TautulliMatchStats()
+
+    resolved_by_rating_key = {
+        row["rating_key"]: row["item_id"]
+        for row in conn.execute("SELECT rating_key, item_id FROM plex_items")
+    }
+    candidates = _candidate_plays(conn)
+
+    with conn:
+        for tautulli_row in source.history():
+            stats.rows_seen += 1
+
+            row_id = tautulli_row.get("id")
+            if row_id is None:
+                stats.rows_in_progress += 1
+                continue
+
+            raw_rating_key = tautulli_row.get("rating_key")
+            user_id = tautulli_row.get("user_id")
+            stopped = tautulli_row.get("stopped")
+            if raw_rating_key in (None, "") or user_id is None or stopped is None:
+                stats.rows_unmatched += 1
+                continue
+
+            item_id = resolved_by_rating_key.get(str(raw_rating_key))
+            if item_id is None:
+                stats.rows_unmatched += 1
+                continue
+
+            # Same "empty is absent" treatment ingest_plays gives an empty
+            # Plex clientIdentifier.
+            machine_id = tautulli_row.get("machine_id") or None
+            key = (item_id, user_id, machine_id)
+
+            best: tuple[int, dict[str, Any]] | None = None
+            for play in candidates.get(key, ()):
+                claimant = play["tautulli_id"]
+                if claimant is not None and claimant != row_id:
+                    # Already matched to a different Tautulli row — not a
+                    # candidate, per issue #9's decision.
+                    continue
+                delta = abs(play["viewed_at"] - stopped)
+                if delta > MATCH_WINDOW_SECONDS:
+                    continue
+                if best is None or delta < best[0]:
+                    best = (delta, play)
+
+            if best is None:
+                stats.rows_unmatched += 1
+                continue
+
+            play = best[1]
+            if play["tautulli_id"] == row_id:
+                # Idempotent re-run: this row already landed on this play.
+                stats.rows_already_matched += 1
+                continue
+
+            conn.execute(
+                "UPDATE plays SET ip = ?, percent_complete = ?, paused_counter = ?, "
+                "seconds_watched = ?, tautulli_id = ? WHERE history_key = ?",
+                (
+                    tautulli_row.get("ip_address"),
+                    tautulli_row.get("percent_complete"),
+                    tautulli_row.get("paused_counter"),
+                    # seconds_watched is duration, copied verbatim: duration
+                    # is already net of paused time, so subtracting
+                    # paused_counter here would subtract it a second time.
+                    tautulli_row.get("duration"),
+                    row_id,
+                    play["history_key"],
+                ),
+            )
+            play["tautulli_id"] = row_id
+            stats.rows_matched += 1
+
+        stats.plays_without_tautulli_data = conn.execute(
+            "SELECT count(*) FROM plays WHERE tautulli_id IS NULL"
+        ).fetchone()[0]
 
     return stats
