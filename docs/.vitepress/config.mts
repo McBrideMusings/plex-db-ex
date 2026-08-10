@@ -6,7 +6,7 @@ export default defineConfig({
   cleanUrls: true,
   themeConfig: {
     nav: [
-      { text: 'Spec', link: '/PRD' },
+      { text: 'PRD', link: '/PRD' },
       { text: 'Schema', link: '/schema' },
       { text: 'Decisions', link: '/adr/' },
       { text: 'Roadmap', link: '/roadmap' },
@@ -22,6 +22,7 @@ export default defineConfig({
             { text: '0003 — Rust reader crate', link: '/adr/0003-rust-reader-crate-behind-a-plugin-capability-grant' },
             { text: '0004 — The store owns watch history', link: '/adr/0004-the-store-owns-watch-history' },
             { text: '0005 — The store walks Plex itself', link: '/adr/0005-the-store-walks-plex-itself-and-augments-never-replaces' },
+            { text: '0006 — The identity fixture is duplicated', link: '/adr/0006-the-identity-fixture-is-duplicated-and-guarded-by-a-hash' },
           ],
         },
       ],
@@ -29,8 +30,9 @@ export default defineConfig({
         {
           text: 'Reference',
           items: [
-            { text: 'Product spec (PRD)', link: '/PRD' },
+            { text: 'PRD', link: '/PRD' },
             { text: 'Schema', link: '/schema' },
+            { text: 'Original spec', link: '/spec' },
             { text: 'Vocabulary', link: '/CONTEXT' },
             { text: 'Decisions', link: '/adr/' },
             { text: 'Roadmap', link: '/roadmap' },

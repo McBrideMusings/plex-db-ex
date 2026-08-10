@@ -88,3 +88,5 @@ A project that uses the Store — today `etv-station` (via plugin only) and `cur
   Plex is the required source, Tautulli an optional adapter.
 - [ADR-0005](./adr/0005-the-store-walks-plex-itself-and-augments-never-replaces.md) — the
   Store walks Plex itself and augments Plex rather than replacing it.
+- [ADR-0006](./adr/0006-the-identity-fixture-is-duplicated-and-guarded-by-a-hash.md) — the
+  identity fixture is duplicated in both repos and guarded by a hash.

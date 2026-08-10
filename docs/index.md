@@ -7,11 +7,14 @@ hero:
   tagline: One writer, many readers. Plex stays authoritative; this carries what Plex cannot.
   actions:
     - theme: brand
-      text: Read the spec
+      text: Read the PRD
       link: /PRD
     - theme: alt
       text: Decisions
       link: /adr/
+    - theme: alt
+      text: Original spec
+      link: /spec
 
 features:
   - title: Layer 1 — the cached item graph

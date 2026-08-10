@@ -9,7 +9,8 @@ plex-db-ex/
 ├── data/                  plexdb.db lives here (gitignored)
 └── docs/
     ├── index.md           docs home
-    ├── PRD.md             the spec, with inline flags where an ADR supersedes it
+    ├── PRD.md             the spec to build from — supersedes spec.md
+    ├── spec.md            the original spec: research, prior art, reasoning
     ├── schema.md          the SQLite schema, which is the public API
     ├── CONTEXT.md         vocabulary — read before writing code
     ├── roadmap.md         Now / Next / Later / Deferred, plus open questions
