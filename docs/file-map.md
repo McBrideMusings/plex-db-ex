@@ -11,6 +11,7 @@ plex-db-ex/
 ├── plexdb/                the Python package — the only writer of plexdb.db
 │   ├── cli.py             the `plexdb` command line; discovers and registers each module under commands/, holds no command itself
 │   ├── commands/          one module per subcommand; a new command is one new file here, no edit to cli.py
+│   │   ├── enrich_tautulli.py
 │   │   ├── enrich_tmdb_edges.py
 │   │   ├── enrich_tmdb_keywords.py
 │   │   ├── ingest_plays.py
@@ -24,7 +25,8 @@ plex-db-ex/
 │   ├── identity.py        item_id derivation — mirrored in etv-station, guarded by a fixture
 │   ├── enrich_tmdb.py     TMDB keyword sweep: namespaced, cached, staleness-gated, tolerant of a failing title (aborts after 3 in a row)
 │   ├── local_edges.py     collection co-membership sweep: replace-wholesale, no staleness, Plex's smart collections excluded
-│   ├── plays.py           watch-history ingest: Plex history into plays, incrementally
+│   ├── plays.py           watch-history ingest: Plex history into plays, incrementally, plus the Tautulli match that enriches them
+│   ├── tautulli_client.py read-only Tautulli client (get_history) behind a TautulliSource protocol
 │   ├── plex_client.py     read-only Plex HTTP client behind a PlexSource protocol
 │   ├── reconcile_etv.py   compares item_id against etv-station's entry_id, joined by Plex rating key; read-only on both stores, reports and never fixes
 │   ├── tmdb_client.py     read-only TMDB client (keywords, recommendations, similar) behind a TMDbSource protocol

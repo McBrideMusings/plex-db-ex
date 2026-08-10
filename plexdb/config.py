@@ -23,7 +23,7 @@ DEFAULT_STORE_PATH = "./data/plexdb.db"
 
 #: Documented default: mid-range of the 30-60 day window `docs/schema.md` sets
 #: for every external source's enrichment. Deliberately duplicated from
-#: `enrich_tmdb.DEFAULT_STALE_DAYS` rather than imported — `config.py` is a
+#: `tmdb_common.DEFAULT_STALE_DAYS` rather than imported — `config.py` is a
 #: leaf like `errors.py` and `schema.py`, and imports no feature module.
 _DEFAULT_TMDB_KEYWORDS_STALE_DAYS = 45
 

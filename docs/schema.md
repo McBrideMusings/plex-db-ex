@@ -182,6 +182,7 @@ a result is dropped and counted, never stored under an invented id
 |---|---|---|
 | `tmdb_recommendations` | `plexdb enrich-tmdb-edges` | TMDB's `/recommendations` endpoint — behavioural: "people who engaged with this also engaged with that". |
 | `tmdb_similar` | `plexdb enrich-tmdb-edges` | TMDB's `/similar` endpoint — content-derived, not behavioural. Kept as a distinct type from `tmdb_recommendations` because the two measure different things. |
+| `local_collection` | `plexdb local-edges` | Two titles share a Plex collection someone made by hand. Plex's `smart` (saved-search) collections are excluded — those are generated, not curated. Recomputed wholesale every run with no staleness threshold, since the input is already in the store and costs no API call. `rank` is always 1: co-membership has no ordering to preserve. |
 
 `enrich-tmdb-edges` re-fetches a title's edge set only once it is older than
 `TMDB_EDGES_STALE_DAYS` (default 45 days, tracked separately from `TMDB_KEYWORDS_STALE_DAYS`).
