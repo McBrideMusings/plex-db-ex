@@ -1,0 +1,25 @@
+{
+  "MediaContainer": {
+    "size": 3,
+    "Device": [
+      {
+        "id": 10,
+        "name": "Living Room TV",
+        "platform": "Roku",
+        "clientIdentifier": "device-alpha-001"
+      },
+      {
+        "id": 11,
+        "name": "Bedroom Chromecast",
+        "platform": "Chromecast",
+        "clientIdentifier": ""
+      },
+      {
+        "id": 12,
+        "name": "Test Phone",
+        "platform": "iOS",
+        "clientIdentifier": "device-gamma-003"
+      }
+    ]
+  }
+}

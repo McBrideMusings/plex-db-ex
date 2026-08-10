@@ -1,6 +1,7 @@
 """The `plexdb` command line.
 
-Subcommands are added as slices land. Today there are three: `init`, `walk`, and `publish`.
+Subcommands are added as slices land. Today there are four: `init`, `walk`,
+`publish`, and `ingest-plays`.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from collections.abc import Sequence
 from . import __version__, schema
 from .config import Config
 from .errors import ConfigError, PlexdbError
+from .plays import ingest_plays
 from .plex_client import LivePlexClient
 from .store import init as init_store
 from .store import open_store
@@ -49,6 +51,30 @@ def _cmd_walk(args: argparse.Namespace) -> int:
         print(
             f"{stats.identity_kept_on_guid_change} title(s) had a changed GUID set "
             "since the last walk; kept their existing item_id rather than forking a new row"
+        )
+    return 0
+
+
+def _cmd_ingest_plays(_args: argparse.Namespace) -> int:
+    config = Config.from_env()
+    if not config.plex_url or not config.plex_token:
+        raise ConfigError("PLEX_URL and PLEX_TOKEN must be set in .env to ingest watch history")
+    client = LivePlexClient(config.plex_url, config.plex_token)
+    with open_store(config.store_path) as conn:
+        stats = ingest_plays(conn, client)
+    print(
+        f"ingested {stats.plays_written} play(s) from {stats.events_seen} event(s) seen, "
+        f"{stats.already_recorded} already recorded"
+    )
+    if stats.unresolved_rating_key:
+        print(
+            f"{stats.unresolved_rating_key} event(s) had a rating key not in the walk's map, "
+            "skipped — run `plexdb walk` to catch up"
+        )
+    if stats.unresolved_device:
+        print(
+            f"{stats.unresolved_device} event(s) had a device id not in Plex's device list; "
+            "recorded with no client identifier or platform"
         )
     return 0
 
@@ -101,6 +127,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="publish a read-only snapshot for consumers; safe to re-run",
     )
     publish_parser.set_defaults(func=_cmd_publish)
+
+    ingest_plays_parser = sub.add_parser(
+        "ingest-plays",
+        help="ingest Plex watch history into plays; safe to re-run",
+    )
+    ingest_plays_parser.set_defaults(func=_cmd_ingest_plays)
 
     return parser
 

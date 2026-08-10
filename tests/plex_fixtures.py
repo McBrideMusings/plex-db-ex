@@ -1,8 +1,10 @@
-"""A `PlexSource` built from the recorded fixtures in `fixtures/plex/`.
+"""A `PlexSource` and a `HistorySource` built from the recorded fixtures in
+`fixtures/plex/`.
 
 Not a test module itself (no `test_` prefix, so pytest never collects it) —
-shared by `test_walk.py`, which drives `walk_all` directly, and
-`test_cli.py`, which drives the same recordings through the `walk` command.
+shared by `test_walk.py`, which drives `walk_all` directly; `test_plays.py`,
+which drives `ingest_plays` directly; and `test_cli.py`, which drives the
+same recordings through the `walk` and `ingest-plays` commands.
 """
 
 from __future__ import annotations
@@ -54,3 +56,39 @@ def recorded_source() -> FakeSource:
         ("2", PLEX_TYPE_EPISODE): load("section_2_type_4.json")["MediaContainer"]["Metadata"],
     }
     return FakeSource(section_list=section_list, records=records)
+
+
+@dataclass
+class FakeHistorySource:
+    """A `HistorySource` over in-memory events and devices — no HTTP.
+
+    `since_viewed_at` is honoured the same way `LivePlexClient.history` would
+    apply Plex's `viewedAt>` filter server-side, so a test exercising
+    incremental fetch doesn't need a live client to see the effect —
+    including that filter's measured quirk: **inclusive** despite its name
+    (confirmed live: filtering on the exact newest event's own `viewedAt`
+    still returns that event). `>=`, not `>`, is what reproduces that.
+    """
+
+    history_events: list[dict[str, Any]]
+    device_list: list[dict[str, Any]]
+
+    def history(self, *, since_viewed_at: int | None = None) -> list[dict[str, Any]]:
+        events = self.history_events
+        if since_viewed_at is not None:
+            events = [e for e in events if e.get("viewedAt", 0) >= since_viewed_at]
+        return copy.deepcopy(events)
+
+    def devices(self) -> list[dict[str, Any]]:
+        return copy.deepcopy(self.device_list)
+
+
+def recorded_history_source() -> FakeHistorySource:
+    """Four recorded-shape history events and the three devices they
+    reference, plus deliberate gaps: one event's rating key (999999) is
+    absent from `recorded_source()`'s items, and one event's device id (999)
+    is absent from the device list — covering the two "counted, not dropped"
+    paths `ingest_plays` must exercise."""
+    events = load("history.json")["MediaContainer"]["Metadata"]
+    devices = load("devices.json")["MediaContainer"]["Device"]
+    return FakeHistorySource(history_events=events, device_list=devices)
