@@ -246,6 +246,223 @@ def test_a_titles_guid_set_changing_between_walks_keeps_its_identity_rather_than
         assert guids == {("imdb", "tt1111111"), ("imdb", "tt2222222")}
 
 
+def test_a_titles_rating_key_changing_between_walks_keeps_its_identity_by_external_id(
+    tmp_path: Path,
+) -> None:
+    """ADR-0008's amendment, second churn case: a remove-and-re-add changes
+    the rating key but not the GUIDs. The external id lookup (tried before
+    the rating key) finds the identity the old rating key was already
+    recorded against, so both rating keys end up mapped to the one item_id
+    — nothing forks."""
+    store = tmp_path / "plexdb.db"
+    movies_section = Section(key="1", type="movie", title="Movies")
+    first_record = {
+        "ratingKey": "500",
+        "type": "movie",
+        "title": "Test Movie",
+        "year": 2000,
+        "Guid": [{"id": "imdb://tt3333333"}],
+        "Media": [{"Part": [{"file": "/media/movies/Test Movie (2000)/test.mkv"}]}],
+    }
+    first_pass = FakeSource(
+        section_list=[movies_section],
+        records={("1", PLEX_TYPE_MOVIE): [first_record]},
+    )
+
+    with _open(store) as conn:
+        walk_all(conn, first_pass)
+
+        # Plex removed and re-added the title: same GUIDs, a new rating key.
+        # The old rating key (500) is absent from this pass's records —
+        # exactly what "remove-and-re-add" means at the Plex level.
+        readded_record = dict(first_record)
+        readded_record["ratingKey"] = "501"
+        second_pass = FakeSource(
+            section_list=[movies_section],
+            records={("1", PLEX_TYPE_MOVIE): [readded_record]},
+        )
+        second_stats = walk_all(conn, second_pass)
+
+        first_mapped = conn.execute(
+            "SELECT item_id FROM plex_items WHERE rating_key = '500'"
+        ).fetchone()[0]
+        second_mapped = conn.execute(
+            "SELECT item_id FROM plex_items WHERE rating_key = '501'"
+        ).fetchone()[0]
+        assert first_mapped == second_mapped == "imdb:tt3333333"
+        item_count = conn.execute(
+            "SELECT count(*) FROM items WHERE item_id = 'imdb:tt3333333'"
+        ).fetchone()[0]
+        assert item_count == 1
+
+    # The GUIDs did not actually change, so a fresh derivation from the
+    # re-added record already lands on the same id the external-id lookup
+    # found — nothing was overridden, so neither "kept" counter fires.
+    assert second_stats.identity_kept_by_external_id == 0
+    assert second_stats.identity_kept_on_guid_change == 0
+
+
+def test_an_external_id_still_matching_a_prior_identity_wins_over_a_fresh_higher_priority_guid(
+    tmp_path: Path,
+) -> None:
+    """A title gains a higher-priority GUID (tmdb) it did not carry before,
+    while keeping a lower-priority one (tvdb) already recorded against its
+    existing identity. A fresh derivation from this pass's GUIDs alone would
+    prefer the new tmdb id; the external-id lookup instead finds the
+    already-known tvdb match first (in priority order, skipping the
+    unrecorded tmdb id) and keeps the existing identity — counted under
+    `identity_kept_by_external_id`, distinct from a rating-key-found keep."""
+    store = tmp_path / "plexdb.db"
+    movies_section = Section(key="1", type="movie", title="Movies")
+    first_record = {
+        "ratingKey": "600",
+        "type": "movie",
+        "title": "Test Movie",
+        "year": 2000,
+        "Guid": [{"id": "tvdb://4444"}],
+        "Media": [{"Part": [{"file": "/media/movies/Test Movie 2 (2000)/test.mkv"}]}],
+    }
+    first_pass = FakeSource(
+        section_list=[movies_section],
+        records={("1", PLEX_TYPE_MOVIE): [first_record]},
+    )
+
+    with _open(store) as conn:
+        first_stats = walk_all(conn, first_pass)
+        assert first_stats.identity_kept_by_external_id == 0
+        kept_id = conn.execute(
+            "SELECT item_id FROM plex_items WHERE rating_key = '600'"
+        ).fetchone()[0]
+        assert kept_id == "tvdb:4444"
+
+        gained_guid_record = dict(first_record)
+        gained_guid_record["Guid"] = [{"id": "tmdb://12345"}, {"id": "tvdb://4444"}]
+        second_pass = FakeSource(
+            section_list=[movies_section],
+            records={("1", PLEX_TYPE_MOVIE): [gained_guid_record]},
+        )
+        second_stats = walk_all(conn, second_pass)
+
+        # A fresh derivation would have picked "tmdb:12345" (tmdb outranks
+        # tvdb); the identity is kept at "tvdb:4444" instead, and the keep
+        # is attributed to the external id, not the rating key.
+        still_mapped = conn.execute(
+            "SELECT item_id FROM plex_items WHERE rating_key = '600'"
+        ).fetchone()[0]
+        assert still_mapped == "tvdb:4444"
+        item_count = conn.execute(
+            "SELECT count(*) FROM items WHERE item_id IN ('tvdb:4444', 'tmdb:12345')"
+        ).fetchone()[0]
+        assert item_count == 1
+
+    assert second_stats.identity_kept_by_external_id == 1
+    assert second_stats.identity_kept_on_guid_change == 0
+
+
+def test_several_external_ids_matching_different_identities_resolve_by_priority_order(
+    tmp_path: Path,
+) -> None:
+    """Acceptance criterion: when a record's external ids match two
+    different already-recorded identities, the pick is deterministic —
+    whichever namespace `identity.PRIORITY` ranks higher wins, not
+    whichever the database happens to return first."""
+    store = tmp_path / "plexdb.db"
+    movies_section = Section(key="1", type="movie", title="Movies")
+    record_a = {
+        "ratingKey": "700",
+        "type": "movie",
+        "title": "Movie A",
+        "year": 2001,
+        "Guid": [{"id": "imdb://tt7777777"}],
+        "Media": [{"Part": [{"file": "/media/movies/Movie A (2001)/a.mkv"}]}],
+    }
+    record_b = {
+        "ratingKey": "701",
+        "type": "movie",
+        "title": "Movie B",
+        "year": 2002,
+        "Guid": [{"id": "tvdb://8888"}],
+        "Media": [{"Part": [{"file": "/media/movies/Movie B (2002)/b.mkv"}]}],
+    }
+    first_pass = FakeSource(
+        section_list=[movies_section],
+        records={("1", PLEX_TYPE_MOVIE): [record_a, record_b]},
+    )
+
+    with _open(store) as conn:
+        walk_all(conn, first_pass)
+
+        # A third rating key's record carries both external ids — imdb
+        # (Movie A's identity) and tvdb (Movie B's identity). imdb outranks
+        # tvdb in identity.PRIORITY, so it must win.
+        ambiguous_record = {
+            "ratingKey": "702",
+            "type": "movie",
+            "title": "Movie A",
+            "year": 2001,
+            "Guid": [{"id": "tvdb://8888"}, {"id": "imdb://tt7777777"}],
+            "Media": [{"Part": [{"file": "/media/movies/Movie A (2001)/a2.mkv"}]}],
+        }
+        second_pass = FakeSource(
+            section_list=[movies_section],
+            records={("1", PLEX_TYPE_MOVIE): [ambiguous_record]},
+        )
+        walk_all(conn, second_pass)
+
+        resolved = conn.execute(
+            "SELECT item_id FROM plex_items WHERE rating_key = '702'"
+        ).fetchone()[0]
+    assert resolved == "imdb:tt7777777"
+
+
+def test_two_records_in_the_same_pass_sharing_an_external_id_resolve_to_one_identity(
+    tmp_path: Path,
+) -> None:
+    """The external-id lookup must see writes made earlier in the *same*
+    `walk_all` call, not just what was already in the store when the walk
+    started. Record A (processed first) claims both imdb and tvdb ids;
+    record B (a different rating key, processed second in the same pass)
+    carries only the tvdb id A also has. B must resolve to A's identity —
+    found by the external id A wrote moments ago — rather than deriving a
+    fresh id of its own and forking a second row for the same title."""
+    store = tmp_path / "plexdb.db"
+    movies_section = Section(key="1", type="movie", title="Movies")
+    record_a = {
+        "ratingKey": "900",
+        "type": "movie",
+        "title": "Same Title",
+        "year": 2003,
+        "Guid": [{"id": "imdb://tt5555555"}, {"id": "tvdb://1111"}],
+        "Media": [{"Part": [{"file": "/media/movies/Same Title (2003)/a.mkv"}]}],
+    }
+    record_b = {
+        "ratingKey": "901",
+        "type": "movie",
+        "title": "Same Title",
+        "year": 2003,
+        "Guid": [{"id": "tvdb://1111"}],
+        "Media": [{"Part": [{"file": "/media/movies/Same Title (2003)/b.mkv"}]}],
+    }
+    source = FakeSource(
+        section_list=[movies_section],
+        records={("1", PLEX_TYPE_MOVIE): [record_a, record_b]},
+    )
+
+    with _open(store) as conn:
+        stats = walk_all(conn, source)
+
+        a_id = conn.execute("SELECT item_id FROM plex_items WHERE rating_key = '900'").fetchone()[0]
+        b_id = conn.execute("SELECT item_id FROM plex_items WHERE rating_key = '901'").fetchone()[0]
+        assert a_id == "imdb:tt5555555"
+        assert b_id == a_id
+        item_count = conn.execute(
+            "SELECT count(*) FROM items WHERE item_id = 'imdb:tt5555555'"
+        ).fetchone()[0]
+        assert item_count == 1
+
+    assert stats.identity_kept_by_external_id == 1
+
+
 def test_walk_can_be_scoped_to_one_section(tmp_path: Path) -> None:
     store = tmp_path / "plexdb.db"
     with _open(store) as conn:

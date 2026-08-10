@@ -8,10 +8,17 @@ them.
 
 **Idempotent, on purpose.** Two invariants make a second walk over unchanged
 input a no-op: `items`/`external_ids` are upserted by `item_id`, and once a
-Plex `rating_key` has been recorded against an `item_id`, that mapping is
-never repointed at a differently-derived id on a later walk — see
-`_write_item` for why. Both are required by issue #3's acceptance criteria;
-neither is enforced by the schema itself, only by this module.
+title has been recorded against an `item_id`, that mapping is never
+repointed at a differently-derived id on a later walk — see `_resolve_existing`
+and `_write_item` for why. Both are required by issue #3's acceptance
+criteria; neither is enforced by the schema itself, only by this module.
+
+**ADR-0008's amendment**: an existing identity is found by any of the
+title's external ids first (in `identity.PRIORITY` order, so the pick is
+deterministic when several are already recorded), then by the Plex rating
+key, so the title keeps one identity through both a wholesale GUID
+re-match (caught by rating key) and a remove-and-re-add that changes the
+rating key but not the GUIDs (caught by external id).
 """
 
 from __future__ import annotations
@@ -20,7 +27,7 @@ import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal, NamedTuple
 
 from . import identity
 from .plex_client import PLEX_TYPE_EPISODE, PLEX_TYPE_MOVIE, PLEX_TYPE_SHOW, PlexSource, Section
@@ -45,10 +52,17 @@ class WalkStats:
     titles_written: int = 0
     #: Titles with no recognised external GUID, landed under the `fs:` fallback.
     fallback_to_path: int = 0
-    #: Titles whose GUID set changed since a prior walk, where the existing
+    #: Titles resolved to an existing identity by Plex rating key — a
+    #: wholesale GUID re-match, rating key unchanged — where the existing
     #: item_id was kept rather than forking a second row. Zero on a library
     #: nothing has re-matched since the last pass.
     identity_kept_on_guid_change: int = 0
+    #: Titles resolved to an existing identity by one of their external ids
+    #: — a remove-and-re-add that changed the rating key but not the GUIDs,
+    #: or a GUID set that gained an id already recorded elsewhere — where
+    #: the existing item_id was kept rather than forking a second row. Zero
+    #: on a library nothing has re-matched since the last pass.
+    identity_kept_by_external_id: int = 0
 
 
 def _guid_pairs(raw_guids: list[dict[str, Any]] | None) -> list[tuple[str, str]]:
@@ -100,6 +114,45 @@ def _canonical_for(record: dict[str, Any], source_roots: Sequence[str]) -> str:
     return identity.canonical_path(str(key), source_roots)
 
 
+class _Resolved(NamedTuple):
+    """An identity this store already holds for a title, and which key found it."""
+
+    item_id: str
+    found_by: Literal["external_id", "rating_key"]
+
+
+def _resolve_existing(
+    external_ids: list[tuple[str, str]],
+    rating_key: str,
+    existing_by_external_id: dict[tuple[str, str], str],
+    existing_by_rating_key: dict[str, str],
+) -> _Resolved | None:
+    """The already-recorded identity for this title, if any — external id
+    first, then rating key (ADR-0008's amendment).
+
+    External ids are tried in `identity.PRIORITY` order, the same order
+    `derive_item_id` uses, so the pick is deterministic when a title carries
+    several and they are already recorded against different identities: the
+    first namespace in priority order with a hit wins, regardless of which
+    id Plex listed first. Only if no external id is already known does the
+    rating key decide.
+
+    `None` when neither resolves — this store has never seen the title under
+    any id it currently carries.
+    """
+    for namespace in identity.PRIORITY:
+        for ns, value in external_ids:
+            if ns != namespace or not value.strip():
+                continue
+            matched = existing_by_external_id.get((ns, value))
+            if matched is not None:
+                return _Resolved(matched, "external_id")
+    prior_id = existing_by_rating_key.get(rating_key)
+    if prior_id is not None:
+        return _Resolved(prior_id, "rating_key")
+    return None
+
+
 def _write_item(
     conn: sqlite3.Connection,
     record: dict[str, Any],
@@ -110,6 +163,7 @@ def _write_item(
     now: str,
     stats: WalkStats,
     existing_by_rating_key: dict[str, str],
+    existing_by_external_id: dict[tuple[str, str], str],
     show_item_ids: dict[str, str],
 ) -> None:
     """Upsert one Plex record as an `items` row, its `external_ids`, and its
@@ -128,18 +182,26 @@ def _write_item(
     if derived_id.startswith("fs:"):
         stats.fallback_to_path += 1
 
-    prior_id = existing_by_rating_key.get(rating_key)
-    if prior_id is not None and prior_id != derived_id:
-        # This rating key's GUID set changed since the last walk (Plex
-        # re-matched it, or it gained a GUID it previously lacked). Adopting
-        # the freshly derived id here would leave the old items/external_ids
-        # rows behind as an orphaned second row for the same physical title
-        # — the silent fork the walk must not produce. Keeping the identity
-        # it already has is the other of the two acceptable outcomes the
-        # issue names; every occurrence is counted, so it is visible in the
-        # walk summary rather than silent.
-        item_id = prior_id
-        stats.identity_kept_on_guid_change += 1
+    resolved = _resolve_existing(
+        external_ids, rating_key, existing_by_external_id, existing_by_rating_key
+    )
+    if resolved is not None and resolved.item_id != derived_id:
+        # Either this rating key's GUID set changed since the last walk
+        # (Plex re-matched it, or it gained a GUID it previously lacked —
+        # caught by the rating key), or the rating key itself changed while
+        # an external id stayed the same (a remove-and-re-add — caught by
+        # the external id). Adopting the freshly derived id here would leave
+        # the old items/external_ids rows behind as an orphaned second row
+        # for the same physical title — the silent fork the walk must not
+        # produce. Keeping the identity it already has is the other of the
+        # two acceptable outcomes the issue names; every occurrence is
+        # counted by which key retained it, so it is visible in the walk
+        # summary rather than silent.
+        item_id = resolved.item_id
+        if resolved.found_by == "external_id":
+            stats.identity_kept_by_external_id += 1
+        else:
+            stats.identity_kept_on_guid_change += 1
     else:
         item_id = derived_id
 
@@ -203,8 +265,8 @@ def _write_item(
     for namespace, value in external_ids:
         # (ns, value) is the primary key. On conflict, keep whichever item_id
         # claimed it first rather than repointing it — the same
-        # never-repoint-silently rule `prior_id` enforces above, applied to
-        # one external id instead of the whole title.
+        # never-repoint-silently rule `_resolve_existing` enforces above,
+        # applied to one external id instead of the whole title.
         conn.execute(
             "INSERT INTO external_ids (item_id, ns, value) VALUES (?, ?, ?) "
             "ON CONFLICT (ns, value) DO NOTHING",
@@ -224,6 +286,15 @@ def _write_item(
     )
 
     existing_by_rating_key[rating_key] = item_id
+    for namespace, value in external_ids:
+        # Mirrors the DB's own `ON CONFLICT (ns, value) DO NOTHING` above:
+        # first claim wins. Without this, a second title later in this same
+        # pass that shares one of these external ids but was not yet in the
+        # store when this walk started would miss the match — it would only
+        # exist in `external_ids` from a moment ago, not in the snapshot
+        # `existing_by_external_id` was preloaded from — and fork instead
+        # of resolving to this identity.
+        existing_by_external_id.setdefault((namespace, value), item_id)
     if kind == "show":
         # Recorded for the episode pass over this same section, which runs
         # next and resolves each episode's `show_item_id` from here.
@@ -251,6 +322,10 @@ def walk_all(
     existing_by_rating_key: dict[str, str] = {
         row["rating_key"]: row["item_id"]
         for row in conn.execute("SELECT rating_key, item_id FROM plex_items")
+    }
+    existing_by_external_id: dict[tuple[str, str], str] = {
+        (row["ns"], row["value"]): row["item_id"]
+        for row in conn.execute("SELECT ns, value, item_id FROM external_ids")
     }
     show_item_ids: dict[str, str] = {
         row["rating_key"]: row["item_id"]
@@ -281,6 +356,7 @@ def walk_all(
                         now=now,
                         stats=stats,
                         existing_by_rating_key=existing_by_rating_key,
+                        existing_by_external_id=existing_by_external_id,
                         show_item_ids=show_item_ids,
                     )
 

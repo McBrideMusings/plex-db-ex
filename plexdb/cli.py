@@ -51,11 +51,15 @@ def _cmd_walk(args: argparse.Namespace) -> int:
         f"{stats.titles_seen} title(s) seen, {stats.titles_written} written, "
         f"{stats.fallback_to_path} fell back to a path-derived id"
     )
-    if stats.identity_kept_on_guid_change:
-        print(
-            f"{stats.identity_kept_on_guid_change} title(s) had a changed GUID set "
-            "since the last walk; kept their existing item_id rather than forking a new row"
-        )
+    for kept, found_by in (
+        (stats.identity_kept_on_guid_change, "rating key"),
+        (stats.identity_kept_by_external_id, "external id"),
+    ):
+        if kept:
+            print(
+                f"{kept} title(s) would have derived a different item_id this walk; "
+                f"kept their existing one (found by {found_by}) rather than forking a new row"
+            )
     return 0
 
 
