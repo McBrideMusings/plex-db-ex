@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import argparse
+import importlib
 import sqlite3
 from pathlib import Path
 
@@ -14,12 +16,46 @@ from plex_fixtures import (
 )
 from tmdb_fixtures import FakeTMDbSource
 
-from plexdb import cli
-from plexdb.cli import main
+from plexdb.cli import _register_commands, build_parser, main
+from plexdb.commands import enrich_tmdb_keywords as enrich_tmdb_keywords_cmd
+from plexdb.commands import ingest_plays as ingest_plays_cmd
+from plexdb.commands import walk as walk_cmd
 from plexdb.config import Config, ConfigError
 from plexdb.store import init as init_store
 from plexdb.store import open_store
 from plexdb.walk import walk_all
+
+EXPECTED_COMMANDS = {"init", "walk", "publish", "enrich-tmdb-keywords", "ingest-plays"}
+
+
+def _subcommand_names(parser: argparse.ArgumentParser) -> set[str]:
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            return set(action.choices)
+    raise AssertionError("parser has no subparsers action")
+
+
+def test_build_parser_discovers_the_expected_command_set() -> None:
+    """Pins the discovered set so a command that stops being found by
+    `pkgutil.iter_modules` fails this test rather than silently vanishing
+    from `--help`."""
+    assert _subcommand_names(build_parser()) == EXPECTED_COMMANDS
+
+
+def test_a_command_module_without_register_fails_loudly_naming_the_module(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package_dir = tmp_path / "broken_commands"
+    package_dir.mkdir()
+    (package_dir / "__init__.py").write_text("")
+    (package_dir / "no_register.py").write_text("# a command module with no register()\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    broken_commands = importlib.import_module("broken_commands")
+
+    sub = argparse.ArgumentParser().add_subparsers(dest="command")
+
+    with pytest.raises(RuntimeError, match="broken_commands.no_register"):
+        _register_commands(sub, package=broken_commands)
 
 
 def _fixture_backed_client(base_url: str, token: str) -> FakeSource:
@@ -52,7 +88,7 @@ def _configure_ingest_plays(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     init_store(store)
     with open_store(store) as conn:
         walk_all(conn, recorded_source())
-    monkeypatch.setattr(cli, "LivePlexClient", _fixture_backed_history_client)
+    monkeypatch.setattr(ingest_plays_cmd, "LivePlexClient", _fixture_backed_history_client)
     return store
 
 
@@ -64,7 +100,7 @@ def _configure_walk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("PLEXDB_PATH", str(store))
     monkeypatch.setenv("PLEX_URL", "http://plex.example:32400")
     monkeypatch.setenv("PLEX_TOKEN", "test-token")
-    monkeypatch.setattr(cli, "LivePlexClient", _fixture_backed_client)
+    monkeypatch.setattr(walk_cmd, "LivePlexClient", _fixture_backed_client)
     return store
 
 
@@ -310,7 +346,7 @@ def _configure_enrich(
         assert api_key == "test-tmdb-key", "enrich-tmdb-keywords must pass the configured key"
         return fake
 
-    monkeypatch.setattr(cli, "LiveTMDbClient", _fixture_backed_client)
+    monkeypatch.setattr(enrich_tmdb_keywords_cmd, "LiveTMDbClient", _fixture_backed_client)
     return store
 
 
@@ -538,7 +574,7 @@ def test_ingest_plays_without_a_store_says_so_not_a_traceback(
     monkeypatch.setenv("PLEXDB_PATH", str(tmp_path / "plexdb.db"))
     monkeypatch.setenv("PLEX_URL", "http://plex.example:32400")
     monkeypatch.setenv("PLEX_TOKEN", "test-token")
-    monkeypatch.setattr(cli, "LivePlexClient", _fixture_backed_history_client)
+    monkeypatch.setattr(ingest_plays_cmd, "LivePlexClient", _fixture_backed_history_client)
     # no `init` — the store never gets created
 
     assert main(["ingest-plays"]) == 1
