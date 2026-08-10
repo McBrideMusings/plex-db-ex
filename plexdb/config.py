@@ -85,6 +85,13 @@ class Config:
     #: before `plexdb enrich-tmdb-edges` re-fetches it. Same documented
     #: default and window as `tmdb_keywords_stale_days`, tracked separately.
     tmdb_edges_stale_days: int
+    #: Path to `etv-station`'s `catalog.db`, opened read-only by `plexdb
+    #: reconcile-etv` (issue #5) to compare `item_id` against `entry_id`.
+    #: `None` when unset — like `snapshot_path`, this carries no default that
+    #: points anywhere real, so a person is never silently pointed at
+    #: whichever checkout happens to sit next to this one; the check that
+    #: it's present lives at the point of use, the `reconcile-etv` command.
+    etv_catalog_path: Path | None
 
     @classmethod
     def from_env(cls, *, env_file: Path | None = None) -> Config:
@@ -101,6 +108,8 @@ class Config:
         snapshot_path = Path(snapshot_raw).expanduser() if snapshot_raw else None
         source_roots_raw = os.environ.get("PLEX_SOURCE_ROOTS", "")
         source_roots = tuple(root.strip() for root in source_roots_raw.split(",") if root.strip())
+        etv_catalog_raw = os.environ.get("ETV_CATALOG_PATH", "").strip()
+        etv_catalog_path = Path(etv_catalog_raw).expanduser() if etv_catalog_raw else None
         return cls(
             store_path=Path(raw).expanduser(),
             snapshot_path=snapshot_path,
@@ -114,4 +123,5 @@ class Config:
             tmdb_edges_stale_days=_stale_days_from_env(
                 "TMDB_EDGES_STALE_DAYS", _DEFAULT_TMDB_EDGES_STALE_DAYS
             ),
+            etv_catalog_path=etv_catalog_path,
         )

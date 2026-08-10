@@ -33,11 +33,12 @@ EXPECTED_COMMANDS = {
     "enrich-tmdb-keywords",
     "enrich-tmdb-edges",
     "ingest-plays",
+    "reconcile-etv",
 }
 
 # The order someone runs them in: create the store, fill it, publish it, then
-# the sources that enrich it. Each module owns its own ORDER, so this list is
-# the only place the sequence is written down.
+# the sources that enrich it, then the cross-store audit. Each module owns its
+# own ORDER, so this list is the only place the sequence is written down.
 EXPECTED_COMMAND_ORDER = [
     "init",
     "walk",
@@ -45,6 +46,7 @@ EXPECTED_COMMAND_ORDER = [
     "enrich-tmdb-keywords",
     "enrich-tmdb-edges",
     "ingest-plays",
+    "reconcile-etv",
 ]
 
 
@@ -756,3 +758,82 @@ def test_ingest_plays_without_a_store_says_so_not_a_traceback(
     assert err.startswith("error: ")
     assert "plexdb init" in err
     assert "Traceback" not in err
+
+
+_ETV_CATALOG_DDL = """
+CREATE TABLE entries (
+    entry_id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    primary_source TEXT NOT NULL
+);
+CREATE TABLE entry_sources (
+    source TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    entry_id TEXT NOT NULL REFERENCES entries(entry_id),
+    playback_path TEXT NOT NULL,
+    PRIMARY KEY (source, source_id)
+);
+CREATE TABLE entry_external_ids (
+    namespace TEXT NOT NULL,
+    value TEXT NOT NULL,
+    entry_id TEXT NOT NULL REFERENCES entries(entry_id),
+    PRIMARY KEY (namespace, value)
+);
+"""
+
+
+def test_reconcile_etv_without_a_catalog_path_configured_is_an_error_not_a_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    store = tmp_path / "plexdb.db"
+    monkeypatch.setenv("PLEXDB_PATH", str(store))
+    # Set (not delete): see the matching comment on the walk test above — this
+    # worktree's own `.env` may carry a real ETV_CATALOG_PATH for `verify`.
+    monkeypatch.setenv("ETV_CATALOG_PATH", "")
+    main(["init"])
+    capsys.readouterr()
+
+    assert main(["reconcile-etv"]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("error: ")
+    assert "ETV_CATALOG_PATH" in err
+    assert "Traceback" not in err
+
+
+def test_reconcile_etv_reports_a_summary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    store = tmp_path / "plexdb.db"
+    etv_catalog = tmp_path / "catalog.db"
+    monkeypatch.setenv("PLEXDB_PATH", str(store))
+    monkeypatch.setenv("ETV_CATALOG_PATH", str(etv_catalog))
+    init_store(store)
+    with sqlite3.connect(etv_catalog) as conn:
+        conn.executescript(_ETV_CATALOG_DDL)
+        conn.execute(
+            "INSERT INTO entries (entry_id, type, title, primary_source) "
+            "VALUES ('imdb:tt0096734', 'movie', ?, 'plex')",
+            ("The 'Burbs",),
+        )
+        conn.execute(
+            "INSERT INTO entry_sources (source, source_id, entry_id, playback_path) "
+            "VALUES ('plex', '1', 'imdb:tt0096734', '')"
+        )
+    with open_store(store) as conn:
+        conn.execute(
+            "INSERT INTO items (item_id, type, title) VALUES ('imdb:tt0096734', 'movie', ?)",
+            ("The 'Burbs",),
+        )
+        conn.execute(
+            "INSERT INTO plex_items (rating_key, item_id, section_id, last_seen) "
+            "VALUES ('1', 'imdb:tt0096734', '1', '2024-01-01T00:00:00+00:00')"
+        )
+        conn.commit()
+    capsys.readouterr()
+
+    assert main(["reconcile-etv"]) == 0
+
+    out = capsys.readouterr().out
+    assert "compared 1 title(s)" in out
+    assert "1 agree, 0 differ" in out
