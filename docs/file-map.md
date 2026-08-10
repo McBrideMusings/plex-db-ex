@@ -10,6 +10,8 @@ plex-db-ex/
 │   ├── config.py          settings from .env; never a default for a URL or a token
 │   ├── errors.py          the errors a user is meant to see, as one `error: …` line
 │   ├── identity.py        item_id derivation — mirrored in etv-station, guarded by a fixture
+│   ├── plex_client.py     read-only Plex HTTP client behind a PlexSource protocol
+│   ├── walk.py            the library walk: Plex sections into items, external_ids, plex_items
 │   ├── schema.py          the DDL and the append-only migration list
 │   └── store.py           opening the store, and publishing the read-only snapshot consumers open
 ├── tests/                 pytest; no test reaches the network
