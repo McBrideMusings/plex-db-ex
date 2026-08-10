@@ -11,7 +11,7 @@ plex-db-ex/
 │   ├── errors.py          the errors a user is meant to see, as one `error: …` line
 │   ├── identity.py        item_id derivation — mirrored in etv-station, guarded by a fixture
 │   ├── schema.py          the DDL and the append-only migration list
-│   └── store.py           opening the store, for writing and read-only
+│   └── store.py           opening the store, and publishing the read-only snapshot consumers open
 ├── tests/                 pytest; no test reaches the network
 │   └── fixtures/
 │       └── entry_id.json  SHARED WITH etv-station — copied there, hash-pinned in both

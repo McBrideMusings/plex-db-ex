@@ -13,7 +13,7 @@ the measurement that proves it, and the reason the rest of this milestone exists
 - [x] [#2](https://github.com/McBrideMusings/plex-db-ex/issues/2) Derive `item_id`, and author the shared identity fixture
 - [ ] [etv-station#180](https://github.com/McBrideMusings/etv-station/issues/180) `etv-station` adopts that fixture
 - [x] [#18](https://github.com/McBrideMusings/plex-db-ex/issues/18) Treat an empty GUID value as absent — Python half; [etv-station#184](https://github.com/McBrideMusings/etv-station/issues/184) is the Rust half and is still open
-- [ ] [#15](https://github.com/McBrideMusings/plex-db-ex/issues/15) Publish a read-only snapshot for consumers
+- [x] [#15](https://github.com/McBrideMusings/plex-db-ex/issues/15) Publish a read-only snapshot for consumers
 - [ ] [#16](https://github.com/McBrideMusings/plex-db-ex/issues/16) Give connections a busy timeout
 - [ ] [#3](https://github.com/McBrideMusings/plex-db-ex/issues/3) Walk the Plex library into items and external ids — blocked on #18, now clear
 - [ ] [#4](https://github.com/McBrideMusings/plex-db-ex/issues/4) Fetch TMDB keywords into namespaced enrichment, cached
