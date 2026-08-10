@@ -224,3 +224,15 @@ class PlexAccountSource(Protocol):
         """Every Plex account this server has ever attached, including id
         0's placeholder record."""
         ...
+
+
+def valid_accounts(accounts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """`accounts` (as returned by `accounts()` above), excluding Plex's id-0
+    placeholder and any record with a blank name — the filter every caller
+    needs before treating an entry as a real person. `latent_users.py` uses
+    this to build its account-name lookup (issue #27)."""
+    return [
+        account
+        for account in accounts
+        if account.get("id") not in (None, 0) and account.get("name")
+    ]

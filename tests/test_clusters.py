@@ -16,6 +16,7 @@ from plexdb.clusters import (
     MIN_IP_OCCURRENCES,
     KeywordProfile,
     account_ids_with_plays,
+    account_units,
     build_keyword_profile,
     cluster_account_plays,
     profile_overlap,
@@ -410,14 +411,16 @@ def test_render_report_is_byte_identical_across_repeated_calls(
     _seed_play(store, history_key="h1", item_id="item:1", client_identifier="device-a")
     _seed_play(store, history_key="h2", item_id="item:2", client_identifier="device-b")
 
-    assert render_report(store) == render_report(store)
+    assert render_report(store, shared_account_ids=[ACCOUNT]) == render_report(
+        store, shared_account_ids=[ACCOUNT]
+    )
 
 
 def test_render_report_states_coverage_for_a_cluster_with_none(store: sqlite3.Connection) -> None:
     _seed_item(store, "item:1")
     _seed_play(store, history_key="h1", item_id="item:1", client_identifier="device-a")
 
-    report = render_report(store)
+    report = render_report(store, shared_account_ids=[ACCOUNT])
 
     assert "no enrichment coverage" in report
     assert "0/1 unit(s) carry tmdb_keywords" in report
@@ -434,7 +437,7 @@ def test_render_report_names_transient_ips_and_why(store: sqlite3.Connection) ->
         platform="Roku",
     )
 
-    report = render_report(store)
+    report = render_report(store, shared_account_ids=[ACCOUNT])
 
     assert "203.0.113.9" in report
     assert "transient" in report.lower()
@@ -444,7 +447,7 @@ def test_render_report_says_na_with_fewer_than_two_clusters(store: sqlite3.Conne
     _seed_item(store, "item:1")
     _seed_play(store, history_key="h1", item_id="item:1", client_identifier="device-a")
 
-    report = render_report(store)
+    report = render_report(store, shared_account_ids=[ACCOUNT])
 
     assert "pairwise overlap: n/a (fewer than two clusters)" in report
 
@@ -459,7 +462,7 @@ def test_render_report_computes_pairwise_overlap_between_clusters(
     _seed_play(store, history_key="h1", item_id="item:1", client_identifier="device-a")
     _seed_play(store, history_key="h2", item_id="item:2", client_identifier="device-b")
 
-    report = render_report(store)
+    report = render_report(store, shared_account_ids=[ACCOUNT])
 
     assert "cluster 1 vs cluster 2: 1.00" in report
 
@@ -474,7 +477,7 @@ def test_render_report_reports_na_overlap_when_one_cluster_has_no_coverage(
     _seed_play(store, history_key="h1", item_id="item:1", client_identifier="device-a")
     _seed_play(store, history_key="h2", item_id="item:2", client_identifier="device-b")
 
-    report = render_report(store)
+    report = render_report(store, shared_account_ids=[ACCOUNT])
 
     assert "no enrichment coverage on one or both" in report
 
@@ -492,7 +495,7 @@ def test_render_report_covers_an_episode_only_cluster_via_its_shows_keywords(
     _seed_play(store, history_key="h1", item_id="ep:office:s1e1", client_identifier="device-a")
     _seed_play(store, history_key="h2", item_id="ep:office:s1e2", client_identifier="device-a")
 
-    report = render_report(store)
+    report = render_report(store, shared_account_ids=[ACCOUNT])
 
     assert "no enrichment coverage" not in report
     assert "workplace comedy" in report
@@ -514,7 +517,7 @@ def test_render_report_overlap_is_real_between_two_episode_only_clusters(
     _seed_play(store, history_key="h1", item_id="ep:office:s1e1", client_identifier="device-a")
     _seed_play(store, history_key="h2", item_id="ep:parks:s1e1", client_identifier="device-b")
 
-    report = render_report(store)
+    report = render_report(store, shared_account_ids=[ACCOUNT])
 
     assert "no enrichment coverage on one or both" not in report
     assert "cluster 1 vs cluster 2: 1.00" in report
@@ -525,7 +528,128 @@ def test_render_report_scopes_to_the_requested_accounts(store: sqlite3.Connectio
     _seed_play(store, history_key="h1", item_id="item:1", account=1, client_identifier="d1")
     _seed_play(store, history_key="h2", item_id="item:1", account=2, client_identifier="d2")
 
-    report = render_report(store, [2])
+    report = render_report(store, [2], shared_account_ids=[])
 
     assert "account 2" in report
     assert "account 1" not in report
+
+
+# --- account_units --------------------------------------------------------
+
+
+def test_account_units_ignores_the_fingerprint_chain_entirely(store: sqlite3.Connection) -> None:
+    """Unlike `cluster_account_plays`, `account_units` never partitions by
+    device — the same show watched from two different client_identifiers
+    is still one unit with depth 2, because a personal account's profile is
+    built over every play it ever recorded, not per device."""
+    _seed_item(store, "show:office", item_type="show")
+    _seed_item(store, "ep:office:s1e1", item_type="episode", show_item_id="show:office")
+    _seed_item(store, "ep:office:s1e2", item_type="episode", show_item_id="show:office")
+    _seed_play(store, history_key="h1", item_id="ep:office:s1e1", client_identifier="device-a")
+    _seed_play(store, history_key="h2", item_id="ep:office:s1e2", client_identifier="device-b")
+
+    assert account_units(store, ACCOUNT) == (("show:office", 2),)
+
+
+def test_account_units_of_no_plays_is_empty(store: sqlite3.Connection) -> None:
+    assert account_units(store, ACCOUNT) == ()
+
+
+# --- render_report: personal vs. shared accounts (issue #27) -------------
+
+
+def test_render_report_reports_a_personal_account_as_one_user_with_no_device_or_cluster_numbers(
+    store: sqlite3.Connection,
+) -> None:
+    """The decided acceptance criterion: an account not in
+    `shared_account_ids` prints name, play count, and one keyword profile —
+    nothing that implies clustering happened."""
+    _seed_item(store, "item:1")
+    _seed_item(store, "item:2")
+    _seed_keyword(store, "item:1", "heist")
+    _seed_play(
+        store, history_key="h1", item_id="item:1", client_identifier="device-a", ip="10.0.0.1"
+    )
+    _seed_play(
+        store, history_key="h2", item_id="item:2", client_identifier="device-b", ip="10.0.0.2"
+    )
+
+    report = render_report(store, [ACCOUNT], shared_account_ids=[])
+
+    assert "plays: 2" in report
+    assert "heist" in report
+    assert "structural baseline" not in report
+    assert "cluster" not in report
+    assert "distinct client_identifier" not in report
+    assert "pairwise" not in report
+    assert "device-a" not in report
+    assert "device-b" not in report
+
+
+def test_render_report_personal_account_profile_covers_every_play_not_one_device(
+    store: sqlite3.Connection,
+) -> None:
+    """A personal account's one keyword profile is built over the whole
+    account, so a show watched from two devices still counts as one
+    covered unit at depth 2 — not split into two partial profiles."""
+    _seed_item(store, "show:office", item_type="show")
+    _seed_item(store, "ep:office:s1e1", item_type="episode", show_item_id="show:office")
+    _seed_item(store, "ep:office:s1e2", item_type="episode", show_item_id="show:office")
+    _seed_keyword(store, "show:office", "workplace comedy")
+    _seed_play(store, history_key="h1", item_id="ep:office:s1e1", client_identifier="device-a")
+    _seed_play(store, history_key="h2", item_id="ep:office:s1e2", client_identifier="device-b")
+
+    report = render_report(store, [ACCOUNT], shared_account_ids=[])
+
+    assert "1/1 unit(s) with tmdb_keywords coverage, spanning 2/2 play(s) deep" in report
+    assert "workplace comedy" in report
+
+
+def test_render_report_personal_account_with_no_coverage_says_so(
+    store: sqlite3.Connection,
+) -> None:
+    _seed_item(store, "item:1")
+    _seed_play(store, history_key="h1", item_id="item:1", client_identifier="device-a")
+
+    report = render_report(store, [ACCOUNT], shared_account_ids=[])
+
+    assert "keyword profile: no enrichment coverage (0/1 unit(s) carry tmdb_keywords)" in report
+
+
+def test_render_report_shared_account_keeps_the_full_structural_report(
+    store: sqlite3.Connection,
+) -> None:
+    """A configured shared account's report is unchanged by issue #27: the
+    structural baseline, per-cluster breakdown, and pairwise overlap all
+    still print."""
+    _seed_item(store, "item:1")
+    _seed_item(store, "item:2")
+    _seed_play(store, history_key="h1", item_id="item:1", client_identifier="device-a")
+    _seed_play(store, history_key="h2", item_id="item:2", client_identifier="device-b")
+
+    report = render_report(store, [ACCOUNT], shared_account_ids=[ACCOUNT])
+
+    assert "structural baseline: 2 play(s), 2 distinct client_identifier(s), 2 cluster(s)" in report
+    assert "cluster 1 [client_identifier='device-a']" in report
+    assert "cluster 2 [client_identifier='device-b']" in report
+    assert "pairwise" in report
+
+
+def test_render_report_labels_an_account_by_name_when_given(store: sqlite3.Connection) -> None:
+    _seed_item(store, "item:1")
+    _seed_play(store, history_key="h1", item_id="item:1", client_identifier="device-a")
+
+    report = render_report(store, [ACCOUNT], shared_account_ids=[], account_names={ACCOUNT: "Madi"})
+
+    assert "== account 1 (Madi) ==" in report
+
+
+def test_render_report_prints_the_bare_id_when_no_name_is_known(
+    store: sqlite3.Connection,
+) -> None:
+    _seed_item(store, "item:1")
+    _seed_play(store, history_key="h1", item_id="item:1", client_identifier="device-a")
+
+    report = render_report(store, [ACCOUNT], shared_account_ids=[])
+
+    assert "== account 1 ==" in report

@@ -53,6 +53,13 @@ adds IP, completion percentage, and paused time.
 The tuple used to split a shared Plex account into latent users — client machine ID,
 then IP, then platform/product, with device display name excluded as a clustering key.
 
+**Shared account**:
+A Plex account genuinely used by more than one person, so its plays are worth splitting
+by Fingerprint. Configuration the server owner states (`PLEXDB_SHARED_ACCOUNT_IDS`), never
+inferred from device or IP counts — a personal account can show more devices than a shared
+one. Every account not listed is one named person; `plexdb latent-users` reports it as a
+single user with no device or cluster numbers at all.
+
 **Projection**:
 The one-way, booleanized, prefix-namespaced write-back of enrichment into Plex labels,
 for the benefit of tools that only speak Plex. Never a round trip.

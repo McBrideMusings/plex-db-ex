@@ -15,11 +15,20 @@ from dotenv import load_dotenv
 
 from .errors import ConfigError
 
-__all__ = ["DEFAULT_STORE_PATH", "Config", "ConfigError"]
+__all__ = ["DEFAULT_SHARED_ACCOUNT_IDS", "DEFAULT_STORE_PATH", "Config", "ConfigError"]
 
 #: Where the store lands when nothing says otherwise. A path is not a secret,
 #: so unlike a URL or a token this one may carry a default.
 DEFAULT_STORE_PATH = "./data/plexdb.db"
+
+#: The only two Plex accounts this server's owner has confirmed are actually
+#: shared by more than one person (issue #27): account `1` (the server
+#: owner, McBrideMusings) and `3670670` (bboy2448). Every other account —
+#: however many devices or IPs it shows — is one named person; which
+#: accounts are shared is configuration the owner stated, never something
+#: `plexdb latent-users` infers from device counts. An account id is not a
+#: secret, so unlike a URL or a token this one may carry a real default.
+DEFAULT_SHARED_ACCOUNT_IDS = "1,3670670"
 
 #: Documented default: mid-range of the 30-60 day window `docs/schema.md` sets
 #: for every external source's enrichment. Deliberately duplicated from
@@ -32,6 +41,23 @@ _DEFAULT_TMDB_KEYWORDS_STALE_DAYS = 45
 #: operator can dial edges and keywords staleness independently even though
 #: both come from TMDB.
 _DEFAULT_TMDB_EDGES_STALE_DAYS = 45
+
+
+def _shared_account_ids_from_env() -> tuple[int, ...]:
+    """`PLEXDB_SHARED_ACCOUNT_IDS`, comma-separated, falling back to
+    `DEFAULT_SHARED_ACCOUNT_IDS` when unset. An explicitly blank value means
+    zero shared accounts, not "use the default" — the same override
+    convention `_stale_days_from_env` uses for its own knobs."""
+    raw = os.environ.get("PLEXDB_SHARED_ACCOUNT_IDS", DEFAULT_SHARED_ACCOUNT_IDS)
+    if not raw.strip():
+        return ()
+    try:
+        return tuple(int(part.strip()) for part in raw.split(",") if part.strip())
+    except ValueError as err:
+        raise ConfigError(
+            "PLEXDB_SHARED_ACCOUNT_IDS must be a comma-separated list of whole numbers, "
+            f"got {raw!r}"
+        ) from err
 
 
 def _stale_days_from_env(var: str, default: int) -> int:
@@ -72,6 +98,13 @@ class Config:
     #: empty by default, which means no stripping — always a safe default,
     #: never a wrong one.
     source_roots: tuple[str, ...]
+    #: Plex account ids `plexdb latent-users` treats as genuinely shared by
+    #: more than one person, and therefore clusters by device fingerprint
+    #: (issue #27). Every account not in this tuple is reported as one named
+    #: person, however many devices or IPs it shows — device fingerprinting
+    #: exists only to split apart the accounts named here. Comma-separated
+    #: in `PLEXDB_SHARED_ACCOUNT_IDS`; defaults to `DEFAULT_SHARED_ACCOUNT_IDS`.
+    shared_account_ids: tuple[int, ...]
     #: The Tautulli server `plexdb enrich-tautulli-plays` reads `get_history`
     #: from (issue #9, ADR-0004's optional-source pattern: only that command
     #: needs it, so the check that it's present lives at the point of use).
@@ -122,6 +155,7 @@ class Config:
             plex_url=os.environ.get("PLEX_URL", "").strip(),
             plex_token=os.environ.get("PLEX_TOKEN", "").strip(),
             source_roots=source_roots,
+            shared_account_ids=_shared_account_ids_from_env(),
             tautulli_url=os.environ.get("TAUTULLI_URL", "").strip(),
             tautulli_api_key=os.environ.get("TAUTULLI_API_KEY", "").strip(),
             tmdb_api_key=os.environ.get("TMDB_API_KEY", "").strip(),

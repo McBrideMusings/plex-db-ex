@@ -45,13 +45,29 @@ account ever watched, describing the show instead of the person. Depth —
 how many plays rolled into each unit — is tracked alongside (`Cluster.units`)
 and reported next to coverage, but it never re-weights which keywords rank
 in the profile.
+
+**Only a configured shared account is clustered (issue #27).** Which
+accounts are genuinely shared by more than one person is a fact the repo
+owner stated, not something a device count or IP count can tell apart from
+a person who happens to use a lot of clients — `bboy2448` shows 219
+distinct devices and is shared; `Natalia` shows 73 and is one person. A
+non-shared account already identifies the person by name, so device
+fingerprinting there would manufacture distinctions that are not real:
+`render_report` reports it as exactly one user — name, play count, one
+keyword profile built over every play it ever recorded — with no device
+count, no cluster count, no structural baseline, and no pairwise overlap.
+The structural baseline and per-cluster breakdown this module was built
+for (`cluster_account_plays`, `AccountClusters`) still run in full, but
+only for an account in the caller-supplied `shared_account_ids` set; this
+module never guesses that set itself; `plexdb latent_users` sources it
+from `Config.shared_account_ids`.
 """
 
 from __future__ import annotations
 
 import sqlite3
 from collections import Counter, defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from itertools import combinations
 
@@ -160,6 +176,25 @@ def account_ids_with_plays(conn: sqlite3.Connection) -> list[int]:
     return [int(row["plex_account_id"]) for row in rows]
 
 
+def _account_play_rows(conn: sqlite3.Connection, plex_account_id: int) -> list[sqlite3.Row]:
+    """Every play row for one account, joined to its unit id
+    (`coalesce(show_item_id, item_id)`) — the fetch `cluster_account_plays`
+    (which additionally partitions the rows by fingerprint) and
+    `account_units` (which does not) both build on, so the query and the
+    INNER JOIN reasoning live in exactly one place.
+    """
+    # INNER JOIN, not LEFT: plays.item_id is NOT NULL REFERENCES items(item_id)
+    # ON DELETE CASCADE, so every play row has a matching items row by
+    # construction — there is no play whose unit this join could drop.
+    return conn.execute(
+        "SELECT p.item_id, p.client_identifier, p.ip, p.platform, "
+        "COALESCE(i.show_item_id, p.item_id) AS unit_id "
+        "FROM plays p JOIN items i ON i.item_id = p.item_id "
+        "WHERE p.plex_account_id = ?",
+        (plex_account_id,),
+    ).fetchall()
+
+
 def cluster_account_plays(conn: sqlite3.Connection, plex_account_id: int) -> AccountClusters:
     """Cluster one account's plays on the fingerprint fallback chain.
 
@@ -168,16 +203,7 @@ def cluster_account_plays(conn: sqlite3.Connection, plex_account_id: int) -> Acc
     one, then sorted explicitly below) — running this twice over an unchanged
     store produces byte-identical `Cluster` tuples.
     """
-    # INNER JOIN, not LEFT: plays.item_id is NOT NULL REFERENCES items(item_id)
-    # ON DELETE CASCADE, so every play row has a matching items row by
-    # construction — there is no play whose unit this join could drop.
-    rows = conn.execute(
-        "SELECT p.item_id, p.client_identifier, p.ip, p.platform, "
-        "COALESCE(i.show_item_id, p.item_id) AS unit_id "
-        "FROM plays p JOIN items i ON i.item_id = p.item_id "
-        "WHERE p.plex_account_id = ?",
-        (plex_account_id,),
-    ).fetchall()
+    rows = _account_play_rows(conn, plex_account_id)
 
     distinct_client_identifiers = {r["client_identifier"] for r in rows if r["client_identifier"]}
 
@@ -229,6 +255,21 @@ def cluster_account_plays(conn: sqlite3.Connection, plex_account_id: int) -> Acc
         clusters=tuple(clusters),
         transient_ips=transient_ips,
     )
+
+
+def account_units(conn: sqlite3.Connection, plex_account_id: int) -> tuple[tuple[str, int], ...]:
+    """Every unit (`coalesce(show_item_id, item_id)`) this account ever
+    played, with play depth, computed over *every* play the account has —
+    no fingerprint clustering at all.
+
+    This is the personal-account report's basis for its single keyword
+    profile (issue #27): once an account already identifies one named
+    person, there is nothing to cluster, so the fingerprint chain
+    (`cluster_account_plays` above) plays no role here. Sorted by unit id
+    for the same determinism `cluster_account_plays` guarantees.
+    """
+    rows = _account_play_rows(conn, plex_account_id)
+    return tuple(sorted(Counter(r["unit_id"] for r in rows).items()))
 
 
 def build_keyword_profile(
@@ -295,80 +336,141 @@ def profile_overlap(a: KeywordProfile, b: KeywordProfile) -> float | None:
     return len(set_a & set_b) / len(union)
 
 
-def render_report(conn: sqlite3.Connection, plex_account_ids: Sequence[int] | None = None) -> str:
-    """The full human-readable, diffable report: one section per account,
-    each with its structural baseline, per-cluster keyword profile, and
-    pairwise overlap.
+def _account_header(plex_account_id: int, account_names: Mapping[int, str]) -> str:
+    name = account_names.get(plex_account_id)
+    return (
+        f"== account {plex_account_id} ({name}) ==" if name else f"== account {plex_account_id} =="
+    )
+
+
+def _render_keyword_profile_lines(profile: KeywordProfile, *, indent: str = "") -> list[str]:
+    """The one or two lines describing a keyword profile, shared by the
+    per-cluster (shared-account) and per-account (personal-account) report
+    paths so the wording never drifts between them."""
+    if profile.has_coverage:
+        top = ", ".join(f"{keyword} ({count})" for keyword, count in profile.top_keywords)
+        return [
+            f"{indent}keyword profile ({profile.units_with_coverage}/{profile.units_total} "
+            f"unit(s) with tmdb_keywords coverage, spanning "
+            f"{profile.covered_depth}/{profile.total_depth} play(s) deep): {top}"
+        ]
+    return [
+        f"{indent}keyword profile: no enrichment coverage "
+        f"(0/{profile.units_total} unit(s) carry tmdb_keywords)"
+    ]
+
+
+def _render_shared_account(
+    conn: sqlite3.Connection, plex_account_id: int, account_names: Mapping[int, str]
+) -> str:
+    """The full report for a configured shared account: structural
+    baseline, per-cluster keyword profile, and pairwise overlap — unchanged
+    from before issue #27, which only narrowed *which* accounts reach this
+    path."""
+    account = cluster_account_plays(conn, plex_account_id)
+    lines = [
+        _account_header(plex_account_id, account_names),
+        f"structural baseline: {account.play_count} play(s), "
+        f"{account.distinct_client_identifiers} distinct client_identifier(s), "
+        f"{len(account.clusters)} cluster(s)",
+    ]
+    if account.transient_ips:
+        lines.append(
+            f"transient IP(s) excluded from clustering (fewer than {MIN_IP_OCCURRENCES} "
+            "plays with no client_identifier, so treated as passing traffic rather than "
+            f"a household): {', '.join(account.transient_ips)}"
+        )
+
+    profiles: dict[int, KeywordProfile] = {}
+    for index, cluster in enumerate(account.clusters, start=1):
+        profile = build_keyword_profile(conn, cluster.units)
+        profiles[index] = profile
+
+        lines.append("")
+        lines.append(f"cluster {index} [{cluster.key_tier}={cluster.key_value!r}]")
+        devices = ", ".join(cluster.client_identifiers) or "(none)"
+        lines.append(f"  client_identifier(s): {devices}")
+        lines.append(f"  ip(s) seen: {', '.join(cluster.ips) or '(none)'}")
+        lines.append(f"  platform(s): {', '.join(cluster.platforms) or '(none)'}")
+        lines.append(
+            f"  plays: {cluster.play_count}, distinct items: {len(cluster.item_ids)}, "
+            f"distinct units (a show counts once, not once per episode): {len(cluster.units)}"
+        )
+        lines.extend(_render_keyword_profile_lines(profile, indent="  "))
+
+    lines.append("")
+    if len(account.clusters) < 2:
+        lines.append("pairwise overlap: n/a (fewer than two clusters)")
+    else:
+        lines.append(
+            f"pairwise keyword-profile overlap (Jaccard over top-{TOP_N_KEYWORDS} keywords):"
+        )
+        for i, j in combinations(range(1, len(account.clusters) + 1), 2):
+            overlap = profile_overlap(profiles[i], profiles[j])
+            if overlap is None:
+                lines.append(
+                    f"  cluster {i} vs cluster {j}: n/a (no enrichment coverage on one or both)"
+                )
+            else:
+                lines.append(f"  cluster {i} vs cluster {j}: {overlap:.2f}")
+
+    return "\n".join(lines)
+
+
+def _render_personal_account(
+    conn: sqlite3.Connection, plex_account_id: int, account_names: Mapping[int, str]
+) -> str:
+    """The report for every account not in `shared_account_ids`: one user,
+    identified by name, with a play count and one keyword profile built
+    over every play it ever recorded. No device count, no cluster count,
+    no structural baseline, no pairwise overlap — the account already
+    identifies the person, so none of that would mean anything (issue
+    #27)."""
+    units = account_units(conn, plex_account_id)
+    play_count = sum(depth for _, depth in units)
+    profile = build_keyword_profile(conn, units)
+    lines = [
+        _account_header(plex_account_id, account_names),
+        f"plays: {play_count}",
+    ]
+    lines.extend(_render_keyword_profile_lines(profile))
+    return "\n".join(lines)
+
+
+def render_report(
+    conn: sqlite3.Connection,
+    plex_account_ids: Sequence[int] | None = None,
+    *,
+    shared_account_ids: Sequence[int],
+    account_names: Mapping[int, str] | None = None,
+) -> str:
+    """The full human-readable, diffable report: one section per account.
+
+    A `plex_account_id` in `shared_account_ids` gets the full
+    fingerprint-clustered report (structural baseline, per-cluster keyword
+    profile, pairwise overlap). Every other account gets exactly one user:
+    name, play count, one keyword profile — see `_render_personal_account`
+    for why nothing else is printed. `shared_account_ids` is required and
+    never defaulted here — which accounts are shared is configuration the
+    caller supplies (`Config.shared_account_ids`), not something this
+    module infers from device or IP counts.
 
     `plex_account_ids` defaults to every account with any plays at all
-    (`account_ids_with_plays`) — this module does not decide which accounts
-    are "shared"; the structural baseline it prints is what lets a reader
-    see that themselves.
+    (`account_ids_with_plays`). `account_names` maps `plex_account_id` to
+    the name Plex reports for it; an id missing from the map prints by id
+    alone.
     """
     account_ids = (
         list(plex_account_ids) if plex_account_ids is not None else account_ids_with_plays(conn)
     )
+    shared = set(shared_account_ids)
+    names = account_names or {}
 
-    sections: list[str] = []
-    for plex_account_id in account_ids:
-        account = cluster_account_plays(conn, plex_account_id)
-        lines = [
-            f"== account {account.plex_account_id} ==",
-            f"structural baseline: {account.play_count} play(s), "
-            f"{account.distinct_client_identifiers} distinct client_identifier(s), "
-            f"{len(account.clusters)} cluster(s)",
-        ]
-        if account.transient_ips:
-            lines.append(
-                f"transient IP(s) excluded from clustering (fewer than {MIN_IP_OCCURRENCES} "
-                "plays with no client_identifier, so treated as passing traffic rather than "
-                f"a household): {', '.join(account.transient_ips)}"
-            )
-
-        profiles: dict[int, KeywordProfile] = {}
-        for index, cluster in enumerate(account.clusters, start=1):
-            profile = build_keyword_profile(conn, cluster.units)
-            profiles[index] = profile
-
-            lines.append("")
-            lines.append(f"cluster {index} [{cluster.key_tier}={cluster.key_value!r}]")
-            devices = ", ".join(cluster.client_identifiers) or "(none)"
-            lines.append(f"  client_identifier(s): {devices}")
-            lines.append(f"  ip(s) seen: {', '.join(cluster.ips) or '(none)'}")
-            lines.append(f"  platform(s): {', '.join(cluster.platforms) or '(none)'}")
-            lines.append(
-                f"  plays: {cluster.play_count}, distinct items: {len(cluster.item_ids)}, "
-                f"distinct units (a show counts once, not once per episode): {len(cluster.units)}"
-            )
-            if profile.has_coverage:
-                top = ", ".join(f"{keyword} ({count})" for keyword, count in profile.top_keywords)
-                lines.append(
-                    f"  keyword profile ({profile.units_with_coverage}/{profile.units_total} "
-                    f"unit(s) with tmdb_keywords coverage, spanning "
-                    f"{profile.covered_depth}/{profile.total_depth} play(s) deep): {top}"
-                )
-            else:
-                lines.append(
-                    f"  keyword profile: no enrichment coverage "
-                    f"(0/{profile.units_total} unit(s) carry tmdb_keywords)"
-                )
-
-        lines.append("")
-        if len(account.clusters) < 2:
-            lines.append("pairwise overlap: n/a (fewer than two clusters)")
-        else:
-            lines.append(
-                f"pairwise keyword-profile overlap (Jaccard over top-{TOP_N_KEYWORDS} keywords):"
-            )
-            for i, j in combinations(range(1, len(account.clusters) + 1), 2):
-                overlap = profile_overlap(profiles[i], profiles[j])
-                if overlap is None:
-                    lines.append(
-                        f"  cluster {i} vs cluster {j}: n/a (no enrichment coverage on one or both)"
-                    )
-                else:
-                    lines.append(f"  cluster {i} vs cluster {j}: {overlap:.2f}")
-
-        sections.append("\n".join(lines))
+    sections = [
+        _render_shared_account(conn, plex_account_id, names)
+        if plex_account_id in shared
+        else _render_personal_account(conn, plex_account_id, names)
+        for plex_account_id in account_ids
+    ]
 
     return "\n\n".join(sections) + "\n"

@@ -18,7 +18,13 @@ from plex_fixtures import load
 
 from plexdb import plex_client
 from plexdb.errors import PlexError
-from plexdb.plex_client import PLEX_TYPE_EPISODE, PLEX_TYPE_MOVIE, PLEX_TYPE_SHOW, LivePlexClient
+from plexdb.plex_client import (
+    PLEX_TYPE_EPISODE,
+    PLEX_TYPE_MOVIE,
+    PLEX_TYPE_SHOW,
+    LivePlexClient,
+    valid_accounts,
+)
 
 #: request path+query -> recorded fixture file, mirroring what the live
 #: server actually returned for these section/type combinations.
@@ -235,6 +241,20 @@ def test_accounts_lists_every_account_including_the_id_zero_placeholder() -> Non
         (0, ""),
         (1, "server-owner"),
         (4242424, "shared-user"),
+    ]
+
+
+def test_valid_accounts_excludes_the_id_zero_placeholder_and_blank_names() -> None:
+    accounts = [
+        {"id": 0, "name": ""},
+        {"id": 1, "name": "server-owner"},
+        {"id": 4242424, "name": "shared-user"},
+        {"id": 999, "name": ""},
+    ]
+
+    assert valid_accounts(accounts) == [
+        {"id": 1, "name": "server-owner"},
+        {"id": 4242424, "name": "shared-user"},
     ]
 
 
