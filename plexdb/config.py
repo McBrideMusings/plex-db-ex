@@ -27,6 +27,11 @@ class Config:
     """Everything the store needs to know about its environment."""
 
     store_path: Path
+    #: Where `plexdb publish` writes the read-only snapshot consumers open
+    #: (ADR-0007). `None` when unset — unlike `store_path`, this carries no
+    #: default that points anywhere real, so a consumer can never be pointed
+    #: at a path nobody chose.
+    snapshot_path: Path | None
 
     @classmethod
     def from_env(cls, *, env_file: Path | None = None) -> Config:
@@ -39,4 +44,6 @@ class Config:
         raw = os.environ.get("PLEXDB_PATH", DEFAULT_STORE_PATH).strip()
         if not raw:
             raise ConfigError("PLEXDB_PATH is set but empty; unset it or give it a path")
-        return cls(store_path=Path(raw).expanduser())
+        snapshot_raw = os.environ.get("PLEXDB_SNAPSHOT_PATH", "").strip()
+        snapshot_path = Path(snapshot_raw).expanduser() if snapshot_raw else None
+        return cls(store_path=Path(raw).expanduser(), snapshot_path=snapshot_path)

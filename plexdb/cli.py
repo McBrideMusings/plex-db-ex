@@ -1,6 +1,6 @@
 """The `plexdb` command line.
 
-Subcommands are added as slices land. Today there is one: `init`.
+Subcommands are added as slices land. Today there are two: `init` and `publish`.
 """
 
 from __future__ import annotations
@@ -12,8 +12,9 @@ from collections.abc import Sequence
 
 from . import __version__, schema
 from .config import Config
-from .errors import PlexdbError
+from .errors import ConfigError, PlexdbError
 from .store import init as init_store
+from .store import publish as publish_snapshot
 
 
 def _cmd_init(_args: argparse.Namespace) -> int:
@@ -26,6 +27,18 @@ def _cmd_init(_args: argparse.Namespace) -> int:
         print(f"created store at schema v{now}: {where}")
     else:
         print(f"migrated store v{was} -> v{now}: {where}")
+    return 0
+
+
+def _cmd_publish(_args: argparse.Namespace) -> int:
+    config = Config.from_env()
+    if config.snapshot_path is None:
+        raise ConfigError(
+            "PLEXDB_SNAPSHOT_PATH is not set — point it at where the published snapshot should land"
+        )
+    version, size = publish_snapshot(config.store_path, config.snapshot_path)
+    where = config.snapshot_path.resolve()
+    print(f"published snapshot at schema v{version}, {size} bytes: {where}")
     return 0
 
 
@@ -46,6 +59,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="create the store and apply the schema; safe to re-run",
     )
     init_parser.set_defaults(func=_cmd_init)
+
+    publish_parser = sub.add_parser(
+        "publish",
+        help="publish a read-only snapshot for consumers; safe to re-run",
+    )
+    publish_parser.set_defaults(func=_cmd_publish)
 
     return parser
 
