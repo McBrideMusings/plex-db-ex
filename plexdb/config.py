@@ -13,7 +13,6 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from .enrich_tmdb import DEFAULT_STALE_DAYS
 from .errors import ConfigError
 
 __all__ = ["DEFAULT_STORE_PATH", "Config", "ConfigError"]
@@ -21,6 +20,12 @@ __all__ = ["DEFAULT_STORE_PATH", "Config", "ConfigError"]
 #: Where the store lands when nothing says otherwise. A path is not a secret,
 #: so unlike a URL or a token this one may carry a default.
 DEFAULT_STORE_PATH = "./data/plexdb.db"
+
+#: Documented default: mid-range of the 30-60 day window `docs/schema.md` sets
+#: for every external source's enrichment. Deliberately duplicated from
+#: `enrich_tmdb.DEFAULT_STALE_DAYS` rather than imported — `config.py` is a
+#: leaf like `errors.py` and `schema.py`, and imports no feature module.
+_DEFAULT_TMDB_KEYWORDS_STALE_DAYS = 45
 
 
 @dataclass(frozen=True)
@@ -78,7 +83,7 @@ class Config:
                     f"TMDB_KEYWORDS_STALE_DAYS must be a whole number of days, got {stale_raw!r}"
                 ) from err
         else:
-            stale_days = DEFAULT_STALE_DAYS
+            stale_days = _DEFAULT_TMDB_KEYWORDS_STALE_DAYS
         return cls(
             store_path=Path(raw).expanduser(),
             snapshot_path=snapshot_path,

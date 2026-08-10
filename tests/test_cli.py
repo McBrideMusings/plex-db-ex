@@ -385,6 +385,58 @@ def test_enrich_tmdb_keywords_rewipe_forces_a_full_refetch(
     assert fake.calls == [("155", "movie"), ("155", "movie")]
 
 
+def _seed_movies(store: Path, n: int) -> None:
+    with sqlite3.connect(store) as conn:
+        for i in range(1, n + 1):
+            item_id = f"imdb:tt{i:07d}"
+            conn.execute(
+                "INSERT INTO items (item_id, type, title) VALUES (?, 'movie', ?)",
+                (item_id, f"Movie {i}"),
+            )
+            conn.execute(
+                "INSERT INTO external_ids (item_id, ns, value) VALUES (?, 'tmdb', ?)",
+                (item_id, str(i)),
+            )
+
+
+def test_enrich_tmdb_keywords_reports_titles_failed_prominently(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Call 1 fails, call 2 succeeds — one failure, well short of the
+    # 3-consecutive abort threshold, so the sweep completes and reports it.
+    fake = FakeTMDbSource(keywords_by_id={("2", "movie"): ["ok"]}, fail_calls={1})
+    store = _configure_enrich(tmp_path, monkeypatch, fake)
+    main(["init"])
+    _seed_movies(store, 2)
+    capsys.readouterr()
+
+    assert main(["enrich-tmdb-keywords"]) == 0
+
+    out = capsys.readouterr().out
+    assert "1 failed" in out
+    assert "failed and were not cached" in out
+
+
+def test_enrich_tmdb_keywords_aborts_after_three_consecutive_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake = FakeTMDbSource(fail_calls={1, 2, 3})
+    store = _configure_enrich(tmp_path, monkeypatch, fake)
+    main(["init"])
+    _seed_movies(store, 5)
+    capsys.readouterr()
+
+    assert main(["enrich-tmdb-keywords"]) == 1
+
+    err = capsys.readouterr().err
+    assert err.startswith("error: ")
+    assert "3 consecutive failures" in err
+    assert "Traceback" not in err
+    # The sweep stopped at the third failing title — the fourth and fifth
+    # were never asked for.
+    assert fake.calls == [("1", "movie"), ("2", "movie"), ("3", "movie")]
+
+
 def test_ingest_plays_writes_rows_and_reports_a_summary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

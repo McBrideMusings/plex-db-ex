@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from plexdb.errors import TMDbError
+
 FIXTURES = Path(__file__).parent / "fixtures" / "tmdb"
 
 
@@ -27,13 +29,21 @@ class FakeTMDbSource:
 
     `calls` records every `(tmdb_id, media_type)` pair asked of it, in the
     order asked, so a test can assert exactly what was (and wasn't) fetched.
+
+    `fail_calls` holds 1-indexed call numbers that raise `TMDbError` instead
+    of returning — `{1, 2, 4}` fails the first, second and fourth ask. Scripting
+    failures by call number rather than by id is what lets a test lay out a
+    run of failures and the success that breaks it.
     """
 
     keywords_by_id: dict[tuple[str, str], list[str]] = field(default_factory=dict)
+    fail_calls: set[int] = field(default_factory=set)
     calls: list[tuple[str, str]] = field(default_factory=list)
 
     def keywords(self, tmdb_id: str, media_type: str) -> list[str]:
         self.calls.append((tmdb_id, media_type))
+        if len(self.calls) in self.fail_calls:
+            raise TMDbError(f"scripted failure on call {len(self.calls)} ({tmdb_id}, {media_type})")
         return list(self.keywords_by_id.get((tmdb_id, media_type), []))
 
 

@@ -14,9 +14,11 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import pytest
 from tmdb_fixtures import FailOnRepeatSource, FakeTMDbSource
 
 from plexdb.enrich_tmdb import NAMESPACE, EnrichStats, enrich_tmdb_keywords, wipe_namespace
+from plexdb.errors import TMDbError
 from plexdb.store import init as init_store
 from plexdb.store import open_store
 
@@ -151,7 +153,7 @@ def test_wiping_one_namespace_leaves_another_namespace_untouched(tmp_path: Path)
         )
         conn.commit()
 
-        removed = wipe_namespace(conn, NAMESPACE)
+        removed = wipe_namespace(conn)
 
         remaining_namespaces = {
             row["namespace"] for row in _rows(conn, "SELECT DISTINCT namespace FROM enrichment")
@@ -212,3 +214,71 @@ def test_episodes_are_not_enriched(tmp_path: Path) -> None:
     # Only the show is counted; the episode is invisible to this sweep.
     assert stats.titles_seen == 1
     assert source.calls == [("1396", "tv")]
+
+
+def _seed_n_movies(conn: sqlite3.Connection, n: int) -> list[str]:
+    """Seed `n` movies, each with tmdb id `str(i)`, returning the item_ids in
+    insertion order — the order the sweep visits them, the same rowid-order
+    assumption the staleness test above makes via `source.calls`."""
+    item_ids = [f"imdb:tt{i:07d}" for i in range(1, n + 1)]
+    for i, item_id in enumerate(item_ids, start=1):
+        _seed(conn, item_id=item_id, item_type="movie", title=f"Movie {i}", tmdb_id=str(i))
+    return item_ids
+
+
+def test_a_failed_title_is_counted_and_the_sweep_continues(tmp_path: Path) -> None:
+    store = tmp_path / "plexdb.db"
+    with _open(store) as conn:
+        failed_id, _ = _seed_n_movies(conn, 2)
+        # The first title fails; the second succeeds.
+        source = FakeTMDbSource(keywords_by_id={("2", "movie"): ["ok"]}, fail_calls={1})
+
+        stats = enrich_tmdb_keywords(conn, source)
+
+        failed_rows = _rows(
+            conn,
+            "SELECT * FROM enrichment WHERE item_id = ? AND namespace = ?",
+            (failed_id, NAMESPACE),
+        )
+
+    assert stats.titles_seen == 2
+    assert stats.titles_failed == 1
+    assert stats.titles_fetched == 1
+    # Nothing was cached for the failed title, so a re-run retries it.
+    assert failed_rows == []
+
+
+def test_two_failures_then_a_success_resets_the_consecutive_counter(tmp_path: Path) -> None:
+    store = tmp_path / "plexdb.db"
+    with _open(store) as conn:
+        _seed_n_movies(conn, 5)
+        # fail, fail, succeed, fail, fail — never 3 in a row, so this must
+        # not abort even though 4 of 5 titles fail overall.
+        source = FakeTMDbSource(keywords_by_id={("3", "movie"): ["ok"]}, fail_calls={1, 2, 4, 5})
+
+        stats = enrich_tmdb_keywords(conn, source)
+
+    assert stats.titles_seen == 5
+    assert stats.titles_failed == 4
+    assert stats.titles_fetched == 1
+    assert len(source.calls) == 5
+
+
+def test_three_consecutive_failures_abort_with_counts_and_the_tripping_error(
+    tmp_path: Path,
+) -> None:
+    store = tmp_path / "plexdb.db"
+    with _open(store) as conn:
+        _seed_n_movies(conn, 5)
+        source = FakeTMDbSource(fail_calls={1, 2, 3})
+
+        with pytest.raises(TMDbError) as excinfo:
+            enrich_tmdb_keywords(conn, source)
+
+    message = str(excinfo.value)
+    assert "3 consecutive failures" in message
+    assert "3 title(s) processed, 3 failed" in message
+    assert "scripted failure on call 3" in message
+    # The sweep stopped at the third failing title — the fourth and fifth
+    # were never asked for.
+    assert source.calls == [("1", "movie"), ("2", "movie"), ("3", "movie")]

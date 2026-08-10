@@ -67,15 +67,18 @@ def _cmd_enrich_tmdb_keywords(args: argparse.Namespace) -> int:
     client = LiveTMDbClient(config.tmdb_api_key)
     with open_store(config.store_path) as conn:
         if args.rewipe:
-            removed = enrich_wipe_namespace(conn, TMDB_KEYWORDS_NAMESPACE)
+            removed = enrich_wipe_namespace(conn)
             print(f"wiped {removed} row(s) from the {TMDB_KEYWORDS_NAMESPACE} namespace")
         stats = enrich_tmdb_keywords(conn, client, stale_days=stale_days)
     print(
         f"tmdb keywords: {stats.titles_seen} title(s) seen, "
         f"{stats.titles_fetched} fetched, {stats.titles_cached} already cached, "
         f"{stats.titles_skipped_no_tmdb_id} skipped (no tmdb id), "
+        f"{stats.titles_failed} failed, "
         f"{stats.keywords_written} keyword(s) written"
     )
+    if stats.titles_failed:
+        print(f"{stats.titles_failed} title(s) failed and were not cached — re-run to retry them")
     return 0
 
 

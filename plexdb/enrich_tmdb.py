@@ -20,6 +20,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from .errors import TMDbError
 from .tmdb_client import TMDbSource
 
 #: This writer's namespace. No other module may write rows under it.
@@ -35,6 +36,12 @@ _SENTINEL_VALUE = "1"
 #: for every external source's enrichment.
 DEFAULT_STALE_DAYS = 45
 
+#: Consecutive TMDB failures before the sweep gives up on the rest of the
+#: library. One flaky title fails alone; a revoked key or a rate limit fails
+#: in a run, and grinding through the whole library against a dead key would
+#: skip every title left while still reporting a clean-looking summary.
+_MAX_CONSECUTIVE_FAILURES = 3
+
 
 @dataclass
 class EnrichStats:
@@ -46,6 +53,10 @@ class EnrichStats:
     #: Movies/shows with no `tmdb` row in `external_ids` — skipped, not an
     #: error. TVDB-only shows and anime are expected here, not exceptional.
     titles_skipped_no_tmdb_id: int = 0
+    #: A single title's fetch raised `TMDbError`. Nothing is written for it,
+    #: so a re-run retries it; `_MAX_CONSECUTIVE_FAILURES` in a row abort the
+    #: sweep.
+    titles_failed: int = 0
     keywords_written: int = 0
 
 
@@ -66,16 +77,16 @@ def _is_stale(fetched_at: str, cutoff: datetime) -> bool:
     return datetime.fromisoformat(fetched_at) < cutoff
 
 
-def wipe_namespace(conn: sqlite3.Connection, namespace: str) -> int:
-    """Delete every enrichment row in one namespace, leaving every other
+def wipe_namespace(conn: sqlite3.Connection) -> int:
+    """Delete every `tmdb_keywords` enrichment row, leaving every other
     namespace's rows untouched. Returns the number of rows removed.
 
-    Generic — any enrichment writer can reuse this for one of its own
-    namespaces — but it lives here rather than in `store.py`, which this
-    slice does not touch.
+    Scoped to this module's own namespace, matching the module docstring's
+    claim to own exactly one. A version taking any namespace belongs in
+    `store.py` once a second enrichment writer needs one — not before.
     """
     with conn:
-        cursor = conn.execute("DELETE FROM enrichment WHERE namespace = ?", (namespace,))
+        cursor = conn.execute("DELETE FROM enrichment WHERE namespace = ?", (NAMESPACE,))
         return cursor.rowcount
 
 
@@ -92,6 +103,11 @@ def enrich_tmdb_keywords(
     all. Each title's row set is committed on its own, so a sweep
     interrupted partway through a large library keeps everything it already
     fetched rather than losing the whole pass and re-asking TMDB for it.
+
+    A single title's `TMDbError` is counted in `titles_failed` and the sweep
+    moves on — nothing is written for that title, so a re-run retries it.
+    `_MAX_CONSECUTIVE_FAILURES` failures in a row raise instead, aborting the
+    sweep; any success resets the run.
     """
     now = datetime.now(UTC)
     cutoff = now - timedelta(days=stale_days)
@@ -127,6 +143,8 @@ def enrich_tmdb_keywords(
         """
     ).fetchall()
 
+    consecutive_failures = 0
+
     for row in candidates:
         stats.titles_seen += 1
         item_id = row["item_id"]
@@ -141,7 +159,20 @@ def enrich_tmdb_keywords(
             stats.titles_cached += 1
             continue
 
-        keywords = source.keywords(tmdb_id, media_type)
+        try:
+            keywords = source.keywords(tmdb_id, media_type)
+        except TMDbError as err:
+            stats.titles_failed += 1
+            consecutive_failures += 1
+            if consecutive_failures >= _MAX_CONSECUTIVE_FAILURES:
+                raise TMDbError(
+                    f"aborting after {_MAX_CONSECUTIVE_FAILURES} consecutive failures: "
+                    f"{stats.titles_seen} title(s) processed, {stats.titles_failed} failed; "
+                    f"tripping error: {err}"
+                ) from err
+            continue
+
+        consecutive_failures = 0
 
         with conn:
             conn.execute(
