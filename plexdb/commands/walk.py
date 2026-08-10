@@ -11,6 +11,8 @@ from ..plex_client import LivePlexClient
 from ..store import open_store
 from ..walk import walk_all
 
+ORDER = 20
+
 
 def _cmd_walk(args: argparse.Namespace) -> int:
     config = Config.from_env()

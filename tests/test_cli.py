@@ -27,12 +27,21 @@ from plexdb.walk import walk_all
 
 EXPECTED_COMMANDS = {"init", "walk", "publish", "enrich-tmdb-keywords", "ingest-plays"}
 
+# The order someone runs them in: create the store, fill it, publish it, then
+# the sources that enrich it. Each module owns its own ORDER, so this list is
+# the only place the sequence is written down.
+EXPECTED_COMMAND_ORDER = ["init", "walk", "publish", "enrich-tmdb-keywords", "ingest-plays"]
 
-def _subcommand_names(parser: argparse.ArgumentParser) -> set[str]:
+
+def _subcommand_order(parser: argparse.ArgumentParser) -> list[str]:
     for action in parser._actions:
         if isinstance(action, argparse._SubParsersAction):
-            return set(action.choices)
+            return list(action.choices)
     raise AssertionError("parser has no subparsers action")
+
+
+def _subcommand_names(parser: argparse.ArgumentParser) -> set[str]:
+    return set(_subcommand_order(parser))
 
 
 def test_build_parser_discovers_the_expected_command_set() -> None:
@@ -42,13 +51,19 @@ def test_build_parser_discovers_the_expected_command_set() -> None:
     assert _subcommand_names(build_parser()) == EXPECTED_COMMANDS
 
 
+def test_help_lists_commands_in_the_order_they_are_run() -> None:
+    """`plexdb --help` leads with the command you run first. Sorting by module
+    name instead would put `enrich-tmdb-keywords` above `init`."""
+    assert _subcommand_order(build_parser()) == EXPECTED_COMMAND_ORDER
+
+
 def test_a_command_module_without_register_fails_loudly_naming_the_module(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     package_dir = tmp_path / "broken_commands"
     package_dir.mkdir()
     (package_dir / "__init__.py").write_text("")
-    (package_dir / "no_register.py").write_text("# a command module with no register()\n")
+    (package_dir / "no_register.py").write_text("ORDER = 10\n")
     monkeypatch.syspath_prepend(str(tmp_path))
     broken_commands = importlib.import_module("broken_commands")
 
@@ -56,6 +71,24 @@ def test_a_command_module_without_register_fails_loudly_naming_the_module(
 
     with pytest.raises(RuntimeError, match="broken_commands.no_register"):
         _register_commands(sub, package=broken_commands)
+
+
+def test_a_command_module_without_order_fails_loudly_naming_the_module(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A missing ORDER must not default the command to the end of `--help`,
+    where nobody would notice it was never given a position."""
+    package_dir = tmp_path / "orderless_commands"
+    package_dir.mkdir()
+    (package_dir / "__init__.py").write_text("")
+    (package_dir / "no_order.py").write_text("def register(sub):\n    pass\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    orderless_commands = importlib.import_module("orderless_commands")
+
+    sub = argparse.ArgumentParser().add_subparsers(dest="command")
+
+    with pytest.raises(RuntimeError, match="orderless_commands.no_order"):
+        _register_commands(sub, package=orderless_commands)
 
 
 def _fixture_backed_client(base_url: str, token: str) -> FakeSource:

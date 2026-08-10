@@ -12,6 +12,8 @@ from ..errors import ConfigError
 from ..store import open_store
 from ..tmdb_client import LiveTMDbClient
 
+ORDER = 40
+
 
 def _cmd_enrich_tmdb_keywords(args: argparse.Namespace) -> int:
     config = Config.from_env()

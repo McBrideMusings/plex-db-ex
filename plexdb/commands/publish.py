@@ -8,6 +8,8 @@ from ..config import Config
 from ..errors import ConfigError
 from ..store import publish as publish_snapshot
 
+ORDER = 30
+
 
 def _cmd_publish(_args: argparse.Namespace) -> int:
     config = Config.from_env()

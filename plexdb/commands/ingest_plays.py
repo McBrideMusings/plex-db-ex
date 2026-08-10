@@ -10,6 +10,8 @@ from ..plays import ingest_plays
 from ..plex_client import LivePlexClient
 from ..store import open_store
 
+ORDER = 50
+
 
 def _cmd_ingest_plays(_args: argparse.Namespace) -> int:
     config = Config.from_env()

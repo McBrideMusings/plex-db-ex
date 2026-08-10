@@ -23,24 +23,28 @@ def _register_commands(
 ) -> None:
     """Import every module in `package` and call its `register(sub)`.
 
-    Modules are visited in sorted name order, so `--help` lists commands the
-    same way on every machine. A module with no `register` function is a
-    programming error: it fails loudly, naming the module, rather than being
-    silently skipped.
+    Modules are visited by their own `ORDER`, ties broken by module name, so
+    `--help` lists commands in the order someone runs them rather than
+    alphabetically, and lists them the same way on every machine. Each module
+    owns its number, so adding a command still edits no existing file.
+
+    A module missing `register` or `ORDER` is a programming error: it fails
+    loudly, naming the module, rather than being silently skipped or silently
+    sorted last.
     """
-    module_infos = sorted(
-        pkgutil.iter_modules(package.__path__, f"{package.__name__}."),
-        key=lambda info: info.name,
-    )
-    for info in module_infos:
-        module = importlib.import_module(info.name)
-        register = getattr(module, "register", None)
-        if register is None:
-            raise RuntimeError(
-                f"{info.name} does not define register(sub) — every module under "
-                f"{package.__name__}/ must expose one"
-            )
-        register(sub)
+    modules = [
+        importlib.import_module(info.name)
+        for info in pkgutil.iter_modules(package.__path__, f"{package.__name__}.")
+    ]
+    for module in modules:
+        for attribute in ("register", "ORDER"):
+            if not hasattr(module, attribute):
+                raise RuntimeError(
+                    f"{module.__name__} does not define {attribute} — every module under "
+                    f"{package.__name__}/ must expose one"
+                )
+    for module in sorted(modules, key=lambda module: (module.ORDER, module.__name__)):
+        module.register(sub)
 
 
 def build_parser() -> argparse.ArgumentParser:

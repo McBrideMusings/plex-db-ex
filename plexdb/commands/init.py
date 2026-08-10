@@ -7,6 +7,8 @@ import argparse
 from ..config import Config
 from ..store import init as init_store
 
+ORDER = 10
+
 
 def _cmd_init(_args: argparse.Namespace) -> int:
     config = Config.from_env()
