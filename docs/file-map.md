@@ -9,9 +9,12 @@ plex-db-ex/
 │   ├── cli.py             the `plexdb` command line; subcommands land here as slices ship
 │   ├── config.py          settings from .env; never a default for a URL or a token
 │   ├── errors.py          the errors a user is meant to see, as one `error: …` line
+│   ├── identity.py        item_id derivation — mirrored in etv-station, guarded by a fixture
 │   ├── schema.py          the DDL and the append-only migration list
 │   └── store.py           opening the store, for writing and read-only
 ├── tests/                 pytest; no test reaches the network
+│   └── fixtures/
+│       └── entry_id.json  SHARED WITH etv-station — copied there, hash-pinned in both
 ├── data/                  plexdb.db lives here (gitignored)
 └── docs/
     ├── index.md           docs home
