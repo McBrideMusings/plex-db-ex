@@ -11,3 +11,4 @@ ADR wins; [the PRD](../PRD) already reflects them.
 | [0004](./0004-the-store-owns-watch-history) | The store owns watch history: Plex required, Tautulli an optional adapter |
 | [0005](./0005-the-store-walks-plex-itself-and-augments-never-replaces) | The store walks Plex itself, and augments Plex rather than replacing it |
 | [0006](./0006-the-identity-fixture-is-duplicated-and-guarded-by-a-hash) | The identity fixture is duplicated in both repos and guarded by a hash |
+| [0007](./0007-readers-get-a-snapshot-not-the-live-store) | Readers get a snapshot, not the live store |

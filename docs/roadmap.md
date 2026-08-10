@@ -36,6 +36,7 @@ Tracked as `question` issues — decisions, never implemented from.
 
 - [ ] [#13](https://github.com/McBrideMusings/plex-db-ex/issues/13) Who owns the Layer 2 ranking knobs — recency half-life, exploration fraction, negative-signal weight? Not answerable until a real taste vector exists.
 - [ ] [#14](https://github.com/McBrideMusings/plex-db-ex/issues/14) Obtain a working Trakt client id — the inherited one is 43 characters and returns 403.
+- [ ] [#17](https://github.com/McBrideMusings/plex-db-ex/issues/17) Should an empty GUID value be treated as absent? Changes what an `item_id` is, so it must land in both repos at once.
 
 ## Later
 
@@ -57,6 +58,8 @@ Tracked as `question` issues — decisions, never implemented from.
 
 Not yet sharp enough to file.
 
-- [ ] Where `plexdb.db` physically lives, and how each consumer reaches it. SQLite over a
-      network share is unsafe, so readers and the writer share a host or readers get a copy.
 - [ ] How a breaking schema change rolls out, given readers have no version negotiation.
+
+Settled since: *where `plexdb.db` lives and how consumers reach it* — readers open a published
+snapshot, never the live file ([ADR-0007](./adr/0007-readers-get-a-snapshot-not-the-live-store.md)),
+which makes a copy to another host safe.

@@ -63,8 +63,13 @@ _Avoid_: sync, export, write-back
 **Writer**:
 The single process permitted to write the Store.
 
+**Snapshot**:
+A consistent single-file copy of the Store, published by the Writer and opened read-only by
+every Reader. Readers never touch the live Store.
+_Avoid_: replica, backup, export
+
 **Reader**:
-Any process that opens the Store read-only. Readers never write.
+Any process that opens the Snapshot read-only. Readers never write.
 
 **Consumer**:
 A project that uses the Store — today `etv-station` (via plugin only) and `curator`.
@@ -90,3 +95,5 @@ A project that uses the Store — today `etv-station` (via plugin only) and `cur
   Store walks Plex itself and augments Plex rather than replacing it.
 - [ADR-0006](./adr/0006-the-identity-fixture-is-duplicated-and-guarded-by-a-hash.md) — the
   identity fixture is duplicated in both repos and guarded by a hash.
+- [ADR-0007](./adr/0007-readers-get-a-snapshot-not-the-live-store.md) — Readers get a
+  Snapshot, not the live Store.
