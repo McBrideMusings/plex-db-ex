@@ -10,7 +10,7 @@ plex-db-ex/
 │   ├── config.py          settings from .env; never a default for a URL or a token
 │   ├── errors.py          the errors a user is meant to see, as one `error: …` line
 │   ├── identity.py        item_id derivation — mirrored in etv-station, guarded by a fixture
-│   ├── enrich_tmdb.py     TMDB keyword sweep: namespaced, cached, staleness-gated
+│   ├── enrich_tmdb.py     TMDB keyword sweep: namespaced, cached, staleness-gated, tolerant of a failing title (aborts after 3 in a row)
 │   ├── plays.py           watch-history ingest: Plex history into plays, incrementally
 │   ├── plex_client.py     read-only Plex HTTP client behind a PlexSource protocol
 │   ├── tmdb_client.py     read-only TMDB client (keywords) behind a TMDbSource protocol
