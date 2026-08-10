@@ -9,7 +9,7 @@ Milestone: **Identity and enrichment**. Nothing downstream is trustworthy until 
 implementations agree on real data — [#5](https://github.com/McBrideMusings/plex-db-ex/issues/5) is
 the measurement that proves it, and the reason the rest of this milestone exists.
 
-- [ ] [#1](https://github.com/McBrideMusings/plex-db-ex/issues/1) The store opens: package skeleton and schema v1
+- [x] [#1](https://github.com/McBrideMusings/plex-db-ex/issues/1) The store opens: package skeleton and schema v1
 - [ ] [#2](https://github.com/McBrideMusings/plex-db-ex/issues/2) Derive `item_id`, and author the shared identity fixture
 - [ ] [etv-station#180](https://github.com/McBrideMusings/etv-station/issues/180) `etv-station` adopts that fixture
 - [ ] [#3](https://github.com/McBrideMusings/plex-db-ex/issues/3) Walk the Plex library into items and external ids
