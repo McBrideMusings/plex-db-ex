@@ -16,6 +16,7 @@ plex-db-ex/
 │   │   ├── enrich_tmdb_keywords.py
 │   │   ├── ingest_plays.py
 │   │   ├── init.py
+│   │   ├── latent_users.py
 │   │   ├── local_edges.py
 │   │   ├── publish.py
 │   │   ├── reconcile_etv.py
@@ -26,6 +27,7 @@ plex-db-ex/
 │   ├── enrich_tmdb.py     TMDB keyword sweep: namespaced, cached, staleness-gated, tolerant of a failing title (aborts after 3 in a row)
 │   ├── local_edges.py     collection co-membership sweep: replace-wholesale, no staleness, Plex's smart collections excluded
 │   ├── plays.py           watch-history ingest: Plex history into plays, incrementally, plus the Tautulli match that enriches them
+│   ├── clusters.py        clusters a shared account's plays into latent users by fingerprint, and scores the keyword overlap between them; read-only, persists nothing
 │   ├── tautulli_client.py read-only Tautulli client (get_history) behind a TautulliSource protocol
 │   ├── plex_client.py     read-only Plex HTTP client behind a PlexSource protocol
 │   ├── reconcile_etv.py   compares item_id against etv-station's entry_id, joined by Plex rating key; read-only on both stores, reports and never fixes
