@@ -1,0 +1,56 @@
+{
+  "MediaContainer": {
+    "size": 4,
+    "totalSize": 4,
+    "offset": 0,
+    "Metadata": [
+      {
+        "historyKey": "/status/sessions/history/2001",
+        "key": "/library/metadata/13714",
+        "ratingKey": "13714",
+        "librarySectionID": "1",
+        "title": "The 'Burbs",
+        "type": "movie",
+        "viewedAt": 1700000400,
+        "accountID": 1,
+        "deviceID": 10
+      },
+      {
+        "historyKey": "/status/sessions/history/2000",
+        "key": "/library/metadata/81290",
+        "ratingKey": "81290",
+        "librarySectionID": "2",
+        "parentKey": "/library/metadata/81044",
+        "grandparentKey": "/library/metadata/81044",
+        "title": "Nature's Empty Throne",
+        "grandparentTitle": "1923",
+        "type": "episode",
+        "index": 1,
+        "parentIndex": 1,
+        "viewedAt": 1700000000,
+        "accountID": 2,
+        "deviceID": 11
+      },
+      {
+        "historyKey": "/status/sessions/history/1999",
+        "key": "/library/metadata/999999",
+        "ratingKey": "999999",
+        "title": "A Title The Walk Has Not Seen",
+        "type": "movie",
+        "viewedAt": 1699999000,
+        "accountID": 1,
+        "deviceID": 12
+      },
+      {
+        "historyKey": "/status/sessions/history/1998",
+        "key": "/library/metadata/70936",
+        "ratingKey": "70936",
+        "title": "Air Mater",
+        "type": "movie",
+        "viewedAt": 1699998000,
+        "accountID": 1,
+        "deviceID": 999
+      }
+    ]
+  }
+}

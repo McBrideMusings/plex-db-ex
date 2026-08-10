@@ -30,6 +30,10 @@ PLEX_TYPE_SHOW = 2
 PLEX_TYPE_EPISODE = 4
 
 _DEFAULT_TIMEOUT = 60.0
+#: Page size for `/status/sessions/history/all`, which does not return
+#: everything in one response the way `/library/sections/<key>/all` does — a
+#: real server has tens of thousands of history rows.
+_HISTORY_PAGE_SIZE = 200
 
 
 @dataclass(frozen=True)
@@ -114,3 +118,56 @@ class LivePlexClient:
         )
         metadata: list[dict[str, Any]] = container.get("Metadata", [])
         return metadata
+
+    def history(self, *, since_viewed_at: int | None = None) -> list[dict[str, Any]]:
+        """Every history event at or newer than `since_viewed_at`, newest
+        first.
+
+        Filters server-side via Plex's own `viewedAt>` operator — confirmed
+        live: a filtered request reports a smaller `totalSize` than an
+        unfiltered one, so this is a real narrowing, not just a client-side
+        illusion. `None` fetches the whole history, which is what a first
+        ingest needs.
+
+        `viewedAt>` is **inclusive** in practice despite its name — filtering
+        on a value equal to the newest event's own `viewedAt` still returns
+        that event (confirmed live). So a caller passing the latest
+        `viewed_at` it already has on file will see that same event again on
+        the next call; `ingest_plays`'s `ON CONFLICT(history_key) DO NOTHING`
+        is what makes that free rather than a duplicate.
+
+        Paginates via `X-Plex-Container-Start`/`-Size`, since unlike a
+        library section this can be tens of thousands of rows.
+        """
+        params: dict[str, Any] = {"sort": "viewedAt:desc"}
+        if since_viewed_at is not None:
+            params["viewedAt>"] = since_viewed_at
+
+        events: list[dict[str, Any]] = []
+        start = 0
+        while True:
+            container = self._get(
+                "/status/sessions/history/all",
+                {
+                    **params,
+                    "X-Plex-Container-Start": start,
+                    "X-Plex-Container-Size": _HISTORY_PAGE_SIZE,
+                },
+            )
+            page: list[dict[str, Any]] = container.get("Metadata", [])
+            events.extend(page)
+            start += len(page)
+            total = container.get("totalSize", start)
+            if not page or start >= total:
+                break
+        return events
+
+    def devices(self) -> list[dict[str, Any]]:
+        """Every device Plex has ever seen a client connect from.
+
+        Cheap to call once per ingest and cache — a play references a
+        device far more often than the device list changes.
+        """
+        container = self._get("/devices")
+        devices: list[dict[str, Any]] = container.get("Device", [])
+        return devices

@@ -1,4 +1,5 @@
-"""The store opens, carries schema v1, and re-running init changes nothing."""
+"""The store opens, carries every shipped migration's schema, and re-running
+init changes nothing."""
 
 from __future__ import annotations
 
@@ -12,6 +13,20 @@ from plexdb.errors import StoreError
 from plexdb.store import init, open_readonly, open_store
 
 V1_TABLES = {"items", "external_ids", "plex_items", "enrichment"}
+V2_TABLES = {"plays", "plays_ingest_cursor"}
+
+
+def _tables_from_batch(batch: str) -> set[str]:
+    """The tables one migration batch creates, applied on its own — proves
+    what a single shipped batch introduces without a later batch's tables
+    muddying the count."""
+    conn = sqlite3.connect(":memory:")
+    try:
+        conn.executescript(batch)
+        rows = conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+        return {r[0] for r in rows}
+    finally:
+        conn.close()
 
 
 def _tables(path: Path) -> set[str]:
@@ -33,14 +48,26 @@ def test_init_creates_the_store_at_the_current_version(tmp_path: Path) -> None:
     assert store.exists(), "init should create the parent directory too"
 
 
-def test_v1_carries_exactly_the_four_tables(tmp_path: Path) -> None:
+def test_v1_carries_exactly_the_four_tables() -> None:
+    # Applied on its own, not through the full `init`, so a later migration's
+    # tables can never be mistaken for something v1 introduced.
+    assert _tables_from_batch(schema._V1) == V1_TABLES
+
+
+def test_v2_carries_exactly_the_plays_and_cursor_tables() -> None:
+    assert _tables_from_batch(schema._V1 + schema._V2) - V1_TABLES == V2_TABLES
+
+
+def test_a_current_store_carries_every_migrations_tables_and_nothing_else(
+    tmp_path: Path,
+) -> None:
     store = tmp_path / "plexdb.db"
     init(store)
 
-    assert V1_TABLES <= _tables(store)
-    # The four tables and nothing more — later slices add their own, and a table
-    # arriving early is a scope leak worth failing on.
-    assert _tables(store) - V1_TABLES == {"schema_version"}
+    # Every table every shipped migration introduces, plus the bookkeeping
+    # table `apply` itself creates — a table arriving early (or never
+    # arriving) is a scope leak worth failing on.
+    assert _tables(store) == V1_TABLES | V2_TABLES | {"schema_version"}
 
 
 def test_the_columns_the_first_slice_depends_on_are_present(tmp_path: Path) -> None:
@@ -51,6 +78,24 @@ def test_the_columns_the_first_slice_depends_on_are_present(tmp_path: Path) -> N
     assert {"item_id", "ns", "value"} <= _columns(store, "external_ids")
     assert {"rating_key", "item_id", "section_id"} <= _columns(store, "plex_items")
     assert {"item_id", "namespace", "key", "value", "fetched_at"} <= _columns(store, "enrichment")
+
+
+def test_the_columns_the_plays_slice_depends_on_are_present(tmp_path: Path) -> None:
+    store = tmp_path / "plexdb.db"
+    init(store)
+
+    assert {
+        "history_key",
+        "item_id",
+        "plex_account_id",
+        "client_identifier",
+        "platform",
+        "viewed_at",
+        "ip",
+        "percent_complete",
+        "paused_counter",
+    } <= _columns(store, "plays")
+    assert {"id", "since_viewed_at"} <= _columns(store, "plays_ingest_cursor")
 
 
 def test_init_is_idempotent(tmp_path: Path) -> None:
