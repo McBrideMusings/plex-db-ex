@@ -1,0 +1,98 @@
+"""`LiveTMDbClient` against recorded responses, never a live server.
+
+`tests/fixtures/tmdb/*.json` were captured from the real TMDB API's
+`/movie/{id}/keywords` and `/tv/{id}/keywords` endpoints (verified live,
+2026-08-10) — `httpx.MockTransport` serves them back over the exact
+request-building and JSON-parsing code `LiveTMDbClient` uses against a real
+server, so this is a genuine test of the adapter, just with no socket.
+"""
+
+from __future__ import annotations
+
+import httpx
+import pytest
+from tmdb_fixtures import load
+
+from plexdb.errors import TMDbError
+from plexdb.tmdb_client import LiveTMDbClient
+
+#: request path -> recorded fixture file, mirroring what the live API
+#: actually returned for these ids.
+_RECORDED = {
+    "/3/movie/155/keywords": "movie_155_keywords.json",
+    "/3/tv/1396/keywords": "tv_1396_keywords.json",
+}
+
+
+def _handler(request: httpx.Request) -> httpx.Response:
+    assert request.url.params["api_key"] == "the-test-key"
+    fixture = _RECORDED.get(request.url.path)
+    if fixture is None:
+        # Recorded live: TMDB's 404 for an id it has never heard of.
+        return httpx.Response(404, json=load("movie_not_found_404.json"))
+    return httpx.Response(200, json=load(fixture))
+
+
+def _client() -> LiveTMDbClient:
+    http = httpx.Client(transport=httpx.MockTransport(_handler))
+    return LiveTMDbClient("the-test-key", http=http)
+
+
+def test_movie_keywords_come_from_the_keywords_array() -> None:
+    names = _client().keywords("155", "movie")
+
+    assert len(names) == 18
+    assert "superhero" in names
+
+
+def test_tv_keywords_come_from_the_results_array() -> None:
+    names = _client().keywords("1396", "tv")
+
+    assert len(names) == 28
+    assert "drug dealer" in names
+
+
+def test_an_id_tmdb_has_never_heard_of_returns_no_keywords_not_an_error() -> None:
+    names = _client().keywords("999999999", "movie")
+
+    assert names == []
+
+
+def test_an_unreachable_server_raises_tmdb_error_not_a_raw_httpx_error() -> None:
+    def _broken(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    http = httpx.Client(transport=httpx.MockTransport(_broken))
+    client = LiveTMDbClient("the-test-key", http=http)
+
+    with pytest.raises(TMDbError, match="cannot reach TMDB"):
+        client.keywords("155", "movie")
+
+
+def test_a_non_404_error_response_raises_tmdb_error() -> None:
+    def _unauthorized(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"status_message": "Invalid API key"})
+
+    http = httpx.Client(transport=httpx.MockTransport(_unauthorized))
+    client = LiveTMDbClient("bad-key", http=http)
+
+    with pytest.raises(TMDbError, match="TMDB returned 401"):
+        client.keywords("155", "movie")
+
+
+def test_an_error_response_never_leaks_the_api_key_into_the_raised_message() -> None:
+    # httpx's own `raise_for_status()` formats its message as
+    # "... for url '<response.url>'", and that URL carries the query string
+    # — so stringifying the raw httpx exception would print a real API key
+    # to stderr on every 401/429/5xx TMDB returns. This is the regression
+    # test for that leak.
+    def _unauthorized(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"status_message": "Invalid API key"})
+
+    http = httpx.Client(transport=httpx.MockTransport(_unauthorized))
+    client = LiveTMDbClient("the-real-secret-key", http=http)
+
+    with pytest.raises(TMDbError) as exc_info:
+        client.keywords("155", "movie")
+
+    assert "the-real-secret-key" not in str(exc_info.value)

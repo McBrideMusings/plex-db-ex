@@ -1,6 +1,7 @@
 """The `plexdb` command line.
 
-Subcommands are added as slices land. Today there are three: `init`, `walk`, and `publish`.
+Subcommands are added as slices land. Today there are four: `init`, `walk`,
+`publish`, and `enrich-tmdb-keywords`.
 """
 
 from __future__ import annotations
@@ -12,11 +13,15 @@ from collections.abc import Sequence
 
 from . import __version__, schema
 from .config import Config
+from .enrich_tmdb import NAMESPACE as TMDB_KEYWORDS_NAMESPACE
+from .enrich_tmdb import enrich_tmdb_keywords
+from .enrich_tmdb import wipe_namespace as enrich_wipe_namespace
 from .errors import ConfigError, PlexdbError
 from .plex_client import LivePlexClient
 from .store import init as init_store
 from .store import open_store
 from .store import publish as publish_snapshot
+from .tmdb_client import LiveTMDbClient
 from .walk import walk_all
 
 
@@ -50,6 +55,26 @@ def _cmd_walk(args: argparse.Namespace) -> int:
             f"{stats.identity_kept_on_guid_change} title(s) had a changed GUID set "
             "since the last walk; kept their existing item_id rather than forking a new row"
         )
+    return 0
+
+
+def _cmd_enrich_tmdb_keywords(args: argparse.Namespace) -> int:
+    config = Config.from_env()
+    if not config.tmdb_api_key:
+        raise ConfigError("TMDB_API_KEY must be set in .env to fetch TMDB keywords")
+    stale_days = args.stale_days if args.stale_days is not None else config.tmdb_keywords_stale_days
+    client = LiveTMDbClient(config.tmdb_api_key)
+    with open_store(config.store_path) as conn:
+        if args.rewipe:
+            removed = enrich_wipe_namespace(conn, TMDB_KEYWORDS_NAMESPACE)
+            print(f"wiped {removed} row(s) from the {TMDB_KEYWORDS_NAMESPACE} namespace")
+        stats = enrich_tmdb_keywords(conn, client, stale_days=stale_days)
+    print(
+        f"tmdb keywords: {stats.titles_seen} title(s) seen, "
+        f"{stats.titles_fetched} fetched, {stats.titles_cached} already cached, "
+        f"{stats.titles_skipped_no_tmdb_id} skipped (no tmdb id), "
+        f"{stats.keywords_written} keyword(s) written"
+    )
     return 0
 
 
@@ -101,6 +126,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="publish a read-only snapshot for consumers; safe to re-run",
     )
     publish_parser.set_defaults(func=_cmd_publish)
+
+    enrich_tmdb_parser = sub.add_parser(
+        "enrich-tmdb-keywords",
+        help="fetch TMDB keywords for walked movies/shows into the tmdb_keywords "
+        "namespace; a fresh row is never re-fetched",
+    )
+    enrich_tmdb_parser.add_argument(
+        "--stale-days",
+        type=int,
+        default=None,
+        metavar="N",
+        help="re-fetch a title whose tmdb_keywords row is older than this many days; "
+        "default: TMDB_KEYWORDS_STALE_DAYS, or 45 if that is unset",
+    )
+    enrich_tmdb_parser.add_argument(
+        "--rewipe",
+        action="store_true",
+        help="delete every tmdb_keywords row before the sweep, forcing a full re-fetch; "
+        "other namespaces are untouched",
+    )
+    enrich_tmdb_parser.set_defaults(func=_cmd_enrich_tmdb_keywords)
 
     return parser
 

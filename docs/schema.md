@@ -75,6 +75,16 @@ CREATE TABLE enrichment (
 assuming the primary key is one. It is also where a Trakt slug, a Letterboxd URL, and a
 resolved free-text Reddit title land.
 
+### Namespaces in use
+
+| Namespace | Writer | Keys |
+|---|---|---|
+| `tmdb_keywords` | `plexdb enrich-tmdb-keywords` | `keyword` (one row per keyword, `value` is the keyword text) and a sentinel `_fetched` row (`value` = `"1"`) so a title with zero keywords still has a `fetched_at` to check staleness against. Only `items.type` `movie` and `show` are enriched — TMDB has no keywords endpoint for an episode. |
+
+`enrich-tmdb-keywords` re-fetches a title only once its row is older than `TMDB_KEYWORDS_STALE_DAYS`
+(default 45 days). `--rewipe` deletes every `tmdb_keywords` row before a sweep, forcing a full
+re-fetch, without touching any other namespace.
+
 Foreign keys are enforced (`PRAGMA foreign_keys = ON`) and the live store runs in WAL mode for
 the writer's own benefit. Consumers never open that file. `plexdb publish` writes a consistent,
 single-file copy with `VACUUM INTO` — no `-wal` or `-shm` sidecars — and every consumer opens

@@ -23,3 +23,12 @@ class StoreError(PlexdbError):
 
 class PlexError(PlexdbError):
     """The Plex server could not be reached, or returned something unusable."""
+
+
+class TMDbError(PlexdbError):
+    """TMDB could not be reached, or returned something unusable.
+
+    A title TMDB has simply never heard of is not this — the client reports
+    that as zero keywords, not an error, so a stale or wrong id doesn't stop
+    a sweep over the rest of the library.
+    """
