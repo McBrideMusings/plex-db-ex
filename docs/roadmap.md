@@ -26,8 +26,16 @@ Milestone: **Edges, history, and the first consumer**. Deliberately sketchy — 
 - [ ] [#8](https://github.com/McBrideMusings/plex-db-ex/issues/8) Ingest watch history from Plex into `plays`
 - [ ] [#9](https://github.com/McBrideMusings/plex-db-ex/issues/9) Tautulli history adapter: IP, completion, paused time
 - [ ] [#10](https://github.com/McBrideMusings/plex-db-ex/issues/10) Cluster shared accounts into latent users by machine id
-- [ ] [#11](https://github.com/McBrideMusings/plex-db-ex/issues/11) Rust reader crate and the `etv-station` capability grant
-- [ ] [#12](https://github.com/McBrideMusings/plex-db-ex/issues/12) Trakt related edges — blocked on a credential only you can get
+- [ ] [#11](https://github.com/McBrideMusings/plex-db-ex/issues/11) Read-only Rust reader crate over the store
+- [ ] [etv-station#181](https://github.com/McBrideMusings/etv-station/issues/181) `etv-station` exposes the crate to plugins behind a capability grant
+- [ ] [#12](https://github.com/McBrideMusings/plex-db-ex/issues/12) Trakt related edges
+
+## Open questions
+
+Tracked as `question` issues — decisions, never implemented from.
+
+- [ ] [#13](https://github.com/McBrideMusings/plex-db-ex/issues/13) Who owns the Layer 2 ranking knobs — recency half-life, exploration fraction, negative-signal weight? Not answerable until a real taste vector exists.
+- [ ] [#14](https://github.com/McBrideMusings/plex-db-ex/issues/14) Obtain a working Trakt client id — the inherited one is 43 characters and returns 403.
 
 ## Later
 
@@ -45,10 +53,10 @@ Milestone: **Edges, history, and the first consumer**. Deliberately sketchy — 
 - [ ] Folding `etv-station`'s `catalog.db` into this store — rejected on posture: this augments
       Plex, so a consumer must be able to talk to Plex directly without it
 
-## Open questions
+## Untracked questions
+
+Not yet sharp enough to file.
 
 - [ ] Where `plexdb.db` physically lives, and how each consumer reaches it. SQLite over a
       network share is unsafe, so readers and the writer share a host or readers get a copy.
 - [ ] How a breaking schema change rolls out, given readers have no version negotiation.
-- [ ] Who owns the Layer 2 policy knobs — recency half-life, exploration fraction,
-      negative-signal weight.
