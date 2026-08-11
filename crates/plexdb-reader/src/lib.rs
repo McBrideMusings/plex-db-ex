@@ -180,8 +180,6 @@ impl Reader {
     /// identical vector, in the same order. Empty, not an error, for an
     /// account with no plays.
     pub fn taste_vector_for(&self, plex_account_id: i64) -> Result<TasteVector, ReaderError> {
-        let seasons = self.median_season_lengths()?;
-
         // Plays per unit: a film is its own unit, an episode belongs to its
         // show, so a season binge rolls up to the show rather than counting
         // each episode as a separate title.
@@ -198,6 +196,54 @@ impl Reader {
                 Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
             })?
             .collect::<Result<Vec<_>, _>>()?;
+
+        self.rollup(units)
+    }
+
+    /// The Layer 2 rollup pooled across every account, weighted per
+    /// ADR-0011 exactly as [`Self::taste_vector_for`] weighs one account.
+    ///
+    /// Pooling is summation, not an approximation of it: an account that
+    /// watched more contributes more `plays` to a unit's count before `r` is
+    /// computed, which is what "the house has been watching cooking shows"
+    /// means. There is no per-account normalisation and no account list in
+    /// the result — a consumer that needs the *house's* taste, not any one
+    /// account's, is the reason this exists (plex-db-ex#39).
+    ///
+    /// For a store with exactly one account's plays, this returns the same
+    /// vector as [`Self::taste_vector_for`] on that account, because the
+    /// per-unit play counts are identical.
+    pub fn pooled_taste_vector(&self) -> Result<TasteVector, ReaderError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT COALESCE(i.show_item_id, p.item_id) AS unit, COUNT(*) AS plays \
+             FROM plays p \
+             JOIN items i ON i.item_id = p.item_id \
+             GROUP BY unit \
+             ORDER BY unit",
+        )?;
+        let units = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        self.rollup(units)
+    }
+
+    /// The rollup shared by [`Self::taste_vector_for`] and
+    /// [`Self::pooled_taste_vector`], which differ only in which plays feed
+    /// `units` — one account's, or every account's summed together. Every
+    /// ADR-0011 rule (season unit, `sqrt` damping, the 0.5 floor, per-title
+    /// attribute division) lives here exactly once, so one caller changing
+    /// it and not the other is not possible.
+    ///
+    /// `units` is `(item_id, play_count)` pairs, one row per watched title.
+    ///
+    /// Deterministic: calling either public accessor twice against
+    /// unchanged data returns an identical vector, in the same order. Empty,
+    /// not an error, when `units` is empty.
+    fn rollup(&self, units: Vec<(String, i64)>) -> Result<TasteVector, ReaderError> {
+        let seasons = self.median_season_lengths()?;
 
         // Three queries for the whole rollup, not two per watched title. The
         // obvious shape — ask per unit inside the loop — costs a fresh
