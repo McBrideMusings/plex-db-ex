@@ -35,6 +35,14 @@ rather than appending. Store the source's rank; never collapse it to a boolean.
 **Enrich once, keyed by external id, with `fetched_at`.** Never re-fetch a row that exists and
 is inside its staleness threshold. This holds independently of rate limits.
 
+**Bookkeeping never goes in `enrichment`.** That table holds facts about titles; a writer's own
+fetch cursors go in `enrichment_cursor`. A cursor that sat in the facts table put the string `1`
+at the top of the house's taste profile and shrank every real keyword at the same time (ADR-0013).
+
+**The real store lives on the host, and you work on a copy.** `admin pull-baseline` fetches it.
+Twenty months of watch history and a rate-limited TMDB sweep are in there, and no re-scan
+reproduces either — see [`docs/baseline.md`](docs/baseline.md).
+
 ## Layout
 
 ```

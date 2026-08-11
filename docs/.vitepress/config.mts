@@ -32,6 +32,7 @@ export default defineConfig({
           items: [
             { text: 'PRD', link: '/PRD' },
             { text: 'Schema', link: '/schema' },
+            { text: 'The baseline store', link: '/baseline' },
             { text: 'Original spec', link: '/spec' },
             { text: 'Vocabulary', link: '/CONTEXT' },
             { text: 'Decisions', link: '/adr/' },
