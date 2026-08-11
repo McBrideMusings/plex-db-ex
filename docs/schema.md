@@ -336,7 +336,8 @@ to mean "third of a hundred" for a ranked list, "on a list eight thousand people
 popular one, and "named in seven comments" for a subreddit — three different quantities — and once
 computed it cannot be inverted back into the facts it came from. That is the same objection this
 document already raises against a stored `counts_as_signal` above. The store records what the
-source said; the consumer weighs it.
+source said; the consumer weighs it
+([ADR-0012](./adr/0012-the-store-records-what-a-source-said-never-a-score-it-computed)).
 
 Every column past the keys is nullable on purpose. A source fills what it genuinely has and leaves
 the rest empty rather than inventing a value to fill a slot, so a missing `rank` stays
