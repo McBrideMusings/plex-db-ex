@@ -45,8 +45,8 @@ def _seed(
     )
     if tmdb_id is not None:
         conn.execute(
-            "INSERT INTO external_ids (item_id, ns, value) VALUES (?, 'tmdb', ?)",
-            (item_id, tmdb_id),
+            "INSERT INTO external_ids (item_id, ns, value, kind) VALUES (?, 'tmdb', ?, ?)",
+            (item_id, tmdb_id, item_type),
         )
     conn.commit()
 

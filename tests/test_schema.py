@@ -152,6 +152,117 @@ def test_a_second_play_cannot_reuse_a_tautulli_id_already_claimed(tmp_path: Path
         )
 
 
+def _v4_store(path: Path) -> None:
+    """A store frozen at version 4 — the shape that shipped before issue #23."""
+    conn = sqlite3.connect(path)
+    try:
+        conn.executescript(
+            schema._V1
+            + schema._V2
+            + schema._V3
+            + schema._V4
+            + "CREATE TABLE schema_version (version INTEGER NOT NULL);"
+            + "INSERT INTO schema_version (version) VALUES (4);"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_v5_lets_a_movie_and_a_show_hold_the_same_tmdb_number(tmp_path: Path) -> None:
+    """TMDB numbers movies and shows in separate lists, so `tmdb 1678` is
+    *Godzilla* (1954) and *The Golden Girls* (1985). Under v4's
+    `PRIMARY KEY (ns, value)` the second insert raised and the two titles
+    ended up sharing one identity (issue #23)."""
+    store = tmp_path / "plexdb.db"
+    init(store)
+
+    with open_store(store) as conn:
+        conn.execute("INSERT INTO items (item_id, type, title) VALUES ('m', 'movie', 'Godzilla')")
+        conn.execute("INSERT INTO items (item_id, type, title) VALUES ('s', 'show', 'Golden')")
+        conn.execute(
+            "INSERT INTO external_ids (item_id, ns, value, kind) "
+            "VALUES ('m', 'tmdb', '1678', 'movie')"
+        )
+        conn.execute(
+            "INSERT INTO external_ids (item_id, ns, value, kind) "
+            "VALUES ('s', 'tmdb', '1678', 'show')"
+        )
+        conn.commit()
+
+        holders = {
+            r["item_id"]
+            for r in conn.execute("SELECT item_id FROM external_ids WHERE value = '1678'")
+        }
+        assert holders == {"m", "s"}
+
+        # Two of the same kind still collide — that is the merge issue #19 wanted.
+        conn.execute("INSERT INTO items (item_id, type, title) VALUES ('m2', 'movie', 'Copy')")
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO external_ids (item_id, ns, value, kind) "
+                "VALUES ('m2', 'tmdb', '1678', 'movie')"
+            )
+
+
+def test_v5_takes_an_existing_rows_kind_from_its_items_type(tmp_path: Path) -> None:
+    store = tmp_path / "plexdb.db"
+    _v4_store(store)
+    conn = sqlite3.connect(store)
+    conn.executescript(
+        "INSERT INTO items (item_id, type, title) VALUES ('m', 'movie', 'Godzilla');"
+        "INSERT INTO items (item_id, type, title) VALUES ('s', 'show', 'Golden');"
+        "INSERT INTO external_ids (item_id, ns, value) VALUES ('m', 'imdb', 'tt0047034');"
+        "INSERT INTO external_ids (item_id, ns, value) VALUES ('s', 'imdb', 'tt0088526');"
+    )
+    conn.commit()
+    conn.close()
+
+    was, now = init(store)
+    assert (was, now) == (4, schema.SCHEMA_VERSION)
+
+    with open_readonly(store) as conn:
+        kinds = {
+            r["item_id"]: r["kind"] for r in conn.execute("SELECT item_id, kind FROM external_ids")
+        }
+    assert kinds == {"m": "movie", "s": "show"}
+
+
+def test_v5_backfills_a_plays_rating_key_only_when_it_is_unambiguous(tmp_path: Path) -> None:
+    """A play resolved through a rating key and then forgot it. The backfill
+    can recover it wherever an identity maps to exactly one rating key —
+    which is everything except the fused identities issue #23 is about, where
+    the answer is genuinely unknowable and `repair-identities` re-ingests."""
+    store = tmp_path / "plexdb.db"
+    _v4_store(store)
+    conn = sqlite3.connect(store)
+    conn.executescript(
+        "INSERT INTO items (item_id, type, title) VALUES ('one', 'movie', 'One Key');"
+        "INSERT INTO items (item_id, type, title) VALUES ('two', 'movie', 'Fused');"
+        "INSERT INTO plex_items (rating_key, item_id, section_id, last_seen) "
+        "VALUES ('11', 'one', '1', '2024-01-01T00:00:00+00:00');"
+        "INSERT INTO plex_items (rating_key, item_id, section_id, last_seen) "
+        "VALUES ('21', 'two', '1', '2024-01-01T00:00:00+00:00');"
+        "INSERT INTO plex_items (rating_key, item_id, section_id, last_seen) "
+        "VALUES ('22', 'two', '2', '2024-01-01T00:00:00+00:00');"
+        "INSERT INTO plays (history_key, item_id, plex_account_id, viewed_at) "
+        "VALUES ('h1', 'one', 1, 1000);"
+        "INSERT INTO plays (history_key, item_id, plex_account_id, viewed_at) "
+        "VALUES ('h2', 'two', 1, 2000);"
+    )
+    conn.commit()
+    conn.close()
+
+    init(store)
+
+    with open_readonly(store) as conn:
+        keys = {
+            r["history_key"]: r["rating_key"]
+            for r in conn.execute("SELECT history_key, rating_key FROM plays")
+        }
+    assert keys == {"h1": "11", "h2": None}
+
+
 def test_init_is_idempotent(tmp_path: Path) -> None:
     store = tmp_path / "plexdb.db"
     init(store)
@@ -265,7 +376,8 @@ def test_foreign_keys_are_enforced(tmp_path: Path) -> None:
     with open_store(store) as conn:
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute(
-                "INSERT INTO external_ids (item_id, ns, value) VALUES ('missing', 'imdb', 'tt1')"
+                "INSERT INTO external_ids (item_id, ns, value, kind) "
+                "VALUES ('missing', 'imdb', 'tt1', 'movie')"
             )
 
 

@@ -56,6 +56,33 @@ Matching on external id means two Plex rating keys sharing an external id resolv
 That is already this store's behaviour — a title with two copies in the library already maps two
 rating keys to one `item_id` — so this extends an existing property rather than introducing one.
 
+## Second amendment: an external id only matches within its own media kind
+
+The paragraph directly above is where this went wrong. "Two Plex rating keys sharing an external
+id" is only the same title twice when the shared id is unique across everything Plex holds. **TMDB
+and TVDB ids are not.** Both sources number movies and TV shows in separate lists that start at 1,
+and Plex reports each as a bare `tmdb://1678` with no media type attached. TMDB movie 1678 is
+*Godzilla* (1954); TMDB show 1678 is *The Golden Girls* (1985). Two unrelated records, one number.
+
+`external_ids` was keyed on `(ns, value)`, so both claimed the same row, `_resolve_existing` read
+that as "seen before", and the rule above — correctly, given what it was told — kept the movie's
+identity for the show. On the author's library 1,414 identities had fused that way, 1,326 of them
+holding two different IMDb ids, with 553 plays landing on them
+([issue #23](https://github.com/McBrideMusings/plex-db-ex/issues/23)).
+
+**Resolved: the media kind is part of the external-id key.** Schema version 5 keys `external_ids`
+on `(ns, value, kind)` and `walk._resolve_existing` matches within a kind only. Godzilla claims
+`('tmdb', '1678', 'movie')`, The Golden Girls claims `('tmdb', '1678', 'show')`. All three kinds
+are distinguished, not just movie-vs-show: TVDB numbers episodes in a list separate from series.
+
+The never-repoint rule itself is untouched, and the merge #19 asked for still happens — two copies
+of *the same* title in two library sections share a kind, so they still resolve to one identity.
+What stops is merging across kinds, which was never the same title at all.
+
+Identities already fused cannot be undone by re-walking: both rating keys are in `plex_items`
+pointing at the fused id, so the walk finds it by rating key and this ADR's rule keeps it.
+`plexdb repair-identities` deletes them and re-derives from Plex instead.
+
 ## Consequences
 
 An `item_id` can stop matching what `derive_item_id` would produce from a title's *current* GUID
@@ -65,3 +92,9 @@ guaranteed to be the "best" id a fresh derivation would produce after a re-match
 store's ids against another source of truth (`etv-station`'s catalog,
 [#5](https://github.com/McBrideMusings/plex-db-ex/issues/5)) will need to account for that rather
 than assume `item_id` always equals a fresh derivation.
+
+An `item_id` can also cover more than one Plex rating key, where `etv-station`'s `entry_id` never
+does — it keys every rating key separately. After the second amendment those are only genuine
+duplicates (one title present in two library sections), but the divergence is real and a join
+across the two stores will land on a different row count for them. `reconcile_etv` reports such a
+title as having inherited its identity rather than as the two derivation rules having drifted.

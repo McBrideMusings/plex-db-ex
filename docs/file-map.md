@@ -20,6 +20,7 @@ plex-db-ex/
 │   │   ├── local_edges.py
 │   │   ├── publish.py
 │   │   ├── reconcile_etv.py
+│   │   ├── repair_identities.py
 │   │   └── walk.py
 │   ├── config.py          settings from .env; never a default for a URL or a token
 │   ├── errors.py          the errors a user is meant to see, as one `error: …` line
@@ -34,7 +35,8 @@ plex-db-ex/
 │   ├── tmdb_client.py     read-only TMDB client (keywords, recommendations, similar) behind a TMDbSource protocol
 │   ├── tmdb_common.py     media_type_for / is_stale / MAX_CONSECUTIVE_FAILURES / DEFAULT_STALE_DAYS shared by enrich_tmdb.py and tmdb_edges.py
 │   ├── tmdb_edges.py      TMDB recommendations/similar sweep: two edge types, replace-wholesale per (from_id, edge_type), cached via a tmdb_edges enrichment cursor
-│   ├── walk.py            the library walk: Plex sections into items, external_ids, plex_items
+│   ├── repair.py          splits identities that fused two unrelated titles sharing a TMDB/TVDB number (issue #23): deletes them, re-walks Plex, rewinds the play cursor over what went with them
+│   ├── walk.py            the library walk: Plex sections into items, external_ids, plex_items; an external id only ever matches within its own media kind
 │   ├── schema.py          the DDL and the append-only migration list
 │   └── store.py           opening the store, and publishing the read-only snapshot consumers open
 ├── tests/                 pytest; no test reaches the network

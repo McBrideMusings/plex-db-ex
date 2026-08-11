@@ -42,6 +42,7 @@ EXPECTED_COMMANDS = {
     "enrich-tautulli-plays",
     "latent-users",
     "reconcile-etv",
+    "repair-identities",
 }
 
 # The order someone runs them in: create the store, fill it, publish it, then
@@ -50,6 +51,7 @@ EXPECTED_COMMANDS = {
 EXPECTED_COMMAND_ORDER = [
     "init",
     "walk",
+    "repair-identities",
     "publish",
     "enrich-tmdb-keywords",
     "enrich-tmdb-edges",
@@ -455,7 +457,8 @@ def _seed_one_movie(store: Path) -> None:
             "('imdb:tt0468569', 'movie', 'The Dark Knight')"
         )
         conn.execute(
-            "INSERT INTO external_ids (item_id, ns, value) VALUES ('imdb:tt0468569', 'tmdb', '155')"
+            "INSERT INTO external_ids (item_id, ns, value, kind) "
+            "VALUES ('imdb:tt0468569', 'tmdb', '155', 'movie')"
         )
 
 
@@ -528,7 +531,8 @@ def _seed_movies(store: Path, n: int) -> None:
                 (item_id, f"Movie {i}"),
             )
             conn.execute(
-                "INSERT INTO external_ids (item_id, ns, value) VALUES (?, 'tmdb', ?)",
+                "INSERT INTO external_ids (item_id, ns, value, kind) "
+                "VALUES (?, 'tmdb', ?, 'movie')",
                 (item_id, str(i)),
             )
 
@@ -601,7 +605,8 @@ def test_enrich_tmdb_edges_writes_rows_and_reports_a_summary(
             "('imdb:tt0372784', 'movie', 'Batman Begins')"
         )
         conn.execute(
-            "INSERT INTO external_ids (item_id, ns, value) VALUES ('imdb:tt0372784', 'tmdb', '272')"
+            "INSERT INTO external_ids (item_id, ns, value, kind) "
+            "VALUES ('imdb:tt0372784', 'tmdb', '272', 'movie')"
         )
     capsys.readouterr()
 

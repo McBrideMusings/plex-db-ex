@@ -19,6 +19,13 @@ deterministic when several are already recorded), then by the Plex rating
 key, so the title keeps one identity through both a wholesale GUID
 re-match (caught by rating key) and a remove-and-re-add that changes the
 rating key but not the GUIDs (caught by external id).
+
+**ADR-0008's second amendment** (issue #23): an external id is only ever
+matched within its own media kind. TMDB and TVDB number movies, shows and
+episodes in separate lists that all start at 1, so a bare `tmdb://1678`
+means *Godzilla* on a movie and *The Golden Girls* on a show. Matching
+across kinds handed the show the movie's identity and fused two unrelated
+titles into one row.
 """
 
 from __future__ import annotations
@@ -124,7 +131,8 @@ class _Resolved(NamedTuple):
 def _resolve_existing(
     external_ids: list[tuple[str, str]],
     rating_key: str,
-    existing_by_external_id: dict[tuple[str, str], str],
+    kind: str,
+    existing_by_external_id: dict[tuple[str, str, str], str],
     existing_by_rating_key: dict[str, str],
 ) -> _Resolved | None:
     """The already-recorded identity for this title, if any — external id
@@ -137,6 +145,11 @@ def _resolve_existing(
     id Plex listed first. Only if no external id is already known does the
     rating key decide.
 
+    An external id matches only within its own `kind` (issue #23). TMDB and
+    TVDB number movies, shows and episodes in separate lists that all start
+    at 1, so `tmdb 1678` is a movie *and* an unrelated show; matching across
+    kinds fused the two into one identity.
+
     `None` when neither resolves — this store has never seen the title under
     any id it currently carries.
     """
@@ -144,7 +157,7 @@ def _resolve_existing(
         for ns, value in external_ids:
             if ns != namespace or not value.strip():
                 continue
-            matched = existing_by_external_id.get((ns, value))
+            matched = existing_by_external_id.get((ns, value, kind))
             if matched is not None:
                 return _Resolved(matched, "external_id")
     prior_id = existing_by_rating_key.get(rating_key)
@@ -163,7 +176,7 @@ def _write_item(
     now: str,
     stats: WalkStats,
     existing_by_rating_key: dict[str, str],
-    existing_by_external_id: dict[tuple[str, str], str],
+    existing_by_external_id: dict[tuple[str, str, str], str],
     show_item_ids: dict[str, str],
 ) -> None:
     """Upsert one Plex record as an `items` row, its `external_ids`, and its
@@ -183,7 +196,7 @@ def _write_item(
         stats.fallback_to_path += 1
 
     resolved = _resolve_existing(
-        external_ids, rating_key, existing_by_external_id, existing_by_rating_key
+        external_ids, rating_key, kind, existing_by_external_id, existing_by_rating_key
     )
     if resolved is not None and resolved.item_id != derived_id:
         # Either this rating key's GUID set changed since the last walk
@@ -263,14 +276,16 @@ def _write_item(
     )
 
     for namespace, value in external_ids:
-        # (ns, value) is the primary key. On conflict, keep whichever item_id
-        # claimed it first rather than repointing it — the same
+        # (ns, value, kind) is the primary key. On conflict, keep whichever
+        # item_id claimed it first rather than repointing it — the same
         # never-repoint-silently rule `_resolve_existing` enforces above,
-        # applied to one external id instead of the whole title.
+        # applied to one external id instead of the whole title. `kind` is in
+        # the key because a TMDB or TVDB number is unique only inside one
+        # media type (issue #23).
         conn.execute(
-            "INSERT INTO external_ids (item_id, ns, value) VALUES (?, ?, ?) "
-            "ON CONFLICT (ns, value) DO NOTHING",
-            (item_id, namespace, value),
+            "INSERT INTO external_ids (item_id, ns, value, kind) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT (ns, value, kind) DO NOTHING",
+            (item_id, namespace, value, kind),
         )
 
     conn.execute(
@@ -294,7 +309,7 @@ def _write_item(
         # exist in `external_ids` from a moment ago, not in the snapshot
         # `existing_by_external_id` was preloaded from — and fork instead
         # of resolving to this identity.
-        existing_by_external_id.setdefault((namespace, value), item_id)
+        existing_by_external_id.setdefault((namespace, value, kind), item_id)
     if kind == "show":
         # Recorded for the episode pass over this same section, which runs
         # next and resolves each episode's `show_item_id` from here.
@@ -323,9 +338,9 @@ def walk_all(
         row["rating_key"]: row["item_id"]
         for row in conn.execute("SELECT rating_key, item_id FROM plex_items")
     }
-    existing_by_external_id: dict[tuple[str, str], str] = {
-        (row["ns"], row["value"]): row["item_id"]
-        for row in conn.execute("SELECT ns, value, item_id FROM external_ids")
+    existing_by_external_id: dict[tuple[str, str, str], str] = {
+        (row["ns"], row["value"], row["kind"]): row["item_id"]
+        for row in conn.execute("SELECT ns, value, kind, item_id FROM external_ids")
     }
     show_item_ids: dict[str, str] = {
         row["rating_key"]: row["item_id"]

@@ -15,7 +15,7 @@ from typing import Any
 from plex_fixtures import FakeSource, recorded_source
 
 from plexdb.identity import canonical_path, derive_item_id
-from plexdb.plex_client import PLEX_TYPE_MOVIE, Section
+from plexdb.plex_client import PLEX_TYPE_EPISODE, PLEX_TYPE_MOVIE, PLEX_TYPE_SHOW, Section
 from plexdb.store import init as init_store
 from plexdb.store import open_store
 from plexdb.walk import WalkStats, walk_all
@@ -461,6 +461,67 @@ def test_two_records_in_the_same_pass_sharing_an_external_id_resolve_to_one_iden
         assert item_count == 1
 
     assert stats.identity_kept_by_external_id == 1
+
+
+def test_a_movie_and_a_show_sharing_a_tmdb_number_stay_two_identities(
+    tmp_path: Path,
+) -> None:
+    """Issue #23. TMDB numbers movies and shows in two separate lists that
+    both start at 1, so `tmdb://1678` is *Godzilla* (1954) as a movie and
+    *The Golden Girls* (1985) as a show — unrelated records that happen to
+    share a number. Before the media kind entered the external-id key, the
+    show resolved to the movie's identity and the two fused into one row."""
+    store = tmp_path / "plexdb.db"
+    movies_section = Section(key="1", type="movie", title="Movies")
+    shows_section = Section(key="2", type="show", title="TV Shows")
+    godzilla = {
+        "ratingKey": "5550",
+        "type": "movie",
+        "title": "Godzilla",
+        "year": 1954,
+        "Guid": [{"id": "imdb://tt0047034"}, {"id": "tmdb://1678"}, {"id": "tvdb://5015"}],
+        "Media": [{"Part": [{"file": "/media/movies/Godzilla (1954)/g.mkv"}]}],
+    }
+    golden_girls = {
+        "ratingKey": "141718",
+        "type": "show",
+        "title": "The Golden Girls",
+        "year": 1985,
+        "key": "/library/metadata/141718",
+        "Guid": [{"id": "imdb://tt0088526"}, {"id": "tmdb://1678"}, {"id": "tvdb://71292"}],
+    }
+    source = FakeSource(
+        section_list=[movies_section, shows_section],
+        records={
+            ("1", PLEX_TYPE_MOVIE): [godzilla],
+            ("2", PLEX_TYPE_SHOW): [golden_girls],
+            ("2", PLEX_TYPE_EPISODE): [],
+        },
+    )
+
+    with _open(store) as conn:
+        stats = walk_all(conn, source)
+
+        movie_id = conn.execute(
+            "SELECT item_id FROM plex_items WHERE rating_key = '5550'"
+        ).fetchone()[0]
+        show_id = conn.execute(
+            "SELECT item_id FROM plex_items WHERE rating_key = '141718'"
+        ).fetchone()[0]
+        assert movie_id == "imdb:tt0047034"
+        assert show_id == "imdb:tt0088526"
+        assert movie_id != show_id
+
+        # The shared number is recorded once per kind, against its own title.
+        shared = {
+            (r["item_id"], r["kind"])
+            for r in _rows(
+                conn, "SELECT item_id, kind FROM external_ids WHERE ns = 'tmdb' AND value = '1678'"
+            )
+        }
+        assert shared == {("imdb:tt0047034", "movie"), ("imdb:tt0088526", "show")}
+
+    assert stats.identity_kept_by_external_id == 0
 
 
 def test_walk_can_be_scoped_to_one_section(tmp_path: Path) -> None:

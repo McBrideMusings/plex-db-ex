@@ -171,15 +171,28 @@ def ingest_plays(conn: sqlite3.Connection, source: HistorySource) -> PlaysStats:
                 else:
                     client_identifier, platform = device
 
+            # `rating_key` is stored alongside the `item_id` it resolved to,
+            # not instead of it: the id is what every query joins on, and the
+            # rating key is the evidence it was derived from. Without it a
+            # play cannot be re-pointed when an identity is later corrected,
+            # which is what made issue #23's repair cost a full re-ingest.
             result = conn.execute(
                 """
                 INSERT INTO plays
-                    (history_key, item_id, plex_account_id, client_identifier,
+                    (history_key, item_id, rating_key, plex_account_id, client_identifier,
                      platform, viewed_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(history_key) DO NOTHING
                 """,
-                (history_key, item_id, account_id, client_identifier, platform, viewed_at),
+                (
+                    history_key,
+                    item_id,
+                    rating_key,
+                    account_id,
+                    client_identifier,
+                    platform,
+                    viewed_at,
+                ),
             )
             if result.rowcount:
                 stats.plays_written += 1

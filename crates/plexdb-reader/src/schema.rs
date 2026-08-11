@@ -18,10 +18,16 @@ use crate::error::ReaderError;
 
 /// The schema version this crate's accessors are written against.
 ///
-/// Currently version 3 — `items`, `external_ids`, `plex_items`,
+/// Currently version 5 — `items`, `external_ids`, `plex_items`,
 /// `enrichment`, `plays`, `plays_ingest_cursor`, `edges` — see
 /// `plexdb/schema.py`.
-pub const SUPPORTED_SCHEMA_VERSION: i64 = 3;
+///
+/// Versions 4 and 5 added columns this crate does not read: Tautulli's
+/// `seconds_watched`/`tautulli_id` on `plays` (issue #9), then `kind` on
+/// `external_ids` and `rating_key` on `plays` (issue #23). The accessors are
+/// unchanged; the constant moves because the gate demands an exact match, and
+/// a reader pinned below the shipping store cannot open it at all.
+pub const SUPPORTED_SCHEMA_VERSION: i64 = 5;
 
 /// Confirm `conn` is a plexdb store at exactly [`SUPPORTED_SCHEMA_VERSION`].
 pub(crate) fn check(conn: &Connection, path: &Path) -> Result<(), ReaderError> {

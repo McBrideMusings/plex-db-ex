@@ -77,6 +77,7 @@ def _classify(
     entry_id: str,
     plexdb_guids: frozenset[tuple[str, str]],
     etv_guids: frozenset[tuple[str, str]],
+    plexdb_rating_keys: int = 1,
 ) -> str:
     """Why `item_id` and `entry_id` disagree for one title.
 
@@ -85,9 +86,24 @@ def _classify(
     names explicitly: identical recognised GUID sets on both sides that still
     produced different winners, which would mean the two implementations have
     actually drifted, not just the data they were fed.
+
+    `plexdb_rating_keys` is how many Plex rating keys this store's `item_id`
+    covers. More than one and the derivation rules never ran on this title in
+    this store at all — it inherited an identity another rating key had
+    already claimed (ADR-0008), so reporting drift here would be wrong.
     """
     ns_p, _, val_p = item_id.partition(":")
     ns_e, _, val_e = entry_id.partition(":")
+
+    if plexdb_rating_keys > 1:
+        return (
+            f"plex-db-ex's {item_id!r} covers {plexdb_rating_keys} Plex rating keys, so this "
+            "title inherited an identity another rating key already held rather than deriving "
+            "its own — the two derivation rules agree here; the stored identity is not a "
+            "derivation at all. `plexdb repair-identities` splits an identity that fused two "
+            "unrelated titles (issue #23); a genuine duplicate of one title across two library "
+            "sections is expected to stay merged"
+        )
 
     if ns_p == "fs" and ns_e == "fs":
         return (
@@ -163,6 +179,14 @@ def reconcile(plexdb_conn: sqlite3.Connection, etv_conn: sqlite3.Connection) -> 
     ):
         etv_guids.setdefault(row["entry_id"], set()).add((row["namespace"], row["value"]))
 
+    # How many rating keys each of this store's identities covers. An
+    # identity covering more than one did not derive its id for every one of
+    # them — the later rating keys inherited it (ADR-0008), which `_classify`
+    # must not report as the two derivation rules having drifted.
+    rating_keys_per_item: dict[str, int] = {}
+    for covered_item_id in plexdb_by_rk.values():
+        rating_keys_per_item[covered_item_id] = rating_keys_per_item.get(covered_item_id, 0) + 1
+
     common = sorted(set(plexdb_by_rk) & set(etv_by_rk))
     agree = 0
     mismatches: list[Mismatch] = []
@@ -178,6 +202,7 @@ def reconcile(plexdb_conn: sqlite3.Connection, etv_conn: sqlite3.Connection) -> 
             entry_id,
             frozenset(plexdb_guids.get(item_id, ())),
             frozenset(etv_guids.get(entry_id, ())),
+            rating_keys_per_item.get(item_id, 1),
         )
         mismatches.append(Mismatch(rating_key, title, item_id, entry_id, reason))
 

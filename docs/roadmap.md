@@ -18,6 +18,7 @@ the measurement that proves it, and the reason the rest of this milestone exists
 - [x] [#3](https://github.com/McBrideMusings/plex-db-ex/issues/3) Walk the Plex library into items and external ids
 - [x] [#4](https://github.com/McBrideMusings/plex-db-ex/issues/4) Fetch TMDB keywords into namespaced enrichment, cached
 - [x] [#5](https://github.com/McBrideMusings/plex-db-ex/issues/5) Reconcile derived identities against `etv-station`'s catalog
+- [x] [#23](https://github.com/McBrideMusings/plex-db-ex/issues/23) A movie and a TV show sharing a TMDB number became one title — schema v5 puts the media kind in the external-id key, and `plexdb repair-identities` splits the 1,407 already fused
 
 ## Next
 

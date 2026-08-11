@@ -95,7 +95,7 @@ def _add_item(
         )
         for ns, value in guids or []:
             conn.execute(
-                "INSERT INTO external_ids (item_id, ns, value) VALUES (?, ?, ?)",
+                "INSERT INTO external_ids (item_id, ns, value, kind) VALUES (?, ?, ?, 'movie')",
                 (item_id, ns, value),
             )
         conn.commit()
@@ -137,6 +137,39 @@ def test_a_guid_present_in_only_one_store_is_reported_with_that_reason(tmp_path:
     assert mismatch.item_id == "imdb:tt1"
     assert mismatch.entry_id == "tmdb:562"
     assert "imdb GUID is present in plex-db-ex but absent from etv-station" in mismatch.reason
+
+
+def test_an_identity_covering_two_rating_keys_is_reported_as_inherited_not_drifted(
+    tmp_path: Path,
+) -> None:
+    """Issue #23. When one `item_id` covers several rating keys, the later
+    ones never ran the derivation rule at all — they inherited an identity
+    (ADR-0008). Reporting that as the two implementations having drifted is
+    the most alarming message this tool can emit and it is the wrong one."""
+    plexdb, etv = tmp_path / "plexdb.db", tmp_path / "catalog.db"
+    _plexdb_store(plexdb)
+    _etv_store(etv)
+    _add_item(plexdb, "imdb:tt0047034", "Godzilla", "5550", [("imdb", "tt0047034")])
+    with open_store(plexdb) as conn:
+        # A second rating key that inherited Godzilla's identity — the show
+        # Plex reports as The Golden Girls.
+        conn.execute(
+            "INSERT INTO plex_items (rating_key, item_id, section_id, last_seen) "
+            "VALUES ('141718', 'imdb:tt0047034', '2', '2024-01-01T00:00:00+00:00')"
+        )
+        conn.commit()
+    _add_entry(etv, "imdb:tt0047034", "Godzilla", "5550", [("imdb", "tt0047034")])
+    _add_entry(etv, "imdb:tt0088526", "The Golden Girls", "141718", [("imdb", "tt0088526")])
+
+    with open_readonly(plexdb) as p, open_readonly(etv) as e:
+        report = reconcile(p, e)
+
+    assert len(report.mismatches) == 1
+    mismatch = report.mismatches[0]
+    assert mismatch.rating_key == "141718"
+    assert "covers 2 Plex rating keys" in mismatch.reason
+    assert "inherited an identity" in mismatch.reason
+    assert "the derivation rule itself disagrees" not in mismatch.reason
 
 
 def test_both_falling_back_to_a_path_hash_is_reported_as_a_canonical_path_disagreement(

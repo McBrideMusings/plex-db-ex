@@ -43,14 +43,16 @@ CREATE TABLE items (
     studio         TEXT
 );
 
--- Every other id a title is known by. Primary key is (ns, value), so one id
--- resolves to exactly one item and a collision is a write-time error rather
--- than a silent duplicate.
+-- Every other id a title is known by. Primary key is (ns, value, kind), so one
+-- id resolves to exactly one item *of that media kind* and a collision within
+-- a kind is a write-time error rather than a silent duplicate. `kind` matches
+-- items.type: 'movie', 'show' or 'episode'.
 CREATE TABLE external_ids (
     item_id TEXT NOT NULL REFERENCES items(item_id) ON DELETE CASCADE,
     ns      TEXT NOT NULL,
     value   TEXT NOT NULL,
-    PRIMARY KEY (ns, value)
+    kind    TEXT NOT NULL,
+    PRIMARY KEY (ns, value, kind)
 );
 
 -- Where Plex keeps a title. Watch history identifies a title only by rating
@@ -75,6 +77,16 @@ CREATE TABLE enrichment (
 `external_ids` is what lets an enrichment fetcher that needs a TMDb id find one without
 assuming the primary key is one. It is also where a Trakt slug, a Letterboxd URL, and a
 resolved free-text Reddit title land.
+
+**`kind` is in the key because a TMDB or TVDB number is only unique inside one media type.**
+Both sources number movies and TV shows in separate lists that start at 1, and Plex reports
+each as a bare `tmdb://1678` with no type attached — movie 1678 is *Godzilla* (1954), show
+1678 is *The Golden Girls* (1985). Keyed on `(ns, value)` alone, those two unrelated records
+claimed one row and the walk fused the two titles into a single identity (issue #23). IMDb
+numbers everything in one shared list and Plex's own `plex://` ids are already type-qualified,
+so neither collides — but `kind` is in the key for every namespace rather than the two that
+happen to need it. A store that fused identities before schema version 5 is repaired with
+`plexdb repair-identities`.
 
 ### Namespaces in use
 
@@ -234,6 +246,46 @@ server, where every other account already carries the identical numeric id on bo
 them on account name (the one field both systems report identically) to build a
 `tautulli_user_id -> plex_account_id` map; a Tautulli row's `user_id` is translated through that
 map before it becomes part of the match key above. See ADR-0010.
+
+## Version 5 — an external id is scoped by media type
+
+[Issue #23](https://github.com/McBrideMusings/plex-db-ex/issues/23). `external_ids` gains `kind`
+and moves its primary key to `(ns, value, kind)`; see the table definition and the note under it
+above for why. Existing rows take their `kind` from `items.type`.
+
+```sql
+ALTER TABLE plays ADD COLUMN rating_key TEXT;
+CREATE INDEX idx_plays_rating_key ON plays(rating_key);
+```
+
+**`plays.rating_key` records what a play was resolved *from*, not just what it resolved *to*.**
+`ingest_plays` reads a Plex history event, looks its `ratingKey` up in `plex_items`, and writes
+the resulting `item_id`. Until this column existed the rating key was then discarded, so a play
+carried a conclusion with no record of the evidence — and when an identity turned out to be
+wrong, no play already written could be re-pointed at the corrected one. That is why repairing
+issue #23 costs a re-ingest rather than an `UPDATE`. Backfilled at migration time for every
+identity mapping to exactly one rating key, and left null wherever an identity maps to several —
+the fused ones, and equally the legitimate merges from
+[#19](https://github.com/McBrideMusings/plex-db-ex/issues/19), where one title sits in two library
+sections. Null is the honest answer in both: the store recorded no evidence to recover. Nothing
+reads the column yet — `repair-identities` still re-ingests rather than re-pointing — so it buys
+the *next* correction, not this one.
+
+`plexdb repair-identities` is the corrective pass. It deletes every identity whose Plex records
+span **more than one media kind**, re-walks Plex so each rating key derives its own id again, and
+rewinds `plays_ingest_cursor` to the oldest affected play. A plain re-walk cannot do it — both
+rating keys are already in `plex_items` pointing at the fused id, so the walk finds that identity
+by rating key and ADR-0008 correctly keeps it. `--dry-run` lists what it would split; both modes
+read Plex, because only Plex knows what kind a rating key is.
+
+**The tempting shortcut — "delete every identity holding two different values in one namespace" —
+is wrong and does damage.** Plex reports every match it holds, so one record can legitimately
+carry several ids in a namespace (*The Animatrix* carries nine TMDB ids on a single rating key),
+and two records of the same kind can legitimately merge and still disagree (South Park S28E1 sits
+in the library twice; the copies share a TVDB id, so version 5 merges them, but Plex matched them
+to different IMDb entries). Neither is a fusion, and deleting either re-walks it into byte-identical
+rows, so that test never reaches a fixed point — measured on the author's library it churned 25
+identities forever, dropping their plays on every run.
 
 ## Not yet built
 
