@@ -5,6 +5,10 @@ plex-db-ex/
 ├── CLAUDE.md              project rules — the ones easy to violate by accident
 ├── admin.toml             task runner manifest (admin build | dev | test | vet | …)
 ├── .env.example           every variable, with placeholders; real values live in .env
+├── Dockerfile             the writer packaged for the Unraid host (#43): linux/amd64 pinned in the FROM because it is always built on an arm64 Mac, ENTRYPOINT ["plexdb", "schedule"], no shell wrapper, and nothing here naming a step or a failure policy
+├── .dockerignore          keeps data/ out of the build context — an image layer holding the store would put twenty months of watch history in every registry it is pushed to
+├── deploy/
+│   └── my-plexdb.xml      reference copy of the Unraid container template, copied to /boot/config/plugins/dockerMan/templates-user/ on the host (#47). Read by nothing here; committed so the mounts and which variables are secret are reviewable. Every credential default is empty, deliberately
 ├── Cargo.toml             Rust workspace manifest — members: crates/plexdb-reader
 ├── crates/                the Rust workspace
 │   └── plexdb-reader/     read-only typed Rust reader over plexdb.db (ADR-0003): enrichment (single-item and bulk — `enrichment_for_many` chunks an `IN` clause against the connection's own SQLITE_LIMIT_VARIABLE_NUMBER so a whole candidate pool is one query, not one per candidate, #40), edges, taste vector; opened SQLITE_OPEN_READ_ONLY and schema-version gated. Two taste accessors — `taste_vector_for(account)` and `pooled_taste_vector()` over every account's plays (#39) — sharing one private `rollup()` so ADR-0011's rules exist once: `sqrt(seasons watched)` split across a title's attributes, nothing under half a season. It needs no bookkeeping filter, because writers' cursors live in `enrichment_cursor` rather than in `enrichment` (ADR-0013). `examples/taste_vector.rs` prints one account's vector, so the rollup can be driven and read back without a consumer. No collection-membership accessor yet — the tables exist since schema v6 (#34) but #29 is unbuilt. Tested against a fixture store built by `plexdb init`; no live Plex, no network, no consumer repo
@@ -21,6 +25,7 @@ plex-db-ex/
 │   │   ├── publish.py
 │   │   ├── reconcile_etv.py
 │   │   ├── repair_identities.py
+│   │   ├── schedule.py
 │   │   ├── sweep.py
 │   │   └── walk.py
 │   ├── config.py          settings from .env; never a default for a URL or a token
@@ -43,6 +48,7 @@ plex-db-ex/
 │   ├── schema.py          the DDL and the append-only migration list
 │   ├── sources.py         what a Gated Source is — an external source whose units carry a fetched_at and are re-fetched only once stale; holds the credential check, the derived <NAME>_STALE_DAYS window, the client build, the store handle and the --stale-days/--rewipe flags, so a source declares only what varies. Not harvest-plex-collections (replaces wholesale, never stales — its input is Plex, not a rate-limited API) and not enrich-tautulli-plays (matches rows)
 │   ├── sweep.py           one scheduled run: the steps a command opts into by declaring SWEEP, ordered by ORDER, a required step's failure ending the run and a best-effort one's only reported (ADR-0014); ConfigError reads as "not configured", anything else as "not reachable"
+│   ├── schedule.py        the container entrypoint's clock and nothing else (ADR-0015): parse PLEXDB_SCHEDULE as HH:MM, sleep to the next occurrence, run one sweep, repeat. In the package rather than the Dockerfile so `next_fire` — midnight rollover, the sweep that ends inside its own minute — is a pure function with tests instead of a `sleep` loop nobody can check
 │   └── store.py           opening the store, and publishing the read-only snapshot consumers open
 ├── tests/                 pytest; no test reaches the network
 │   └── fixtures/

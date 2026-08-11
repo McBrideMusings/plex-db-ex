@@ -233,6 +233,28 @@ a result is dropped and counted, never stored under an invented id
 |---|---|---|
 | `tmdb_recommendations` | `plexdb enrich-tmdb-edges` | TMDB's `/recommendations` endpoint — behavioural: "people who engaged with this also engaged with that". |
 | `tmdb_similar` | `plexdb enrich-tmdb-edges` | TMDB's `/similar` endpoint — content-derived, not behavioural. Kept as a distinct type from `tmdb_recommendations` because the two measure different things. |
+
+**Measured on the author's library** ([issue #42](https://github.com/McBrideMusings/plex-db-ex/issues/42),
+first full run, 11 August 2026): 12,961 of 14,079 walked movies and shows carried a TMDB id and were
+fetched; 1,118 had none and were skipped. `tmdb_recommendations` wrote 120,941 edges and dropped
+138,029 targets as outside the library; `tmdb_similar` wrote 113,855 and dropped 131,730. So roughly
+half of what TMDB names is a title this library owns, and a fetched title averages about nine edges
+per type.
+
+**The two types are not of equal quality, and a consumer should not treat them as interchangeable.**
+Read back from that run:
+
+| From | `tmdb_recommendations`, ranks 1–4 | `tmdb_similar`, ranks 1–3 |
+|---|---|---|
+| *Alien* (1979) | *Alien: Covenant*, *Aliens*, *Prometheus*, *Alien: Romulus* | — |
+| *Inception* (2010) | *The Dark Tower*, *Solo: A Star Wars Story*, *Push* | *Quantum of Solace*, *The Tuxedo*, *Zootopia* |
+| *The Matrix* (1999) | *Teen Titans*, *The Matrix Revolutions*, *Terminator Genisys* | *The Tuxedo*, *The One*, *Logan's Run* |
+
+`tmdb_recommendations` is sometimes excellent and sometimes weak. `tmdb_similar` was weak on every
+title spot-checked. Both are stored exactly as TMDB ordered them
+([ADR-0012](./adr/0012-the-store-records-what-a-source-said-never-a-score-it-computed)) — the store
+does not rank sources, and this table is the record so a reader can weight them itself.
+
 **Plex's own collections are not a source, and there is no `local_collection` edge type**
 ([issue #48](https://github.com/McBrideMusings/plex-db-ex/issues/48)). Co-membership used to be
 stored here as every ordered pair, so a collection of N members wrote N×(N−1) rows — measured at

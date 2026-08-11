@@ -19,3 +19,4 @@ ADR wins; [the PRD](../PRD) already reflects them.
 | [0012](./0012-the-store-records-what-a-source-said-never-a-score-it-computed) | The store records what a source said, never a score it computed |
 | [0013](./0013-bookkeeping-never-shares-a-table-with-facts) | Bookkeeping never shares a table with facts |
 | [0014](./0014-the-sweep-is-a-command-not-a-shell-script) | The sweep is a command, not a shell script |
+| [0015](./0015-the-schedule-is-a-command-too) | The schedule is a command too |

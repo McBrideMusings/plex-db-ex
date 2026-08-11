@@ -43,6 +43,7 @@ EXPECTED_COMMANDS = {
     "latent-users",
     "reconcile-etv",
     "repair-identities",
+    "schedule",
 }
 
 # The order someone runs them in, which since ADR-0014 is also the order
@@ -62,6 +63,9 @@ EXPECTED_COMMAND_ORDER = [
     "latent-users",
     "reconcile-etv",
     "publish",
+    # Last, and not a step of the sweep — it wraps the whole run rather than
+    # taking part in one (`plexdb/commands/schedule.py`).
+    "schedule",
 ]
 
 
