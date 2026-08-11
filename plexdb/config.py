@@ -42,6 +42,11 @@ _DEFAULT_TMDB_KEYWORDS_STALE_DAYS = 45
 #: both come from TMDB.
 _DEFAULT_TMDB_EDGES_STALE_DAYS = 45
 
+#: Same documented default again, and a separate knob for the same reason: a
+#: crowd list turns over on its own schedule, unrelated to how often TMDB
+#: revises a title's keywords.
+_DEFAULT_MDBLIST_STALE_DAYS = 45
+
 
 def _shared_account_ids_from_env() -> tuple[int, ...]:
     """`PLEXDB_SHARED_ACCOUNT_IDS`, comma-separated, falling back to
@@ -130,6 +135,15 @@ class Config:
     #: before `plexdb enrich-tmdb-edges` re-fetches it. Same documented
     #: default and window as `tmdb_keywords_stale_days`, tracked separately.
     tmdb_edges_stale_days: int
+    #: The MDBList API key `plexdb harvest-mdblist` authenticates with
+    #: (ADR-0004-style optional-source pattern: crowd-list harvesting needs it,
+    #: `init` and `walk` don't, so the check that it's present lives at the
+    #: point of use). Empty when unset.
+    mdblist_api_key: str
+    #: Days a `collection` row and its memberships stay fresh before `plexdb
+    #: harvest-mdblist` re-fetches that list. Same documented default and
+    #: window as the TMDB knobs, tracked separately.
+    mdblist_stale_days: int
     #: Path to `etv-station`'s `catalog.db`, opened read-only by `plexdb
     #: reconcile-etv` (issue #5) to compare `item_id` against `entry_id`.
     #: `None` when unset — like `snapshot_path`, this carries no default that
@@ -170,6 +184,10 @@ class Config:
             ),
             tmdb_edges_stale_days=_stale_days_from_env(
                 "TMDB_EDGES_STALE_DAYS", _DEFAULT_TMDB_EDGES_STALE_DAYS
+            ),
+            mdblist_api_key=os.environ.get("MDBLIST_API_KEY", "").strip(),
+            mdblist_stale_days=_stale_days_from_env(
+                "MDBLIST_STALE_DAYS", _DEFAULT_MDBLIST_STALE_DAYS
             ),
             etv_catalog_path=etv_catalog_path,
         )

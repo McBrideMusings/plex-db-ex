@@ -14,6 +14,7 @@ plex-db-ex/
 │   │   ├── enrich_tautulli.py
 │   │   ├── enrich_tmdb_edges.py
 │   │   ├── enrich_tmdb_keywords.py
+│   │   ├── harvest_mdblist.py
 │   │   ├── ingest_plays.py
 │   │   ├── init.py
 │   │   ├── latent_users.py
@@ -33,7 +34,10 @@ plex-db-ex/
 │   ├── plex_client.py     read-only Plex HTTP client behind PlexSource/PlexAccountSource protocols
 │   ├── reconcile_etv.py   compares item_id against etv-station's entry_id, joined by Plex rating key; read-only on both stores, reports and never fixes
 │   ├── tmdb_client.py     read-only TMDB client (keywords, recommendations, similar) behind a TMDbSource protocol
-│   ├── tmdb_common.py     media_type_for / is_stale / MAX_CONSECUTIVE_FAILURES / DEFAULT_STALE_DAYS shared by enrich_tmdb.py and tmdb_edges.py
+│   ├── tmdb_common.py     media_type_for / MAX_CONSECUTIVE_FAILURES shared by enrich_tmdb.py and tmdb_edges.py
+│   ├── staleness.py       is_stale / DEFAULT_STALE_DAYS — the one "is this row due a re-fetch" rule, shared by both TMDB sweeps and the crowd-list harvest
+│   ├── mdblist_client.py  read-only MDBList client (top lists, list entries) behind an MDBListSource protocol; pages until has_more clears and sends an explicit User-Agent, without which the service 403s a valid key
+│   ├── collections.py     crowd-list harvest into collection/collection_membership: rank is array position, replace-wholesale per collection_id, no computed weight (ADR-0012), an entry outside the library dropped rather than invented
 │   ├── tmdb_edges.py      TMDB recommendations/similar sweep: two edge types, replace-wholesale per (from_id, edge_type), cached via a tmdb_edges enrichment cursor
 │   ├── repair.py          splits identities that fused two unrelated titles sharing a TMDB/TVDB number (issue #23): deletes them, re-walks Plex, rewinds the play cursor over what went with them
 │   ├── walk.py            the library walk: Plex sections into items, external_ids, plex_items; an external id only ever matches within its own media kind
@@ -41,7 +45,8 @@ plex-db-ex/
 │   └── store.py           opening the store, and publishing the read-only snapshot consumers open
 ├── tests/                 pytest; no test reaches the network
 │   └── fixtures/
-│       └── entry_id.json  SHARED WITH etv-station — copied there, hash-pinned in both
+│       ├── entry_id.json  SHARED WITH etv-station — copied there, hash-pinned in both
+│       └── mdblist/       trimmed recordings of MDBList's live responses, including a two-page list that proves paging
 ├── data/                  plexdb.db lives here (gitignored)
 └── docs/
     ├── index.md           docs home

@@ -1,0 +1,24 @@
+{
+  "movies": [
+    {
+      "id": 155,
+      "mediatype": "movie",
+      "imdb_id": "tt0468569",
+      "ids": {
+        "mdblist": "1aa11",
+        "imdb": "tt0468569",
+        "tmdb": 155
+      },
+      "title": "The Dark Knight",
+      "release_year": 2008,
+      "rank": 7
+    }
+  ],
+  "shows": [],
+  "pagination": {
+    "limit": 1000,
+    "offset": 0,
+    "total": 2,
+    "has_more": true
+  }
+}

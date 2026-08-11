@@ -1,0 +1,46 @@
+[
+  {
+    "id": 2194,
+    "user_id": 1230,
+    "user_name": "garycrawfordgc",
+    "user_avatar_url": "https://example.invalid/avatar.jpg",
+    "name": "Latest TV Shows",
+    "slug": "latest-tv-shows",
+    "description": "",
+    "mediatype": "show",
+    "items": 300,
+    "likes": 4509,
+    "private": false,
+    "dynamic": true,
+    "liked": false
+  },
+  {
+    "id": 14,
+    "user_id": 3,
+    "user_name": "linaspurinis",
+    "user_avatar_url": "https://example.invalid/avatar.png",
+    "name": "Top Watched Movies of The Week / >60",
+    "slug": "top-watched-movies-of-the-week",
+    "description": "",
+    "mediatype": "movie",
+    "items": 48,
+    "likes": 961,
+    "private": false,
+    "dynamic": true,
+    "liked": false
+  },
+  {
+    "id": 9001,
+    "user_id": 7,
+    "user_name": "newcomer",
+    "name": "A Brand New List",
+    "slug": "a-brand-new-list",
+    "description": "",
+    "mediatype": "movie",
+    "items": 0,
+    "likes": 0,
+    "private": false,
+    "dynamic": false,
+    "liked": false
+  }
+]

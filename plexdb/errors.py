@@ -36,3 +36,12 @@ class TMDbError(PlexdbError):
 
 class TautulliError(PlexdbError):
     """Tautulli could not be reached, or returned something unusable."""
+
+
+class MDBListError(PlexdbError):
+    """MDBList could not be reached, or returned something unusable.
+
+    A list entry naming a title this store has never walked is not this — the
+    harvest counts it as unresolved and drops it, so a list that mostly sits
+    outside the library is an ordinary result rather than a failure.
+    """

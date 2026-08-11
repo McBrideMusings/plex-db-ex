@@ -44,7 +44,9 @@ Tracked as `question` issues — decisions, never implemented from.
 
 ## Later
 
-- [ ] Crowd lists and subreddit mentions, one source at a time. [#34](https://github.com/McBrideMusings/plex-db-ex/issues/34) MDBList creates the `collection` and `collection_membership` tables; [#35](https://github.com/McBrideMusings/plex-db-ex/issues/35) Letterboxd, [#36](https://github.com/McBrideMusings/plex-db-ex/issues/36) Trakt, [#37](https://github.com/McBrideMusings/plex-db-ex/issues/37) editorial/RSS and [#38](https://github.com/McBrideMusings/plex-db-ex/issues/38) Reddit land on top as new `source` values. Together they unblock [#29](https://github.com/McBrideMusings/plex-db-ex/issues/29)
+- [x] [#34](https://github.com/McBrideMusings/plex-db-ex/issues/34) MDBList crowd lists — schema v6's `collection` and `collection_membership`, filled by `plexdb harvest-mdblist`. Measured on the author's library: 50 lists, 11,896 memberships, 15,237 entries dropped as outside it
+- [ ] The rest of the crowd-list sources, one at a time, each a new `source` value rather than a schema change: [#35](https://github.com/McBrideMusings/plex-db-ex/issues/35) Letterboxd, [#36](https://github.com/McBrideMusings/plex-db-ex/issues/36) Trakt, [#37](https://github.com/McBrideMusings/plex-db-ex/issues/37) editorial/RSS, [#38](https://github.com/McBrideMusings/plex-db-ex/issues/38) Reddit
+- [ ] [#29](https://github.com/McBrideMusings/plex-db-ex/issues/29) The reader crate's collection-membership accessor — now unblocked
 - [ ] Wikidata awards
 - [ ] Write-back projection to Plex labels, prefix-namespaced and booleanised
 - [ ] Local embeddings over overviews

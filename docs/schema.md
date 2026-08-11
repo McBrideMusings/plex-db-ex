@@ -307,7 +307,10 @@ to different IMDb entries). Neither is a fusion, and deleting either re-walks it
 rows, so that test never reaches a fixed point — measured on the author's library it churned 25
 identities forever, dropping their plays on every run.
 
-## Not yet built
+## Collection membership
+
+Which crowd lists a title appears on, and where in them — schema v6, written by
+`plexdb harvest-mdblist` ([issue #34](https://github.com/McBrideMusings/plex-db-ex/issues/34)).
 
 ```sql
 collection(
@@ -321,8 +324,8 @@ collection(
 )
 
 collection_membership(
-    collection_id   TEXT NOT NULL REFERENCES collection(collection_id),
-    item_id         TEXT NOT NULL,
+    collection_id   TEXT NOT NULL REFERENCES collection(collection_id) ON DELETE CASCADE,
+    item_id         TEXT NOT NULL REFERENCES items(item_id) ON DELETE CASCADE,
     rank            INTEGER,            -- 1-based position, NULL where the source is unordered
     mentions        INTEGER,            -- times named, NULL where not a mention source
     observed_at     TEXT NOT NULL,
@@ -339,10 +342,46 @@ document already raises against a stored `counts_as_signal` above. The store rec
 source said; the consumer weighs it
 ([ADR-0012](./adr/0012-the-store-records-what-a-source-said-never-a-score-it-computed)).
 
-Every column past the keys is nullable on purpose. A source fills what it genuinely has and leaves
-the rest empty rather than inventing a value to fill a slot, so a missing `rank` stays
-distinguishable from rank 1. First writer is
-[issue #34](https://github.com/McBrideMusings/plex-db-ex/issues/34).
+**Every column past the keys is nullable on purpose.** A source fills what it genuinely has and
+leaves the rest empty rather than inventing a value to fill a slot, so a missing `rank` stays
+distinguishable from rank 1 and a missing `likes` from zero likes. A reader that defaults these to
+`0` destroys exactly the distinction the shape exists to preserve.
+
+**Two tables, because a list's own facts belong to the list.** `size` and `likes` describe the
+collection, not one title's place in it; carrying them per membership would repeat them thousands
+of times and let two rows disagree about the same list.
+
+**Membership is a snapshot, not a fact**, the same as edges. On re-pull the whole
+`(collection_id)` membership set is deleted and rewritten inside one transaction, so a title the
+list dropped disappears rather than going stale. This is not optional tidiness: MDBList marks many
+of its lists `dynamic`, meaning the source regenerates them, and appending to one of those would
+accumulate every title that had ever passed through it.
+
+**Only titles this store already walked are representable.** `item_id` references `items`, which
+`plexdb walk` alone populates (ADR-0005), so a list entry naming a title nobody walked is dropped
+and counted, never stored under an invented id
+([ADR-0009](./adr/0009-an-edge-only-connects-two-items-this-store-already-knows)). `size` still
+records the list's full length, so a consumer can tell it is seeing a twelfth of a list rather
+than all of it. Measured on the author's library: 50 lists produced 11,896 memberships and
+dropped 15,237 entries as outside it.
+
+**A list entry resolves through the strongest id it carries** — `imdb`, then `tmdb`, then `tvdb`,
+the same priority order `derive_item_id` uses, and always scoped by media type. Resolving without
+the type would hand a show a movie's identity, since TMDB and TVDB number the two in separate
+lists that both start at 1 (see v5 above).
+
+A `collection` row is the staleness cursor for its own list: a fetched list always leaves one
+behind even when none of its entries resolved, so no sentinel row is needed the way the TMDB edge
+sweep needs one.
+
+## Not yet built
+
+Further sources land as new `source` values rather than as schema changes:
+[Letterboxd](https://github.com/McBrideMusings/plex-db-ex/issues/35),
+[Trakt](https://github.com/McBrideMusings/plex-db-ex/issues/36),
+[editorial articles and RSS](https://github.com/McBrideMusings/plex-db-ex/issues/37), and
+[subreddit mentions](https://github.com/McBrideMusings/plex-db-ex/issues/38) — the last being the
+only one that fills `mentions`.
 
 Two rules that are easy to break by accident:
 

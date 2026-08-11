@@ -1,0 +1,49 @@
+{
+  "movies": [],
+  "shows": [
+    {
+      "id": 298168,
+      "mediatype": "show",
+      "imdb_id": "tt27543562",
+      "tvdb_id": 450799,
+      "ids": {
+        "mdblist": "43pl2",
+        "imdb": "tt27543562",
+        "tmdb": 298168,
+        "tvdb": 450799
+      },
+      "title": "The Shards",
+      "language": "en",
+      "release_year": 2026,
+      "release_date": "2026-08-05",
+      "status": "Returning Series",
+      "runtime": 500,
+      "rank": 333
+    },
+    {
+      "id": 1396,
+      "mediatype": "show",
+      "imdb_id": "tt0903747",
+      "tvdb_id": 81189,
+      "ids": {
+        "mdblist": "9xk1a",
+        "imdb": "tt0903747",
+        "tmdb": 1396,
+        "tvdb": 81189
+      },
+      "title": "Breaking Bad",
+      "language": "en",
+      "release_year": 2008,
+      "release_date": "2008-01-20",
+      "status": "Ended",
+      "runtime": 49,
+      "rank": 12
+    }
+  ],
+  "pagination": {
+    "limit": 1000,
+    "offset": 0,
+    "total": 2,
+    "has_more": false
+  }
+}

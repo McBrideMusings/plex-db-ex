@@ -24,15 +24,18 @@
 //! rather than what a person likes, so it stays with the consumer. See
 //! ADR-0011.
 //!
-//! **Weighted collection membership is not implemented.** The issue that
-//! commissioned this crate (plex-db-ex#11) asks for it, but the
-//! `collection_membership` table it would read does not exist yet — the
-//! store's own schema (`plexdb/schema.py`, currently at version
-//! [`SUPPORTED_SCHEMA_VERSION`]) has no such table, `docs/schema.md` lists
-//! it under "Not yet built", and the project roadmap places it under
-//! "Later", after this milestone. Adding it here would mean inventing a
-//! table the writer does not create, which no real store would ever
-//! satisfy. This accessor is deferred until that table ships.
+//! **Collection membership is not implemented yet.** The issue that
+//! commissioned this crate (plex-db-ex#11) asks for it, and the tables it
+//! would read now exist — schema v6 added `collection` and
+//! `collection_membership`, filled by `plexdb harvest-mdblist`
+//! (plex-db-ex#34). The accessor itself is plex-db-ex#29, no longer blocked.
+//!
+//! It will carry no weight, and that is deliberate rather than an omission:
+//! the store records `rank`, `mentions`, and the collection's own `size` and
+//! `likes` as the source gave them, and a consumer wanting one number
+//! computes it from those (plex-db-ex#33, ADR-0012). All four are nullable at
+//! the source, so all four are `Option<_>` here — collapsing a missing `rank`
+//! to `0` would make "unordered" and "ranked first" indistinguishable.
 //!
 //! [adr-0003]: https://github.com/McBrideMusings/plex-db-ex/blob/main/docs/adr/0003-rust-reader-crate-behind-a-plugin-capability-grant.md
 

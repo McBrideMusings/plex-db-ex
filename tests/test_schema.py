@@ -15,6 +15,7 @@ from plexdb.store import init, open_readonly, open_store
 V1_TABLES = {"items", "external_ids", "plex_items", "enrichment"}
 V2_TABLES = {"plays", "plays_ingest_cursor"}
 V3_TABLES = {"edges"}
+V6_TABLES = {"collection", "collection_membership"}
 #: V4 adds no new table — it only alters the existing `plays` table and adds
 #: an index (issue #9).
 
@@ -68,6 +69,15 @@ def test_v3_carries_exactly_the_edges_table() -> None:
     )
 
 
+def test_v6_carries_exactly_the_two_collection_tables() -> None:
+    every_earlier = V1_TABLES | V2_TABLES | V3_TABLES
+    applied = _tables_from_batch(
+        schema._V1 + schema._V2 + schema._V3 + schema._V4 + schema._V5 + schema._V6
+    )
+
+    assert applied - every_earlier == V6_TABLES
+
+
 def test_a_current_store_carries_every_migrations_tables_and_nothing_else(
     tmp_path: Path,
 ) -> None:
@@ -77,7 +87,7 @@ def test_a_current_store_carries_every_migrations_tables_and_nothing_else(
     # Every table every shipped migration introduces, plus the bookkeeping
     # table `apply` itself creates — a table arriving early (or never
     # arriving) is a scope leak worth failing on.
-    assert _tables(store) == V1_TABLES | V2_TABLES | V3_TABLES | {"schema_version"}
+    assert _tables(store) == V1_TABLES | V2_TABLES | V3_TABLES | V6_TABLES | {"schema_version"}
 
 
 def test_the_columns_the_first_slice_depends_on_are_present(tmp_path: Path) -> None:

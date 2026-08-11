@@ -21,8 +21,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from .errors import TMDbError
+from .staleness import DEFAULT_STALE_DAYS, is_stale
 from .tmdb_client import TMDbSource
-from .tmdb_common import DEFAULT_STALE_DAYS, MAX_CONSECUTIVE_FAILURES, is_stale, media_type_for
+from .tmdb_common import MAX_CONSECUTIVE_FAILURES, media_type_for
 
 #: This writer's namespace. No other module may write rows under it.
 NAMESPACE = "tmdb_keywords"
