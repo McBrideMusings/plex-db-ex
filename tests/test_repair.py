@@ -240,12 +240,134 @@ def test_repair_drops_the_plays_it_cannot_repoint_and_rewinds_the_cursor(
         stats = repair(conn, _source())
 
         assert stats.plays_dropped == 1
+        assert stats.plays_repointed == 0
         assert stats.cursor_rewound_to == 1000
         assert conn.execute("SELECT COUNT(*) FROM plays").fetchone()[0] == 0
         cursor = conn.execute(
             "SELECT since_viewed_at FROM plays_ingest_cursor WHERE id = 1"
         ).fetchone()[0]
         assert cursor == 1000
+
+
+def test_a_play_carrying_its_rating_key_is_repointed_not_dropped(
+    tmp_path: Path,
+) -> None:
+    """The whole point of `plays.rating_key`. Two plays on the fused identity,
+    one for each of the two real titles; both name the Plex item they came
+    from, so both survive the split and land on the right half — no history
+    re-read, and no cursor rewind, because nothing had to be dropped."""
+    store = tmp_path / "plexdb.db"
+    _fused_store(store, with_play=False)
+    with open_store(store) as conn:
+        conn.execute(
+            "INSERT INTO plays (history_key, item_id, rating_key, plex_account_id, viewed_at, "
+            "seconds_watched) VALUES ('movie', ?, '5550', 1, 1000, 5400)",
+            (FUSED_ID,),
+        )
+        conn.execute(
+            "INSERT INTO plays (history_key, item_id, rating_key, plex_account_id, viewed_at) "
+            "VALUES ('show', ?, '141718', 1, 2000)",
+            (FUSED_ID,),
+        )
+        conn.execute("INSERT INTO plays_ingest_cursor (id, since_viewed_at) VALUES (1, 9000)")
+        conn.commit()
+
+        stats = repair(conn, _source())
+
+        # One moved, not two: the fused identity *was* the movie's id, so the
+        # movie's play was already where it belongs and only the show's play
+        # had to travel. A play that needs no move is not a repoint.
+        assert stats.plays_repointed == 1
+        assert stats.plays_dropped == 0
+        assert stats.plays_orphaned == 0
+        assert stats.cursor_rewound_to is None, (
+            "nothing was dropped, so there is nothing to re-read — rewinding would re-fetch "
+            "history the store already holds"
+        )
+        cursor = conn.execute(
+            "SELECT since_viewed_at FROM plays_ingest_cursor WHERE id = 1"
+        ).fetchone()[0]
+        assert cursor == 9000
+
+        landed = {
+            r["history_key"]: r["item_id"]
+            for r in _rows(conn, "SELECT history_key, item_id FROM plays")
+        }
+        assert landed == {"movie": "imdb:tt0047034", "show": "imdb:tt0088526"}, (
+            "each play must follow its own rating key onto the correct half of the split"
+        )
+
+        # Columns other than item_id survive the round trip — a repair must not
+        # quietly discard the Tautulli data a separate pass worked to attach.
+        watched = conn.execute(
+            "SELECT seconds_watched FROM plays WHERE history_key = 'movie'"
+        ).fetchone()[0]
+        assert watched == 5400
+
+
+def test_a_play_whose_rating_key_left_the_library_is_kept_not_guessed_at(
+    tmp_path: Path,
+) -> None:
+    """A title can leave Plex before the repair runs. Its play cannot be
+    placed against any identity — inventing one would credit someone's viewing
+    to the wrong title — so it stays exactly where it is and is counted. The
+    identity holding it survives for the same reason: deleting it would take
+    real viewing history along with it."""
+    store = tmp_path / "plexdb.db"
+    _fused_store(store, with_play=False)
+    with open_store(store) as conn:
+        conn.execute(
+            "INSERT INTO plays (history_key, item_id, rating_key, plex_account_id, viewed_at) "
+            "VALUES ('gone', ?, '999999', 1, 1000)",
+            (FUSED_ID,),
+        )
+        conn.commit()
+
+        stats = repair(conn, _source())
+
+        assert stats.plays_orphaned == 1
+        assert stats.plays_repointed == 0
+        assert stats.plays_dropped == 0
+        surviving = conn.execute("SELECT item_id FROM plays WHERE history_key = 'gone'").fetchone()
+        assert surviving is not None, "an unplaceable play must not be deleted"
+        assert surviving["item_id"] == FUSED_ID
+        assert (
+            conn.execute("SELECT COUNT(*) FROM items WHERE item_id = ?", (FUSED_ID,)).fetchone()[0]
+            == 1
+        ), "the identity holding an unplaceable play is kept, or the play goes with it"
+
+
+def test_repair_recovers_when_an_earlier_pass_died_before_moving_the_plays(
+    tmp_path: Path,
+) -> None:
+    """The crash window this design exists to close. An interrupted pass can
+    leave a play sitting on an identity that no longer appears in `plex_items`
+    at all. Nothing looks fused any more, so the fused scan finds nothing — the
+    next run must still put the play right, from the store alone."""
+    store = tmp_path / "plexdb.db"
+    init_store(store)
+    with open_store(store) as conn:
+        walk_all(conn, _source())
+        # The state an interrupted run leaves: the play still names the rating
+        # key it came from, but sits on the wrong identity.
+        conn.execute("INSERT INTO items (item_id, type, title) VALUES ('stale', 'movie', 'Stale')")
+        conn.execute(
+            "INSERT INTO plays (history_key, item_id, rating_key, plex_account_id, viewed_at) "
+            "VALUES ('orphan', 'stale', '141718', 1, 1000)"
+        )
+        conn.commit()
+
+        stats = repair(conn, _source())
+
+        assert stats.fused_found == 0, "nothing is fused — the earlier run got that far"
+        assert stats.plays_repointed == 1
+        landed = conn.execute("SELECT item_id FROM plays WHERE history_key = 'orphan'").fetchone()[
+            0
+        ]
+        assert landed == "imdb:tt0088526", (
+            "the play follows its own rating key home without any record of what the "
+            "interrupted run was trying to do"
+        )
 
 
 def test_repair_on_a_clean_store_changes_nothing(tmp_path: Path) -> None:

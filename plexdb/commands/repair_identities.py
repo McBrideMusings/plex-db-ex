@@ -49,9 +49,20 @@ def _cmd_repair_identities(args: argparse.Namespace) -> int:
         f"deleted {stats.fused_found} fused identit(ies) and re-walked Plex: "
         f"{stats.walk.titles_written if stats.walk else 0} title(s) rewritten"
     )
+    if stats.plays_repointed:
+        print(
+            f"{stats.plays_repointed} play(s) carried across by their own rating key — "
+            "no history re-read needed for those"
+        )
+    if stats.plays_orphaned:
+        print(
+            f"{stats.plays_orphaned} play(s) could not be placed: their rating key is no "
+            "longer in the library, so the title left Plex between the snapshot and the walk"
+        )
     if stats.plays_dropped:
         print(
-            f"{stats.plays_dropped} play(s) went with them; the ingest cursor is rewound to "
+            f"{stats.plays_dropped} play(s) predate schema v5 and carry no rating key, so "
+            f"nothing records which title they came from; the ingest cursor is rewound to "
             f"{stats.cursor_rewound_to} — run `plexdb ingest-plays` to read them back, then "
             "`plexdb enrich-tautulli-plays` if Tautulli is configured"
         )

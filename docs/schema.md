@@ -277,9 +277,19 @@ issue #23 costs a re-ingest rather than an `UPDATE`. Backfilled at migration tim
 identity mapping to exactly one rating key, and left null wherever an identity maps to several —
 the fused ones, and equally the legitimate merges from
 [#19](https://github.com/McBrideMusings/plex-db-ex/issues/19), where one title sits in two library
-sections. Null is the honest answer in both: the store recorded no evidence to recover. Nothing
-reads the column yet — `repair-identities` still re-ingests rather than re-pointing — so it buys
-the *next* correction, not this one.
+sections. Null is the honest answer in both: the store recorded no evidence to recover.
+
+**`repair-identities` reads it, and that is what makes a correction cheap.** A play carrying a
+rating key is snapshotted before the delete and written back afterwards against whichever identity
+that key now resolves to — right title, Tautulli columns intact, no history re-read, and no cursor
+rewind on its account. Only the plays that *cannot* be placed force a rewind, and only far enough
+to reach them. Measured by reconstructing a fusion on the real store: 32 plays across a film and
+an episode, all 32 carried across onto the correct title, total play count unchanged, cursor
+unchanged, 30 of them keeping their `tautulli_id` and `seconds_watched`.
+
+The historical fusions this schema version exists to fix are the exception, and permanently so:
+they all predate the column, so their plays carry no rating key and are still dropped and
+re-ingested. The re-point path is for every correction after this one.
 
 `plexdb repair-identities` is the corrective pass. It deletes every identity whose Plex records
 span **more than one media kind**, re-walks Plex so each rating key derives its own id again, and

@@ -22,14 +22,21 @@ the library to get it.
 The tempting local test — an identity holding two ids in one namespace — is
 wrong, and using it churns the store forever. See `fused_item_ids`.
 
-**Plays are the expensive part.** `plays` rows on a fused identity point at an
-`item_id` that is about to stop existing, and until version 5 they carried no
-`rating_key`, so nothing records which Plex item each one actually came from
-and they cannot be re-pointed. They are deleted with the identity and re-read
-from history: `plays_ingest_cursor` is rewound to the oldest affected play so
-the next `plexdb ingest-plays` asks Plex for that window again. Rows Plex's
-history no longer covers are genuinely lost — which is why this pass is scoped
-to the fused identities rather than rebuilding the whole store.
+**Plays split into two populations, and only one of them costs anything.**
+From schema version 5 a `plays` row carries its own `rating_key`, which is
+enough to place it again after a split: the fused `items` row is left standing
+while its Plex mapping is removed, so the play is never deleted, only *moved*
+onto whatever identity its rating key resolves to once the walk has run. No
+history re-read, nothing held in memory across a walk that takes minutes, and
+no instant at which the play exists nowhere.
+
+A row written *before* version 5 has no `rating_key` — it recorded the
+conclusion it reached and not the evidence — so once its identity splits there
+is no way to say which half it belongs to. Those are deleted and re-read from
+history: `plays_ingest_cursor` is rewound to the oldest of *them* specifically,
+never to reach a row that is about to be moved anyway. Rows Plex's history no
+longer covers are genuinely lost, which is why this pass is scoped to the fused
+identities rather than rebuilding the whole store.
 """
 
 from __future__ import annotations
@@ -51,12 +58,23 @@ _CHUNK = 500
 class RepairStats:
     """What one repair pass found and touched."""
 
-    #: Identities holding two or more different values in a single namespace.
+    #: Identities whose Plex records span more than one media kind.
     fused_found: int = 0
-    #: `plays` rows deleted with those identities, to be re-read from history.
+    #: Plays carried across the split by their own `rating_key` — written
+    #: back against whichever identity that rating key resolves to after the
+    #: re-walk. No history re-read, nothing lost.
+    plays_repointed: int = 0
+    #: Plays that went with their identity and must be re-read from history:
+    #: rows written before schema v5, which carry no `rating_key`, so nothing
+    #: records which Plex item each one came from.
     plays_dropped: int = 0
-    #: The `viewed_at` the ingest cursor was rewound to, or `None` when no
-    #: fused identity had any plays and the cursor was left alone.
+    #: Plays whose `rating_key` no longer resolves after the re-walk — the
+    #: title left the library between the snapshot and the walk. Neither
+    #: repointed nor recoverable by re-ingest, so counted separately rather
+    #: than folded into either.
+    plays_orphaned: int = 0
+    #: The `viewed_at` the ingest cursor was rewound to, or `None` when
+    #: nothing had to be dropped and the cursor was left alone.
     cursor_rewound_to: int | None = None
     #: The walk that re-derived the deleted titles.
     walk: WalkStats | None = None
@@ -118,14 +136,22 @@ def fused_item_ids(conn: sqlite3.Connection, kinds: dict[str, str]) -> list[str]
     return sorted(item_id for item_id, seen in by_item.items() if len(seen) > 1)
 
 
-def _oldest_play(conn: sqlite3.Connection, item_ids: Sequence[str]) -> int | None:
-    """The earliest `viewed_at` recorded against any of `item_ids`."""
+def _oldest_play_without_rating_key(
+    conn: sqlite3.Connection, item_ids: Sequence[str]
+) -> int | None:
+    """The earliest `viewed_at` among plays that cannot be carried across.
+
+    Deliberately ignores plays that *do* carry a rating key: those are written
+    back after the walk, so rewinding the cursor to reach them would re-read
+    history the store is about to hold again anyway.
+    """
     oldest: int | None = None
     for start in range(0, len(item_ids), _CHUNK):
         chunk = item_ids[start : start + _CHUNK]
         placeholders = ",".join("?" for _ in chunk)
         row = conn.execute(
-            f"SELECT MIN(viewed_at) AS oldest FROM plays WHERE item_id IN ({placeholders})",
+            f"SELECT MIN(viewed_at) AS oldest FROM plays "
+            f"WHERE rating_key IS NULL AND item_id IN ({placeholders})",
             tuple(chunk),
         ).fetchone()
         if row["oldest"] is not None and (oldest is None or row["oldest"] < oldest):
@@ -133,13 +159,73 @@ def _oldest_play(conn: sqlite3.Connection, item_ids: Sequence[str]) -> int | Non
     return oldest
 
 
-def _count_plays(conn: sqlite3.Connection, item_ids: Sequence[str]) -> int:
+def _count_plays_without_rating_key(conn: sqlite3.Connection, item_ids: Sequence[str]) -> int:
+    """Plays on `item_ids` that record no rating key, so cannot be placed.
+
+    Written before schema version 5: they hold the conclusion the ingest
+    reached and no evidence of where it came from, so once their identity
+    splits in two there is no way to say which half they belong to.
+    """
     total = 0
     for start in range(0, len(item_ids), _CHUNK):
         chunk = item_ids[start : start + _CHUNK]
         placeholders = ",".join("?" for _ in chunk)
         row = conn.execute(
-            f"SELECT COUNT(*) AS n FROM plays WHERE item_id IN ({placeholders})",
+            f"SELECT COUNT(*) AS n FROM plays "
+            f"WHERE rating_key IS NULL AND item_id IN ({placeholders})",
+            tuple(chunk),
+        ).fetchone()
+        total += int(row["n"])
+    return total
+
+
+def repoint_plays(conn: sqlite3.Connection) -> int:
+    """Move every play onto whatever identity its own rating key now holds.
+
+    One statement over the whole table, and the reason the repair never has
+    to hold a play in memory: a play is only ever *moved*, never deleted and
+    re-inserted, so there is no window in which it exists nowhere. Returns how
+    many moved.
+
+    Idempotent and unconditional, which is what makes the repair crash-safe.
+    A pass that dies after deleting a fused identity's `plex_items` rows but
+    before the walk has rebuilt them leaves its plays sitting on an identity
+    that is no longer anywhere in `plex_items`; the next run's call to this
+    puts them right, because the question it asks — "does this play's rating
+    key resolve somewhere other than where the play is?" — needs no memory of
+    what the failed run intended.
+
+    A rating key with no `plex_items` row is a title that has left the
+    library. Its play is left exactly where it is rather than being moved to a
+    guess or deleted; `orphaned_plays` counts those.
+    """
+    cursor = conn.execute(
+        "UPDATE plays SET item_id = ("
+        "    SELECT p.item_id FROM plex_items p WHERE p.rating_key = plays.rating_key"
+        ") "
+        "WHERE rating_key IS NOT NULL "
+        "  AND EXISTS (SELECT 1 FROM plex_items p WHERE p.rating_key = plays.rating_key) "
+        "  AND item_id <> ("
+        "    SELECT p.item_id FROM plex_items p WHERE p.rating_key = plays.rating_key"
+        ")"
+    )
+    return cursor.rowcount
+
+
+def orphaned_plays(conn: sqlite3.Connection, item_ids: Sequence[str]) -> int:
+    """Plays still on `item_ids` whose rating key resolves nowhere.
+
+    The title left Plex between one pass and the next, so nothing can say
+    which identity the play belongs to now. Counted, never guessed at.
+    """
+    total = 0
+    for start in range(0, len(item_ids), _CHUNK):
+        chunk = item_ids[start : start + _CHUNK]
+        placeholders = ",".join("?" for _ in chunk)
+        row = conn.execute(
+            f"SELECT COUNT(*) AS n FROM plays "
+            f"WHERE rating_key IS NOT NULL AND item_id IN ({placeholders}) "
+            f"  AND NOT EXISTS (SELECT 1 FROM plex_items p WHERE p.rating_key = plays.rating_key)",
             tuple(chunk),
         ).fetchone()
         total += int(row["n"])
@@ -151,30 +237,68 @@ def repair(
     source: PlexSource,
     source_roots: Sequence[str] = (),
 ) -> RepairStats:
-    """Delete every fused identity, re-walk Plex, and rewind the play cursor.
+    """Split every fused identity, carrying its plays across where it can.
 
-    The delete and the cursor rewind share one transaction, so a failure
-    between them cannot leave the store missing rows it will never ask for
-    again. The walk runs afterwards in its own transaction — it is idempotent,
-    so re-running the whole pass after an interrupted walk is safe.
+    **A play is never deleted and re-inserted, only moved.** The fused
+    identity's `items` row is left standing while its `plex_items` and
+    `external_ids` rows are deleted — enough for the walk to derive each rating
+    key afresh, and not enough to cascade its plays away. After the walk,
+    `repoint_plays` moves each play onto whatever identity its own rating key
+    now holds. At no instant does a play exist nowhere, so no failure between
+    the steps can lose one, and no snapshot has to survive in memory across a
+    walk that takes minutes.
+
+    Once its plays have moved off it, the emptied fused row is deleted. A row
+    still holding plays is kept: those are plays whose rating key has left
+    Plex, and dropping the row would take real viewing history with it.
+
+    A play written before schema v5 carries no `rating_key`, so it records the
+    conclusion the ingest reached and no evidence of where it came from. Those
+    genuinely cannot be placed once the identity splits; they are deleted and
+    `plays_ingest_cursor` is rewound far enough to read them back from Plex.
+
+    **Re-running after a failure repairs it.** `repoint_plays` asks only "does
+    this play's rating key resolve somewhere other than where the play is",
+    which needs no memory of what the interrupted run intended, and the walk
+    is idempotent.
     """
     stats = RepairStats()
     item_ids = fused_item_ids(conn, kinds_by_rating_key(source))
     stats.fused_found = len(item_ids)
     if not item_ids:
+        # Still worth a pass: an earlier run may have died between deleting a
+        # identity's plex_items rows and moving its plays off it, which leaves
+        # nothing looking fused but plays sitting on a stale identity.
+        with conn:
+            stats.plays_repointed = repoint_plays(conn)
         return stats
 
-    stats.plays_dropped = _count_plays(conn, item_ids)
-    oldest = _oldest_play(conn, item_ids)
+    stats.plays_dropped = _count_plays_without_rating_key(conn, item_ids)
+    # Only the plays that cannot be carried across justify a rewind. Rewinding
+    # to reach a play that is about to be moved would re-read history the store
+    # already holds.
+    oldest = _oldest_play_without_rating_key(conn, item_ids) if stats.plays_dropped else None
 
     with conn:
         for start in range(0, len(item_ids), _CHUNK):
             chunk = item_ids[start : start + _CHUNK]
             placeholders = ",".join("?" for _ in chunk)
-            # `items` is the parent of external_ids, plex_items, plays, edges
-            # and enrichment, every one of them ON DELETE CASCADE, so this one
-            # statement clears the fused identity everywhere it appears.
-            conn.execute(f"DELETE FROM items WHERE item_id IN ({placeholders})", tuple(chunk))
+            # Deliberately NOT `DELETE FROM items`: that cascades to `plays`,
+            # and a play deleted here would have to survive in memory across
+            # the walk to come back. Removing the identity's Plex mapping and
+            # its external ids is all the walk needs to derive each rating key
+            # afresh — `enrichment` and `edges` are keyed on the item and are
+            # rebuilt by their own sweeps.
+            conn.execute(f"DELETE FROM plex_items WHERE item_id IN ({placeholders})", tuple(chunk))
+            conn.execute(
+                f"DELETE FROM external_ids WHERE item_id IN ({placeholders})", tuple(chunk)
+            )
+            # These cannot be moved by any later pass, so they go now, in the
+            # same transaction as the rewind that will read them back.
+            conn.execute(
+                f"DELETE FROM plays WHERE rating_key IS NULL AND item_id IN ({placeholders})",
+                tuple(chunk),
+            )
 
         if oldest is not None:
             # Only ever moves the cursor backwards. Advancing it here would
@@ -198,4 +322,24 @@ def repair(
                 stats.cursor_rewound_to = int(row["since_viewed_at"])
 
     stats.walk = walk_all(conn, source, source_roots)
+
+    # After the walk, and only then: the identity a rating key resolves to did
+    # not exist until it ran.
+    with conn:
+        stats.plays_repointed = repoint_plays(conn)
+        stats.plays_orphaned = orphaned_plays(conn, item_ids)
+        for start in range(0, len(item_ids), _CHUNK):
+            chunk = item_ids[start : start + _CHUNK]
+            placeholders = ",".join("?" for _ in chunk)
+            # The fused rows have served their purpose — they held the plays
+            # while the walk ran. Delete only the ones nothing points at any
+            # more; a row still holding plays is one whose rating key left
+            # Plex, and taking it would take that viewing history with it.
+            conn.execute(
+                f"DELETE FROM items WHERE item_id IN ({placeholders}) "
+                f"  AND NOT EXISTS (SELECT 1 FROM plays WHERE plays.item_id = items.item_id) "
+                f"  AND NOT EXISTS "
+                f"      (SELECT 1 FROM plex_items WHERE plex_items.item_id = items.item_id)",
+                tuple(chunk),
+            )
     return stats
