@@ -315,7 +315,7 @@ Which crowd lists a title appears on, and where in them — schema v6, written b
 ```sql
 collection(
     collection_id   TEXT PRIMARY KEY,   -- "mdblist:14" — source-namespaced, opaque
-    source          TEXT NOT NULL,      -- "mdblist", "letterboxd", "trakt", "editorial", "reddit"
+    source          TEXT NOT NULL,      -- "mdblist", "letterboxd", "editorial", "reddit"
     name            TEXT,
     url             TEXT,
     size            INTEGER,            -- entries in the list, NULL where it has no end
@@ -378,10 +378,15 @@ sweep needs one.
 
 Further sources land as new `source` values rather than as schema changes:
 [Letterboxd](https://github.com/McBrideMusings/plex-db-ex/issues/35),
-[Trakt](https://github.com/McBrideMusings/plex-db-ex/issues/36),
 [editorial articles and RSS](https://github.com/McBrideMusings/plex-db-ex/issues/37), and
 [subreddit mentions](https://github.com/McBrideMusings/plex-db-ex/issues/38) — the last being the
 only one that fills `mentions`.
+
+Trakt was to have been one of them
+([#36](https://github.com/McBrideMusings/plex-db-ex/issues/36)) and is dropped: Trakt gated API
+application creation behind VIP in August 2026, and MDBList already covers crowd lists. Nothing in
+the schema recorded that plan, which is the point of `source` being a plain column — a source
+arriving or being abandoned costs no migration either way.
 
 Two rules that are easy to break by accident:
 

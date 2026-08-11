@@ -32,20 +32,20 @@ Milestone: **Edges, history, and the first consumer**. Deliberately sketchy — 
 - [x] [#10](https://github.com/McBrideMusings/plex-db-ex/issues/10) Cluster shared accounts into latent users by machine id — plus [#25](https://github.com/McBrideMusings/plex-db-ex/issues/25): a keyword profile counts a show once, not once per episode
 - [x] [#11](https://github.com/McBrideMusings/plex-db-ex/issues/11) Read-only Rust reader crate over the store — enrichment, edges, taste vector, read-only enforcement and the schema-version gate. The collection-membership accessor is split out as [#29](https://github.com/McBrideMusings/plex-db-ex/issues/29), which waits on the `collection` and `collection_membership` tables that do not exist yet
 - [ ] [etv-station#181](https://github.com/McBrideMusings/etv-station/issues/181) `etv-station` exposes the crate to plugins behind a capability grant
-- [ ] [#12](https://github.com/McBrideMusings/plex-db-ex/issues/12) Trakt related edges
+- [x] ~~[#12](https://github.com/McBrideMusings/plex-db-ex/issues/12) Trakt related edges~~ — **dropped.** Trakt gated API application creation behind VIP in August 2026 and deleted existing applications without notice, so the credential cannot be obtained. A third opinion on affinity is not worth a subscription when `tmdb_recommendations` and `tmdb_similar` already ship
 
 ## Open questions
 
 Tracked as `question` issues — decisions, never implemented from.
 
 - [x] [#13](https://github.com/McBrideMusings/plex-db-ex/issues/13) Who owns the Layer 2 ranking knobs? Answered against real vectors over 25,835 plays: the half-life and the negative weight are not knobs (decay concentrates rather than mixes; abandonment is no signal, not negative signal), and the exploration fraction belongs to a channel, not to this store. The rollup ships no knobs to own — [ADR-0011](./adr/0011-a-taste-vector-weights-a-season-not-an-episode), implemented by [#32](https://github.com/McBrideMusings/plex-db-ex/issues/32).
-- [ ] [#14](https://github.com/McBrideMusings/plex-db-ex/issues/14) Obtain a working Trakt client id — the inherited one is 43 characters and returns 403.
+- [x] [#14](https://github.com/McBrideMusings/plex-db-ex/issues/14) Obtain a working Trakt client id — closed, not answerable. The inherited id was a real, formerly working one; Trakt deleted existing API applications without notice around 1–2 August 2026 and gated new ones behind VIP, calling it temporary with no date. Nothing is built from it now that #12 and #36 are dropped. (`403` from Trakt means "invalid API key or unapproved app" — not a VIP gate, which is `426`.)
 - [ ] [#17](https://github.com/McBrideMusings/plex-db-ex/issues/17) Should an empty GUID value be treated as absent? Changes what an `item_id` is, so it must land in both repos at once.
 
 ## Later
 
 - [x] [#34](https://github.com/McBrideMusings/plex-db-ex/issues/34) MDBList crowd lists — schema v6's `collection` and `collection_membership`, filled by `plexdb harvest-mdblist`. Measured on the author's library: 50 lists, 11,896 memberships, 15,237 entries dropped as outside it
-- [ ] The rest of the crowd-list sources, one at a time, each a new `source` value rather than a schema change: [#35](https://github.com/McBrideMusings/plex-db-ex/issues/35) Letterboxd, [#36](https://github.com/McBrideMusings/plex-db-ex/issues/36) Trakt, [#37](https://github.com/McBrideMusings/plex-db-ex/issues/37) editorial/RSS, [#38](https://github.com/McBrideMusings/plex-db-ex/issues/38) Reddit
+- [ ] The rest of the crowd-list sources, one at a time, each a new `source` value rather than a schema change: [#35](https://github.com/McBrideMusings/plex-db-ex/issues/35) Letterboxd, [#37](https://github.com/McBrideMusings/plex-db-ex/issues/37) editorial/RSS, [#38](https://github.com/McBrideMusings/plex-db-ex/issues/38) Reddit. [#36](https://github.com/McBrideMusings/plex-db-ex/issues/36) Trakt is dropped for the same reason as #12
 - [ ] [#29](https://github.com/McBrideMusings/plex-db-ex/issues/29) The reader crate's collection-membership accessor — now unblocked
 - [ ] Wikidata awards
 - [ ] Write-back projection to Plex labels, prefix-namespaced and booleanised

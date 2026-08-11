@@ -229,6 +229,17 @@ and how each consumer reaches it, given SQLite over a network share is unsafe; h
 schema change is rolled out; and who owns the Layer 2 policy knobs — recency half-life,
 exploration fraction, negative-signal weight.
 
-**One known-bad credential.** The Trakt client id inherited from the collection pipeline is 43
-characters where Trakt's is 64, and a live call with it returns 403. Trakt work needs a fresh
-credential first.
+**Trakt is dropped as a source.** The client id inherited from the collection pipeline was a real,
+working one — the pipeline's own store holds 2,382 candidates fetched with it. Around 1–2 August
+2026 Trakt deleted existing API applications without notice and restricted creating new ones to
+VIP subscribers, calling it a temporary anti-abuse measure but giving no date. So the credential
+cannot be replaced without paying, and what Trakt would have contributed — related-title edges and
+crowd lists — is already covered by TMDB's two edge types and by MDBList. Issues
+[#12](https://github.com/McBrideMusings/plex-db-ex/issues/12),
+[#14](https://github.com/McBrideMusings/plex-db-ex/issues/14) and
+[#36](https://github.com/McBrideMusings/plex-db-ex/issues/36) are closed as not planned; `source`
+being a plain column means Trakt can arrive later without a migration.
+
+*(An earlier version of this paragraph said the id was "43 characters where Trakt's is 64". That
+was wrong — a working Trakt client id here was 43 characters of URL-safe base64, and the length
+was never the defect.)*
