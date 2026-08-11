@@ -17,4 +17,4 @@ ADR wins; [the PRD](../PRD) already reflects them.
 | [0010](./0010-the-owner-account-id-is-resolved-by-a-runtime-name-join-not-a-hardcoded-id) | The owner's account id is resolved by a runtime name join, not a hardcoded id |
 | [0011](./0011-a-taste-vector-weights-a-season-not-an-episode) | A taste vector weighs one season, damped, and carries no ranking knobs |
 | [0012](./0012-the-store-records-what-a-source-said-never-a-score-it-computed) | The store records what a source said, never a score it computed |
-| [0013](./0013-bookkeeping-never-shares-a-namespace-with-facts) | Bookkeeping never shares a namespace with facts |
+| [0013](./0013-bookkeeping-never-shares-a-table-with-facts) | Bookkeeping never shares a table with facts |

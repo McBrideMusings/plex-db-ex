@@ -16,6 +16,7 @@ V1_TABLES = {"items", "external_ids", "plex_items", "enrichment"}
 V2_TABLES = {"plays", "plays_ingest_cursor"}
 V3_TABLES = {"edges"}
 V6_TABLES = {"collection", "collection_membership"}
+V7_TABLES = {"enrichment_cursor"}
 #: V4 adds no new table — it only alters the existing `plays` table and adds
 #: an index (issue #9).
 
@@ -78,6 +79,55 @@ def test_v6_carries_exactly_the_two_collection_tables() -> None:
     assert applied - every_earlier == V6_TABLES
 
 
+def test_v7_moves_every_bookkeeping_row_out_of_enrichment(tmp_path: Path) -> None:
+    """The migration that made `enrichment` a facts-only table (issue #41).
+
+    Built by applying v1–v6, writing the sentinels exactly as the two TMDB
+    writers used to, then running v7 alone — so this tests the migration
+    against the shape it will actually meet on a real store, not against a
+    store this version of the code created.
+    """
+    store = tmp_path / "plexdb.db"
+    conn = sqlite3.connect(store)
+    try:
+        conn.executescript(
+            schema._V1 + schema._V2 + schema._V3 + schema._V4 + schema._V5 + schema._V6
+        )
+        conn.execute("INSERT INTO items (item_id, type, title) VALUES ('imdb:tt1', 'movie', 'X')")
+        conn.executemany(
+            "INSERT INTO enrichment (item_id, namespace, key, value, fetched_at) "
+            "VALUES ('imdb:tt1', ?, ?, ?, ?)",
+            [
+                ("tmdb_keywords", "keyword", "heist", "2026-01-01T00:00:00+00:00"),
+                ("tmdb_keywords", "_fetched", "1", "2026-01-02T00:00:00+00:00"),
+                ("tmdb_edges", "_fetched_recommendations", "1", "2026-01-03T00:00:00+00:00"),
+                ("tmdb_edges", "_fetched_similar", "1", "2026-01-04T00:00:00+00:00"),
+            ],
+        )
+        conn.commit()
+
+        conn.executescript(schema._V7)
+
+        facts = conn.execute(
+            "SELECT namespace, key, value FROM enrichment ORDER BY namespace, key"
+        ).fetchall()
+        cursors = conn.execute(
+            "SELECT namespace, key, fetched_at FROM enrichment_cursor ORDER BY namespace, key"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    # Only the real keyword survives in `enrichment`.
+    assert facts == [("tmdb_keywords", "keyword", "heist")]
+    # All three cursors move, keep their own namespace, lose the `_` prefix,
+    # and carry their original fetched_at — so no sweep re-fetches anything.
+    assert cursors == [
+        ("tmdb_edges", "fetched_recommendations", "2026-01-03T00:00:00+00:00"),
+        ("tmdb_edges", "fetched_similar", "2026-01-04T00:00:00+00:00"),
+        ("tmdb_keywords", "fetched", "2026-01-02T00:00:00+00:00"),
+    ]
+
+
 def test_a_current_store_carries_every_migrations_tables_and_nothing_else(
     tmp_path: Path,
 ) -> None:
@@ -87,7 +137,9 @@ def test_a_current_store_carries_every_migrations_tables_and_nothing_else(
     # Every table every shipped migration introduces, plus the bookkeeping
     # table `apply` itself creates — a table arriving early (or never
     # arriving) is a scope leak worth failing on.
-    assert _tables(store) == V1_TABLES | V2_TABLES | V3_TABLES | V6_TABLES | {"schema_version"}
+    assert _tables(store) == (
+        V1_TABLES | V2_TABLES | V3_TABLES | V6_TABLES | V7_TABLES | {"schema_version"}
+    )
 
 
 def test_the_columns_the_first_slice_depends_on_are_present(tmp_path: Path) -> None:

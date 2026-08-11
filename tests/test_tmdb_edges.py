@@ -226,7 +226,7 @@ def test_a_re_pull_replaces_the_set_an_edge_the_source_dropped_disappears(
         # TMDB now drops Breaking Bad and gains nothing new.
         stale_at = (datetime.now(UTC) - timedelta(days=31)).isoformat(timespec="seconds")
         conn.execute(
-            "UPDATE enrichment SET fetched_at = ? WHERE namespace = 'tmdb_edges'",
+            "UPDATE enrichment_cursor SET fetched_at = ? WHERE namespace = 'tmdb_edges'",
             (stale_at,),
         )
         conn.commit()
@@ -257,7 +257,7 @@ def test_a_re_pull_adds_an_edge_the_source_gained(tmp_path: Path) -> None:
 
         stale_at = (datetime.now(UTC) - timedelta(days=31)).isoformat(timespec="seconds")
         conn.execute(
-            "UPDATE enrichment SET fetched_at = ? WHERE namespace = 'tmdb_edges'",
+            "UPDATE enrichment_cursor SET fetched_at = ? WHERE namespace = 'tmdb_edges'",
             (stale_at,),
         )
         conn.commit()
@@ -411,7 +411,9 @@ def test_rewipe_removes_edges_and_cursor_for_one_edge_type_only(tmp_path: Path) 
         }
         remaining_cursor_keys = {
             row["key"]
-            for row in _rows(conn, "SELECT key FROM enrichment WHERE namespace = 'tmdb_edges'")
+            for row in _rows(
+                conn, "SELECT key FROM enrichment_cursor WHERE namespace = 'tmdb_edges'"
+            )
         }
 
     assert edges_removed == 1
@@ -420,7 +422,7 @@ def test_rewipe_removes_edges_and_cursor_for_one_edge_type_only(tmp_path: Path) 
     # so wiping the edge type clears both cursor rows, not just one.
     assert cursor_removed == 2
     assert remaining_edge_types == {SIMILAR_EDGE_TYPE}
-    assert remaining_cursor_keys == {"_fetched_similar"}
+    assert remaining_cursor_keys == {"fetched_similar"}
 
 
 def test_a_failure_partway_through_leaves_the_previous_set_intact(tmp_path: Path) -> None:

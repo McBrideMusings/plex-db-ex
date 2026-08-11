@@ -81,13 +81,15 @@ INSERT INTO enrichment (item_id, namespace, key, value, fetched_at) VALUES
     ('imdb:ttbail',  'tmdb_keywords', 'keyword', 'bailed',    '2026-01-01T00:00:00+00:00'),
     ('imdb:ttnosea', 'tmdb_keywords', 'keyword', 'seasonless','2026-01-01T00:00:00+00:00');
 
--- Bookkeeping sentinels, exactly as `plexdb enrich-tmdb-keywords` writes them.
--- They must never reach a taste vector, and must not count toward the split
--- that divides a title's weight across its attributes: ttfin carries two real
--- keywords, so each must get half its weight, not a third.
-INSERT INTO enrichment (item_id, namespace, key, value, fetched_at) VALUES
-    ('imdb:ttfin', 'tmdb_keywords', '_fetched', '1', '2026-01-01T00:00:00+00:00'),
-    ('imdb:tt2',   'tmdb_keywords', '_fetched', '1', '2026-01-01T00:00:00+00:00');
+-- Bookkeeping, exactly as `plexdb enrich-tmdb-keywords` writes it: rows in
+-- `enrichment_cursor`, never in `enrichment` (ADR-0013). Seeded here so the
+-- rollup is exercised against a store that has bookkeeping in it — a fixture
+-- with none would pass whether or not the rollup could tell the difference.
+INSERT INTO enrichment_cursor (item_id, namespace, key, fetched_at) VALUES
+    ('imdb:ttfin', 'tmdb_keywords', 'fetched', '2026-01-01T00:00:00+00:00'),
+    ('imdb:tt2',   'tmdb_keywords', 'fetched', '2026-01-01T00:00:00+00:00'),
+    ('imdb:ttfin', 'tmdb_edges',    'fetched_recommendations', '2026-01-01T00:00:00+00:00'),
+    ('imdb:ttfin', 'tmdb_edges',    'fetched_similar', '2026-01-01T00:00:00+00:00');
 "#;
 
 /// Episodes and the plays over them, built in code because a two-season show

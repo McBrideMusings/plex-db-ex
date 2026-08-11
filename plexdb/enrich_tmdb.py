@@ -8,10 +8,16 @@ edges design uses.
 
 **Caching is the substance of this module, not a side effect.** A title inside
 its staleness threshold is never asked of `TMDbSource` at all — the check
-happens before the call, not after inspecting what came back. Without a
-lookup for a title that turned out to carry zero keywords, that title would
-be re-asked on every single sweep forever; `_SENTINEL_KEY` exists so a
-zero-keyword result is just as cacheable as a twenty-keyword one.
+happens before the call, not after inspecting what came back. A title that
+turned out to carry zero keywords leaves no `enrichment` row to read a
+timestamp off, so without a marker it would be re-asked on every sweep
+forever; the per-title cursor row exists so a zero-keyword result is just as
+cacheable as a twenty-keyword one.
+
+That cursor lives in `enrichment_cursor`, not in `enrichment` (ADR-0013).
+`enrichment` holds facts about titles; a reader scanning it needs no
+convention to tell a keyword from this module's own bookkeeping, because the
+bookkeeping is not there.
 """
 
 from __future__ import annotations
@@ -28,11 +34,19 @@ from .tmdb_common import MAX_CONSECUTIVE_FAILURES, media_type_for
 #: This writer's namespace. No other module may write rows under it.
 NAMESPACE = "tmdb_keywords"
 _KEYWORD_KEY = "keyword"
-#: One row per enriched title regardless of how many keywords it carries, so
-#: a title with zero keywords still has a `fetched_at` to check staleness
-#: against.
-_SENTINEL_KEY = "_fetched"
-_SENTINEL_VALUE = "1"
+
+#: This writer's per-title progress marker, in `enrichment_cursor` rather than
+#: in `enrichment` (ADR-0013). One row per enriched title regardless of how
+#: many keywords it carries, so a title with zero keywords still has a
+#: `fetched_at` to check staleness against.
+#:
+#: It used to be an `enrichment` row keyed `_fetched`, which made it
+#: indistinguishable from a keyword to anything that did not already know that
+#: a leading underscore meant "skip me". Measured on the live store, that put
+#: the string `1` at the top of the house's taste profile at 8.7x the real
+#: leader, and inflated every title's attribute count — worst on thinly-tagged
+#: titles, so the error did not cancel across the library (issue #41).
+_CURSOR_KEY = "fetched"
 
 
 @dataclass
@@ -53,16 +67,20 @@ class EnrichStats:
 
 
 def wipe_namespace(conn: sqlite3.Connection) -> int:
-    """Delete every `tmdb_keywords` enrichment row, leaving every other
-    namespace's rows untouched. Returns the number of rows removed.
+    """Delete every `tmdb_keywords` row **and** this module's fetch cursors,
+    leaving every other namespace untouched. Returns the number of rows removed.
 
-    Scoped to this module's own namespace, matching the module docstring's
-    claim to own exactly one. A version taking any namespace belongs in
-    `store.py` once a second enrichment writer needs one — not before.
+    Both tables, because they hold one module's state split across two places
+    for a reader's benefit (ADR-0013), not two independent things. Wiping the
+    keywords and keeping the cursors would leave every title looking fetched
+    and empty, so `--rewipe` would silently fetch nothing.
     """
     with conn:
-        cursor = conn.execute("DELETE FROM enrichment WHERE namespace = ?", (NAMESPACE,))
-        return cursor.rowcount
+        removed = conn.execute("DELETE FROM enrichment WHERE namespace = ?", (NAMESPACE,)).rowcount
+        removed += conn.execute(
+            "DELETE FROM enrichment_cursor WHERE namespace = ?", (NAMESPACE,)
+        ).rowcount
+        return removed
 
 
 def enrich_tmdb_keywords(
@@ -97,9 +115,8 @@ def enrich_tmdb_keywords(
     cached_fetched_at: dict[str, str] = {
         row["item_id"]: row["fetched_at"]
         for row in conn.execute(
-            "SELECT item_id, fetched_at FROM enrichment "
-            "WHERE namespace = ? AND key = ? AND value = ?",
-            (NAMESPACE, _SENTINEL_KEY, _SENTINEL_VALUE),
+            "SELECT item_id, fetched_at FROM enrichment_cursor WHERE namespace = ? AND key = ?",
+            (NAMESPACE, _CURSOR_KEY),
         )
     }
 
@@ -150,14 +167,20 @@ def enrich_tmdb_keywords(
         consecutive_failures = 0
 
         with conn:
+            # Both tables, in one transaction: the cursor and the keywords it
+            # vouches for are replaced together or not at all. Split across two
+            # transactions, an interrupted sweep could leave a cursor saying
+            # "fetched" over keywords that had already been deleted.
             conn.execute(
                 "DELETE FROM enrichment WHERE item_id = ? AND namespace = ?",
                 (item_id, NAMESPACE),
             )
             conn.execute(
-                "INSERT INTO enrichment (item_id, namespace, key, value, fetched_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (item_id, NAMESPACE, _SENTINEL_KEY, _SENTINEL_VALUE, now_iso),
+                "INSERT INTO enrichment_cursor (item_id, namespace, key, fetched_at) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(item_id, namespace, key) DO UPDATE SET "
+                "fetched_at = excluded.fetched_at",
+                (item_id, NAMESPACE, _CURSOR_KEY, now_iso),
             )
             # `dict.fromkeys` dedupes while keeping first-seen order, in case
             # a source ever repeats a name — the row's primary key includes

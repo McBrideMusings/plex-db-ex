@@ -18,19 +18,22 @@ use crate::error::ReaderError;
 
 /// The schema version this crate's accessors are written against.
 ///
-/// Currently version 6 — `items`, `external_ids`, `plex_items`,
-/// `enrichment`, `plays`, `plays_ingest_cursor`, `edges`, `collection`,
+/// Currently version 7 — `items`, `external_ids`, `plex_items`, `enrichment`,
+/// `enrichment_cursor`, `plays`, `plays_ingest_cursor`, `edges`, `collection`,
 /// `collection_membership` — see `plexdb/schema.py`.
 ///
-/// Versions 4, 5 and 6 added things this crate does not read yet: Tautulli's
+/// Versions 4, 5 and 6 added things this crate does not read: Tautulli's
 /// `seconds_watched`/`tautulli_id` on `plays` (issue #9), then `kind` on
 /// `external_ids` and `rating_key` on `plays` (issue #23), then the two
-/// collection tables (issue #34), whose accessor is issue #29. The accessors
-/// are unchanged; the constant moves because the gate demands an exact match,
-/// and a reader pinned below the shipping store cannot open it at all — which
-/// is the whole failure mode this constant exists to make loud instead of
-/// silent.
-pub const SUPPORTED_SCHEMA_VERSION: i64 = 6;
+/// collection tables (issue #34), whose accessor is issue #29.
+///
+/// **Version 7 is different — it changed what this crate reads.** Writers'
+/// fetch cursors moved out of `enrichment` into `enrichment_cursor`, so
+/// `attributes_by_item` dropped the key-prefix filter that had been hiding
+/// them (issue #41, ADR-0013). Against a v6 store that query would now return
+/// the sentinels as real attributes, which is exactly why the gate demands an
+/// exact match rather than a minimum.
+pub const SUPPORTED_SCHEMA_VERSION: i64 = 7;
 
 /// Confirm `conn` is a plexdb store at exactly [`SUPPORTED_SCHEMA_VERSION`].
 pub(crate) fn check(conn: &Connection, path: &Path) -> Result<(), ReaderError> {

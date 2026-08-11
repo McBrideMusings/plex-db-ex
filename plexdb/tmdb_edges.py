@@ -22,11 +22,14 @@ first-hit-wins ordering exists to prevent.
 **Caching needs a cursor `edges` rows alone cannot supply.** A title whose
 recommendations are all outside the library — or genuinely empty — leaves no
 `edges` row behind, so there is nothing to read a `fetched_at` off on the next
-sweep. The `tmdb_edges` enrichment namespace holds a per-`(item_id,
-edge_type)` sentinel row purely for this bookkeeping, the same trick
-`enrich_tmdb.py`'s `_SENTINEL_KEY` uses for a title with zero keywords. It
-carries no relationship data — that lives in `edges` — and no other writer
-may touch it.
+sweep. `enrichment_cursor` holds a per-`(item_id, edge_type)` row purely for
+this bookkeeping, under the `tmdb_edges` namespace, which no other writer may
+touch. It carries no relationship data — that lives in `edges`.
+
+These cursors used to be rows in `enrichment` with `_`-prefixed keys, and the
+only thing keeping them out of a consumer's taste vector was a filter in one
+query in the reader crate (issue #41, ADR-0013). A separate table means no
+filter and no convention: a query against `enrichment` cannot see them.
 """
 
 from __future__ import annotations
@@ -45,14 +48,16 @@ from .tmdb_common import MAX_CONSECUTIVE_FAILURES, media_type_for
 RECOMMENDATIONS_EDGE_TYPE = "tmdb_recommendations"
 SIMILAR_EDGE_TYPE = "tmdb_similar"
 
-#: The enrichment namespace holding this module's per-title fetch cursor.
-#: Not a relationship namespace — see the module docstring.
+#: The namespace this module's per-title fetch cursors are recorded under, in
+#: `enrichment_cursor` (ADR-0013). They used to be `enrichment` rows with
+#: `_`-prefixed keys, invisible to the taste rollup only because it filtered
+#: that prefix — one convention, known in one place, between working and
+#: silently wrong (issue #41).
 _CURSOR_NAMESPACE = "tmdb_edges"
 _CURSOR_KEYS: dict[str, str] = {
-    RECOMMENDATIONS_EDGE_TYPE: "_fetched_recommendations",
-    SIMILAR_EDGE_TYPE: "_fetched_similar",
+    RECOMMENDATIONS_EDGE_TYPE: "fetched_recommendations",
+    SIMILAR_EDGE_TYPE: "fetched_similar",
 }
-_SENTINEL_VALUE = "1"
 
 #: A bound `TMDbSource` method returning ordered TMDB ids for one title, best
 #: match first — `source.recommendations` or `source.similar`. Bound, so a
@@ -88,7 +93,7 @@ def wipe_edge_type(conn: sqlite3.Connection, edge_type: str) -> tuple[int, int]:
     with conn:
         edges_removed = conn.execute("DELETE FROM edges WHERE edge_type = ?", (edge_type,)).rowcount
         cursor_removed = conn.execute(
-            "DELETE FROM enrichment WHERE namespace = ? AND key = ?",
+            "DELETE FROM enrichment_cursor WHERE namespace = ? AND key = ?",
             (_CURSOR_NAMESPACE, _CURSOR_KEYS[edge_type]),
         ).rowcount
     return edges_removed, cursor_removed
@@ -157,9 +162,8 @@ def _sweep(
     cached_fetched_at: dict[str, str] = {
         row["item_id"]: row["fetched_at"]
         for row in conn.execute(
-            "SELECT item_id, fetched_at FROM enrichment "
-            "WHERE namespace = ? AND key = ? AND value = ?",
-            (_CURSOR_NAMESPACE, cursor_key, _SENTINEL_VALUE),
+            "SELECT item_id, fetched_at FROM enrichment_cursor WHERE namespace = ? AND key = ?",
+            (_CURSOR_NAMESPACE, cursor_key),
         )
     }
 
@@ -233,13 +237,11 @@ def _sweep(
                     (item_id, to_item_id, edge_type, rank, now_iso),
                 )
             conn.execute(
-                "DELETE FROM enrichment WHERE item_id = ? AND namespace = ? AND key = ?",
-                (item_id, _CURSOR_NAMESPACE, cursor_key),
-            )
-            conn.execute(
-                "INSERT INTO enrichment (item_id, namespace, key, value, fetched_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (item_id, _CURSOR_NAMESPACE, cursor_key, _SENTINEL_VALUE, now_iso),
+                "INSERT INTO enrichment_cursor (item_id, namespace, key, fetched_at) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(item_id, namespace, key) DO UPDATE SET "
+                "fetched_at = excluded.fetched_at",
+                (item_id, _CURSOR_NAMESPACE, cursor_key, now_iso),
             )
         stats.titles_fetched += 1
         stats.edges_written += len(edges)

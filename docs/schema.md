@@ -92,18 +92,47 @@ happen to need it. A store that fused identities before schema version 5 is repa
 
 | Namespace | Writer | Keys |
 |---|---|---|
-| `tmdb_keywords` | `plexdb enrich-tmdb-keywords` | `keyword` (one row per keyword, `value` is the keyword text) and a sentinel `_fetched` row (`value` = `"1"`) so a title with zero keywords still has a `fetched_at` to check staleness against. Only `items.type` `movie` and `show` are enriched — TMDB has no keywords endpoint for an episode. |
-| `tmdb_edges` | `plexdb enrich-tmdb-edges` | Bookkeeping only, not relationship data — that lives in `edges` (below). `_fetched_recommendations` and `_fetched_similar` sentinel rows (`value` = `"1"`), one per title per edge type, so a title whose result was empty or entirely outside the library still has a `fetched_at` to check staleness against even though it left no `edges` row behind. |
+| `tmdb_keywords` | `plexdb enrich-tmdb-keywords` | `keyword`, one row per keyword, `value` is the keyword text. Nothing else. Only `items.type` `movie` and `show` are enriched — TMDB has no keywords endpoint for an episode. |
 
-**A key beginning with `_` is the writer's bookkeeping, not a fact about the title.** `_fetched`,
-`_fetched_recommendations` and `_fetched_similar` above all exist so a title whose result was
-empty still carries a `fetched_at` to check staleness against. They are ordinary `enrichment`
-rows, so anything reading the table sees them, and a reader that treats them as attributes gets a
-wrong answer twice: on a real account the `_fetched` sentinels were **43.6%** of a taste vector's
-total weight, all of it the string `"1"`, and because `Reader::taste_vector_for` divides a title's
-weight across its attributes, each sentinel also quietly shrank every real keyword on that title.
-`plexdb-reader` excludes `_`-prefixed keys from the rollup. A new writer adding a sentinel should
-use the same prefix; a new reader should skip it.
+## enrichment_cursor
+
+How far each writer has got. **Never mixed into `enrichment`**
+([ADR-0013](./adr/0013-bookkeeping-never-shares-a-table-with-facts)).
+
+```sql
+enrichment_cursor(
+    item_id    TEXT NOT NULL REFERENCES items(item_id) ON DELETE CASCADE,
+    namespace  TEXT NOT NULL,
+    key        TEXT NOT NULL,
+    fetched_at TEXT NOT NULL,
+    PRIMARY KEY (item_id, namespace, key)
+)
+```
+
+| Namespace | Key | Written by |
+|---|---|---|
+| `tmdb_keywords` | `fetched` | `enrich-tmdb-keywords`, one per title |
+| `tmdb_edges` | `fetched_recommendations`, `fetched_similar` | `enrich-tmdb-edges`, one per title per edge type |
+
+A cursor exists so a title whose result was **empty** is still cacheable. A movie TMDB has no
+keywords for leaves no `enrichment` row, and a title whose recommendations all fall outside the
+library leaves no `edges` row — without a cursor, both would be re-asked on every sweep forever.
+
+**There is no `value` column, because a cursor has no value.** It used to carry the string `"1"`,
+which was filler; `fetched_at` was always the whole point.
+
+**These used to live in `enrichment` with `_`-prefixed keys, and it was a real bug** (issue #41).
+A leading underscore meant "bookkeeping, skip me", and exactly one query in the reader crate knew
+it. On the author's store the sentinels were **43.6%** of a taste vector's total weight, all of it
+the string `"1"` — and because a title's weight is divided across its attributes, each sentinel
+also shrank every genuine keyword on that title. The divisor error reaches **41%** on a title
+carrying one real keyword, so it does not cancel across a library; it reorders the bottom of every
+ranked list.
+
+Moving them to a different *namespace* would not have fixed it: the rollup scans every namespace,
+and only the key prefix was hiding them. A different **table** does fix it, permanently and for
+every reader — including one querying the published snapshot with plain SQLite, which ADR-0007
+makes an expected thing to do. A writer needing bookkeeping puts it here; nothing filters anything.
 
 `enrich-tmdb-keywords` re-fetches a title only once its row is older than `TMDB_KEYWORDS_STALE_DAYS`
 (default 45 days). `--rewipe` deletes every `tmdb_keywords` row before a sweep, forcing a full
@@ -210,9 +239,9 @@ a result is dropped and counted, never stored under an invented id
 `TMDB_EDGES_STALE_DAYS` (default 45 days, tracked separately from `TMDB_KEYWORDS_STALE_DAYS`).
 `--rewipe` deletes every row of one run's edge types before a sweep, forcing a full re-fetch,
 without touching any other edge type. The per-title fetch cursor this staleness check reads lives
-in the `tmdb_edges` `enrichment` namespace, not in `edges` itself — a title whose result is empty,
-or entirely outside the library, still needs a `fetched_at` to check next sweep, and `edges` alone
-cannot carry one for a title with no rows.
+in `enrichment_cursor` under the `tmdb_edges` namespace, not in `edges` itself — a title whose
+result is empty, or entirely outside the library, still needs a `fetched_at` to check next sweep,
+and `edges` alone cannot carry one for a title with no rows.
 
 ## Version 4 — the Tautulli history adapter
 
@@ -371,8 +400,8 @@ the type would hand a show a movie's identity, since TMDB and TVDB number the tw
 lists that both start at 1 (see v5 above).
 
 A `collection` row is the staleness cursor for its own list: a fetched list always leaves one
-behind even when none of its entries resolved, so no sentinel row is needed the way the TMDB edge
-sweep needs one.
+behind even when none of its entries resolved, so this source needs no `enrichment_cursor` row the
+way the TMDB sweeps do.
 
 ## Not yet built
 

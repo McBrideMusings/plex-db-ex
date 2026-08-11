@@ -511,7 +511,14 @@ def test_enrich_tmdb_keywords_writes_rows_and_reports_a_summary(
         count = conn.execute(
             "SELECT count(*) FROM enrichment WHERE namespace = 'tmdb_keywords'"
         ).fetchone()[0]
-    assert count == 3  # the sentinel row plus the two keyword rows
+        cursors = conn.execute(
+            "SELECT count(*) FROM enrichment_cursor WHERE namespace = 'tmdb_keywords'"
+        ).fetchone()[0]
+    # Two keyword rows and nothing else. The fetch cursor is a row in
+    # `enrichment_cursor`, not a third row here pretending to be a keyword
+    # (issue #41, ADR-0013).
+    assert count == 2
+    assert cursors == 1
 
 
 def test_a_second_enrich_tmdb_keywords_run_does_not_refetch(

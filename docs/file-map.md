@@ -7,7 +7,7 @@ plex-db-ex/
 ├── .env.example           every variable, with placeholders; real values live in .env
 ├── Cargo.toml             Rust workspace manifest — members: crates/plexdb-reader
 ├── crates/                the Rust workspace
-│   └── plexdb-reader/     read-only typed Rust reader over plexdb.db (ADR-0003): enrichment, edges, taste vector; opened SQLITE_OPEN_READ_ONLY and schema-version gated. The taste vector weighs each title by `sqrt(seasons watched)` split across its attributes, drops anything under half a season, and skips `_`-prefixed bookkeeping keys (ADR-0011). `examples/taste_vector.rs` prints one account's vector, so the rollup can be driven and read back without a consumer. No collection-membership accessor yet — that table is not built. Tested against a fixture store built by `plexdb init`; no live Plex, no network, no consumer repo
+│   └── plexdb-reader/     read-only typed Rust reader over plexdb.db (ADR-0003): enrichment, edges, taste vector; opened SQLITE_OPEN_READ_ONLY and schema-version gated. The taste vector weighs each title by `sqrt(seasons watched)` split across its attributes and drops anything under half a season (ADR-0011); it needs no bookkeeping filter, because writers' cursors live in `enrichment_cursor` rather than in `enrichment` (ADR-0013). `examples/taste_vector.rs` prints one account's vector, so the rollup can be driven and read back without a consumer. No collection-membership accessor yet — that table is not built. Tested against a fixture store built by `plexdb init`; no live Plex, no network, no consumer repo
 ├── plexdb/                the Python package — the only writer of plexdb.db
 │   ├── cli.py             the `plexdb` command line; discovers and registers each module under commands/, holds no command itself
 │   ├── commands/          one module per subcommand; a new command is one new file here, no edit to cli.py
@@ -38,7 +38,7 @@ plex-db-ex/
 │   ├── staleness.py       is_stale / DEFAULT_STALE_DAYS — the one "is this row due a re-fetch" rule, shared by both TMDB sweeps and the crowd-list harvest
 │   ├── mdblist_client.py  read-only MDBList client (top lists, list entries) behind an MDBListSource protocol; pages until has_more clears and sends an explicit User-Agent, without which the service 403s a valid key
 │   ├── collections.py     crowd-list harvest into collection/collection_membership: rank is array position, replace-wholesale per collection_id, no computed weight (ADR-0012), an entry outside the library dropped rather than invented
-│   ├── tmdb_edges.py      TMDB recommendations/similar sweep: two edge types, replace-wholesale per (from_id, edge_type), cached via a tmdb_edges enrichment cursor
+│   ├── tmdb_edges.py      TMDB recommendations/similar sweep: two edge types, replace-wholesale per (from_id, edge_type), cached via enrichment_cursor rows under the tmdb_edges namespace
 │   ├── repair.py          splits identities that fused two unrelated titles sharing a TMDB/TVDB number (issue #23): deletes them, re-walks Plex, rewinds the play cursor over what went with them
 │   ├── walk.py            the library walk: Plex sections into items, external_ids, plex_items; an external id only ever matches within its own media kind
 │   ├── schema.py          the DDL and the append-only migration list

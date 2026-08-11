@@ -128,7 +128,7 @@ def test_a_row_past_its_staleness_threshold_is_refetched_a_row_inside_it_is_not(
         # alone (still fresh). Only the movie should be re-fetched next.
         stale_at = (datetime.now(UTC) - timedelta(days=31)).isoformat(timespec="seconds")
         conn.execute(
-            "UPDATE enrichment SET fetched_at = ? WHERE item_id = ? AND namespace = ?",
+            "UPDATE enrichment_cursor SET fetched_at = ? WHERE item_id = ? AND namespace = ?",
             (stale_at, MOVIE_ID, NAMESPACE),
         )
         conn.commit()
@@ -282,3 +282,31 @@ def test_three_consecutive_failures_abort_with_counts_and_the_tripping_error(
     # The sweep stopped at the third failing title — the fourth and fifth
     # were never asked for.
     assert source.calls == [("1", "movie"), ("2", "movie"), ("3", "movie")]
+
+
+def test_no_bookkeeping_row_ever_lands_in_the_keyword_namespace(tmp_path: Path) -> None:
+    """The rule ADR-0013 exists to make unbreakable.
+
+    Before issue #41 the fetch cursor was an `enrichment` row keyed `_fetched`,
+    and the only thing keeping it out of the house's taste profile was a
+    `NOT LIKE '\\_%'` filter in one query in the reader crate. This asserts the
+    property directly — `tmdb_keywords` contains keywords — so a cursor written
+    back into it fails here rather than surfacing as a phantom attribute.
+    """
+    store = tmp_path / "plexdb.db"
+    with _open(store) as conn:
+        _seed(conn, item_id=MOVIE_ID, item_type="movie", title="The Dark Knight", tmdb_id="155")
+        source = FakeTMDbSource(keywords_by_id={("155", "movie"): ["superhero"]})
+
+        enrich_tmdb_keywords(conn, source)
+
+        keys = {
+            row["key"]
+            for row in conn.execute(
+                "SELECT DISTINCT key FROM enrichment WHERE namespace = ?", (NAMESPACE,)
+            )
+        }
+        cursor_rows = conn.execute("SELECT namespace, key FROM enrichment_cursor").fetchall()
+
+    assert keys == {"keyword"}
+    assert [tuple(row) for row in cursor_rows] == [(NAMESPACE, "fetched")]

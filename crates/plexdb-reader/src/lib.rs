@@ -296,7 +296,18 @@ impl Reader {
         Ok(rows)
     }
 
-    /// Every title's attributes, keyed by `item_id`, bookkeeping excluded.
+    /// Every title's attributes, keyed by `item_id`.
+    ///
+    /// No filter, deliberately. `enrichment` holds facts about titles and
+    /// nothing else since schema v7 — writers record their own progress in
+    /// `enrichment_cursor`, a table this rollup never reads (ADR-0013).
+    ///
+    /// This used to say `WHERE key NOT LIKE '\_%' ESCAPE '\'`, and that line
+    /// was the only thing standing between the house's taste profile and a
+    /// top attribute of the string `1`. A rule known in exactly one query is
+    /// a rule the next accessor gets wrong; the filter is gone rather than
+    /// kept alongside the fix, so a sentinel written back into `enrichment`
+    /// shows up loudly instead of being silently swallowed here.
     ///
     /// One scan rather than a query per watched title. Enrichment is the
     /// biggest table a rollup touches, so this is the one place worth
@@ -304,7 +315,6 @@ impl Reader {
     fn attributes_by_item(&self) -> Result<AttributesByItem, ReaderError> {
         let mut stmt = self.conn.prepare(
             "SELECT DISTINCT item_id, namespace, key, value FROM enrichment \
-             WHERE key NOT LIKE '\\_%' ESCAPE '\\' \
              ORDER BY item_id, namespace, key, value",
         )?;
         let rows = stmt

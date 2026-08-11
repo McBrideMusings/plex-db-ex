@@ -218,25 +218,33 @@ fn nine_seasons_counts_about_three_films_not_nine() {
 }
 
 #[test]
-fn a_fetchers_bookkeeping_sentinel_never_reaches_the_vector() {
+fn a_fetchers_bookkeeping_never_reaches_the_vector() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("plexdb.db");
     common::build_fixture(&path);
     let reader = Reader::open(&path).expect("open the fixture store");
     let vector = reader.taste_vector_for(42).expect("taste vector");
 
+    // The fixture seeds four `enrichment_cursor` rows across two namespaces.
+    // None of them may appear as an attribute — and, since schema v7, none of
+    // them can, because the rollup reads `enrichment` and they are not in it.
+    // Before that they were `enrichment` rows kept out by a key-prefix filter,
+    // and on a real account they reached 43.6% of the vector's weight.
     assert!(
-        vector.attributes.iter().all(|a| !a.key.starts_with('_')),
-        "`_fetched` and friends are a fetcher's note to itself about staleness, not a fact \
-         about the title — on a real account they were 43.6% of the vector's weight"
+        vector
+            .attributes
+            .iter()
+            .all(|a| a.namespace != "tmdb_edges" && !a.key.starts_with("fetched")),
+        "a fetcher's note to itself about staleness is not a fact about the title"
     );
 
-    // ttfin carries two real keywords plus one sentinel. The sentinel must not
-    // count toward the split either: each keyword gets 1.0/2, not 1.0/3.
+    // ttfin carries exactly two real keywords, so each takes half the title's
+    // weight. Bookkeeping must not inflate the divisor either — that is the
+    // half of the bug that dragged every genuine keyword down at once.
     let sitcom = weight_of(&vector, "sitcom").expect("ttfin carries `sitcom`");
     assert!(
         close(sitcom, 0.5),
-        "a sentinel must not shrink the real keywords by inflating the attribute count — \
+        "bookkeeping must not shrink the real keywords by inflating the attribute count — \
          expected 0.5, got {sitcom}"
     );
 }
