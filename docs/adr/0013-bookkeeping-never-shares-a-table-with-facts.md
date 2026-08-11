@@ -19,18 +19,29 @@ It has already been paid for twice.
 correct. Nothing about that line explains itself to the next person, and nothing makes the next
 accessor do the same.
 
-**Once outside it.** A pooled keyword profile computed over the live store's 25,837 plays, using
-`enrichment_for`'s shape rather than the rollup's, came back:
+**Once outside it.** A pooled keyword profile computed over the live store's 25,837 plays with
+ADR-0011's rollup, but over the rows `enrichment_for` actually returns rather than the rows the
+rollup filters to:
 
 ```
-1|2696.1          <- the sentinel
-sitcom|436.5
-workplace comedy|217.5
+_fetched | 1                        287.2     <- the sentinel, 8.7x the real leader
+keyword  | based on novel or book    33.0
+keyword  | sequel                    22.3
+keyword  | new york city             14.6
 ```
 
-The top entry of the house's taste profile was the string `1`, at six times the weight of the real
-leader. Filtered properly the same query gives `sitcom` 497.5, `dating show` 305.6,
-`based on novel or book` 288.0.
+The top entry of the house's taste profile was the string `1`. Excluding it, the same rollup gives
+the profile the house actually has:
+
+```
+based on novel or book        40.5
+sequel                        24.2
+new york city                 19.0
+```
+
+Note the real leader moving from 33.0 to 40.5 — an 18% shift. The phantom attribute does not merely
+sit on top of the list; it is counted in every title's attribute total, so it drags every genuine
+keyword down at the same time.
 
 The scale of the damage is not uniform, which is what makes it dangerous. A consumer scoring a
 candidate by cosine over its keyword set divides by the square root of that set's size. One phantom
@@ -46,10 +57,12 @@ The error is largest on sparsely-tagged titles, so it does not cancel out across
 reorders the bottom of every ranked list, in the exact region where a recommender's mistakes are
 most visible.
 
-**The project already decided this once, the other way round.** `tmdb_edges.py:49` puts its cursors
-in a dedicated `tmdb_edges` namespace holding nothing else, and its module docstring says so
-outright: *"Not a relationship namespace — see the module docstring."* The older module mixed them;
-the newer one did not. This ADR makes the newer one the rule.
+**And the same trap is already set twice more.** `tmdb_edges.py:49` puts its cursors in a dedicated
+`tmdb_edges` namespace holding nothing else, and its docstring says so outright: *"Not a
+relationship namespace — see the module docstring."* That module was more careful than
+`enrich_tmdb.py` and it does not help, because its two cursor rows sit in the same `enrichment`
+table and are hidden from the rollup by the same `_` prefix. They are invisible today only because
+`edges` has no rows yet (#42). The care went into the wrong boundary.
 
 ## What we chose, and the rejected alternatives
 
