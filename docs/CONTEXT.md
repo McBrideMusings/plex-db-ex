@@ -25,6 +25,13 @@ A title's identity everywhere in the Store — the opaque string `etv-station` d
 external GUIDs, first-hit-wins `imdb:` → `tmdb:` → `tvdb:` → `plex:`, else `fs:<hash>`.
 _Avoid_: tmdb_id, rating key, GUID
 
+**External id**:
+One `(source, number)` pair Plex reports for a title — an IMDb, TMDB, TVDB or Plex id.
+Only IMDb numbers movies and shows in a single shared list; **TMDB and TVDB number each
+media type separately**, so `tmdb 1678` is a movie *and* an unrelated show, and an external
+id identifies a title only together with its media type.
+_Avoid_: GUID (Plex's word for the whole set), external key
+
 **Enrichment**:
 A namespaced key-value fact about one title, opaque to the Store.
 
