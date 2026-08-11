@@ -50,7 +50,7 @@ Mac is in the path only because that is where the code was written.
 - [x] [#45](https://github.com/McBrideMusings/plex-db-ex/issues/45) `plexdb sweep` — one command runs the whole pass, each step declaring whether its failure ends the run ([ADR-0014](./adr/0014-the-sweep-is-a-command-not-a-shell-script))
 - [ ] [#43](https://github.com/McBrideMusings/plex-db-ex/issues/43) A container image whose entrypoint loops on a wall-clock schedule, so two sweeps cannot overlap
 - [ ] [#47](https://github.com/McBrideMusings/plex-db-ex/issues/47) Install it on the host — a person's job, since the first run writes to the irreplaceable store
-- [ ] [#48](https://github.com/McBrideMusings/plex-db-ex/issues/48) `local-edges` writes 16,381,416 edges and a 3.7 GB snapshot, because co-membership is quadratic and one collection has 3,004 members. Out of the sweep until its shape changes
+- [x] [#48](https://github.com/McBrideMusings/plex-db-ex/issues/48) Plex co-membership is stored once per membership, not once per pair — 19,360 rows and a 74 MiB snapshot, down from 17.8M rows and 3.7 GB. `local-edges` became `harvest-plex-collections` and rejoined the sweep
 
 - [x] [#34](https://github.com/McBrideMusings/plex-db-ex/issues/34) MDBList crowd lists — schema v6's `collection` and `collection_membership`, filled by `plexdb harvest-mdblist`. Measured on the author's library: 50 lists, 11,896 memberships, 15,237 entries dropped as outside it
 - [x] [#46](https://github.com/McBrideMusings/plex-db-ex/issues/46) The Gated Source contract — a source declares its client, its key and its write; the credential check, the derived staleness window and the two flags stop being copied per source

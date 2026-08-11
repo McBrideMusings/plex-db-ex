@@ -28,11 +28,12 @@ EXPECTED_SWEEP = [
     ("enrich-tmdb-keywords", Step.BEST_EFFORT),
     ("enrich-tmdb-edges", Step.BEST_EFFORT),
     ("harvest-mdblist", Step.BEST_EFFORT),
+    ("harvest-plex-collections", Step.BEST_EFFORT),
     ("publish", Step.REQUIRED),
 ]
 
 # Commands that exist and are deliberately not in a sweep.
-NOT_IN_A_SWEEP = {"sweep", "repair-identities", "latent-users", "reconcile-etv", "local-edges"}
+NOT_IN_A_SWEEP = {"sweep", "repair-identities", "latent-users", "reconcile-etv"}
 
 
 def test_the_sweep_runs_these_steps_in_this_order() -> None:
@@ -59,12 +60,15 @@ def test_read_only_and_repair_commands_are_not_in_a_sweep() -> None:
     assert NOT_IN_A_SWEEP.isdisjoint({step.name for step in plan()})
 
 
-def test_local_edges_is_not_in_a_sweep_until_its_edge_count_is_bounded() -> None:
-    """Measured, not guessed: one full run wrote 16,381,416 edges and took the
-    published snapshot from 72 MiB to 3.7 GB, because co-membership is
-    quadratic and one collection has 3,004 members (#48). Its own test so that
-    putting it back is a deliberate act with a failing test attached."""
-    assert "local-edges" not in {step.name for step in plan()}
+def test_plex_collections_are_swept_now_that_membership_is_linear() -> None:
+    """This step used to be excluded, and the exclusion had a test of its own.
+
+    Co-membership was stored as every ordered pair, so one run wrote
+    16,381,416 edges and took the published snapshot from 72 MiB to 3.7 GB
+    (#48). It now writes one row per membership — 19,365 against the real
+    library — so a nightly pass costs nothing and the exclusion is gone.
+    """
+    assert "harvest-plex-collections" in {step.name for step in plan()}
 
 
 def _fake_package(

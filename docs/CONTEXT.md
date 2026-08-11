@@ -120,7 +120,7 @@ neither is not in the Sweep at all.
 **Gated Source**:
 An external source whose units carry a `fetched_at` and are re-fetched only once stale. The
 unit is not always a title: TMDB keywords and edges gate per title, MDBList per list.
-`local-edges` and `enrich-tautulli-plays` read external things and are *not* this — neither
+`harvest-plex-collections` and `enrich-tautulli-plays` read external things and are *not* this — neither
 gates on staleness.
 _Avoid_: cache, provider
 

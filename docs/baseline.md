@@ -39,8 +39,13 @@ admin pull-baseline
 That copies the host store to `./data/plexdb.db`. Break that copy freely — a migration under
 development, a new sweep, a repair, a wrong idea. Pull again to get back to a known state.
 
-Nothing pushes a working copy back up. If a change to the baseline is genuinely wanted, it is a
-deliberate act with its own decision behind it, not a side effect of developing.
+Nothing pushes a working copy back up **as a file**. The one case where data legitimately travels
+upward is a new source that has already harvested a good result into a working copy — copying
+those rows up beats re-scraping the same thing on the host. That is per-source, deliberate, and
+worth saying out loud when you do it; it is never "sync my copy over prod".
+
+[`development.md`](./development.md) has the whole practice: what is safe to break, what a deploy
+must never re-acquire, and where each kind of change belongs.
 
 ## The two paths are different on purpose
 

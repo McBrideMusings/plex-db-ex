@@ -36,9 +36,9 @@ SWEEP = Step.REQUIRED  # init, walk, ingest-plays, publish
 SWEEP = Step.BEST_EFFORT  # tautulli, keywords, edges, mdblist
 ```
 
-A command that declares neither is not in the Sweep — `latent-users`, `reconcile-etv`,
-`repair-identities` and `local-edges` say nothing and stay out. Absence is the safe default: a new
-command cannot silently join a nightly run that writes to consumers.
+A command that declares neither is not in the Sweep — `latent-users`, `reconcile-etv` and
+`repair-identities` say nothing and stay out. Absence is the safe default: a new command cannot
+silently join a nightly run that writes to consumers.
 
 **Absence earned its keep the first time the sweep ran.** `local-edges` was in the original
 composition and came out again after a full run measured what it writes: 16,381,416
@@ -47,6 +47,11 @@ co-membership is quadratic and one Plex collection has 3,004 members (#48). Noth
 command's own output said so — it prints a summary line and a list of large collections, and the
 size only appears once something publishes the result. A default of "in unless it opts out" would
 have shipped that to consumers.
+
+That command no longer exists. #48 replaced it with `harvest-plex-collections`, which stores one
+row per membership rather than one per pair — 19,360 rows and a 74 MiB snapshot — and it now
+declares `BEST_EFFORT` and runs nightly. The episode stands as the reason for the default, not as
+a permanent verdict on that command: opting out is what bought the time to find the real fix.
 
 This restores the promise the same docstring makes — "adding a command is one new file; nothing
 else in this package or in `plexdb/cli.py` changes" — which was true of the parser and false of the

@@ -233,7 +233,15 @@ a result is dropped and counted, never stored under an invented id
 |---|---|---|
 | `tmdb_recommendations` | `plexdb enrich-tmdb-edges` | TMDB's `/recommendations` endpoint — behavioural: "people who engaged with this also engaged with that". |
 | `tmdb_similar` | `plexdb enrich-tmdb-edges` | TMDB's `/similar` endpoint — content-derived, not behavioural. Kept as a distinct type from `tmdb_recommendations` because the two measure different things. |
-| `local_collection` | `plexdb local-edges` | Two titles share a Plex collection someone made by hand. Plex's `smart` (saved-search) collections are excluded — those are generated, not curated. Recomputed wholesale every run with no staleness threshold, since the input is already in the store and costs no API call. `rank` is always 1: co-membership has no ordering to preserve. |
+**There is no `local_collection` edge type, and there will not be one again**
+([issue #48](https://github.com/McBrideMusings/plex-db-ex/issues/48)). Plex collection
+co-membership used to be stored here as every ordered pair, so a collection of N members wrote
+N×(N−1) rows. Measured: 154 curated collections holding **19,365 memberships** expanded to
+**17,809,980 edges**, taking the store from 72 MiB to 3.9 GB and the published snapshot — the file
+every consumer opens — to 3.7 GB, with one 3,005-member collection responsible for nine million of
+them. Co-membership is a linear fact and now lives in `collection_membership` under
+`source = 'plex'`, one row per membership. **"What shares a collection with X" is a join through
+that table**, not a stored expansion of that join.
 
 `enrich-tmdb-edges` re-fetches a title's edge set only once it is older than
 `TMDB_EDGES_STALE_DAYS` (default 45 days, tracked separately from `TMDB_KEYWORDS_STALE_DAYS`).
@@ -344,7 +352,7 @@ Which crowd lists a title appears on, and where in them — schema v6, written b
 ```sql
 collection(
     collection_id   TEXT PRIMARY KEY,   -- "mdblist:14" — source-namespaced, opaque
-    source          TEXT NOT NULL,      -- "mdblist", "letterboxd", "editorial", "reddit"
+    source          TEXT NOT NULL,      -- "plex", "mdblist", "letterboxd", "editorial", "reddit"
     name            TEXT,
     url             TEXT,
     size            INTEGER,            -- entries in the list, NULL where it has no end
@@ -379,6 +387,11 @@ distinguishable from rank 1 and a missing `likes` from zero likes. A reader that
 **Two tables, because a list's own facts belong to the list.** `size` and `likes` describe the
 collection, not one title's place in it; carrying them per membership would repeat them thousands
 of times and let two rows disagree about the same list.
+
+**Sources in use:** `plex` (`harvest-plex-collections`, hand-built Plex collections, `smart`
+saved-searches excluded — `rank` and `likes` are `NULL` because Plex publishes no ordering and no
+follower count) and `mdblist` (`harvest-mdblist`). Both replace their own rows wholesale on
+re-pull; only MDBList is staleness-gated, because only MDBList is a rate-limited API.
 
 **Membership is a snapshot, not a fact**, the same as edges. On re-pull the whole
 `(collection_id)` membership set is deleted and rewritten inside one transaction, so a title the

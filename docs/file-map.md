@@ -18,7 +18,7 @@ plex-db-ex/
 │   │   ├── ingest_plays.py
 │   │   ├── init.py
 │   │   ├── latent_users.py
-│   │   ├── local_edges.py
+│   │   ├── harvest_plex_collections.py
 │   │   ├── publish.py
 │   │   ├── reconcile_etv.py
 │   │   ├── repair_identities.py
@@ -28,7 +28,7 @@ plex-db-ex/
 │   ├── errors.py          the errors a user is meant to see, as one `error: …` line
 │   ├── identity.py        item_id derivation — mirrored in etv-station, guarded by a fixture
 │   ├── enrich_tmdb.py     TMDB keyword sweep: namespaced, cached, staleness-gated, tolerant of a failing title (aborts after 3 in a row)
-│   ├── local_edges.py     collection co-membership sweep: replace-wholesale, no staleness, Plex's smart collections excluded
+│   ├── plex_collections.py Plex's hand-built collections into collection/collection_membership under source='plex': one row per membership, not per pair — the pairwise shape wrote 17.8M rows and a 3.7 GB snapshot (#48). Replace-wholesale, no staleness, smart saved-searches excluded
 │   ├── plays.py           watch-history ingest: Plex history into plays, incrementally, plus the Tautulli match that enriches them
 │   ├── clusters.py        clusters a *configured* shared account's plays into latent users by fingerprint, joining devices that share a recurring single-account IP (issue #27), and scores keyword overlap between them over show/movie units — a show counts once however many episodes were watched (issue #25); a cluster under 20 plays is folded into one unattributed bucket rather than called a person (issue #28); every other account is one named person with a single profile, no device or cluster numbers; read-only, persists nothing
 │   ├── tautulli_client.py read-only Tautulli client (get_history, get_users) behind TautulliSource/TautulliUserSource protocols
@@ -43,7 +43,7 @@ plex-db-ex/
 │   ├── repair.py          splits identities that fused two unrelated titles sharing a TMDB/TVDB number (issue #23): deletes them, re-walks Plex, rewinds the play cursor over what went with them
 │   ├── walk.py            the library walk: Plex sections into items, external_ids, plex_items; an external id only ever matches within its own media kind
 │   ├── schema.py          the DDL and the append-only migration list
-│   ├── sources.py         what a Gated Source is — an external source whose units carry a fetched_at and are re-fetched only once stale; holds the credential check, the derived <NAME>_STALE_DAYS window, the client build, the store handle and the --stale-days/--rewipe flags, so a source declares only what varies. Not local-edges (replaces wholesale, never stales) and not enrich-tautulli-plays (matches rows)
+│   ├── sources.py         what a Gated Source is — an external source whose units carry a fetched_at and are re-fetched only once stale; holds the credential check, the derived <NAME>_STALE_DAYS window, the client build, the store handle and the --stale-days/--rewipe flags, so a source declares only what varies. Not harvest-plex-collections (replaces wholesale, never stales — its input is Plex, not a rate-limited API) and not enrich-tautulli-plays (matches rows)
 │   ├── sweep.py           one scheduled run: the steps a command opts into by declaring SWEEP, ordered by ORDER, a required step's failure ending the run and a best-effort one's only reported (ADR-0014); ConfigError reads as "not configured", anything else as "not reachable"
 │   └── store.py           opening the store, and publishing the read-only snapshot consumers open
 ├── tests/                 pytest; no test reaches the network
@@ -58,6 +58,8 @@ plex-db-ex/
     ├── schema.md          the SQLite schema, which is the public API
     ├── CONTEXT.md         vocabulary — read before writing code
     ├── roadmap.md         Now / Next / Later / Deferred, plus open questions
+    ├── baseline.md        where the real store lives and why it is never edited in place
+    ├── development.md     what is safe to break, what a deploy must never re-acquire, where each change belongs
     ├── file-map.md        this file
     └── adr/               architecture decision records
 ```

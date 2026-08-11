@@ -21,10 +21,10 @@ from plexdb.cli import _register_commands, build_parser, main
 from plexdb.clusters import LATENT_USER_FLOOR
 from plexdb.commands import enrich_tmdb_edges as enrich_tmdb_edges_cmd
 from plexdb.commands import enrich_tmdb_keywords as enrich_tmdb_keywords_cmd
+from plexdb.commands import harvest_plex_collections as plex_collections_cmd
 from plexdb.commands import ingest_plays as ingest_plays_cmd
 from plexdb.commands import iter_command_modules
 from plexdb.commands import latent_users as latent_users_cmd
-from plexdb.commands import local_edges as local_edges_cmd
 from plexdb.commands import walk as walk_cmd
 from plexdb.config import Config, ConfigError
 from plexdb.plex_client import Section
@@ -39,7 +39,7 @@ EXPECTED_COMMANDS = {
     "publish",
     "enrich-tmdb-keywords",
     "enrich-tmdb-edges",
-    "local-edges",
+    "harvest-plex-collections",
     "harvest-mdblist",
     "ingest-plays",
     "enrich-tautulli-plays",
@@ -59,10 +59,10 @@ EXPECTED_COMMAND_ORDER = [
     "repair-identities",
     "ingest-plays",
     "enrich-tautulli-plays",
-    "local-edges",
     "enrich-tmdb-keywords",
     "enrich-tmdb-edges",
     "harvest-mdblist",
+    "harvest-plex-collections",
     "latent-users",
     "reconcile-etv",
     "publish",
@@ -750,14 +750,14 @@ def test_enrich_tmdb_edges_without_an_api_key_is_an_error_not_a_default(
 
 
 class _FakeCollectionSource:
-    """Stands in for `LivePlexClient` in a `local-edges` CLI test — same
+    """Stands in for `LivePlexClient` in a `harvest-plex-collections` CLI test — same
     `(base_url, token)` construction shape, backed by an in-memory collection
     listing keyed to the recorded walk fixtures' real rating keys (13714 =
     The 'Burbs, 70936 = Air Mater). No network."""
 
     def __init__(self, base_url: str, token: str) -> None:
-        assert base_url, "local-edges must pass the configured PLEX_URL through"
-        assert token, "local-edges must pass the configured PLEX_TOKEN through"
+        assert base_url, "the harvest must pass the configured PLEX_URL through"
+        assert token, "the harvest must pass the configured PLEX_TOKEN through"
 
     def sections(self) -> list[Section]:
         return recorded_source().sections()
@@ -772,7 +772,7 @@ class _FakeCollectionSource:
         return [{"ratingKey": "13714"}, {"ratingKey": "70936"}]
 
 
-def _configure_local_edges(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def _configure_plex_collections(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Point the CLI at a store under `tmp_path`, already walked from the
     recorded library fixtures — so `plex_items` can resolve the fake
     collection's rating keys — with `_FakeCollectionSource` standing in for
@@ -784,42 +784,34 @@ def _configure_local_edges(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> P
     init_store(store)
     with open_store(store) as conn:
         walk_all(conn, recorded_source())
-    monkeypatch.setattr(local_edges_cmd, "LivePlexClient", _FakeCollectionSource)
+    monkeypatch.setattr(plex_collections_cmd, "LivePlexClient", _FakeCollectionSource)
     return store
 
 
-def test_local_edges_writes_rows_and_reports_a_summary(
+def test_harvest_plex_collections_writes_rows_and_reports_a_summary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    store = _configure_local_edges(tmp_path, monkeypatch)
+    store = _configure_plex_collections(tmp_path, monkeypatch)
     capsys.readouterr()
 
-    assert main(["local-edges"]) == 0
+    assert main(["harvest-plex-collections"]) == 0
 
     out = capsys.readouterr().out
-    assert "1 collection(s) processed" in out
-    assert "2 edge(s) written" in out
+    assert "1 collection(s) written" in out
+    assert "2 membership(s) written" in out
 
     with sqlite3.connect(store) as conn:
-        count = conn.execute(
-            "SELECT count(*) FROM edges WHERE edge_type = 'local_collection'"
+        memberships = conn.execute(
+            "SELECT count(*) FROM collection_membership WHERE collection_id = 'plex:900'"
         ).fetchone()[0]
-    assert count == 2
+        edges = conn.execute("SELECT count(*) FROM edges").fetchone()[0]
+    # Two members, two rows — not the 2*1 pairs the old edge shape wrote, and
+    # nothing at all in `edges` any more (issue #48).
+    assert memberships == 2
+    assert edges == 0
 
 
-def test_local_edges_reports_a_collection_at_or_above_the_threshold(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    _configure_local_edges(tmp_path, monkeypatch)
-    capsys.readouterr()
-
-    assert main(["local-edges", "--report-threshold", "2"]) == 0
-
-    out = capsys.readouterr().out
-    assert "large collection: '80s Comedies' has 2 member(s)" in out
-
-
-def test_local_edges_without_plex_credentials_configured_is_an_error_not_a_default(
+def test_harvest_plex_collections_without_credentials_is_an_error_not_a_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     store = tmp_path / "plexdb.db"
@@ -829,7 +821,7 @@ def test_local_edges_without_plex_credentials_configured_is_an_error_not_a_defau
     main(["init"])
     capsys.readouterr()
 
-    assert main(["local-edges"]) == 1
+    assert main(["harvest-plex-collections"]) == 1
     err = capsys.readouterr().err
     assert err.startswith("error: ")
     assert "PLEX_URL" in err

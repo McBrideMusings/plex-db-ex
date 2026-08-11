@@ -39,9 +39,13 @@ is inside its staleness threshold. This holds independently of rate limits.
 fetch cursors go in `enrichment_cursor`. A cursor that sat in the facts table put the string `1`
 at the top of the house's taste profile and shrank every real keyword at the same time (ADR-0013).
 
-**The real store lives on the host, and you work on a copy.** `admin pull-baseline` fetches it.
-Twenty months of watch history and a rate-limited TMDB sweep are in there, and no re-scan
-reproduces either — see [`docs/baseline.md`](docs/baseline.md).
+**The real store lives on the host, and you work on a copy.** `admin pull-baseline` fetches it;
+`data/` is gitignored, so a working copy never follows a branch anywhere. Break the copy freely —
+drop tables, run an unfinished migration, inject fake plays — and never point any of that at the
+host. Twenty months of watch history and a rate-limited TMDB sweep are in there, and no re-scan
+reproduces either. A deploy re-seeds nothing and re-fetches nothing; sweeps are incremental
+because `enrichment_cursor` carries a `fetched_at` per title. See
+[`docs/development.md`](docs/development.md) and [`docs/baseline.md`](docs/baseline.md).
 
 ## Layout
 
