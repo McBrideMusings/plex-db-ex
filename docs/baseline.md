@@ -11,7 +11,7 @@ path  : /mnt/user/appdata/plexdb/plexdb.db
 
 It cannot be reproduced by re-scanning. Three separate reasons, each sufficient on its own:
 
-**Twenty months of watch history.** 25,837 plays spanning 2024-12-03 to 2026-08-13. A fresh walk
+**Twenty months of watch history.** 25,837 plays spanning 2024-12-03 to 2026-08-11. A fresh walk
 recovers whatever Plex and Tautulli still hold; anything either has rolled off is gone the moment
 this file is. That history is the entire input to every taste vector — ADR-0011's rollup is
 computed from it and nothing else.
