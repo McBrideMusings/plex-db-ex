@@ -9,6 +9,7 @@ import argparse
 from ..config import Config
 from ..errors import ConfigError
 from ..store import open_store
+from ..sweep import Step
 from ..tmdb_client import LiveTMDbClient
 from ..tmdb_edges import (
     RECOMMENDATIONS_EDGE_TYPE,
@@ -17,7 +18,10 @@ from ..tmdb_edges import (
     wipe_edge_type,
 )
 
-ORDER = 45
+NAME = "enrich-tmdb-edges"
+ORDER = 55
+#: Same optional-source reasoning as the keywords sweep beside it.
+SWEEP = Step.BEST_EFFORT
 
 
 def _cmd_enrich_tmdb_edges(args: argparse.Namespace) -> int:
@@ -52,7 +56,7 @@ def _cmd_enrich_tmdb_edges(args: argparse.Namespace) -> int:
 
 def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     enrich_tmdb_edges_parser = sub.add_parser(
-        "enrich-tmdb-edges",
+        NAME,
         help="fetch TMDB recommendations/similar for walked movies/shows into "
         "tmdb_recommendations/tmdb_similar edges; a fresh set is never re-fetched",
     )

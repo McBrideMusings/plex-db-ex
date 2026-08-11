@@ -10,7 +10,10 @@ from ..errors import ConfigError
 from ..reconcile_etv import ReconcileReport, reconcile
 from ..store import open_readonly
 
-ORDER = 60
+NAME = "reconcile-etv"
+ORDER = 75
+# No SWEEP: read-only on both sides, and it needs etv-station's catalog to be
+# there. A cross-store audit is something you ask for, not something that runs.
 
 #: How many rows of a "present in only one store" category to print by
 #: default. Every mismatch always prints in full — that's the finding this
@@ -68,7 +71,7 @@ def _cmd_reconcile_etv(args: argparse.Namespace) -> int:
 
 def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     reconcile_parser = sub.add_parser(
-        "reconcile-etv",
+        NAME,
         help="compare item_id against etv-station's entry_id for every title both "
         "stores know about; read-only on both sides",
     )

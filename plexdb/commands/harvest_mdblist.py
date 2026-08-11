@@ -10,11 +10,16 @@ from ..config import Config
 from ..errors import ConfigError
 from ..mdblist_client import LiveMDBListClient
 from ..store import open_store
+from ..sweep import Step
 
-#: Last of the enrichment sources, after `local-edges` (47) and before
-#: `ingest-plays` (50). A list entry can only resolve to a title `walk` already
-#: wrote, so everything filling `items` and `external_ids` runs ahead of it.
-ORDER = 48
+NAME = "harvest-mdblist"
+#: Last of the enrichment sources. A list entry can only resolve to a title
+#: `walk` already wrote, so everything filling `items` and `external_ids` runs
+#: ahead of it.
+ORDER = 60
+#: MDBList is an optional source behind an adapter (ADR-0004), and its lists
+#: are staleness-gated, so a missed harvest is picked up by the next run.
+SWEEP = Step.BEST_EFFORT
 
 
 def _cmd_harvest_mdblist(args: argparse.Namespace) -> int:
@@ -41,7 +46,7 @@ def _cmd_harvest_mdblist(args: argparse.Namespace) -> int:
 
 def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     harvest_parser = sub.add_parser(
-        "harvest-mdblist",
+        NAME,
         help="fetch MDBList's top crowd lists into collection/collection_membership; "
         "a fresh list is never re-fetched",
     )

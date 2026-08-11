@@ -9,8 +9,14 @@ from ..errors import ConfigError
 from ..plays import ingest_plays
 from ..plex_client import LivePlexClient
 from ..store import open_store
+from ..sweep import Step
 
-ORDER = 50
+NAME = "ingest-plays"
+#: Ahead of the enrichment block on purpose: plays are the data no re-scan
+#: reproduces, TMDB is re-fetchable, and a sweep killed partway should already
+#: have banked the plays.
+ORDER = 30
+SWEEP = Step.REQUIRED
 
 
 def _cmd_ingest_plays(_args: argparse.Namespace) -> int:
@@ -39,7 +45,7 @@ def _cmd_ingest_plays(_args: argparse.Namespace) -> int:
 
 def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     ingest_plays_parser = sub.add_parser(
-        "ingest-plays",
+        NAME,
         help="ingest Plex watch history into plays; safe to re-run",
     )
     ingest_plays_parser.set_defaults(func=_cmd_ingest_plays)

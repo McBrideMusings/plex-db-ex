@@ -10,7 +10,7 @@ plex-db-ex/
 │   └── plexdb-reader/     read-only typed Rust reader over plexdb.db (ADR-0003): enrichment (single-item and bulk — `enrichment_for_many` chunks an `IN` clause against the connection's own SQLITE_LIMIT_VARIABLE_NUMBER so a whole candidate pool is one query, not one per candidate, #40), edges, taste vector; opened SQLITE_OPEN_READ_ONLY and schema-version gated. Two taste accessors — `taste_vector_for(account)` and `pooled_taste_vector()` over every account's plays (#39) — sharing one private `rollup()` so ADR-0011's rules exist once: `sqrt(seasons watched)` split across a title's attributes, nothing under half a season. It needs no bookkeeping filter, because writers' cursors live in `enrichment_cursor` rather than in `enrichment` (ADR-0013). `examples/taste_vector.rs` prints one account's vector, so the rollup can be driven and read back without a consumer. No collection-membership accessor yet — the tables exist since schema v6 (#34) but #29 is unbuilt. Tested against a fixture store built by `plexdb init`; no live Plex, no network, no consumer repo
 ├── plexdb/                the Python package — the only writer of plexdb.db
 │   ├── cli.py             the `plexdb` command line; discovers and registers each module under commands/, holds no command itself
-│   ├── commands/          one module per subcommand; a new command is one new file here, no edit to cli.py
+│   ├── commands/          one module per subcommand, each declaring NAME, ORDER, and optionally SWEEP; a new command is one new file here, no edit to cli.py or sweep.py
 │   │   ├── enrich_tautulli.py
 │   │   ├── enrich_tmdb_edges.py
 │   │   ├── enrich_tmdb_keywords.py
@@ -22,6 +22,7 @@ plex-db-ex/
 │   │   ├── publish.py
 │   │   ├── reconcile_etv.py
 │   │   ├── repair_identities.py
+│   │   ├── sweep.py
 │   │   └── walk.py
 │   ├── config.py          settings from .env; never a default for a URL or a token
 │   ├── errors.py          the errors a user is meant to see, as one `error: …` line
@@ -42,6 +43,7 @@ plex-db-ex/
 │   ├── repair.py          splits identities that fused two unrelated titles sharing a TMDB/TVDB number (issue #23): deletes them, re-walks Plex, rewinds the play cursor over what went with them
 │   ├── walk.py            the library walk: Plex sections into items, external_ids, plex_items; an external id only ever matches within its own media kind
 │   ├── schema.py          the DDL and the append-only migration list
+│   ├── sweep.py           one scheduled run: the steps a command opts into by declaring SWEEP, ordered by ORDER, a required step's failure ending the run and a best-effort one's only reported (ADR-0014); ConfigError reads as "not configured", anything else as "not reachable"
 │   └── store.py           opening the store, and publishing the read-only snapshot consumers open
 ├── tests/                 pytest; no test reaches the network
 │   └── fixtures/

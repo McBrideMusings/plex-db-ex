@@ -11,7 +11,10 @@ from ..plex_client import LivePlexClient
 from ..repair import fused_item_ids, kinds_by_rating_key, repair
 from ..store import open_store
 
+NAME = "repair-identities"
 ORDER = 25
+# No SWEEP: this rewinds the play cursor to undo damage a person has diagnosed.
+# It is pointed at a known problem, never fired on a timer.
 
 
 def _cmd_repair_identities(args: argparse.Namespace) -> int:
@@ -71,7 +74,7 @@ def _cmd_repair_identities(args: argparse.Namespace) -> int:
 
 def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parser = sub.add_parser(
-        "repair-identities",
+        NAME,
         help="split identities that fused a movie and a TV show sharing a TMDB or TVDB "
         "number, and rewind the play cursor over what they cost",
     )

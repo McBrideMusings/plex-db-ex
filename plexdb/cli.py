@@ -7,14 +7,13 @@ command is one new file there; this module discovers it and never changes.
 from __future__ import annotations
 
 import argparse
-import importlib
-import pkgutil
 import sqlite3
 import sys
 from collections.abc import Sequence
 from types import ModuleType
 
 from . import __version__, commands, schema
+from .commands import iter_command_modules
 from .errors import PlexdbError
 
 
@@ -26,18 +25,17 @@ def _register_commands(
     Modules are visited by their own `ORDER`, ties broken by module name, so
     `--help` lists commands in the order someone runs them rather than
     alphabetically, and lists them the same way on every machine. Each module
-    owns its number, so adding a command still edits no existing file.
+    owns its number, so adding a command still edits no existing file. That
+    number is also the order `plexdb sweep` runs them (ADR-0014), which is what
+    keeps the listed order and the run order from drifting apart.
 
-    A module missing `register` or `ORDER` is a programming error: it fails
-    loudly, naming the module, rather than being silently skipped or silently
-    sorted last.
+    A module missing `NAME`, `register` or `ORDER` is a programming error: it
+    fails loudly, naming the module, rather than being silently skipped or
+    silently sorted last.
     """
-    modules = [
-        importlib.import_module(info.name)
-        for info in pkgutil.iter_modules(package.__path__, f"{package.__name__}.")
-    ]
+    modules = iter_command_modules(package)
     for module in modules:
-        for attribute in ("register", "ORDER"):
+        for attribute in ("NAME", "register", "ORDER"):
             if not hasattr(module, attribute):
                 raise RuntimeError(
                     f"{module.__name__} does not define {attribute} — every module under "

@@ -9,9 +9,14 @@ from ..config import Config
 from ..errors import ConfigError
 from ..plex_client import LivePlexClient
 from ..store import open_store
+from ..sweep import Step
 from ..walk import walk_all
 
+NAME = "walk"
 ORDER = 20
+#: Plex is the one required dependency (ADR-0004). A sweep that could not read
+#: the library must not publish a snapshot built on what it managed to get.
+SWEEP = Step.REQUIRED
 
 
 def _cmd_walk(args: argparse.Namespace) -> int:
@@ -52,7 +57,7 @@ def _cmd_walk(args: argparse.Namespace) -> int:
 
 def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     walk_parser = sub.add_parser(
-        "walk",
+        NAME,
         help="walk the Plex library into items, external_ids, and the rating-key map; "
         "safe to re-run",
     )
