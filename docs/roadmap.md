@@ -29,7 +29,7 @@ Milestone: **Edges, history, and the first consumer**. Deliberately sketchy — 
 - [x] [#8](https://github.com/McBrideMusings/plex-db-ex/issues/8) Ingest watch history from Plex into `plays`
 - [x] [#9](https://github.com/McBrideMusings/plex-db-ex/issues/9) Tautulli history adapter: IP, completion, paused time — plus [#26](https://github.com/McBrideMusings/plex-db-ex/issues/26): the server owner's differing account id resolved so their plays match too
 - [x] [#10](https://github.com/McBrideMusings/plex-db-ex/issues/10) Cluster shared accounts into latent users by machine id — plus [#25](https://github.com/McBrideMusings/plex-db-ex/issues/25): a keyword profile counts a show once, not once per episode
-- [ ] [#11](https://github.com/McBrideMusings/plex-db-ex/issues/11) Read-only Rust reader crate over the store — enrichment, edges, taste vector, read-only enforcement and the schema-version gate have landed; the weighted collection-membership accessor waits on a `collection_membership` table that does not exist yet
+- [x] [#11](https://github.com/McBrideMusings/plex-db-ex/issues/11) Read-only Rust reader crate over the store — enrichment, edges, taste vector, read-only enforcement and the schema-version gate. The weighted collection-membership accessor is split out as [#29](https://github.com/McBrideMusings/plex-db-ex/issues/29), which waits on a `collection_membership` table that does not exist yet
 - [ ] [etv-station#181](https://github.com/McBrideMusings/etv-station/issues/181) `etv-station` exposes the crate to plugins behind a capability grant
 - [ ] [#12](https://github.com/McBrideMusings/plex-db-ex/issues/12) Trakt related edges
 
@@ -43,7 +43,7 @@ Tracked as `question` issues — decisions, never implemented from.
 
 ## Later
 
-- [ ] `collection_membership`: crowd lists and subreddit mention harvesting
+- [ ] `collection_membership`: crowd lists and subreddit mention harvesting — unblocks [#29](https://github.com/McBrideMusings/plex-db-ex/issues/29)
 - [ ] Wikidata awards
 - [ ] Write-back projection to Plex labels, prefix-namespaced and booleanised
 - [ ] Local embeddings over overviews
