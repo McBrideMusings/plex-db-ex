@@ -17,8 +17,16 @@ collection membership, embeddings. Cached hard, expensive to acquire.
 
 **Layer 2**:
 A single user's weighted attribute vector, rolled up from Layer 1 through that user's
-watch history. Recomputed per pass, never stored.
+watch history. Recomputed per pass, never stored. Carries no ranking policy — no recency
+half-life, no tunable damping constant (ADR-0011).
 _Avoid_: profile, model, recommendations
+
+**Season unit**:
+The amount of watching that counts as 1 in a taste vector — one full season of a show, or
+one film. `r = plays / median season length`; below `r = 0.5` a title contributes nothing.
+Chosen because every other unit measures something that is not taste: per-episode measures
+time occupied, per-title equates a nine-minute special with a seven-season run (ADR-0011).
+_Avoid_: play count, watch count, completion
 
 **item_id**:
 A title's identity everywhere in the Store — the opaque string `etv-station` derives from

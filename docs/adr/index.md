@@ -15,3 +15,4 @@ ADR wins; [the PRD](../PRD) already reflects them.
 | [0008](./0008-the-walk-never-repoints-an-existing-item-id) | The walk never repoints an existing `item_id` when a title's GUID set changes |
 | [0009](./0009-an-edge-only-connects-two-items-this-store-already-knows) | An edge only connects two items this store already knows |
 | [0010](./0010-the-owner-account-id-is-resolved-by-a-runtime-name-join-not-a-hardcoded-id) | The owner's account id is resolved by a runtime name join, not a hardcoded id |
+| [0011](./0011-a-taste-vector-weights-a-season-not-an-episode) | A taste vector weighs one season, damped, and carries no ranking knobs |

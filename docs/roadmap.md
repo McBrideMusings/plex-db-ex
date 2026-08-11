@@ -38,7 +38,7 @@ Milestone: **Edges, history, and the first consumer**. Deliberately sketchy — 
 
 Tracked as `question` issues — decisions, never implemented from.
 
-- [ ] [#13](https://github.com/McBrideMusings/plex-db-ex/issues/13) Who owns the Layer 2 ranking knobs — recency half-life, exploration fraction, negative-signal weight? Not answerable until a real taste vector exists.
+- [x] [#13](https://github.com/McBrideMusings/plex-db-ex/issues/13) Who owns the Layer 2 ranking knobs? Answered against real vectors over 25,835 plays: the half-life and the negative weight are not knobs (decay concentrates rather than mixes; abandonment is no signal, not negative signal), and the exploration fraction belongs to a channel, not to this store. The rollup ships no knobs to own — [ADR-0011](./adr/0011-a-taste-vector-weights-a-season-not-an-episode), implemented by [#32](https://github.com/McBrideMusings/plex-db-ex/issues/32).
 - [ ] [#14](https://github.com/McBrideMusings/plex-db-ex/issues/14) Obtain a working Trakt client id — the inherited one is 43 characters and returns 403.
 - [ ] [#17](https://github.com/McBrideMusings/plex-db-ex/issues/17) Should an empty GUID value be treated as absent? Changes what an `item_id` is, so it must land in both repos at once.
 
