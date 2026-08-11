@@ -5,15 +5,15 @@ and `tmdb_similar` edges."""
 from __future__ import annotations
 
 import argparse
+import sqlite3
 
-from ..config import Config
-from ..errors import ConfigError
-from ..store import open_store
+from ..sources import GatedSource
 from ..sweep import Step
 from ..tmdb_client import LiveTMDbClient
 from ..tmdb_edges import (
     RECOMMENDATIONS_EDGE_TYPE,
     SIMILAR_EDGE_TYPE,
+    EdgeStats,
     refresh_tmdb_edges,
     wipe_edge_type,
 )
@@ -24,22 +24,19 @@ ORDER = 55
 SWEEP = Step.BEST_EFFORT
 
 
-def _cmd_enrich_tmdb_edges(args: argparse.Namespace) -> int:
-    config = Config.from_env()
-    if not config.tmdb_api_key:
-        raise ConfigError("TMDB_API_KEY must be set in .env to fetch TMDB edges")
-    stale_days = args.stale_days if args.stale_days is not None else config.tmdb_edges_stale_days
-    client = LiveTMDbClient(config.tmdb_api_key)
-    with open_store(config.store_path) as conn:
-        if args.rewipe:
-            for edge_type in (RECOMMENDATIONS_EDGE_TYPE, SIMILAR_EDGE_TYPE):
-                edges_removed, _ = wipe_edge_type(conn, edge_type)
-                print(f"wiped {edges_removed} edge(s) of type {edge_type}")
-        stats_by_type = refresh_tmdb_edges(conn, client, stale_days=stale_days)
+def _wipe(conn: sqlite3.Connection) -> list[str]:
+    lines = []
+    for edge_type in (RECOMMENDATIONS_EDGE_TYPE, SIMILAR_EDGE_TYPE):
+        edges_removed, _ = wipe_edge_type(conn, edge_type)
+        lines.append(f"wiped {edges_removed} edge(s) of type {edge_type}")
+    return lines
 
+
+def _report(stats_by_type: dict[str, EdgeStats]) -> list[str]:
+    lines = []
     any_failed = False
     for edge_type, stats in stats_by_type.items():
-        print(
+        lines.append(
             f"{edge_type}: {stats.titles_seen} title(s) seen, {stats.titles_fetched} fetched, "
             f"{stats.titles_cached} already cached, "
             f"{stats.titles_skipped_no_tmdb_id} skipped (no tmdb id), "
@@ -50,28 +47,29 @@ def _cmd_enrich_tmdb_edges(args: argparse.Namespace) -> int:
         if stats.titles_failed:
             any_failed = True
     if any_failed:
-        print("some titles failed and were not cached — re-run to retry them")
-    return 0
+        lines.append("some titles failed and were not cached — re-run to retry them")
+    return lines
+
+
+SOURCE = GatedSource(
+    name="tmdb_edges",
+    unit="title",
+    credential="TMDB_API_KEY",
+    credential_purpose="fetch TMDB edges",
+    # Late-bound on purpose — see the note in enrich_tmdb_keywords.py.
+    make_client=lambda api_key: LiveTMDbClient(api_key),
+    refresh=refresh_tmdb_edges,
+    wipe=_wipe,
+    report=_report,
+)
 
 
 def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    enrich_tmdb_edges_parser = sub.add_parser(
+    SOURCE.register(
+        sub,
         NAME,
         help="fetch TMDB recommendations/similar for walked movies/shows into "
         "tmdb_recommendations/tmdb_similar edges; a fresh set is never re-fetched",
-    )
-    enrich_tmdb_edges_parser.add_argument(
-        "--stale-days",
-        type=int,
-        default=None,
-        metavar="N",
-        help="re-fetch a title's edge set once it is older than this many days; "
-        "default: TMDB_EDGES_STALE_DAYS, or 45 if that is unset",
-    )
-    enrich_tmdb_edges_parser.add_argument(
-        "--rewipe",
-        action="store_true",
-        help="delete every tmdb_recommendations/tmdb_similar edge and fetch cursor "
+        rewipe_help="delete every tmdb_recommendations/tmdb_similar edge and fetch cursor "
         "before the sweep, forcing a full re-fetch; other edge types are untouched",
     )
-    enrich_tmdb_edges_parser.set_defaults(func=_cmd_enrich_tmdb_edges)

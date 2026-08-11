@@ -1062,54 +1062,6 @@ def test_enrich_tmdb_keywords_without_an_api_key_is_an_error_not_a_default(
     assert "Traceback" not in err
 
 
-def test_config_reads_the_tmdb_stale_days_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("TMDB_KEYWORDS_STALE_DAYS", "10")
-
-    config = Config.from_env(env_file=Path("/nonexistent/.env"))
-
-    assert config.tmdb_keywords_stale_days == 10
-
-
-def test_config_defaults_the_tmdb_stale_days_to_45(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("TMDB_KEYWORDS_STALE_DAYS", raising=False)
-
-    config = Config.from_env(env_file=Path("/nonexistent/.env"))
-
-    assert config.tmdb_keywords_stale_days == 45
-
-
-def test_config_rejects_a_non_numeric_tmdb_stale_days(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("TMDB_KEYWORDS_STALE_DAYS", "soon")
-
-    with pytest.raises(ConfigError):
-        Config.from_env(env_file=Path("/nonexistent/.env"))
-
-
-def test_config_reads_the_tmdb_edges_stale_days_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("TMDB_EDGES_STALE_DAYS", "20")
-
-    config = Config.from_env(env_file=Path("/nonexistent/.env"))
-
-    assert config.tmdb_edges_stale_days == 20
-
-
-def test_config_defaults_the_tmdb_edges_stale_days_to_45(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("TMDB_EDGES_STALE_DAYS", raising=False)
-
-    config = Config.from_env(env_file=Path("/nonexistent/.env"))
-
-    assert config.tmdb_edges_stale_days == 45
-
-
-def test_config_rejects_a_non_numeric_tmdb_edges_stale_days(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("TMDB_EDGES_STALE_DAYS", "soon")
-
-    with pytest.raises(ConfigError):
-        Config.from_env(env_file=Path("/nonexistent/.env"))
-
-
 def test_ingest_plays_without_plex_credentials_configured_is_an_error_not_a_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

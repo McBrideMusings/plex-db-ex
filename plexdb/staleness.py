@@ -6,11 +6,13 @@ window. The rule does not vary by source, so it lives here rather than being
 restated per sweep: TMDB keywords and edges (`tmdb_common.py`) and crowd-list
 harvesting (`collections.py`) all read it from this one place.
 
-`config.py` deliberately keeps its own `_DEFAULT_*_STALE_DAYS` literals rather
-than importing `DEFAULT_STALE_DAYS` from here (issue #20). That keeps
-`config.py` a leaf like `errors.py` and `schema.py`, importing no feature
-module, and it lets an operator dial each source's window independently even
-though they share a documented default.
+`config.py` holds no staleness setting at all, and this is the only copy of the
+default. It used to keep three `_DEFAULT_*_STALE_DAYS` literals of its own so
+it could stay a leaf importing no feature module (issue #20) while each source
+kept an independently dialable window. `sources.py` gets both without the
+duplication: a Gated Source derives `<NAME>_STALE_DAYS` from its own name and
+reads it there, so the windows stay independent, `config.py` stays a leaf, and
+the number 45 is written once.
 """
 
 from __future__ import annotations
