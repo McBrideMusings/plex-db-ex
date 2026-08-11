@@ -233,15 +233,17 @@ a result is dropped and counted, never stored under an invented id
 |---|---|---|
 | `tmdb_recommendations` | `plexdb enrich-tmdb-edges` | TMDB's `/recommendations` endpoint — behavioural: "people who engaged with this also engaged with that". |
 | `tmdb_similar` | `plexdb enrich-tmdb-edges` | TMDB's `/similar` endpoint — content-derived, not behavioural. Kept as a distinct type from `tmdb_recommendations` because the two measure different things. |
-**There is no `local_collection` edge type, and there will not be one again**
-([issue #48](https://github.com/McBrideMusings/plex-db-ex/issues/48)). Plex collection
-co-membership used to be stored here as every ordered pair, so a collection of N members wrote
-N×(N−1) rows. Measured: 154 curated collections holding **19,365 memberships** expanded to
-**17,809,980 edges**, taking the store from 72 MiB to 3.9 GB and the published snapshot — the file
-every consumer opens — to 3.7 GB, with one 3,005-member collection responsible for nine million of
-them. Co-membership is a linear fact and now lives in `collection_membership` under
-`source = 'plex'`, one row per membership. **"What shares a collection with X" is a join through
-that table**, not a stored expansion of that join.
+**Plex's own collections are not a source, and there is no `local_collection` edge type**
+([issue #48](https://github.com/McBrideMusings/plex-db-ex/issues/48)). Co-membership used to be
+stored here as every ordered pair, so a collection of N members wrote N×(N−1) rows — measured at
+**17,809,980 edges**, taking the published snapshot from 72 MiB to 3.7 GB.
+
+Size was the visible problem; it was not the reason for dropping it. **A collection someone
+assembled by hand states a similarity its author already knows about.** Feeding that back as a
+recommendation is circular — it returns the curator's own judgement to them as a discovery. Whether
+a collection was hand-built in Plex or synced from an outside list by a tool, the store cannot tell
+from Plex alone, so it takes none of them. Outside curation is read from the source that publishes
+it, where it arrives with a rank, a size and a follower count that Plex does not carry.
 
 `enrich-tmdb-edges` re-fetches a title's edge set only once it is older than
 `TMDB_EDGES_STALE_DAYS` (default 45 days, tracked separately from `TMDB_KEYWORDS_STALE_DAYS`).
@@ -388,10 +390,8 @@ distinguishable from rank 1 and a missing `likes` from zero likes. A reader that
 collection, not one title's place in it; carrying them per membership would repeat them thousands
 of times and let two rows disagree about the same list.
 
-**Sources in use:** `plex` (`harvest-plex-collections`, hand-built Plex collections, `smart`
-saved-searches excluded — `rank` and `likes` are `NULL` because Plex publishes no ordering and no
-follower count) and `mdblist` (`harvest-mdblist`). Both replace their own rows wholesale on
-re-pull; only MDBList is staleness-gated, because only MDBList is a rate-limited API.
+**Sources in use:** `mdblist` (`harvest-mdblist`). Plex's own collections are deliberately not
+one — see the edges section above. Each source replaces its own rows wholesale on re-pull.
 
 **Membership is a snapshot, not a fact**, the same as edges. On re-pull the whole
 `(collection_id)` membership set is deleted and rewritten inside one transaction, so a title the

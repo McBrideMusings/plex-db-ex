@@ -7,11 +7,10 @@ by external id, with `fetched_at`". Three commands implement it today
 and #38 add more.
 
 The unit is not always a title: keywords and edges gate per title, MDBList per
-list. `harvest-plex-collections` and `enrich-tautulli-plays` read external
-things and are **not** Gated Sources — the first replaces its whole set every
-run and never stales (its input is Plex itself, not a rate-limited API), the
-second matches rows it has already seen. Pulling them in here would be
-inventing a framework, which is how this abstraction goes wrong.
+list. `enrich-tautulli-plays` reads an external thing and is **not** a Gated Source
+— it matches rows it has already seen rather than fetching per unit. Pulling
+it in here would be inventing a framework, which is how this abstraction goes
+wrong.
 
 ## Where the staleness window comes from
 

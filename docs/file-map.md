@@ -18,7 +18,6 @@ plex-db-ex/
 │   │   ├── ingest_plays.py
 │   │   ├── init.py
 │   │   ├── latent_users.py
-│   │   ├── harvest_plex_collections.py
 │   │   ├── publish.py
 │   │   ├── reconcile_etv.py
 │   │   ├── repair_identities.py
@@ -28,7 +27,6 @@ plex-db-ex/
 │   ├── errors.py          the errors a user is meant to see, as one `error: …` line
 │   ├── identity.py        item_id derivation — mirrored in etv-station, guarded by a fixture
 │   ├── enrich_tmdb.py     TMDB keyword sweep: namespaced, cached, staleness-gated, tolerant of a failing title (aborts after 3 in a row)
-│   ├── plex_collections.py Plex's hand-built collections into collection/collection_membership under source='plex': one row per membership, not per pair — the pairwise shape wrote 17.8M rows and a 3.7 GB snapshot (#48). Replace-wholesale, no staleness, smart saved-searches excluded
 │   ├── plays.py           watch-history ingest: Plex history into plays, incrementally, plus the Tautulli match that enriches them
 │   ├── clusters.py        clusters a *configured* shared account's plays into latent users by fingerprint, joining devices that share a recurring single-account IP (issue #27), and scores keyword overlap between them over show/movie units — a show counts once however many episodes were watched (issue #25); a cluster under 20 plays is folded into one unattributed bucket rather than called a person (issue #28); every other account is one named person with a single profile, no device or cluster numbers; read-only, persists nothing
 │   ├── tautulli_client.py read-only Tautulli client (get_history, get_users) behind TautulliSource/TautulliUserSource protocols

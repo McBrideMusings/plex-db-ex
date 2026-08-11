@@ -21,13 +21,11 @@ from plexdb.cli import _register_commands, build_parser, main
 from plexdb.clusters import LATENT_USER_FLOOR
 from plexdb.commands import enrich_tmdb_edges as enrich_tmdb_edges_cmd
 from plexdb.commands import enrich_tmdb_keywords as enrich_tmdb_keywords_cmd
-from plexdb.commands import harvest_plex_collections as plex_collections_cmd
 from plexdb.commands import ingest_plays as ingest_plays_cmd
 from plexdb.commands import iter_command_modules
 from plexdb.commands import latent_users as latent_users_cmd
 from plexdb.commands import walk as walk_cmd
 from plexdb.config import Config, ConfigError
-from plexdb.plex_client import Section
 from plexdb.store import init as init_store
 from plexdb.store import open_store
 from plexdb.walk import walk_all
@@ -39,7 +37,6 @@ EXPECTED_COMMANDS = {
     "publish",
     "enrich-tmdb-keywords",
     "enrich-tmdb-edges",
-    "harvest-plex-collections",
     "harvest-mdblist",
     "ingest-plays",
     "enrich-tautulli-plays",
@@ -62,7 +59,6 @@ EXPECTED_COMMAND_ORDER = [
     "enrich-tmdb-keywords",
     "enrich-tmdb-edges",
     "harvest-mdblist",
-    "harvest-plex-collections",
     "latent-users",
     "reconcile-etv",
     "publish",
@@ -746,85 +742,6 @@ def test_enrich_tmdb_edges_without_an_api_key_is_an_error_not_a_default(
     err = capsys.readouterr().err
     assert err.startswith("error: ")
     assert "TMDB_API_KEY" in err
-    assert "Traceback" not in err
-
-
-class _FakeCollectionSource:
-    """Stands in for `LivePlexClient` in a `harvest-plex-collections` CLI test — same
-    `(base_url, token)` construction shape, backed by an in-memory collection
-    listing keyed to the recorded walk fixtures' real rating keys (13714 =
-    The 'Burbs, 70936 = Air Mater). No network."""
-
-    def __init__(self, base_url: str, token: str) -> None:
-        assert base_url, "the harvest must pass the configured PLEX_URL through"
-        assert token, "the harvest must pass the configured PLEX_TOKEN through"
-
-    def sections(self) -> list[Section]:
-        return recorded_source().sections()
-
-    def collections(self, section_key: str) -> list[dict[str, Any]]:
-        if section_key != "1":
-            return []
-        return [{"ratingKey": "900", "title": "80s Comedies", "smart": None}]
-
-    def collection_children(self, collection_key: str) -> list[dict[str, Any]]:
-        assert collection_key == "900"
-        return [{"ratingKey": "13714"}, {"ratingKey": "70936"}]
-
-
-def _configure_plex_collections(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Point the CLI at a store under `tmp_path`, already walked from the
-    recorded library fixtures — so `plex_items` can resolve the fake
-    collection's rating keys — with `_FakeCollectionSource` standing in for
-    `LivePlexClient`. Returns the store path."""
-    store = tmp_path / "plexdb.db"
-    monkeypatch.setenv("PLEXDB_PATH", str(store))
-    monkeypatch.setenv("PLEX_URL", "http://plex.example:32400")
-    monkeypatch.setenv("PLEX_TOKEN", "test-token")
-    init_store(store)
-    with open_store(store) as conn:
-        walk_all(conn, recorded_source())
-    monkeypatch.setattr(plex_collections_cmd, "LivePlexClient", _FakeCollectionSource)
-    return store
-
-
-def test_harvest_plex_collections_writes_rows_and_reports_a_summary(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    store = _configure_plex_collections(tmp_path, monkeypatch)
-    capsys.readouterr()
-
-    assert main(["harvest-plex-collections"]) == 0
-
-    out = capsys.readouterr().out
-    assert "1 collection(s) written" in out
-    assert "2 membership(s) written" in out
-
-    with sqlite3.connect(store) as conn:
-        memberships = conn.execute(
-            "SELECT count(*) FROM collection_membership WHERE collection_id = 'plex:900'"
-        ).fetchone()[0]
-        edges = conn.execute("SELECT count(*) FROM edges").fetchone()[0]
-    # Two members, two rows — not the 2*1 pairs the old edge shape wrote, and
-    # nothing at all in `edges` any more (issue #48).
-    assert memberships == 2
-    assert edges == 0
-
-
-def test_harvest_plex_collections_without_credentials_is_an_error_not_a_default(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    store = tmp_path / "plexdb.db"
-    monkeypatch.setenv("PLEXDB_PATH", str(store))
-    monkeypatch.setenv("PLEX_URL", "")
-    monkeypatch.setenv("PLEX_TOKEN", "")
-    main(["init"])
-    capsys.readouterr()
-
-    assert main(["harvest-plex-collections"]) == 1
-    err = capsys.readouterr().err
-    assert err.startswith("error: ")
-    assert "PLEX_URL" in err
     assert "Traceback" not in err
 
 

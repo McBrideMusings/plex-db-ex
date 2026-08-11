@@ -48,10 +48,11 @@ command's own output said so — it prints a summary line and a list of large co
 size only appears once something publishes the result. A default of "in unless it opts out" would
 have shipped that to consumers.
 
-That command no longer exists. #48 replaced it with `harvest-plex-collections`, which stores one
-row per membership rather than one per pair — 19,360 rows and a 74 MiB snapshot — and it now
-declares `BEST_EFFORT` and runs nightly. The episode stands as the reason for the default, not as
-a permanent verdict on that command: opting out is what bought the time to find the real fix.
+That command no longer exists. #48 removed Plex collection harvesting entirely rather than
+reshaping it: the size was the visible problem, but a collection someone assembled by hand states
+a similarity its author already knows, so feeding it back as a recommendation signal is circular.
+The episode stands as the reason for the default — opting out is what bought the time to find that
+out instead of shipping it to consumers.
 
 This restores the promise the same docstring makes — "adding a command is one new file; nothing
 else in this package or in `plexdb/cli.py` changes" — which was true of the parser and false of the
