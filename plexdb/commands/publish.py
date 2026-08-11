@@ -7,8 +7,13 @@ import argparse
 from ..config import Config
 from ..errors import ConfigError
 from ..store import publish as publish_snapshot
+from ..sweep import Step
 
-ORDER = 30
+NAME = "publish"
+#: Last. It snapshots whatever the run produced, so every step that writes has
+#: to have finished first.
+ORDER = 90
+SWEEP = Step.REQUIRED
 
 
 def _cmd_publish(_args: argparse.Namespace) -> int:
@@ -25,7 +30,7 @@ def _cmd_publish(_args: argparse.Namespace) -> int:
 
 def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     publish_parser = sub.add_parser(
-        "publish",
+        NAME,
         help="publish a read-only snapshot for consumers; safe to re-run",
     )
     publish_parser.set_defaults(func=_cmd_publish)

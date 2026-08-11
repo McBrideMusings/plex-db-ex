@@ -22,6 +22,7 @@ from plexdb.clusters import LATENT_USER_FLOOR
 from plexdb.commands import enrich_tmdb_edges as enrich_tmdb_edges_cmd
 from plexdb.commands import enrich_tmdb_keywords as enrich_tmdb_keywords_cmd
 from plexdb.commands import ingest_plays as ingest_plays_cmd
+from plexdb.commands import iter_command_modules
 from plexdb.commands import latent_users as latent_users_cmd
 from plexdb.commands import local_edges as local_edges_cmd
 from plexdb.commands import walk as walk_cmd
@@ -32,6 +33,7 @@ from plexdb.store import open_store
 from plexdb.walk import walk_all
 
 EXPECTED_COMMANDS = {
+    "sweep",
     "init",
     "walk",
     "publish",
@@ -46,22 +48,24 @@ EXPECTED_COMMANDS = {
     "repair-identities",
 }
 
-# The order someone runs them in: create the store, fill it, publish it, then
-# the sources that enrich it, then the cross-store audit. Each module owns its
-# own ORDER, so this list is the only place the sequence is written down.
+# The order someone runs them in, which since ADR-0014 is also the order
+# `plexdb sweep` runs them: create the store, fill it with the library and the
+# plays, enrich it, publish it last. Each module owns its own ORDER, so this
+# list is the only place the sequence is written down.
 EXPECTED_COMMAND_ORDER = [
+    "sweep",
     "init",
     "walk",
     "repair-identities",
-    "publish",
-    "enrich-tmdb-keywords",
-    "enrich-tmdb-edges",
-    "local-edges",
-    "harvest-mdblist",
     "ingest-plays",
     "enrich-tautulli-plays",
+    "local-edges",
+    "enrich-tmdb-keywords",
+    "enrich-tmdb-edges",
+    "harvest-mdblist",
     "latent-users",
     "reconcile-etv",
+    "publish",
 ]
 
 
@@ -95,7 +99,7 @@ def test_a_command_module_without_register_fails_loudly_naming_the_module(
     package_dir = tmp_path / "broken_commands"
     package_dir.mkdir()
     (package_dir / "__init__.py").write_text("")
-    (package_dir / "no_register.py").write_text("ORDER = 10\n")
+    (package_dir / "no_register.py").write_text('NAME = "no-register"\nORDER = 10\n')
     monkeypatch.syspath_prepend(str(tmp_path))
     broken_commands = importlib.import_module("broken_commands")
 
@@ -113,7 +117,9 @@ def test_a_command_module_without_order_fails_loudly_naming_the_module(
     package_dir = tmp_path / "orderless_commands"
     package_dir.mkdir()
     (package_dir / "__init__.py").write_text("")
-    (package_dir / "no_order.py").write_text("def register(sub):\n    pass\n")
+    (package_dir / "no_order.py").write_text(
+        'NAME = "no-order"\n\n\ndef register(sub):\n    pass\n'
+    )
     monkeypatch.syspath_prepend(str(tmp_path))
     orderless_commands = importlib.import_module("orderless_commands")
 
@@ -121,6 +127,36 @@ def test_a_command_module_without_order_fails_loudly_naming_the_module(
 
     with pytest.raises(RuntimeError, match="orderless_commands.no_order"):
         _register_commands(sub, package=orderless_commands)
+
+
+def test_every_module_registers_the_subcommand_its_name_declares() -> None:
+    """`plexdb sweep` runs a step by its module's `NAME`, but the subparser is
+    added by `register`. If those drift, `parse_args([name])` raises
+    `SystemExit(2)` straight through the sweep — no `error:` line, no summary,
+    and nothing else in the suite would notice."""
+    registered = _subcommand_names(build_parser())
+    declared = {module.NAME for module in iter_command_modules()}
+
+    assert declared == registered
+
+
+def test_a_command_module_without_name_fails_loudly_naming_the_module(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`NAME` is what `plexdb sweep` runs a step by (ADR-0014). A module
+    without one registers a subcommand the sweep cannot name, so it would go
+    missing from every sweep while still appearing in `--help`."""
+    package_dir = tmp_path / "nameless_commands"
+    package_dir.mkdir()
+    (package_dir / "__init__.py").write_text("")
+    (package_dir / "no_name.py").write_text("ORDER = 10\n\n\ndef register(sub):\n    pass\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    nameless_commands = importlib.import_module("nameless_commands")
+
+    sub = argparse.ArgumentParser().add_subparsers(dest="command")
+
+    with pytest.raises(RuntimeError, match="nameless_commands.no_name"):
+        _register_commands(sub, package=nameless_commands)
 
 
 def _fixture_backed_client(base_url: str, token: str) -> FakeSource:

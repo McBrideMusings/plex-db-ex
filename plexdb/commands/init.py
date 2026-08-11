@@ -6,8 +6,13 @@ import argparse
 
 from ..config import Config
 from ..store import init as init_store
+from ..sweep import Step
 
+NAME = "init"
 ORDER = 10
+#: Applies pending migrations. A sweep against a store the build cannot open
+#: has nothing to walk into.
+SWEEP = Step.REQUIRED
 
 
 def _cmd_init(_args: argparse.Namespace) -> int:
@@ -25,7 +30,7 @@ def _cmd_init(_args: argparse.Namespace) -> int:
 
 def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     init_parser = sub.add_parser(
-        "init",
+        NAME,
         help="create the store and apply the schema; safe to re-run",
     )
     init_parser.set_defaults(func=_cmd_init)

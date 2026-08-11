@@ -12,7 +12,12 @@ from ..local_edges import DEFAULT_REPORT_THRESHOLD, refresh_local_edges
 from ..plex_client import LivePlexClient
 from ..store import open_store
 
-ORDER = 47
+NAME = "local-edges"
+ORDER = 40
+# No SWEEP, for now. Co-membership is quadratic and one Plex collection has
+# 3,004 members, so a full run writes 16,381,416 edges and takes the published
+# snapshot from 72 MiB to 3.7 GB (#48). Until the edge shape is fixed this is a
+# command someone runs deliberately, not one a nightly sweep fires at consumers.
 
 
 def _cmd_local_edges(args: argparse.Namespace) -> int:
@@ -39,7 +44,7 @@ def _cmd_local_edges(args: argparse.Namespace) -> int:
 
 def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     local_edges_parser = sub.add_parser(
-        "local-edges",
+        NAME,
         help="recompute local_collection edges from Plex collection co-membership; "
         "the whole set is replaced every run, never staled",
     )

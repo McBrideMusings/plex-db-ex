@@ -19,11 +19,15 @@ from ..errors import ConfigError
 from ..plays import build_account_id_map, match_tautulli_history
 from ..plex_client import LivePlexClient
 from ..store import open_store
+from ..sweep import Step
 from ..tautulli_client import LiveTautulliClient
 
-#: Between ingest-plays (50), whose output this enriches, and reconcile-etv
-#: (60).
-ORDER = 55
+NAME = "enrich-tautulli-plays"
+#: Straight after ingest-plays (30), whose output this enriches.
+ORDER = 35
+#: Tautulli is an optional adapter (ADR-0004), so its absence or its failure
+#: costs a sweep its IP, completion and paused-time columns and nothing else.
+SWEEP = Step.BEST_EFFORT
 
 
 def _cmd_enrich_tautulli_plays(_args: argparse.Namespace) -> int:
@@ -67,7 +71,7 @@ def _cmd_enrich_tautulli_plays(_args: argparse.Namespace) -> int:
 
 def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parser = sub.add_parser(
-        "enrich-tautulli-plays",
+        NAME,
         help=(
             "enrich plays with Tautulli's IP, completion percentage, and paused time; "
             "safe to re-run"

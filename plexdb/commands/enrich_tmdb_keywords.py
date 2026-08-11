@@ -10,9 +10,15 @@ from ..enrich_tmdb import NAMESPACE as TMDB_KEYWORDS_NAMESPACE
 from ..enrich_tmdb import enrich_tmdb_keywords, wipe_namespace
 from ..errors import ConfigError
 from ..store import open_store
+from ..sweep import Step
 from ..tmdb_client import LiveTMDbClient
 
-ORDER = 40
+NAME = "enrich-tmdb-keywords"
+ORDER = 50
+#: TMDB is an optional source behind an adapter (ADR-0004). Staleness gating
+#: means a skipped pass costs nothing but freshness — the next run picks up
+#: exactly the titles this one missed.
+SWEEP = Step.BEST_EFFORT
 
 
 def _cmd_enrich_tmdb_keywords(args: argparse.Namespace) -> int:
@@ -40,7 +46,7 @@ def _cmd_enrich_tmdb_keywords(args: argparse.Namespace) -> int:
 
 def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     enrich_tmdb_parser = sub.add_parser(
-        "enrich-tmdb-keywords",
+        NAME,
         help="fetch TMDB keywords for walked movies/shows into the tmdb_keywords "
         "namespace; a fresh row is never re-fetched",
     )

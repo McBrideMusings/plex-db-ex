@@ -32,13 +32,21 @@ wrong run rather than a cosmetic quirk.
 source** — as `|| true` on some lines of a script and not others. Each command declares it instead:
 
 ```python
-SWEEP = Step.REQUIRED      # init, walk, ingest-plays, publish
-SWEEP = Step.BEST_EFFORT   # tautulli, local-edges, keywords, edges, mdblist
+SWEEP = Step.REQUIRED  # init, walk, ingest-plays, publish
+SWEEP = Step.BEST_EFFORT  # tautulli, keywords, edges, mdblist
 ```
 
-A command that declares neither is not in the Sweep — `latent-users`, `reconcile-etv` and
-`repair-identities` say nothing and stay out. Absence is the safe default: a new command cannot
-silently join a nightly run that writes to consumers.
+A command that declares neither is not in the Sweep — `latent-users`, `reconcile-etv`,
+`repair-identities` and `local-edges` say nothing and stay out. Absence is the safe default: a new
+command cannot silently join a nightly run that writes to consumers.
+
+**Absence earned its keep the first time the sweep ran.** `local-edges` was in the original
+composition and came out again after a full run measured what it writes: 16,381,416
+`local_collection` edges, taking the published snapshot from 72 MiB to 3.7 GB, because
+co-membership is quadratic and one Plex collection has 3,004 members (#48). Nothing about the
+command's own output said so — it prints a summary line and a list of large collections, and the
+size only appears once something publishes the result. A default of "in unless it opts out" would
+have shipped that to consumers.
 
 This restores the promise the same docstring makes — "adding a command is one new file; nothing
 else in this package or in `plexdb/cli.py` changes" — which was true of the parser and false of the

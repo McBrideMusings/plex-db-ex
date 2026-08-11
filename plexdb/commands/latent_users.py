@@ -22,11 +22,14 @@ from ..errors import ConfigError
 from ..plex_client import LivePlexClient, valid_accounts
 from ..store import open_readonly
 
-#: After ingest-plays (50) and enrich-tautulli-plays (55), whose output this
-#: reads, and before reconcile-etv (60) — this is a report, not a pipeline
+#: After ingest-plays (30) and enrich-tautulli-plays (35), whose output this
+#: reads, and before reconcile-etv (75) — this is a report, not a pipeline
 #: step, so its position among the enrichment commands is only a reading
 #: convenience.
-ORDER = 57
+NAME = "latent-users"
+ORDER = 70
+# No SWEEP: read-only, persists nothing. A report nobody reads at 3am is not
+# worth the Plex calls it makes.
 
 
 def _cmd_latent_users(args: argparse.Namespace) -> int:
@@ -52,7 +55,7 @@ def _cmd_latent_users(args: argparse.Namespace) -> int:
 
 def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parser = sub.add_parser(
-        "latent-users",
+        NAME,
         help=(
             "cluster shared accounts' plays into latent users by fingerprint and report "
             "taste divergence between clusters; read-only, persists nothing"
