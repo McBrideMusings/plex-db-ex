@@ -29,6 +29,96 @@ fn enrichment_round_trips_filtered_by_namespace() {
 }
 
 #[test]
+fn enrichment_for_many_groups_facts_by_id_matching_the_single_item_accessor() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("plexdb.db");
+    common::build_fixture(&path);
+    let reader = Reader::open(&path).expect("open the fixture store");
+
+    let ids = ["imdb:tt1", "imdb:tt2", "imdb:tt3", "imdb:does-not-exist"];
+    let grouped = reader
+        .enrichment_for_many(ids, "tmdb_keywords")
+        .expect("bulk query");
+
+    // An id with no rows in the namespace is absent from the map — never an
+    // error, and never an empty entry the caller has to tell apart from
+    // "absent".
+    assert_eq!(
+        grouped.keys().collect::<Vec<_>>(),
+        vec!["imdb:tt1", "imdb:tt2", "imdb:tt3"],
+        "imdb:does-not-exist carries no rows in this namespace and must be absent, not an \
+         empty entry"
+    );
+
+    // For any single id, its group is exactly what the single-item accessor
+    // returns for that id.
+    for id in ["imdb:tt1", "imdb:tt2", "imdb:tt3"] {
+        let single = reader
+            .enrichment_for(id, "tmdb_keywords")
+            .expect("single-item query");
+        assert_eq!(
+            grouped.get(id).expect("id must be present"),
+            &single,
+            "the bulk accessor's group for {id} must match enrichment_for exactly"
+        );
+    }
+}
+
+#[test]
+fn enrichment_for_many_deduplicates_a_repeated_id() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("plexdb.db");
+    common::build_fixture(&path);
+    let reader = Reader::open(&path).expect("open the fixture store");
+
+    // imdb:tt1 passed twice must not double its facts in the result.
+    let grouped = reader
+        .enrichment_for_many(["imdb:tt1", "imdb:tt1"], "tmdb_keywords")
+        .expect("bulk query with a repeated id");
+    let single = reader
+        .enrichment_for("imdb:tt1", "tmdb_keywords")
+        .expect("single-item query");
+    assert_eq!(
+        grouped.get("imdb:tt1").expect("id must be present"),
+        &single,
+        "a repeated input id must not duplicate its facts"
+    );
+}
+
+#[test]
+fn enrichment_for_many_of_empty_input_is_empty_without_erroring() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("plexdb.db");
+    common::build_fixture(&path);
+    let reader = Reader::open(&path).expect("open the fixture store");
+
+    let grouped = reader
+        .enrichment_for_many(std::iter::empty(), "tmdb_keywords")
+        .expect("empty input must not be an error");
+    assert!(grouped.is_empty());
+}
+
+#[test]
+fn enrichment_for_many_is_stable_across_calls() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("plexdb.db");
+    common::build_fixture(&path);
+    let reader = Reader::open(&path).expect("open the fixture store");
+
+    let ids = ["imdb:tt1", "imdb:tt2", "imdb:tt3"];
+    let first = reader
+        .enrichment_for_many(ids, "tmdb_keywords")
+        .expect("first bulk query");
+    let second = reader
+        .enrichment_for_many(ids, "tmdb_keywords")
+        .expect("second bulk query against unchanged data");
+    assert_eq!(
+        first, second,
+        "two calls against unchanged data must return identical results in identical order"
+    );
+}
+
+#[test]
 fn edges_are_queryable_in_both_directions_filtered_by_type() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("plexdb.db");
