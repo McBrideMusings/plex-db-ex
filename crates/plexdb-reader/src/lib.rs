@@ -116,6 +116,80 @@ impl Reader {
         Ok(rows)
     }
 
+    /// Every enrichment fact recorded under `namespace` for any of
+    /// `item_ids`, grouped by `item_id`. Within each id's group the facts are
+    /// in `(key, value)` order — for any single id, that group is
+    /// byte-identical to what [`Self::enrichment_for`] returns for that id.
+    /// An id with no rows in the namespace is simply absent from the result
+    /// (2,373 of this store's movies have no TMDB keywords, and that is
+    /// normal) — never an error, and never an empty entry a caller has to
+    /// tell apart from "absent". Empty input returns an empty map without
+    /// touching the database.
+    ///
+    /// One `SELECT ... WHERE item_id IN (...) AND namespace = ?` per chunk
+    /// of ids, not one query per id: a scorer ranking a whole candidate set
+    /// needs an id-keyed map built *before* its loop, and a call that
+    /// degrades to one round trip per id makes that impossible to do — see
+    /// plex-db-ex#40. Chunked against this connection's own
+    /// `SQLITE_LIMIT_VARIABLE_NUMBER`, not a guessed constant, because a
+    /// candidate set the size of this store's movie pool (12,462 ids) can
+    /// exceed whatever that connection's SQLite was built with — one chunk,
+    /// one query, for anything under the limit; several queries, still not
+    /// one per id, above it.
+    pub fn enrichment_for_many<'a>(
+        &self,
+        item_ids: impl IntoIterator<Item = &'a str>,
+        namespace: &str,
+    ) -> Result<BTreeMap<String, Vec<EnrichmentFact>>, ReaderError> {
+        // Deduplicated: an id repeated in the input must not land in two
+        // different chunks' `IN` lists and have its facts counted twice.
+        let item_ids: Vec<&str> = item_ids
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        if item_ids.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+
+        // One bound parameter goes to `namespace`; the rest to the `IN`
+        // list, so each chunk holds one fewer id than the connection's own
+        // limit.
+        let max_vars = self
+            .conn
+            .limit(rusqlite::limits::Limit::SQLITE_LIMIT_VARIABLE_NUMBER);
+        let chunk_size = usize::try_from(max_vars)
+            .unwrap_or(1)
+            .saturating_sub(1)
+            .max(1);
+
+        let mut by_item: BTreeMap<String, Vec<EnrichmentFact>> = BTreeMap::new();
+        for chunk in item_ids.chunks(chunk_size) {
+            let placeholders = vec!["?"; chunk.len()].join(",");
+            // `item_id` comes last so the first four columns are exactly the
+            // ones [`Self::enrichment_row`] reads.
+            let sql = format!(
+                "SELECT namespace, key, value, fetched_at, item_id \
+                 FROM enrichment \
+                 WHERE item_id IN ({placeholders}) AND namespace = ? \
+                 ORDER BY item_id, key, value"
+            );
+            let mut stmt = self.conn.prepare(&sql)?;
+            let params =
+                rusqlite::params_from_iter(chunk.iter().copied().chain(std::iter::once(namespace)));
+            let rows = stmt
+                .query_map(params, |row| {
+                    Ok((row.get::<_, String>(4)?, Self::enrichment_row(row)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            for (item_id, fact) in rows {
+                by_item.entry(item_id).or_default().push(fact);
+            }
+        }
+
+        Ok(by_item)
+    }
+
     /// Edges of `edge_type` pointing *out of* `item_id`, ranked ascending.
     pub fn edges_from(&self, item_id: &str, edge_type: &str) -> Result<Vec<Edge>, ReaderError> {
         self.query_edges(
@@ -427,5 +501,63 @@ mod tests {
             result.is_err(),
             "a connection opened with OPEN_FLAGS must not accept a write"
         );
+    }
+
+    /// A naive `enrichment_for_many` — one `IN` clause holding every id plus
+    /// `namespace` — would fail outright against a connection whose
+    /// `SQLITE_LIMIT_VARIABLE_NUMBER` is smaller than the candidate set: 10
+    /// ids plus the namespace parameter is 11 bound variables. This pins the
+    /// limit to 3 (room for 2 ids per chunk) and asserts the call still
+    /// succeeds and every id's facts still come back correct — proof the
+    /// accessor chunks against the connection's real limit rather than
+    /// assuming any set of ids fits in one statement.
+    #[test]
+    fn enrichment_for_many_chunks_against_a_small_variable_limit() {
+        let file = tempfile::NamedTempFile::new().expect("create a temp file");
+        {
+            let setup = Connection::open(file.path()).expect("open for setup");
+            setup
+                .execute_batch(
+                    "CREATE TABLE schema_version (version INTEGER NOT NULL);
+                     INSERT INTO schema_version (version) VALUES (7);
+                     CREATE TABLE items (item_id TEXT PRIMARY KEY);
+                     CREATE TABLE enrichment (
+                         item_id    TEXT NOT NULL,
+                         namespace  TEXT NOT NULL,
+                         key        TEXT NOT NULL,
+                         value      TEXT NOT NULL,
+                         fetched_at TEXT NOT NULL
+                     );",
+                )
+                .expect("build a minimal enrichment-only schema");
+            for i in 0..10 {
+                setup
+                    .execute(
+                        "INSERT INTO enrichment (item_id, namespace, key, value, fetched_at) \
+                         VALUES (?1, 'ns', 'k', ?2, 't')",
+                        rusqlite::params![format!("id{i}"), format!("v{i}")],
+                    )
+                    .expect("seed a fact");
+            }
+        }
+
+        let reader = Reader::open(file.path()).expect("open the minimal store");
+        reader
+            .conn
+            .set_limit(rusqlite::limits::Limit::SQLITE_LIMIT_VARIABLE_NUMBER, 3);
+
+        let ids: Vec<String> = (0..10).map(|i| format!("id{i}")).collect();
+        let result = reader
+            .enrichment_for_many(ids.iter().map(String::as_str), "ns")
+            .expect("a set larger than the variable limit must still succeed by chunking");
+
+        assert_eq!(result.len(), 10, "every id must be present");
+        for i in 0..10 {
+            let facts = result
+                .get(&format!("id{i}"))
+                .unwrap_or_else(|| panic!("id{i} must be present"));
+            assert_eq!(facts.len(), 1);
+            assert_eq!(facts[0].value, format!("v{i}"));
+        }
     }
 }
