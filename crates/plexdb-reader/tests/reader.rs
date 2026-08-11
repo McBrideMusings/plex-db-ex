@@ -266,6 +266,111 @@ fn a_show_with_no_season_numbers_is_reported_rather_than_silently_weighed() {
 }
 
 #[test]
+fn the_pooled_vector_equals_the_single_account_vector_when_only_one_account_has_plays() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("plexdb.db");
+    common::build_fixture(&path);
+    let reader = Reader::open(&path).expect("open the fixture store");
+
+    // The fixture's only plays belong to account 42 (account 43 has none),
+    // so pooling across every account must return exactly what one-account
+    // taste_vector_for(42) returns — same attributes, same order.
+    let pooled = reader
+        .pooled_taste_vector()
+        .expect("compute the pooled vector");
+    let single = reader
+        .taste_vector_for(42)
+        .expect("compute account 42's vector");
+    assert_eq!(
+        pooled, single,
+        "with exactly one account's plays in the store, pooling must equal that account's own vector"
+    );
+}
+
+#[test]
+fn the_pooled_vector_is_stable_across_calls() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("plexdb.db");
+    common::build_fixture(&path);
+    let reader = Reader::open(&path).expect("open the fixture store");
+
+    let first = reader
+        .pooled_taste_vector()
+        .expect("compute the pooled vector");
+    let second = reader
+        .pooled_taste_vector()
+        .expect("compute it again from unchanged input");
+    assert_eq!(
+        first, second,
+        "unchanged input must roll up to the same pooled vector"
+    );
+}
+
+#[test]
+fn the_pooled_vector_sums_a_second_accounts_plays_rather_than_averaging_or_ignoring_them() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("plexdb.db");
+    common::build_fixture(&path);
+    let conn = rusqlite::Connection::open(&path).expect("open for a second-account seed");
+    // Account 100 watches tt2 (a film carrying only `heist`) once more, on
+    // top of account 42's existing single watch of it. Pooled plays on tt2
+    // become 2, so r = 2 rather than 1.
+    conn.execute(
+        "INSERT INTO plays (history_key, item_id, plex_account_id, viewed_at) \
+         VALUES ('h100', 'imdb:tt2', 100, 1700000300)",
+        [],
+    )
+    .expect("seed a second account's play");
+    drop(conn);
+
+    let reader = Reader::open(&path).expect("open the fixture store");
+    let pooled = reader
+        .pooled_taste_vector()
+        .expect("compute the pooled vector");
+
+    // tt1 (account 42 only, 2 plays, 2 keywords) still contributes
+    // sqrt(2)/2 of `heist`; tt2 now carries 2 pooled plays across accounts
+    // 42 and 100, r = 2, sqrt(2) split across its one keyword `heist`.
+    let expected_heist = 2f64.sqrt() / 2.0 + 2f64.sqrt();
+    let heist = weight_of(&pooled, "heist").expect("heist is carried by tt1 and tt2");
+    assert!(
+        close(heist, expected_heist),
+        "pooling must sum plays across accounts before damping, not average or drop the second \
+         account's watch — expected {expected_heist}, got {heist}"
+    );
+}
+
+#[test]
+fn the_pooled_vectors_shows_without_seasons_names_a_show_once_not_once_per_account() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("plexdb.db");
+    common::build_fixture(&path);
+    let conn = rusqlite::Connection::open(&path).expect("open for a second-account seed");
+    // A second account also watches the show Plex filed with no season
+    // numbers. If the pooled rollup grouped per (account, unit) rather than
+    // per unit, this show would be named twice.
+    conn.execute(
+        "INSERT INTO plays (history_key, item_id, plex_account_id, viewed_at) \
+         VALUES ('n100', 'nosea-3', 100, 1700003003)",
+        [],
+    )
+    .expect("seed a second account's play on the show with no season numbers");
+    drop(conn);
+
+    let reader = Reader::open(&path).expect("open the fixture store");
+    let pooled = reader
+        .pooled_taste_vector()
+        .expect("compute the pooled vector");
+
+    assert_eq!(
+        pooled.shows_without_seasons,
+        vec!["imdb:ttnosea".to_string()],
+        "a show with no season numbers must be named exactly once, however many accounts \
+         watched it"
+    );
+}
+
+#[test]
 fn opening_a_store_of_an_unknown_schema_version_fails_naming_both_versions() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("plexdb.db");
