@@ -62,8 +62,23 @@ fn edges_are_queryable_in_both_directions_filtered_by_type() {
     assert!(none.is_empty());
 }
 
+/// Two weights are equal to within floating-point noise. The rollup sums
+/// square roots, so exact comparison would fail on rounding rather than on
+/// anything meaningful.
+fn close(actual: f64, expected: f64) -> bool {
+    (actual - expected).abs() < 1e-9
+}
+
+fn weight_of(vector: &plexdb_reader::TasteVector, value: &str) -> Option<f64> {
+    vector
+        .attributes
+        .iter()
+        .find(|a| a.value == value)
+        .map(|a| a.weight)
+}
+
 #[test]
-fn the_taste_vector_is_an_unweighted_rollup_and_is_stable_across_calls() {
+fn the_taste_vector_is_stable_across_calls() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("plexdb.db");
     common::build_fixture(&path);
@@ -80,23 +95,8 @@ fn the_taste_vector_is_an_unweighted_rollup_and_is_stable_across_calls() {
         "unchanged input must roll up to the same vector"
     );
 
-    let heist = first
-        .iter()
-        .find(|a| a.namespace == "tmdb_keywords" && a.value == "heist")
-        .expect("account 42 watched two distinct titles carrying `heist`");
-    assert_eq!(
-        heist.weight, 2,
-        "tt1 and tt2 both carry `heist`; the tt1 rewatch must not inflate it"
-    );
-
-    let ensemble = first
-        .iter()
-        .find(|a| a.value == "ensemble cast")
-        .expect("tt1 carries `ensemble cast` and was watched once");
-    assert_eq!(ensemble.weight, 1);
-
     assert!(
-        first.iter().all(|a| a.value != "space"),
+        weight_of(&first, "space").is_none(),
         "tt3 (the only title carrying `space`) was never played by account 42"
     );
 
@@ -104,7 +104,157 @@ fn the_taste_vector_is_an_unweighted_rollup_and_is_stable_across_calls() {
     let nobody = reader
         .taste_vector_for(9999)
         .expect("compute the vector for an account with no plays");
-    assert!(nobody.is_empty());
+    assert!(nobody.attributes.is_empty());
+    assert!(nobody.shows_without_seasons.is_empty());
+}
+
+#[test]
+fn one_film_watched_once_and_one_full_season_both_weigh_one() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("plexdb.db");
+    common::build_fixture(&path);
+    let reader = Reader::open(&path).expect("open the fixture store");
+    let vector = reader.taste_vector_for(42).expect("taste vector");
+
+    // tt2 is a film watched once carrying exactly one keyword: r = 1,
+    // sqrt(1) = 1, split across 1 keyword. tt1 also carries `heist`, watched
+    // twice with two keywords: sqrt(2)/2. So `heist` is the sum of both.
+    let heist = weight_of(&vector, "heist").expect("tt1 and tt2 both carry `heist`");
+    assert!(
+        close(heist, 1.0 + 2f64.sqrt() / 2.0),
+        "expected 1.0 (tt2, one full watch, one keyword) + sqrt(2)/2 (tt1 rewatched, two \
+         keywords), got {heist}"
+    );
+
+    // ttfin: one full season of a median-5 season show. r = 5/5 = 1, so
+    // sqrt(1) = 1 split across its two keywords — the same weight per keyword
+    // a single film watched once produces.
+    let sitcom = weight_of(&vector, "sitcom").expect("ttfin carries `sitcom`");
+    assert!(
+        close(sitcom, 0.5),
+        "one full season, two keywords, must give 1.0/2 — got {sitcom}"
+    );
+    assert!(close(weight_of(&vector, "workplace").unwrap(), 0.5));
+}
+
+#[test]
+fn a_title_under_half_a_season_contributes_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("plexdb.db");
+    common::build_fixture(&path);
+    let reader = Reader::open(&path).expect("open the fixture store");
+    let vector = reader.taste_vector_for(42).expect("taste vector");
+
+    // ttbail: 2 of a 10-episode season is r = 0.2, under the 0.5 floor.
+    assert!(
+        weight_of(&vector, "bailed").is_none(),
+        "a show watched to 20% of one season must contribute nothing at all — \
+         not a reduced weight, and never a negative one"
+    );
+}
+
+#[test]
+fn a_heavily_tagged_title_does_not_outvote_a_sparsely_tagged_one() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("plexdb.db");
+    common::build_fixture(&path);
+    let reader = Reader::open(&path).expect("open the fixture store");
+    let vector = reader.taste_vector_for(42).expect("taste vector");
+
+    // ttfin carries two keywords and was watched exactly one season; tt2
+    // carries one keyword and was watched exactly once. Both are r = 1, so
+    // each title's *total* contribution is 1.0 — the split is what stops the
+    // two-keyword title counting double.
+    let ttfin_total =
+        weight_of(&vector, "sitcom").unwrap() + weight_of(&vector, "workplace").unwrap();
+    assert!(
+        close(ttfin_total, 1.0),
+        "a title's weight is split across its keywords, so its total stays 1.0 per full \
+         watch however many keywords it carries — got {ttfin_total}"
+    );
+}
+
+#[test]
+fn nine_seasons_counts_about_three_films_not_nine() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("plexdb.db");
+    common::build_fixture(&path);
+    let conn = rusqlite::Connection::open(&path).expect("open for a long-run seed");
+    // A nine-season show, one keyword, watched end to end: r = 9.
+    conn.execute_batch(
+        "INSERT INTO items (item_id, type, title) VALUES ('imdb:ttlong', 'show', 'Long Run');
+         INSERT INTO enrichment (item_id, namespace, key, value, fetched_at) VALUES
+             ('imdb:ttlong', 'tmdb_keywords', 'keyword', 'longrun', '2026-01-01T00:00:00+00:00');",
+    )
+    .expect("seed the long-running show");
+    let mut sql = String::new();
+    for season in 1..=9 {
+        for episode in 1..=5 {
+            sql.push_str(&format!(
+                "INSERT INTO items (item_id, type, title, show_item_id, season, episode) VALUES \
+                 ('long-s{season}e{episode}', 'episode', 'L', 'imdb:ttlong', {season}, {episode});\n\
+                 INSERT INTO plays (history_key, item_id, plex_account_id, viewed_at) VALUES \
+                 ('L{season}-{episode}', 'long-s{season}e{episode}', 42, 1700900000);\n"
+            ));
+        }
+    }
+    conn.execute_batch(&sql)
+        .expect("seed the long run's episodes and plays");
+    drop(conn);
+
+    let reader = Reader::open(&path).expect("open the fixture store");
+    let vector = reader.taste_vector_for(42).expect("taste vector");
+    let longrun = weight_of(&vector, "longrun").expect("the long-running show is in the vector");
+    let film = weight_of(&vector, "ensemble cast").expect("tt1 is a film in the vector");
+
+    assert!(
+        close(longrun, 3.0),
+        "45 episodes of a median-5 season show is r = 9, and sqrt(9) = 3 — got {longrun}"
+    );
+    assert!(
+        longrun < 9.0 * film,
+        "nine seasons must not count nine times a film; damping is the whole point"
+    );
+}
+
+#[test]
+fn a_fetchers_bookkeeping_sentinel_never_reaches_the_vector() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("plexdb.db");
+    common::build_fixture(&path);
+    let reader = Reader::open(&path).expect("open the fixture store");
+    let vector = reader.taste_vector_for(42).expect("taste vector");
+
+    assert!(
+        vector.attributes.iter().all(|a| !a.key.starts_with('_')),
+        "`_fetched` and friends are a fetcher's note to itself about staleness, not a fact \
+         about the title — on a real account they were 43.6% of the vector's weight"
+    );
+
+    // ttfin carries two real keywords plus one sentinel. The sentinel must not
+    // count toward the split either: each keyword gets 1.0/2, not 1.0/3.
+    let sitcom = weight_of(&vector, "sitcom").expect("ttfin carries `sitcom`");
+    assert!(
+        close(sitcom, 0.5),
+        "a sentinel must not shrink the real keywords by inflating the attribute count — \
+         expected 0.5, got {sitcom}"
+    );
+}
+
+#[test]
+fn a_show_with_no_season_numbers_is_reported_rather_than_silently_weighed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("plexdb.db");
+    common::build_fixture(&path);
+    let reader = Reader::open(&path).expect("open the fixture store");
+    let vector = reader.taste_vector_for(42).expect("taste vector");
+
+    assert_eq!(
+        vector.shows_without_seasons,
+        vec!["imdb:ttnosea".to_string()],
+        "a show Plex files with no season number has no season length to divide by, so it \
+         is named rather than folded in as though it had one"
+    );
 }
 
 #[test]

@@ -26,17 +26,40 @@ pub struct Edge {
     pub fetched_at: String,
 }
 
-/// One attribute in a user's Layer 2 taste vector: how many distinct titles
-/// in their watch history carry it.
+/// One attribute in a user's Layer 2 taste vector, and how strongly their
+/// watch history carries it.
 ///
-/// Deliberately the plain, unweighted count — no recency half-life, no
-/// negative-signal discount for an abandoned play, no exploration fraction.
-/// Those are ranking policy, owned by the consumer and not yet decided
-/// (plex-db-ex#13). This is the rollup a policy gets layered on top of.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// `weight` is the sum, over every title the account watched, of
+/// `sqrt(r) / attributes_on_that_title`, where `r` is that account's
+/// consumption of the title measured in **seasons** — a film, or one full
+/// season of a show, is `r = 1`. Titles below `r = 0.5` contribute nothing.
+/// Dividing by the title's attribute count stops a heavily-tagged title
+/// outvoting a sparsely-tagged one (plex-db-ex ADR-0011).
+///
+/// **Still no ranking policy here**, and now on evidence rather than by
+/// deferral: measured against 25,835 real plays, a recency half-life
+/// concentrated the vector onto one recent show rather than mixing it, and an
+/// abandoned watch is no signal rather than negative signal. The exploration
+/// fraction describes how a *channel* is assembled, not what a person likes,
+/// so it stays with the consumer. There is no constant in here to tune.
+#[derive(Debug, Clone, PartialEq)]
 pub struct TasteAttribute {
     pub namespace: String,
     pub key: String,
     pub value: String,
-    pub weight: i64,
+    pub weight: f64,
+}
+
+/// A user's Layer 2 taste vector, plus what the rollup could not weigh
+/// properly.
+///
+/// `shows_without_seasons` names every show whose episodes Plex files with no
+/// season number. There is no season length to divide by, so each play counts
+/// as one unit — which over-weights a long show. Reported rather than
+/// silently folded in, because the alternative is a vector that is quietly
+/// wrong in a way nothing downstream can detect.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TasteVector {
+    pub attributes: Vec<TasteAttribute>,
+    pub shows_without_seasons: Vec<String>,
 }

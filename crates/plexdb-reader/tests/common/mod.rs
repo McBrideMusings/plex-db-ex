@@ -40,6 +40,9 @@ pub fn build_fixture(path: &Path) -> Connection {
 
     let conn = Connection::open(path).expect("open the freshly-created fixture for seeding");
     conn.execute_batch(SEED).expect("seed the fixture store");
+    seed_episodes(&conn);
+    conn.execute_batch(MOVIE_PLAYS)
+        .expect("seed the movie plays");
     conn
 }
 
@@ -63,6 +66,85 @@ INSERT INTO edges (from_id, to_id, edge_type, rank, fetched_at) VALUES
     ('imdb:tt1', 'imdb:tt3', 'tmdb_similar',         2, '2026-01-01T00:00:00+00:00'),
     ('imdb:tt2', 'imdb:tt1', 'tmdb_recommendations', 1, '2026-01-01T00:00:00+00:00');
 
+-- Three shows, to exercise ADR-0011's season unit:
+--   ttfin   two seasons of 5, watched exactly one season   -> r = 1.0, kept
+--   ttbail  one season of 10, watched twice                -> r = 0.2, dropped
+--   ttnosea no season numbers at all                       -> reported, not silently weighed
+INSERT INTO items (item_id, type, title, year) VALUES
+    ('imdb:ttfin',   'show', 'Finished',   2010),
+    ('imdb:ttbail',  'show', 'Abandoned',  2011),
+    ('imdb:ttnosea', 'show', 'No Seasons', 2012);
+
+INSERT INTO enrichment (item_id, namespace, key, value, fetched_at) VALUES
+    ('imdb:ttfin',   'tmdb_keywords', 'keyword', 'sitcom',    '2026-01-01T00:00:00+00:00'),
+    ('imdb:ttfin',   'tmdb_keywords', 'keyword', 'workplace', '2026-01-01T00:00:00+00:00'),
+    ('imdb:ttbail',  'tmdb_keywords', 'keyword', 'bailed',    '2026-01-01T00:00:00+00:00'),
+    ('imdb:ttnosea', 'tmdb_keywords', 'keyword', 'seasonless','2026-01-01T00:00:00+00:00');
+
+-- Bookkeeping sentinels, exactly as `plexdb enrich-tmdb-keywords` writes them.
+-- They must never reach a taste vector, and must not count toward the split
+-- that divides a title's weight across its attributes: ttfin carries two real
+-- keywords, so each must get half its weight, not a third.
+INSERT INTO enrichment (item_id, namespace, key, value, fetched_at) VALUES
+    ('imdb:ttfin', 'tmdb_keywords', '_fetched', '1', '2026-01-01T00:00:00+00:00'),
+    ('imdb:tt2',   'tmdb_keywords', '_fetched', '1', '2026-01-01T00:00:00+00:00');
+"#;
+
+/// Episodes and the plays over them, built in code because a two-season show
+/// is 10 near-identical rows and a literal block hides the shape.
+pub fn seed_episodes(conn: &Connection) {
+    let mut sql = String::new();
+    for season in 1..=2 {
+        for episode in 1..=5 {
+            sql.push_str(&format!(
+                "INSERT INTO items (item_id, type, title, show_item_id, season, episode) \
+                 VALUES ('fin-s{season}e{episode}', 'episode', 'Finished S{season}E{episode}', \
+                 'imdb:ttfin', {season}, {episode});\n"
+            ));
+        }
+    }
+    for episode in 1..=10 {
+        sql.push_str(&format!(
+            "INSERT INTO items (item_id, type, title, show_item_id, season, episode) \
+             VALUES ('bail-s1e{episode}', 'episode', 'Abandoned S1E{episode}', \
+             'imdb:ttbail', 1, {episode});\n"
+        ));
+    }
+    // Season deliberately NULL — the case ADR-0011 says must be reported.
+    for episode in 1..=4 {
+        sql.push_str(&format!(
+            "INSERT INTO items (item_id, type, title, show_item_id, season, episode) \
+             VALUES ('nosea-{episode}', 'episode', 'No Seasons {episode}', \
+             'imdb:ttnosea', NULL, {episode});\n"
+        ));
+    }
+
+    // Account 42: one full season of ttfin (5 of a median-5 season, r = 1.0),
+    // two episodes of ttbail (r = 0.2, under the half-season floor), and two
+    // of ttnosea (no season length to divide by).
+    for episode in 1..=5 {
+        sql.push_str(&format!(
+            "INSERT INTO plays (history_key, item_id, plex_account_id, viewed_at) \
+             VALUES ('f{episode}', 'fin-s1e{episode}', 42, 17001000{episode:02});\n"
+        ));
+    }
+    for episode in 1..=2 {
+        sql.push_str(&format!(
+            "INSERT INTO plays (history_key, item_id, plex_account_id, viewed_at) \
+             VALUES ('b{episode}', 'bail-s1e{episode}', 42, 17002000{episode:02});\n"
+        ));
+    }
+    for episode in 1..=2 {
+        sql.push_str(&format!(
+            "INSERT INTO plays (history_key, item_id, plex_account_id, viewed_at) \
+             VALUES ('n{episode}', 'nosea-{episode}', 42, 17003000{episode:02});\n"
+        ));
+    }
+    conn.execute_batch(&sql)
+        .expect("seed episodes and their plays");
+}
+
+const MOVIE_PLAYS: &str = r#"
 -- Account 42 watched tt1 twice (a rewatch, h1 and h3) and tt2 once. Account
 -- 43 has never played anything, for the "no plays -> empty vector" case.
 INSERT INTO plays (history_key, item_id, plex_account_id, viewed_at) VALUES

@@ -95,6 +95,16 @@ happen to need it. A store that fused identities before schema version 5 is repa
 | `tmdb_keywords` | `plexdb enrich-tmdb-keywords` | `keyword` (one row per keyword, `value` is the keyword text) and a sentinel `_fetched` row (`value` = `"1"`) so a title with zero keywords still has a `fetched_at` to check staleness against. Only `items.type` `movie` and `show` are enriched — TMDB has no keywords endpoint for an episode. |
 | `tmdb_edges` | `plexdb enrich-tmdb-edges` | Bookkeeping only, not relationship data — that lives in `edges` (below). `_fetched_recommendations` and `_fetched_similar` sentinel rows (`value` = `"1"`), one per title per edge type, so a title whose result was empty or entirely outside the library still has a `fetched_at` to check staleness against even though it left no `edges` row behind. |
 
+**A key beginning with `_` is the writer's bookkeeping, not a fact about the title.** `_fetched`,
+`_fetched_recommendations` and `_fetched_similar` above all exist so a title whose result was
+empty still carries a `fetched_at` to check staleness against. They are ordinary `enrichment`
+rows, so anything reading the table sees them, and a reader that treats them as attributes gets a
+wrong answer twice: on a real account the `_fetched` sentinels were **43.6%** of a taste vector's
+total weight, all of it the string `"1"`, and because `Reader::taste_vector_for` divides a title's
+weight across its attributes, each sentinel also quietly shrank every real keyword on that title.
+`plexdb-reader` excludes `_`-prefixed keys from the rollup. A new writer adding a sentinel should
+use the same prefix; a new reader should skip it.
+
 `enrich-tmdb-keywords` re-fetches a title only once its row is older than `TMDB_KEYWORDS_STALE_DAYS`
 (default 45 days). `--rewipe` deletes every `tmdb_keywords` row before a sweep, forcing a full
 re-fetch, without touching any other namespace.

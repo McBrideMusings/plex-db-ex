@@ -13,11 +13,16 @@
 //! drops a column a consumer reads fails that consumer's **build**, not a
 //! runtime string-built query.
 //!
-//! **No ranking policy lives here.** [`Reader::taste_vector_for`] computes
-//! the Layer 2 rollup — how many distinct watched titles carry each
-//! enrichment attribute — and nothing more. Recency half-life, exploration
-//! fraction, and negative-signal weighting are the consumer's decisions,
-//! tracked separately and not yet answered (plex-db-ex#13).
+//! **No ranking policy lives here, and there is no constant to tune.**
+//! [`Reader::taste_vector_for`] computes the Layer 2 rollup — each watched
+//! title weighed by `sqrt(seasons watched)`, split across its attributes —
+//! and nothing more. plex-db-ex#13 asked who owns the recency half-life,
+//! the exploration fraction and the negative-signal weight; measured against
+//! 25,835 real plays, the first two turned out not to be knobs at all (decay
+//! concentrates the vector rather than mixing it; abandonment is no signal,
+//! not negative signal) and the third describes how a channel is assembled
+//! rather than what a person likes, so it stays with the consumer. See
+//! ADR-0011.
 //!
 //! **Weighted collection membership is not implemented.** The issue that
 //! commissioned this crate (plex-db-ex#11) asks for it, but the
@@ -35,13 +40,29 @@ mod error;
 mod model;
 mod schema;
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use rusqlite::{Connection, OpenFlags, Row};
 
 pub use error::ReaderError;
-pub use model::{Edge, EnrichmentFact, TasteAttribute};
+pub use model::{Edge, EnrichmentFact, TasteAttribute, TasteVector};
 pub use schema::SUPPORTED_SCHEMA_VERSION;
+
+/// A title watched less than half a season contributes nothing. Hu, Koren &
+/// Volinsky (ICDM 2008) §6, applied to seasons rather than whole programmes:
+/// "watching less than half of a program is not a strong indication that a
+/// user likes the program". They zero it; they do not flip it negative, and
+/// neither does this (ADR-0011).
+const MIN_SEASONS_WATCHED: f64 = 0.5;
+
+/// One attribute's identity: `(namespace, key, value)`. The rollup keys on
+/// this rather than carrying whole [`TasteAttribute`]s, so summing is a map
+/// entry rather than a search.
+type AttributeKey = (String, String, String);
+
+/// Every title's attributes, keyed by `item_id`.
+type AttributesByItem = BTreeMap<String, Vec<AttributeKey>>;
 
 /// The exact flags every connection in this crate is opened with: read-only,
 /// no implicit create, no read-write fallback. A write attempted through a
@@ -132,40 +153,171 @@ impl Reader {
         Ok(rows)
     }
 
-    /// The Layer 2 rollup for one Plex account: every enrichment attribute
-    /// carried by a title that account has played, weighted by how many
-    /// *distinct* such titles carry it — a rewatch of one title does not
-    /// inflate its attributes' weight. See [`TasteAttribute`] for what is
-    /// deliberately left out.
+    /// The Layer 2 rollup for one Plex account, weighted per ADR-0011.
+    ///
+    /// Each title the account watched contributes `sqrt(r)`, where `r` is
+    /// consumption measured in seasons: `plays / median_season_length` for a
+    /// show, `plays` for a film, so one full season or one film watched once
+    /// is `r = 1` and a rewatch pushes past it. A title under `r = 0.5`
+    /// contributes nothing — abandonment is no signal, not negative signal.
+    /// That contribution is split across the title's attributes, so a
+    /// heavily-tagged title cannot outvote a sparsely-tagged one.
+    ///
+    /// The median season length, not the mean and not the episode count the
+    /// library holds: a specials season of two must not set the scale, and
+    /// dividing by episodes-held would make the denominator a property of
+    /// what happens to sit on disk rather than of the show.
+    ///
+    /// Computed in Rust rather than SQL because SQLite has no median, and
+    /// `sqrt` is an optional compile-time extension there — a query that
+    /// depends on how the caller's SQLite was built is exactly the runtime
+    /// surprise ADR-0003 exists to avoid.
     ///
     /// Deterministic: calling this twice against unchanged data returns an
     /// identical vector, in the same order. Empty, not an error, for an
     /// account with no plays.
-    pub fn taste_vector_for(
-        &self,
-        plex_account_id: i64,
-    ) -> Result<Vec<TasteAttribute>, ReaderError> {
+    pub fn taste_vector_for(&self, plex_account_id: i64) -> Result<TasteVector, ReaderError> {
+        let seasons = self.median_season_lengths()?;
+
+        // Plays per unit: a film is its own unit, an episode belongs to its
+        // show, so a season binge rolls up to the show rather than counting
+        // each episode as a separate title.
         let mut stmt = self.conn.prepare(
-            "SELECT e.namespace, e.key, e.value, COUNT(DISTINCT p.item_id) AS weight \
+            "SELECT COALESCE(i.show_item_id, p.item_id) AS unit, COUNT(*) AS plays \
              FROM plays p \
-             JOIN enrichment e ON e.item_id = p.item_id \
+             JOIN items i ON i.item_id = p.item_id \
              WHERE p.plex_account_id = ?1 \
-             GROUP BY e.namespace, e.key, e.value \
-             ORDER BY e.namespace, e.key, e.value",
+             GROUP BY unit \
+             ORDER BY unit",
+        )?;
+        let units = stmt
+            .query_map([plex_account_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // Three queries for the whole rollup, not two per watched title. The
+        // obvious shape — ask per unit inside the loop — costs a fresh
+        // statement compile and round-trip per title, which is invisible at
+        // the 99 titles one account has today and is thousands of them on a
+        // library that has been running for years.
+        let shows = self.show_ids()?;
+        let attributes_by_item = self.attributes_by_item()?;
+
+        let mut totals: BTreeMap<AttributeKey, f64> = BTreeMap::new();
+        let mut shows_without_seasons: Vec<String> = Vec::new();
+
+        for (unit, plays) in units {
+            let r = match seasons.get(&unit) {
+                Some(length) => plays as f64 / *length as f64,
+                None => {
+                    // Only a show can be missing a season length. A film has
+                    // none by nature and is one whole thing, so `plays` is
+                    // already its `r`; a show landing here is one Plex files
+                    // with no season numbers, and that is worth naming.
+                    if shows.contains(&unit) {
+                        shows_without_seasons.push(unit.clone());
+                    }
+                    plays as f64
+                }
+            };
+            if r < MIN_SEASONS_WATCHED {
+                continue;
+            }
+            let Some(attributes) = attributes_by_item.get(&unit) else {
+                continue;
+            };
+            let share = r.sqrt() / attributes.len() as f64;
+            for key in attributes {
+                *totals.entry(key.clone()).or_insert(0.0) += share;
+            }
+        }
+
+        // BTreeMap already orders by (namespace, key, value), which is the
+        // ordering the determinism guarantee above promises.
+        let attributes = totals
+            .into_iter()
+            .map(|((namespace, key, value), weight)| TasteAttribute {
+                namespace,
+                key,
+                value,
+                weight,
+            })
+            .collect();
+        shows_without_seasons.sort();
+        Ok(TasteVector {
+            attributes,
+            shows_without_seasons,
+        })
+    }
+
+    /// Median episodes per season, per show. Shows Plex files with no season
+    /// number are absent — the caller decides what that means.
+    fn median_season_lengths(&self) -> Result<BTreeMap<String, i64>, ReaderError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT show_item_id, COUNT(*) AS episodes \
+             FROM items \
+             WHERE type = 'episode' AND show_item_id IS NOT NULL AND season IS NOT NULL \
+             GROUP BY show_item_id, season \
+             ORDER BY show_item_id, episodes",
         )?;
         let rows = stmt
-            .query_map([plex_account_id], Self::taste_attribute_row)?
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?
             .collect::<Result<Vec<_>, _>>()?;
+
+        let mut by_show: BTreeMap<String, Vec<i64>> = BTreeMap::new();
+        for (show, episodes) in rows {
+            by_show.entry(show).or_default().push(episodes);
+        }
+        Ok(by_show
+            .into_iter()
+            .map(|(show, lengths)| {
+                // Already ascending from the ORDER BY above.
+                let median = lengths[lengths.len() / 2];
+                (show, median)
+            })
+            .collect())
+    }
+
+    /// Every `item_id` the store calls a show. Read once per rollup so the
+    /// per-unit check is a set lookup rather than a query.
+    fn show_ids(&self) -> Result<BTreeSet<String>, ReaderError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT item_id FROM items WHERE type = 'show'")?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<BTreeSet<_>, _>>()?;
         Ok(rows)
     }
 
-    fn taste_attribute_row(row: &Row) -> rusqlite::Result<TasteAttribute> {
-        Ok(TasteAttribute {
-            namespace: row.get(0)?,
-            key: row.get(1)?,
-            value: row.get(2)?,
-            weight: row.get(3)?,
-        })
+    /// Every title's attributes, keyed by `item_id`, bookkeeping excluded.
+    ///
+    /// One scan rather than a query per watched title. Enrichment is the
+    /// biggest table a rollup touches, so this is the one place worth
+    /// measuring if a store ever grows past what a scan can hold.
+    fn attributes_by_item(&self) -> Result<AttributesByItem, ReaderError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT item_id, namespace, key, value FROM enrichment \
+             WHERE key NOT LIKE '\\_%' ESCAPE '\\' \
+             ORDER BY item_id, namespace, key, value",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    (row.get(1)?, row.get(2)?, row.get(3)?),
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut by_item: AttributesByItem = BTreeMap::new();
+        for (item_id, attribute) in rows {
+            by_item.entry(item_id).or_default().push(attribute);
+        }
+        Ok(by_item)
     }
 
     fn enrichment_row(row: &Row) -> rusqlite::Result<EnrichmentFact> {
