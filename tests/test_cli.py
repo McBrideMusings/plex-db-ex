@@ -163,6 +163,10 @@ def _configure_walk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("PLEXDB_PATH", str(store))
     monkeypatch.setenv("PLEX_URL", "http://plex.example:32400")
     monkeypatch.setenv("PLEX_TOKEN", "test-token")
+    # The recorded fixtures report paths under /media, same as the real server.
+    # `walk` refuses to run without this (issue #24), so it is part of a
+    # working configuration, not an extra a test opts into.
+    monkeypatch.setenv("PLEX_SOURCE_ROOTS", "/media")
     monkeypatch.setattr(walk_cmd, "LivePlexClient", _fixture_backed_client)
     return store
 
@@ -410,6 +414,7 @@ def test_walk_without_plex_credentials_configured_is_an_error_not_a_default(
     # needed for `verify`) leak back in and mask the case under test.
     monkeypatch.setenv("PLEX_URL", "")
     monkeypatch.setenv("PLEX_TOKEN", "")
+    monkeypatch.setenv("PLEX_SOURCE_ROOTS", "/media")
     main(["init"])
     capsys.readouterr()
 
@@ -418,6 +423,28 @@ def test_walk_without_plex_credentials_configured_is_an_error_not_a_default(
     assert err.startswith("error: ")
     assert "PLEX_URL" in err
     assert "PLEX_TOKEN" in err
+
+
+def test_walk_without_a_source_root_refuses_rather_than_writing_mount_bound_ids(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An empty root list is the wrong answer, not an absent option.
+
+    A GUID-less title's item_id is a hash of its path, so with nothing stripped
+    the id encodes the mount point and joins with no other store. That produced
+    1,521 disagreements against `etv-station` (issue #24). Set (not delete) for
+    the same reason as the credentials test above.
+    """
+    _configure_walk(tmp_path, monkeypatch)
+    monkeypatch.setenv("PLEX_SOURCE_ROOTS", "")
+    main(["init"])
+    capsys.readouterr()
+
+    assert main(["walk"]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("error: ")
+    assert "PLEX_SOURCE_ROOTS" in err
+    assert "Traceback" not in err
     assert "Traceback" not in err
 
 

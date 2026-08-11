@@ -94,9 +94,15 @@ class Config:
     plex_token: str
     #: Mount roots to strip from a Plex playback path when deriving a
     #: path-based item_id for a title with no recognised external GUID
-    #: (`identity.canonical_path`). Comma-separated in `PLEX_SOURCE_ROOTS`;
-    #: empty by default, which means no stripping — always a safe default,
-    #: never a wrong one.
+    #: (`identity.canonical_path`). Comma-separated in `PLEX_SOURCE_ROOTS`.
+    #:
+    #: **Empty is not a safe default — it is the wrong answer** (issue #24).
+    #: With no root to strip, an item_id for a GUID-less title is a hash of
+    #: wherever the disk happens to be mounted, so two correct installs
+    #: against one Plex server name the same file differently. Measured: 1,521
+    #: titles disagreed with `etv-station` for exactly this reason. `walk`
+    #: therefore refuses to run while this is empty rather than writing ids
+    #: that look fine and join with nothing.
     source_roots: tuple[str, ...]
     #: Plex account ids `plexdb latent-users` treats as genuinely shared by
     #: more than one person, and therefore clusters by device fingerprint

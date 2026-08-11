@@ -18,6 +18,18 @@ def _cmd_walk(args: argparse.Namespace) -> int:
     config = Config.from_env()
     if not config.plex_url or not config.plex_token:
         raise ConfigError("PLEX_URL and PLEX_TOKEN must be set in .env to walk the library")
+    # An empty root list is silently wrong rather than harmlessly absent: a
+    # GUID-less title's item_id becomes a hash of the mount point, so it joins
+    # with nothing in any other store (issue #24). Refuse rather than write it.
+    if not config.source_roots:
+        raise ConfigError(
+            "PLEX_SOURCE_ROOTS must be set in .env to walk the library. "
+            "It is the mount root to strip from a Plex path before hashing it, and "
+            "a title with no external GUID gets its item_id from that hash — so with "
+            "no root set, the id encodes where the disk is mounted and matches no "
+            "other store. Set it to the directory the library sections live under "
+            "(the section paths reported by Plex all sit beneath it)."
+        )
     client = LivePlexClient(config.plex_url, config.plex_token)
     with open_store(config.store_path) as conn:
         stats = walk_all(conn, client, config.source_roots, section_key=args.section)
