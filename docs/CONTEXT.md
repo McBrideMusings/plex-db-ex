@@ -107,6 +107,23 @@ Any process that opens the Snapshot read-only. Readers never write.
 **Consumer**:
 A project that uses the Store — today `etv-station` (via plugin only) and `curator`.
 
+**Sweep**:
+One scheduled run of the Writer: every Step in order, ending in a published Snapshot. Runs
+as `plexdb sweep`; the container's entrypoint invokes it and nothing else.
+_Avoid_: job, pipeline, cron run
+
+**Step**:
+One command taking part in a Sweep. Declared `REQUIRED` — its failure ends the Sweep — or
+`BEST_EFFORT` — its failure is reported and the Sweep continues. A command that declares
+neither is not in the Sweep at all.
+
+**Gated Source**:
+An external source whose units carry a `fetched_at` and are re-fetched only once stale. The
+unit is not always a title: TMDB keywords and edges gate per title, MDBList per list.
+`local-edges` and `enrich-tautulli-plays` read external things and are *not* this — neither
+gates on staleness.
+_Avoid_: cache, provider
+
 ## Relationships
 
 - A **Consumer** is a **Reader**, a **Writer**, or both.
