@@ -310,8 +310,38 @@ identities forever, dropping their plays on every run.
 ## Not yet built
 
 ```sql
-collection_membership(collection_id, item_id, weight, source, observed_at)
+collection(
+    collection_id   TEXT PRIMARY KEY,   -- "mdblist:14" — source-namespaced, opaque
+    source          TEXT NOT NULL,      -- "mdblist", "letterboxd", "trakt", "editorial", "reddit"
+    name            TEXT,
+    url             TEXT,
+    size            INTEGER,            -- entries in the list, NULL where it has no end
+    likes           INTEGER,            -- the source's own popularity number, NULL where absent
+    observed_at     TEXT NOT NULL
+)
+
+collection_membership(
+    collection_id   TEXT NOT NULL REFERENCES collection(collection_id),
+    item_id         TEXT NOT NULL,
+    rank            INTEGER,            -- 1-based position, NULL where the source is unordered
+    mentions        INTEGER,            -- times named, NULL where not a mention source
+    observed_at     TEXT NOT NULL,
+    PRIMARY KEY (collection_id, item_id)
+)
 ```
+
+**There is no `weight` column, and there will not be one**
+([issue #33](https://github.com/McBrideMusings/plex-db-ex/issues/33)). A single number would have
+to mean "third of a hundred" for a ranked list, "on a list eight thousand people follow" for a
+popular one, and "named in seven comments" for a subreddit — three different quantities — and once
+computed it cannot be inverted back into the facts it came from. That is the same objection this
+document already raises against a stored `counts_as_signal` above. The store records what the
+source said; the consumer weighs it.
+
+Every column past the keys is nullable on purpose. A source fills what it genuinely has and leaves
+the rest empty rather than inventing a value to fill a slot, so a missing `rank` stays
+distinguishable from rank 1. First writer is
+[issue #34](https://github.com/McBrideMusings/plex-db-ex/issues/34).
 
 Two rules that are easy to break by accident:
 
