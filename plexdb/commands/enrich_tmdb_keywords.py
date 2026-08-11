@@ -4,12 +4,11 @@ shows into the `tmdb_keywords` namespace."""
 from __future__ import annotations
 
 import argparse
+import sqlite3
 
-from ..config import Config
 from ..enrich_tmdb import NAMESPACE as TMDB_KEYWORDS_NAMESPACE
-from ..enrich_tmdb import enrich_tmdb_keywords, wipe_namespace
-from ..errors import ConfigError
-from ..store import open_store
+from ..enrich_tmdb import EnrichStats, enrich_tmdb_keywords, wipe_namespace
+from ..sources import GatedSource
 from ..sweep import Step
 from ..tmdb_client import LiveTMDbClient
 
@@ -21,47 +20,48 @@ ORDER = 50
 SWEEP = Step.BEST_EFFORT
 
 
-def _cmd_enrich_tmdb_keywords(args: argparse.Namespace) -> int:
-    config = Config.from_env()
-    if not config.tmdb_api_key:
-        raise ConfigError("TMDB_API_KEY must be set in .env to fetch TMDB keywords")
-    stale_days = args.stale_days if args.stale_days is not None else config.tmdb_keywords_stale_days
-    client = LiveTMDbClient(config.tmdb_api_key)
-    with open_store(config.store_path) as conn:
-        if args.rewipe:
-            removed = wipe_namespace(conn)
-            print(f"wiped {removed} row(s) from the {TMDB_KEYWORDS_NAMESPACE} namespace")
-        stats = enrich_tmdb_keywords(conn, client, stale_days=stale_days)
-    print(
+def _wipe(conn: sqlite3.Connection) -> list[str]:
+    return [f"wiped {wipe_namespace(conn)} row(s) from the {TMDB_KEYWORDS_NAMESPACE} namespace"]
+
+
+def _report(stats: EnrichStats) -> list[str]:
+    lines = [
         f"tmdb keywords: {stats.titles_seen} title(s) seen, "
         f"{stats.titles_fetched} fetched, {stats.titles_cached} already cached, "
         f"{stats.titles_skipped_no_tmdb_id} skipped (no tmdb id), "
         f"{stats.titles_failed} failed, "
         f"{stats.keywords_written} keyword(s) written"
-    )
+    ]
     if stats.titles_failed:
-        print(f"{stats.titles_failed} title(s) failed and were not cached — re-run to retry them")
-    return 0
+        lines.append(
+            f"{stats.titles_failed} title(s) failed and were not cached — re-run to retry them"
+        )
+    return lines
+
+
+SOURCE = GatedSource(
+    name="tmdb_keywords",
+    unit="title",
+    credential="TMDB_API_KEY",
+    credential_purpose="fetch TMDB keywords",
+    # A lambda, not the class itself: it resolves `LiveTMDbClient` from this
+    # module's globals on every call, which is what lets a test substitute a
+    # fixture-backed client with `monkeypatch.setattr(module, "LiveTMDbClient", …)`.
+    # Binding the class here directly would capture it at import and silently
+    # ignore the patch — the test would hit the live API.
+    make_client=lambda api_key: LiveTMDbClient(api_key),
+    refresh=enrich_tmdb_keywords,
+    wipe=_wipe,
+    report=_report,
+)
 
 
 def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    enrich_tmdb_parser = sub.add_parser(
+    SOURCE.register(
+        sub,
         NAME,
         help="fetch TMDB keywords for walked movies/shows into the tmdb_keywords "
         "namespace; a fresh row is never re-fetched",
+        rewipe_help="delete every tmdb_keywords row before the sweep, forcing a full "
+        "re-fetch; other namespaces are untouched",
     )
-    enrich_tmdb_parser.add_argument(
-        "--stale-days",
-        type=int,
-        default=None,
-        metavar="N",
-        help="re-fetch a title whose tmdb_keywords row is older than this many days; "
-        "default: TMDB_KEYWORDS_STALE_DAYS, or 45 if that is unset",
-    )
-    enrich_tmdb_parser.add_argument(
-        "--rewipe",
-        action="store_true",
-        help="delete every tmdb_keywords row before the sweep, forcing a full re-fetch; "
-        "other namespaces are untouched",
-    )
-    enrich_tmdb_parser.set_defaults(func=_cmd_enrich_tmdb_keywords)

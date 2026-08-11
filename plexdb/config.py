@@ -30,29 +30,21 @@ DEFAULT_STORE_PATH = "./data/plexdb.db"
 #: secret, so unlike a URL or a token this one may carry a real default.
 DEFAULT_SHARED_ACCOUNT_IDS = "1,3670670"
 
-#: Documented default: mid-range of the 30-60 day window `docs/schema.md` sets
-#: for every external source's enrichment. Deliberately duplicated from
-#: `tmdb_common.DEFAULT_STALE_DAYS` rather than imported — `config.py` is a
-#: leaf like `errors.py` and `schema.py`, and imports no feature module.
-_DEFAULT_TMDB_KEYWORDS_STALE_DAYS = 45
-
-#: Same documented default, duplicated for the same reason as the keywords
-#: constant above — a separate knob from `tmdb_keywords_stale_days` so an
-#: operator can dial edges and keywords staleness independently even though
-#: both come from TMDB.
-_DEFAULT_TMDB_EDGES_STALE_DAYS = 45
-
-#: Same documented default again, and a separate knob for the same reason: a
-#: crowd list turns over on its own schedule, unrelated to how often TMDB
-#: revises a title's keywords.
-_DEFAULT_MDBLIST_STALE_DAYS = 45
+# Staleness windows and source credentials are deliberately absent from here.
+# A Gated Source reads its own `<NAME>_STALE_DAYS` and its own credential
+# variable (`plexdb/sources.py`), against the single `DEFAULT_STALE_DAYS` in
+# `staleness.py`. That keeps each source's window independently dialable — the
+# reason three separate knobs existed — while adding a source touches no file
+# but its own, and it lets this module stay a leaf importing no feature module
+# (issue #20), which is what the three duplicated literals here were buying.
 
 
 def _shared_account_ids_from_env() -> tuple[int, ...]:
     """`PLEXDB_SHARED_ACCOUNT_IDS`, comma-separated, falling back to
     `DEFAULT_SHARED_ACCOUNT_IDS` when unset. An explicitly blank value means
-    zero shared accounts, not "use the default" — the same override
-    convention `_stale_days_from_env` uses for its own knobs."""
+    zero shared accounts, not "use the default" — the opposite of the
+    convention `GatedSource.resolve_stale_days` uses, where a blank value means
+    the default, because there a zero would re-fetch the whole library."""
     raw = os.environ.get("PLEXDB_SHARED_ACCOUNT_IDS", DEFAULT_SHARED_ACCOUNT_IDS)
     if not raw.strip():
         return ()
@@ -63,23 +55,6 @@ def _shared_account_ids_from_env() -> tuple[int, ...]:
             "PLEXDB_SHARED_ACCOUNT_IDS must be a comma-separated list of whole numbers, "
             f"got {raw!r}"
         ) from err
-
-
-def _stale_days_from_env(var: str, default: int) -> int:
-    """Read one whole-number staleness knob, falling back to its documented
-    default when the variable is unset or empty.
-
-    Shared by every `*_STALE_DAYS` knob so a second one cannot drift into a
-    different rejection message or a silent `0` for a typo — the variable name
-    is the only thing that differs between them.
-    """
-    raw = os.environ.get(var, "").strip()
-    if not raw:
-        return default
-    try:
-        return int(raw)
-    except ValueError as err:
-        raise ConfigError(f"{var} must be a whole number of days, got {raw!r}") from err
 
 
 @dataclass(frozen=True)
@@ -122,28 +97,6 @@ class Config:
     #: Empty when unset.
     tautulli_url: str
     tautulli_api_key: str
-    #: The TMDB v3 API key `plexdb enrich-tmdb-keywords` authenticates with
-    #: (ADR-0004-style optional-source pattern: enrichment needs it, `init`
-    #: and `walk` don't, so the check that it's present lives at the point of
-    #: use). Empty when unset.
-    tmdb_api_key: str
-    #: Days a `tmdb_keywords` row stays fresh before it's eligible for
-    #: re-fetch. Documented default sits mid-range of the 30-60 day window
-    #: `docs/schema.md` sets for every external source.
-    tmdb_keywords_stale_days: int
-    #: Days a `tmdb_recommendations`/`tmdb_similar` edge set stays fresh
-    #: before `plexdb enrich-tmdb-edges` re-fetches it. Same documented
-    #: default and window as `tmdb_keywords_stale_days`, tracked separately.
-    tmdb_edges_stale_days: int
-    #: The MDBList API key `plexdb harvest-mdblist` authenticates with
-    #: (ADR-0004-style optional-source pattern: crowd-list harvesting needs it,
-    #: `init` and `walk` don't, so the check that it's present lives at the
-    #: point of use). Empty when unset.
-    mdblist_api_key: str
-    #: Days a `collection` row and its memberships stay fresh before `plexdb
-    #: harvest-mdblist` re-fetches that list. Same documented default and
-    #: window as the TMDB knobs, tracked separately.
-    mdblist_stale_days: int
     #: Path to `etv-station`'s `catalog.db`, opened read-only by `plexdb
     #: reconcile-etv` (issue #5) to compare `item_id` against `entry_id`.
     #: `None` when unset — like `snapshot_path`, this carries no default that
@@ -178,16 +131,5 @@ class Config:
             shared_account_ids=_shared_account_ids_from_env(),
             tautulli_url=os.environ.get("TAUTULLI_URL", "").strip(),
             tautulli_api_key=os.environ.get("TAUTULLI_API_KEY", "").strip(),
-            tmdb_api_key=os.environ.get("TMDB_API_KEY", "").strip(),
-            tmdb_keywords_stale_days=_stale_days_from_env(
-                "TMDB_KEYWORDS_STALE_DAYS", _DEFAULT_TMDB_KEYWORDS_STALE_DAYS
-            ),
-            tmdb_edges_stale_days=_stale_days_from_env(
-                "TMDB_EDGES_STALE_DAYS", _DEFAULT_TMDB_EDGES_STALE_DAYS
-            ),
-            mdblist_api_key=os.environ.get("MDBLIST_API_KEY", "").strip(),
-            mdblist_stale_days=_stale_days_from_env(
-                "MDBLIST_STALE_DAYS", _DEFAULT_MDBLIST_STALE_DAYS
-            ),
             etv_catalog_path=etv_catalog_path,
         )

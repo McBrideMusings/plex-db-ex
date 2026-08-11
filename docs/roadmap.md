@@ -53,6 +53,7 @@ Mac is in the path only because that is where the code was written.
 - [ ] [#48](https://github.com/McBrideMusings/plex-db-ex/issues/48) `local-edges` writes 16,381,416 edges and a 3.7 GB snapshot, because co-membership is quadratic and one collection has 3,004 members. Out of the sweep until its shape changes
 
 - [x] [#34](https://github.com/McBrideMusings/plex-db-ex/issues/34) MDBList crowd lists — schema v6's `collection` and `collection_membership`, filled by `plexdb harvest-mdblist`. Measured on the author's library: 50 lists, 11,896 memberships, 15,237 entries dropped as outside it
+- [x] [#46](https://github.com/McBrideMusings/plex-db-ex/issues/46) The Gated Source contract — a source declares its client, its key and its write; the credential check, the derived staleness window and the two flags stop being copied per source
 - [ ] The rest of the crowd-list sources, one at a time, each a new `source` value rather than a schema change: [#35](https://github.com/McBrideMusings/plex-db-ex/issues/35) Letterboxd, [#37](https://github.com/McBrideMusings/plex-db-ex/issues/37) editorial/RSS, [#38](https://github.com/McBrideMusings/plex-db-ex/issues/38) Reddit. [#36](https://github.com/McBrideMusings/plex-db-ex/issues/36) Trakt is dropped for the same reason as #12
 - [ ] [#29](https://github.com/McBrideMusings/plex-db-ex/issues/29) The reader crate's collection-membership accessor — now unblocked
 - [ ] Wikidata awards
