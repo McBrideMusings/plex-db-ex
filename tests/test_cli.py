@@ -42,6 +42,7 @@ EXPECTED_COMMANDS = {
     "enrich-tautulli-plays",
     "latent-users",
     "repair-identities",
+    "repair-fs-identities",
     "schedule",
 }
 
@@ -54,6 +55,7 @@ EXPECTED_COMMAND_ORDER = [
     "init",
     "walk",
     "repair-identities",
+    "repair-fs-identities",
     "ingest-plays",
     "enrich-tautulli-plays",
     "enrich-tmdb-keywords",
