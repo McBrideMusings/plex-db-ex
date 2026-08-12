@@ -250,10 +250,24 @@ Read back from that run:
 | *Inception* (2010) | *The Dark Tower*, *Solo: A Star Wars Story*, *Push* | *Quantum of Solace*, *The Tuxedo*, *Zootopia* |
 | *The Matrix* (1999) | *Teen Titans*, *The Matrix Revolutions*, *Terminator Genisys* | *The Tuxedo*, *The One*, *Logan's Run* |
 
-`tmdb_recommendations` is sometimes excellent and sometimes weak. `tmdb_similar` was weak on every
-title spot-checked. Both are stored exactly as TMDB ordered them
+Both are stored exactly as TMDB ordered them
 ([ADR-0012](./adr/0012-the-store-records-what-a-source-said-never-a-score-it-computed)) — the store
-does not rank sources, and this table is the record so a reader can weight them itself.
+does not rank sources. **But only one of the two orderings means anything**, which matters to any
+reader that sorts by `rank`. Scoring every stored edge by the keyword overlap of its two ends, with
+a random pair of titles as the control:
+
+| | rank 1 | rank 5 | rank 20 | vs. a random pair |
+|---|---|---|---|---|
+| `tmdb_recommendations` | 0.1349 | 0.0745 | 0.0453 | 17× |
+| `tmdb_similar` | 0.0416 | 0.0407 | 0.0450 | 12× |
+| random pair (control) | — | — | — | 0.0037 |
+
+`tmdb_recommendations` decays threefold across its list: rank 1 genuinely is its best answer.
+`tmdb_similar` is flat and drifts slightly upward — its twentieth answer is as good as its first, so
+sorting by its rank buys nothing. Both beat random by a wide margin, so `tmdb_similar` is not noise;
+it is an unordered bucket of roughly-related titles, useful as a candidate pool to filter and not as
+a sequence to walk. Tracked as
+[issue #52](https://github.com/McBrideMusings/plex-db-ex/issues/52).
 
 **Plex's own collections are not a source, and there is no `local_collection` edge type**
 ([issue #48](https://github.com/McBrideMusings/plex-db-ex/issues/48)). Co-membership used to be
