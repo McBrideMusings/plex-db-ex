@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal, NamedTuple
 
@@ -50,6 +50,25 @@ _SECTION_PASSES: dict[str, tuple[tuple[str, int], ...]] = {
 }
 
 
+class KeptIdentity(NamedTuple):
+    """One title whose stored `item_id` differed from the id this walk derived,
+    and which kept the stored one (ADR-0008).
+
+    Named, not just counted: a bare count answers "how many" and leaves "which
+    ones" to a hand-written script against the live library, which is what
+    issue #56 had to do to find out that eight of nine occurrences were a
+    shrinking GUID set on an unchanged title and the ninth was two different
+    Simpsons episodes Plex had handed the same TVDB id.
+    """
+
+    #: Which key found the stored identity — `_resolve_existing`'s two paths.
+    found_by: Literal["external_id", "rating_key"]
+    label: str
+    rating_key: str
+    kept_id: str
+    derived_id: str
+
+
 @dataclass
 class WalkStats:
     """What one walk touched — the summary `plexdb walk` prints on completion."""
@@ -59,17 +78,18 @@ class WalkStats:
     titles_written: int = 0
     #: Titles with no recognised external GUID, landed under the `fs:` fallback.
     fallback_to_path: int = 0
-    #: Titles resolved to an existing identity by Plex rating key — a
-    #: wholesale GUID re-match, rating key unchanged — where the existing
-    #: item_id was kept rather than forking a second row. Zero on a library
-    #: nothing has re-matched since the last pass.
-    identity_kept_on_guid_change: int = 0
-    #: Titles resolved to an existing identity by one of their external ids
-    #: — a remove-and-re-add that changed the rating key but not the GUIDs,
-    #: or a GUID set that gained an id already recorded elsewhere — where
-    #: the existing item_id was kept rather than forking a second row. Zero
-    #: on a library nothing has re-matched since the last pass.
-    identity_kept_by_external_id: int = 0
+    #: Every title that resolved to an existing identity differing from the id
+    #: this walk derived, and kept the existing one rather than forking a
+    #: second row. Empty on a library nothing has re-matched since the last
+    #: pass. `found_by` separates the two causes: `rating_key` is a wholesale
+    #: GUID re-match with the rating key unchanged, `external_id` is a
+    #: remove-and-re-add that changed the rating key but not the GUIDs, or a
+    #: GUID set that gained an id already recorded elsewhere.
+    identities_kept: list[KeptIdentity] = field(default_factory=list)
+
+    def kept_by(self, found_by: str) -> list[KeptIdentity]:
+        """The kept identities one of `_resolve_existing`'s two paths found."""
+        return [kept for kept in self.identities_kept if kept.found_by == found_by]
 
 
 def _guid_pairs(raw_guids: list[dict[str, Any]] | None) -> list[tuple[str, str]]:
@@ -119,6 +139,25 @@ def _canonical_for(record: dict[str, Any], source_roots: Sequence[str]) -> str:
         return identity.canonical_path(raw_path, source_roots)
     key = record.get("key") or f"/library/metadata/{record.get('ratingKey', '')}"
     return identity.canonical_path(str(key), source_roots)
+
+
+def _label(record: dict[str, Any], kind: str) -> str:
+    """A one-line human name for a Plex record, for the walk's own output.
+
+    An episode is named by its show and its season/episode numbers as well as
+    its title: episode titles repeat across shows, and the two occurrences
+    worth telling apart in issue #56 were two episodes of one show.
+    """
+    title = str(record.get("title") or "(untitled)")
+    if kind != "episode":
+        year = record.get("year")
+        return f"{title} ({year})" if year else title
+    show = record.get("grandparentTitle") or "(unknown show)"
+    season = record.get("parentIndex")
+    episode = record.get("index")
+    if season is None or episode is None:
+        return f"{show} — {title}"
+    return f"{show} S{int(season):02d}E{int(episode):02d} — {title}"
 
 
 class _Resolved(NamedTuple):
@@ -211,10 +250,15 @@ def _write_item(
         # counted by which key retained it, so it is visible in the walk
         # summary rather than silent.
         item_id = resolved.item_id
-        if resolved.found_by == "external_id":
-            stats.identity_kept_by_external_id += 1
-        else:
-            stats.identity_kept_on_guid_change += 1
+        stats.identities_kept.append(
+            KeptIdentity(
+                found_by=resolved.found_by,
+                label=_label(record, kind),
+                rating_key=rating_key,
+                kept_id=resolved.item_id,
+                derived_id=derived_id,
+            )
+        )
     else:
         item_id = derived_id
 

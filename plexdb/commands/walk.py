@@ -17,6 +17,9 @@ ORDER = 20
 #: Plex is the one required dependency (ADR-0004). A sweep that could not read
 #: the library must not publish a snapshot built on what it managed to get.
 SWEEP = Step.REQUIRED
+#: How many kept identities to name per resolution path before summarising the
+#: rest as a count.
+_KEPT_SHOWN = 20
 
 
 def _cmd_walk(args: argparse.Namespace) -> int:
@@ -43,15 +46,25 @@ def _cmd_walk(args: argparse.Namespace) -> int:
         f"{stats.titles_seen} title(s) seen, {stats.titles_written} written, "
         f"{stats.fallback_to_path} fell back to a path-derived id"
     )
-    for kept, found_by in (
-        (stats.identity_kept_on_guid_change, "rating key"),
-        (stats.identity_kept_by_external_id, "external id"),
-    ):
-        if kept:
-            print(
-                f"{kept} title(s) would have derived a different item_id this walk; "
-                f"kept their existing one (found by {found_by}) rather than forking a new row"
-            )
+    for path, found_by in (("rating_key", "rating key"), ("external_id", "external id")):
+        kept = stats.kept_by(path)
+        if not kept:
+            continue
+        print(
+            f"{len(kept)} title(s) would have derived a different item_id this walk; "
+            f"kept their existing one (found by {found_by}) rather than forking a new row"
+        )
+        # Named, not just counted (issue #56). Each line is what someone needs
+        # to decide whether the keep was right: a title Plex stopped reporting
+        # an id for keeps its identity correctly, whereas two different titles
+        # Plex handed one id land on one row and lose one of them. The cap
+        # keeps a library-wide event — a mount path that moved, issue #55,
+        # printed 1521 of these — from burying the rest of the summary.
+        for entry in kept[:_KEPT_SHOWN]:
+            print(f"    {entry.label} [rating key {entry.rating_key}]")
+            print(f"        kept {entry.kept_id}, would have derived {entry.derived_id}")
+        if len(kept) > _KEPT_SHOWN:
+            print(f"    ... and {len(kept) - _KEPT_SHOWN} more")
     return 0
 
 

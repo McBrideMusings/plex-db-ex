@@ -109,7 +109,6 @@ def test_a_recorded_response_produces_the_expected_items_and_external_ids_rows(
         titles_seen=6,
         titles_written=6,
         fallback_to_path=1,
-        identity_kept_on_guid_change=0,
     )
 
 
@@ -173,7 +172,7 @@ def test_a_second_walk_over_the_same_recorded_response_adds_no_rows_and_changes_
         after = _snapshot(conn)
 
     assert after == before
-    assert second_stats.identity_kept_on_guid_change == 0
+    assert second_stats.kept_by("rating_key") == []
 
 
 def test_every_rating_key_seen_maps_to_exactly_one_item_id(tmp_path: Path) -> None:
@@ -210,7 +209,7 @@ def test_a_titles_guid_set_changing_between_walks_keeps_its_identity_rather_than
 
     with _open(store) as conn:
         first_stats = walk_all(conn, first_pass)
-        assert first_stats.identity_kept_on_guid_change == 0
+        assert first_stats.kept_by("rating_key") == []
         kept_id = conn.execute(
             "SELECT item_id FROM plex_items WHERE rating_key = '999'"
         ).fetchone()[0]
@@ -228,7 +227,7 @@ def test_a_titles_guid_set_changing_between_walks_keeps_its_identity_rather_than
 
         # The identity is kept, not forked: still one items row for rating
         # key 999, still addressed by the original id.
-        assert second_stats.identity_kept_on_guid_change == 1
+        assert len(second_stats.kept_by("rating_key")) == 1
         item_count = conn.execute(
             "SELECT count(*) FROM items WHERE item_id IN ('imdb:tt1111111', 'imdb:tt2222222')"
         ).fetchone()[0]
@@ -377,8 +376,8 @@ def test_a_titles_rating_key_changing_between_walks_keeps_its_identity_by_extern
     # The GUIDs did not actually change, so a fresh derivation from the
     # re-added record already lands on the same id the external-id lookup
     # found — nothing was overridden, so neither "kept" counter fires.
-    assert second_stats.identity_kept_by_external_id == 0
-    assert second_stats.identity_kept_on_guid_change == 0
+    assert second_stats.kept_by("external_id") == []
+    assert second_stats.kept_by("rating_key") == []
 
 
 def test_an_external_id_still_matching_a_prior_identity_wins_over_a_fresh_higher_priority_guid(
@@ -389,8 +388,8 @@ def test_an_external_id_still_matching_a_prior_identity_wins_over_a_fresh_higher
     existing identity. A fresh derivation from this pass's GUIDs alone would
     prefer the new tmdb id; the external-id lookup instead finds the
     already-known tvdb match first (in priority order, skipping the
-    unrecorded tmdb id) and keeps the existing identity — counted under
-    `identity_kept_by_external_id`, distinct from a rating-key-found keep."""
+    unrecorded tmdb id) and keeps the existing identity — recorded under
+    `found_by="external_id"`, distinct from a rating-key-found keep."""
     store = tmp_path / "plexdb.db"
     movies_section = Section(key="1", type="movie", title="Movies")
     first_record = {
@@ -408,7 +407,7 @@ def test_an_external_id_still_matching_a_prior_identity_wins_over_a_fresh_higher
 
     with _open(store) as conn:
         first_stats = walk_all(conn, first_pass)
-        assert first_stats.identity_kept_by_external_id == 0
+        assert first_stats.kept_by("external_id") == []
         kept_id = conn.execute(
             "SELECT item_id FROM plex_items WHERE rating_key = '600'"
         ).fetchone()[0]
@@ -434,8 +433,54 @@ def test_an_external_id_still_matching_a_prior_identity_wins_over_a_fresh_higher
         ).fetchone()[0]
         assert item_count == 1
 
-    assert second_stats.identity_kept_by_external_id == 1
-    assert second_stats.identity_kept_on_guid_change == 0
+    assert len(second_stats.kept_by("external_id")) == 1
+    assert second_stats.kept_by("rating_key") == []
+
+
+def test_a_kept_identity_names_the_title_and_both_ids(tmp_path: Path) -> None:
+    """The walk's own record of a kept identity says which title it was and
+    which two ids were in play, not just that one happened (issue #56).
+
+    The shape here is the one that made naming worth having: Plex handed two
+    different episodes of one show the same TVDB id, so the second episode
+    resolved onto the first's identity and overwrote its title. A count alone
+    reads exactly like the harmless case — a title whose GUID set shrank —
+    and the episode label is what separates them.
+    """
+    store = tmp_path / "plexdb.db"
+    shows_section = Section(key="2", type="show", title="TV Shows")
+
+    def episode(rating_key: str, index: int, title: str, guids: list[str]) -> dict[str, Any]:
+        return {
+            "ratingKey": rating_key,
+            "title": title,
+            "grandparentTitle": "The Simpsons",
+            "parentIndex": 37,
+            "index": index,
+            "Guid": [{"id": guid} for guid in guids],
+            "Media": [{"Part": [{"file": f"/media/television/The Simpsons/S37E{index:02d}.mkv"}]}],
+        }
+
+    first = episode("149812", 14, "Irrational Treasure", ["imdb://tt36431487", "tvdb://11464298"])
+    # Plex reports only the TVDB id on the newly-added file, and it is the
+    # TVDB id of the episode above — the mismatch this walk cannot see past.
+    second = episode("149814", 16, "Extreme Makeover: Homer Edition", ["tvdb://11464298"])
+
+    with _open(store) as conn:
+        walk_all(
+            conn,
+            FakeSource(section_list=[shows_section], records={("2", PLEX_TYPE_EPISODE): [first]}),
+        )
+        stats = walk_all(
+            conn,
+            FakeSource(section_list=[shows_section], records={("2", PLEX_TYPE_EPISODE): [second]}),
+        )
+
+    (kept,) = stats.kept_by("external_id")
+    assert kept.label == "The Simpsons S37E16 — Extreme Makeover: Homer Edition"
+    assert kept.rating_key == "149814"
+    assert kept.kept_id == "imdb:tt36431487"
+    assert kept.derived_id == "tvdb:11464298"
 
 
 def test_several_external_ids_matching_different_identities_resolve_by_priority_order(
@@ -539,7 +584,7 @@ def test_two_records_in_the_same_pass_sharing_an_external_id_resolve_to_one_iden
         ).fetchone()[0]
         assert item_count == 1
 
-    assert stats.identity_kept_by_external_id == 1
+    assert len(stats.kept_by("external_id")) == 1
 
 
 def test_a_movie_and_a_show_sharing_a_tmdb_number_stay_two_identities(
@@ -600,7 +645,7 @@ def test_a_movie_and_a_show_sharing_a_tmdb_number_stay_two_identities(
         }
         assert shared == {("imdb:tt0047034", "movie"), ("imdb:tt0088526", "show")}
 
-    assert stats.identity_kept_by_external_id == 0
+    assert stats.kept_by("external_id") == []
 
 
 def test_walk_can_be_scoped_to_one_section(tmp_path: Path) -> None:
