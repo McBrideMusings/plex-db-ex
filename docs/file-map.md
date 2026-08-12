@@ -23,7 +23,6 @@ plex-db-ex/
 │   │   ├── init.py
 │   │   ├── latent_users.py
 │   │   ├── publish.py
-│   │   ├── reconcile_etv.py
 │   │   ├── repair_identities.py
 │   │   ├── schedule.py
 │   │   ├── sweep.py
@@ -36,7 +35,6 @@ plex-db-ex/
 │   ├── clusters.py        clusters a *configured* shared account's plays into latent users by fingerprint, joining devices that share a recurring single-account IP (issue #27), and scores keyword overlap between them over show/movie units — a show counts once however many episodes were watched (issue #25); a cluster under 20 plays is folded into one unattributed bucket rather than called a person (issue #28); every other account is one named person with a single profile, no device or cluster numbers; read-only, persists nothing
 │   ├── tautulli_client.py read-only Tautulli client (get_history, get_users) behind TautulliSource/TautulliUserSource protocols
 │   ├── plex_client.py     read-only Plex HTTP client behind PlexSource/PlexAccountSource protocols
-│   ├── reconcile_etv.py   compares item_id against etv-station's entry_id, joined by Plex rating key; read-only on both stores, reports and never fixes
 │   ├── tmdb_client.py     read-only TMDB client (keywords, recommendations, similar) behind a TMDbSource protocol
 │   ├── tmdb_common.py     media_type_for / MAX_CONSECUTIVE_FAILURES shared by enrich_tmdb.py and tmdb_edges.py
 │   ├── staleness.py       is_stale / DEFAULT_STALE_DAYS — the one "is this row due a re-fetch" rule, shared by both TMDB sweeps and the crowd-list harvest

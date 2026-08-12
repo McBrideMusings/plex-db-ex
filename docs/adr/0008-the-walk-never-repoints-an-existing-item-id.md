@@ -96,5 +96,8 @@ than assume `item_id` always equals a fresh derivation.
 An `item_id` can also cover more than one Plex rating key, where `etv-station`'s `entry_id` never
 does — it keys every rating key separately. After the second amendment those are only genuine
 duplicates (one title present in two library sections), but the divergence is real and a join
-across the two stores will land on a different row count for them. `reconcile_etv` reports such a
-title as having inherited its identity rather than as the two derivation rules having drifted.
+across the two stores will land on a different row count for them. Whatever compares the two must
+read such a title as having inherited its identity rather than as the two derivation rules having
+drifted. That comparison used to live here as `plexdb reconcile-etv`; it now belongs to
+`etv-station`, which already reads this store's published snapshot and so holds both halves
+without the writer reaching into a consumer's database.

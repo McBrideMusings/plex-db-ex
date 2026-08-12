@@ -97,13 +97,6 @@ class Config:
     #: Empty when unset.
     tautulli_url: str
     tautulli_api_key: str
-    #: Path to `etv-station`'s `catalog.db`, opened read-only by `plexdb
-    #: reconcile-etv` (issue #5) to compare `item_id` against `entry_id`.
-    #: `None` when unset — like `snapshot_path`, this carries no default that
-    #: points anywhere real, so a person is never silently pointed at
-    #: whichever checkout happens to sit next to this one; the check that
-    #: it's present lives at the point of use, the `reconcile-etv` command.
-    etv_catalog_path: Path | None
     #: Where `plexdb init` puts the copy it takes before applying a migration.
     #: Defaults to a `backups/` directory beside the store, so the container
     #: needs no extra mount and a dev checkout needs no extra setting — the
@@ -127,8 +120,6 @@ class Config:
         snapshot_path = Path(snapshot_raw).expanduser() if snapshot_raw else None
         source_roots_raw = os.environ.get("PLEX_SOURCE_ROOTS", "")
         source_roots = tuple(root.strip() for root in source_roots_raw.split(",") if root.strip())
-        etv_catalog_raw = os.environ.get("ETV_CATALOG_PATH", "").strip()
-        etv_catalog_path = Path(etv_catalog_raw).expanduser() if etv_catalog_raw else None
         store_path = Path(raw).expanduser()
         backup_raw = os.environ.get("PLEXDB_BACKUP_DIR", "").strip()
         backup_dir = (
@@ -143,6 +134,5 @@ class Config:
             shared_account_ids=_shared_account_ids_from_env(),
             tautulli_url=os.environ.get("TAUTULLI_URL", "").strip(),
             tautulli_api_key=os.environ.get("TAUTULLI_API_KEY", "").strip(),
-            etv_catalog_path=etv_catalog_path,
             backup_dir=backup_dir,
         )

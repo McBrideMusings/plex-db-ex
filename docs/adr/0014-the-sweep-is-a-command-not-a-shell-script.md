@@ -36,7 +36,7 @@ SWEEP = Step.REQUIRED  # init, walk, ingest-plays, publish
 SWEEP = Step.BEST_EFFORT  # tautulli, keywords, edges, mdblist
 ```
 
-A command that declares neither is not in the Sweep — `latent-users`, `reconcile-etv` and
+A command that declares neither is not in the Sweep — `latent-users` and
 `repair-identities` say nothing and stay out. Absence is the safe default: a new command cannot
 silently join a nightly run that writes to consumers.
 

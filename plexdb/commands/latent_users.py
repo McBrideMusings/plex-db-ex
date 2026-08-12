@@ -23,9 +23,8 @@ from ..plex_client import LivePlexClient, valid_accounts
 from ..store import open_readonly
 
 #: After ingest-plays (30) and enrich-tautulli-plays (35), whose output this
-#: reads, and before reconcile-etv (75) — this is a report, not a pipeline
-#: step, so its position among the enrichment commands is only a reading
-#: convenience.
+#: reads — this is a report, not a pipeline step, so its position among the
+#: enrichment commands is only a reading convenience.
 NAME = "latent-users"
 ORDER = 70
 # No SWEEP: read-only, persists nothing. A report nobody reads at 3am is not
