@@ -140,3 +140,17 @@ def test_a_response_of_the_wrong_shape_is_an_error_not_a_silent_empty() -> None:
 
     with pytest.raises(MDBListError):
         _client(handler).top_lists()
+
+
+def test_a_200_with_a_non_json_body_raises_mdblist_error_not_a_json_traceback() -> None:
+    # A WAF interstitial or captive portal can answer 200 with an HTML page
+    # instead of the JSON MDBList normally returns — issue #49.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text="<!DOCTYPE html><title>Just a moment...</title>",
+            headers={"content-type": "text/html"},
+        )
+
+    with pytest.raises(MDBListError, match="not JSON"):
+        _client(handler).top_lists()

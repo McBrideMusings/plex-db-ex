@@ -88,16 +88,25 @@ class LivePlexClient:
     def _get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         # The token rides in a header, not the query string, so it never lands
         # in a proxy or access log.
+        url = f"{self._base}{path}"
         try:
             resp = self._http.get(
-                f"{self._base}{path}",
+                url,
                 params=params,
                 headers={"Accept": "application/json", "X-Plex-Token": self._token},
             )
             resp.raise_for_status()
         except httpx.HTTPError as err:
-            raise PlexError(f"cannot reach Plex at {self._base}{path}: {err}") from err
-        container: dict[str, Any] = resp.json().get("MediaContainer", {})
+            raise PlexError(f"cannot reach Plex at {url}: {err}") from err
+        try:
+            body = resp.json()
+        except ValueError:
+            raise PlexError(f"Plex returned a response that is not JSON for {url}") from None
+        if not isinstance(body, dict):
+            raise PlexError(
+                f"Plex returned a {type(body).__name__} body for {url}, expected an object"
+            )
+        container: dict[str, Any] = body.get("MediaContainer", {})
         return container
 
     def sections(self) -> list[Section]:

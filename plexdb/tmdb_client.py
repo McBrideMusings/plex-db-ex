@@ -135,5 +135,8 @@ class LiveTMDbClient:
             resp.raise_for_status()
         except httpx.HTTPError:
             raise TMDbError(f"TMDB returned {resp.status_code} for {url}") from None
-        result: dict[str, Any] = resp.json()
+        try:
+            result: dict[str, Any] = resp.json()
+        except ValueError:
+            raise TMDbError(f"TMDB returned a response that is not JSON for {url}") from None
         return result

@@ -170,3 +170,20 @@ def test_the_api_key_never_reaches_a_traceback() -> None:
 
     assert key not in rendered
     assert "api_key=" not in rendered
+
+
+def test_a_200_with_a_non_json_body_raises_tmdb_error_not_a_json_traceback() -> None:
+    # A WAF interstitial or captive portal can answer 200 with an HTML page
+    # instead of the JSON TMDB normally returns — issue #49.
+    def _html_interstitial(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text="<!DOCTYPE html><title>Just a moment...</title>",
+            headers={"content-type": "text/html"},
+        )
+
+    http = httpx.Client(transport=httpx.MockTransport(_html_interstitial))
+    client = LiveTMDbClient("the-test-key", http=http)
+
+    with pytest.raises(TMDbError, match="not JSON"):
+        client.keywords("27205", "movie")

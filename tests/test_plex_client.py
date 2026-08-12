@@ -299,3 +299,33 @@ def test_history_paginates_until_total_size_is_reached(
         "/status/sessions/history/2",
         "/status/sessions/history/3",
     ]
+
+
+def test_a_200_with_a_non_json_body_raises_plex_error_not_a_json_traceback() -> None:
+    # A proxy or captive portal in front of Plex can answer 200 with an HTML
+    # page instead of the JSON Plex normally returns — issue #49.
+    def _html_interstitial(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text="<!DOCTYPE html><title>Just a moment...</title>",
+            headers={"content-type": "text/html"},
+        )
+
+    http = httpx.Client(transport=httpx.MockTransport(_html_interstitial))
+    client = LivePlexClient("http://plex.example:32400", "the-test-token", http=http)
+
+    with pytest.raises(PlexError, match="not JSON"):
+        client.sections()
+
+
+def test_a_200_with_valid_json_that_is_not_an_object_raises_plex_error() -> None:
+    # A body that parses as JSON but isn't the expected object (a bare list,
+    # a string, null) must not fall through to AttributeError on .get() — #49.
+    def _bare_list(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=["not", "an", "object"])
+
+    http = httpx.Client(transport=httpx.MockTransport(_bare_list))
+    client = LivePlexClient("http://plex.example:32400", "the-test-token", http=http)
+
+    with pytest.raises(PlexError, match="expected an object"):
+        client.sections()
