@@ -112,6 +112,53 @@ guessing, but changes nothing about which `item_id` a title is assigned. Whether
 ever *act* on a stale id — expiring it, or re-deriving `item_id` once one is missing long enough —
 is a separate decision, deliberately out of scope here.
 
+## Fourth amendment: an identity another rating key already holds under a different title is refused
+
+The second amendment left one sentence still doing too much work: "two Plex rating keys sharing an
+external id resolve to one identity … a title with two copies in the library already maps two
+rating keys to one `item_id`". Inside a single media kind, that is *usually* the same title twice.
+It is not always.
+
+Plex gives a freshly-added episode whose metadata is still `TBA` the TVDB id of a **different**
+episode of the same show. On 12 August 2026 the author's library held *The Simpsons* S37E14
+("Irrational Treasure", the 800th episode, rating key 149812, `imdb://tt36431487` +
+`tmdb://6878206` + `tvdb://11464298`) and S37E16 ("Extreme Makeover: Homer Edition", rating key
+149814), and Plex reported exactly one GUID for E16: `tvdb://11464298` — E14's. E14 was walked
+first and took `imdb:tt36431487`. E16 then matched that identity on the one id it had,
+`_write_item` upserted E16's title, season and episode number into E14's row, and S37E14 — a file
+on disk, playable, in the library — had no row in the store at all. Anything reading the store saw
+the 800th episode as absent, and either episode's plays would have landed on the one surviving row
+([issue #58](https://github.com/McBrideMusings/plex-db-ex/issues/58)).
+
+Six identities in that library were held by two rating keys. Five are correct: two Star Trek films
+with two copies each, and *Saturday Night Live*, *Diners, Drive-ins and Dives* and *South Park*
+episodes Plex lists under two season numbers. **In all five the title string is the same on both
+rating keys**; in the Simpsons pair it is not. So the discriminator is the title — not the season
+and episode numbers, which differ in three of the five correct cases.
+
+**Resolved: an identity found by external id is refused when another rating key already holds it
+under a different title.** The refusing record takes an id derived from only the external ids no
+other identity has claimed — for E16 that is none of them, so it lands on the `fs:` path hash
+rather than being named after an id that belongs to a different episode. `external_ids` is
+untouched: the shared TVDB id still points at E14, which had it first, so looking that id up
+returns the episode it actually names. Occurrences are named individually in `plexdb walk`'s
+output (`WalkStats.identities_forked`, carrying the label, the contested id, and the rating key
+and title already holding it), never just counted.
+
+Two limits, both deliberate:
+
+- **A record whose own GUID set derives exactly the identity it matched never forks**, whatever
+  else claims it. This is what repairs a store already holding the fused row: E14's ids derive
+  `imdb:tt36431487`, so it keeps that id and overwrites the wrong title, and E16 — whose derived
+  id differs — moves off. One walk, no separate repair command, no rows deleted.
+- **The comparison is against the title the identity currently carries**, so if the mis-matched
+  episode is walked *first* on the pass that follows the fusion, the stored title is still its own
+  and it keeps the identity for one more walk; the pass after that separates them. Plex returns
+  episodes in season/episode order, so in practice the rightful owner comes first.
+
+What is refused is narrow: two rating keys, one external id, two different titles. Two copies of
+one film, and one episode listed under two season numbers, still merge exactly as before.
+
 ## Consequences
 
 An `item_id` can stop matching what `derive_item_id` would produce from a title's *current* GUID

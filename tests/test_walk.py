@@ -437,50 +437,261 @@ def test_an_external_id_still_matching_a_prior_identity_wins_over_a_fresh_higher
     assert second_stats.kept_by("rating_key") == []
 
 
+def _simpsons_episode(rating_key: str, index: int, title: str, guids: list[str]) -> dict[str, Any]:
+    return {
+        "ratingKey": rating_key,
+        "title": title,
+        "grandparentTitle": "The Simpsons",
+        "parentIndex": 37,
+        "index": index,
+        "Guid": [{"id": guid} for guid in guids],
+        "Media": [{"Part": [{"file": f"/media/television/The Simpsons/S37E{index:02d}.mkv"}]}],
+    }
+
+
 def test_a_kept_identity_names_the_title_and_both_ids(tmp_path: Path) -> None:
     """The walk's own record of a kept identity says which title it was and
     which two ids were in play, not just that one happened (issue #56).
 
-    The shape here is the one that made naming worth having: Plex handed two
-    different episodes of one show the same TVDB id, so the second episode
-    resolved onto the first's identity and overwrote its title. A count alone
-    reads exactly like the harmless case — a title whose GUID set shrank —
-    and the episode label is what separates them.
+    The shape here is the common one — the same episode, same rating key, with
+    the IMDb id Plex reported on the first walk missing from the second, so a
+    fresh derivation would drop to the TVDB tier. The identity is kept, and the
+    label is what tells someone reading the summary that this is that harmless
+    case rather than two different titles colliding.
     """
     store = tmp_path / "plexdb.db"
     shows_section = Section(key="2", type="show", title="TV Shows")
 
-    def episode(rating_key: str, index: int, title: str, guids: list[str]) -> dict[str, Any]:
-        return {
-            "ratingKey": rating_key,
-            "title": title,
-            "grandparentTitle": "The Simpsons",
-            "parentIndex": 37,
-            "index": index,
-            "Guid": [{"id": guid} for guid in guids],
-            "Media": [{"Part": [{"file": f"/media/television/The Simpsons/S37E{index:02d}.mkv"}]}],
-        }
-
-    first = episode("149812", 14, "Irrational Treasure", ["imdb://tt36431487", "tvdb://11464298"])
-    # Plex reports only the TVDB id on the newly-added file, and it is the
-    # TVDB id of the episode above — the mismatch this walk cannot see past.
-    second = episode("149814", 16, "Extreme Makeover: Homer Edition", ["tvdb://11464298"])
+    full = _simpsons_episode(
+        "149812", 14, "Irrational Treasure", ["imdb://tt36431487", "tvdb://11464298"]
+    )
+    shrunk = _simpsons_episode("149812", 14, "Irrational Treasure", ["tvdb://11464298"])
 
     with _open(store) as conn:
         walk_all(
             conn,
-            FakeSource(section_list=[shows_section], records={("2", PLEX_TYPE_EPISODE): [first]}),
+            FakeSource(section_list=[shows_section], records={("2", PLEX_TYPE_EPISODE): [full]}),
         )
         stats = walk_all(
             conn,
-            FakeSource(section_list=[shows_section], records={("2", PLEX_TYPE_EPISODE): [second]}),
+            FakeSource(section_list=[shows_section], records={("2", PLEX_TYPE_EPISODE): [shrunk]}),
         )
 
     (kept,) = stats.kept_by("external_id")
-    assert kept.label == "The Simpsons S37E16 — Extreme Makeover: Homer Edition"
-    assert kept.rating_key == "149814"
+    assert kept.label == "The Simpsons S37E14 — Irrational Treasure"
+    assert kept.rating_key == "149812"
     assert kept.kept_id == "imdb:tt36431487"
     assert kept.derived_id == "tvdb:11464298"
+    assert stats.identities_forked == []
+
+
+def test_two_different_episodes_plex_gave_one_tvdb_id_stay_two_rows(tmp_path: Path) -> None:
+    """Issue #58. Plex handed *The Simpsons* S37E16 — a freshly-aired file still
+    showing as `TBA` — the TVDB id of S37E14, which was walked first and holds
+    `imdb:tt36431487`. Adopting that identity for E16 overwrote E14's title and
+    left E14 with no row in the store at all.
+
+    E16 must land on an id of its own. The only external id Plex reports for it
+    belongs to E14, so there is nothing left to derive from and it falls to the
+    `fs:` path hash — and E14 keeps both its identity and its own title.
+    """
+    store = tmp_path / "plexdb.db"
+    shows_section = Section(key="2", type="show", title="TV Shows")
+
+    e14 = _simpsons_episode(
+        "149812",
+        14,
+        "Irrational Treasure [800th episode]",
+        ["imdb://tt36431487", "tmdb://6878206", "tvdb://11464298"],
+    )
+    e16 = _simpsons_episode("149814", 16, "Extreme Makeover: Homer Edition", ["tvdb://11464298"])
+    expected_fork = derive_item_id(
+        [], canonical_path("/media/television/The Simpsons/S37E16.mkv", ())
+    )
+
+    with _open(store) as conn:
+        stats = walk_all(
+            conn,
+            FakeSource(
+                section_list=[shows_section], records={("2", PLEX_TYPE_EPISODE): [e14, e16]}
+            ),
+        )
+        mapped = {
+            row["rating_key"]: row["item_id"]
+            for row in _rows(conn, "SELECT rating_key, item_id FROM plex_items")
+        }
+        rows = {
+            row["item_id"]: (row["episode"], row["title"])
+            for row in _rows(conn, "SELECT item_id, episode, title FROM items")
+        }
+        # The shared TVDB id still belongs to the episode that had it first —
+        # a reader looking it up gets E14, not the file Plex mis-matched.
+        owner = conn.execute(
+            "SELECT item_id FROM external_ids WHERE ns = 'tvdb' AND value = '11464298'"
+        ).fetchone()[0]
+
+    assert mapped == {"149812": "imdb:tt36431487", "149814": expected_fork}
+    assert rows["imdb:tt36431487"] == (14, "Irrational Treasure [800th episode]")
+    assert rows[expected_fork] == (16, "Extreme Makeover: Homer Edition")
+    assert owner == "imdb:tt36431487"
+
+    (forked,) = stats.identities_forked
+    assert forked.label == "The Simpsons S37E16 — Extreme Makeover: Homer Edition"
+    assert forked.rating_key == "149814"
+    assert forked.contested_id == "imdb:tt36431487"
+    assert forked.contested_by == "149812"
+    assert forked.contested_title == "Irrational Treasure [800th episode]"
+    assert forked.forked_id == expected_fork
+    assert stats.kept_by("external_id") == []
+
+
+def test_the_episode_forks_the_same_way_when_the_mismatched_file_is_walked_first(
+    tmp_path: Path,
+) -> None:
+    """Order must not decide who keeps the shared id's identity. With E16 first,
+    it takes `tvdb:11464298`; E14 then arrives carrying that same TVDB id plus
+    its own IMDb and TMDB ids, finds E16's identity under a different title, and
+    forks — to `imdb:tt36431487`, not the `fs:` hash, because its own two ids
+    are unclaimed."""
+    store = tmp_path / "plexdb.db"
+    shows_section = Section(key="2", type="show", title="TV Shows")
+
+    e16 = _simpsons_episode("149814", 16, "Extreme Makeover: Homer Edition", ["tvdb://11464298"])
+    e14 = _simpsons_episode(
+        "149812",
+        14,
+        "Irrational Treasure [800th episode]",
+        ["imdb://tt36431487", "tmdb://6878206", "tvdb://11464298"],
+    )
+
+    with _open(store) as conn:
+        stats = walk_all(
+            conn,
+            FakeSource(
+                section_list=[shows_section], records={("2", PLEX_TYPE_EPISODE): [e16, e14]}
+            ),
+        )
+        mapped = {
+            row["rating_key"]: row["item_id"]
+            for row in _rows(conn, "SELECT rating_key, item_id FROM plex_items")
+        }
+
+    assert mapped == {"149814": "tvdb:11464298", "149812": "imdb:tt36431487"}
+    (forked,) = stats.identities_forked
+    assert forked.rating_key == "149812"
+    assert forked.contested_id == "tvdb:11464298"
+    assert forked.forked_id == "imdb:tt36431487"
+
+
+def test_one_episode_plex_lists_under_two_season_numbers_stays_one_row(tmp_path: Path) -> None:
+    """The other side of issue #58, and the reason the title is the
+    discriminator rather than the season/episode numbers. *South Park*
+    "Twisted Christian" is one episode Plex lists as both S27E06 and S28E01
+    under one TVDB id — two rating keys that are meant to collapse onto one
+    identity. Five of the six shared identities in the author's library on 12
+    August 2026 were this shape; only the Simpsons pair was not."""
+    store = tmp_path / "plexdb.db"
+    shows_section = Section(key="2", type="show", title="TV Shows")
+
+    def episode(rating_key: str, season: int, index: int) -> dict[str, Any]:
+        return {
+            "ratingKey": rating_key,
+            "title": "Twisted Christian",
+            "grandparentTitle": "South Park",
+            "parentIndex": season,
+            "index": index,
+            "Guid": [{"id": "tvdb://11256175"}, {"id": "tmdb://6443923"}],
+            "Media": [
+                {"Part": [{"file": f"/media/television/South Park/S{season:02d}E{index:02d}.mkv"}]}
+            ],
+        }
+
+    with _open(store) as conn:
+        stats = walk_all(
+            conn,
+            FakeSource(
+                section_list=[shows_section],
+                records={("2", PLEX_TYPE_EPISODE): [episode("200", 27, 6), episode("201", 28, 1)]},
+            ),
+        )
+        mapped = {
+            row["rating_key"]: row["item_id"]
+            for row in _rows(conn, "SELECT rating_key, item_id FROM plex_items")
+        }
+        item_count = conn.execute("SELECT count(*) FROM items").fetchone()[0]
+
+    assert mapped == {"200": "tmdb:6443923", "201": "tmdb:6443923"}
+    assert item_count == 1
+    assert stats.identities_forked == []
+
+
+def test_a_store_already_holding_the_fused_row_is_repaired_by_the_next_walk(
+    tmp_path: Path,
+) -> None:
+    """The live store as issue #58 measured it: one row, `imdb:tt36431487`,
+    holding S37E16's title and numbers, with both rating keys pointing at it and
+    S37E14 absent. A walk must put E14 back on the id that is actually its IMDb
+    number and move E16 off it — otherwise the fix stops the fusion happening
+    again but leaves the episode already lost still lost.
+
+    E14's own GUID set derives `imdb:tt36431487` exactly, so it holds the id and
+    overwrites the wrong title; E16 has nothing left to derive from and forks.
+    """
+    store = tmp_path / "plexdb.db"
+    shows_section = Section(key="2", type="show", title="TV Shows")
+
+    e14 = _simpsons_episode(
+        "149812",
+        14,
+        "Irrational Treasure [800th episode]",
+        ["imdb://tt36431487", "tmdb://6878206", "tvdb://11464298"],
+    )
+    e16 = _simpsons_episode("149814", 16, "Extreme Makeover: Homer Edition", ["tvdb://11464298"])
+    expected_fork = derive_item_id(
+        [], canonical_path("/media/television/The Simpsons/S37E16.mkv", ())
+    )
+
+    with _open(store) as conn:
+        with conn:
+            conn.execute(
+                "INSERT INTO items (item_id, type, title, show_title, season, episode) "
+                "VALUES ('imdb:tt36431487', 'episode', 'Extreme Makeover: Homer Edition', "
+                "'The Simpsons', 37, 16)"
+            )
+            for ns, value in (("imdb", "tt36431487"), ("tmdb", "6878206"), ("tvdb", "11464298")):
+                conn.execute(
+                    "INSERT INTO external_ids (item_id, ns, value, kind, last_seen) "
+                    "VALUES ('imdb:tt36431487', ?, ?, 'episode', '2026-08-12T19:50:09+00:00')",
+                    (ns, value),
+                )
+            for rating_key in ("149812", "149814"):
+                conn.execute(
+                    "INSERT INTO plex_items (rating_key, item_id, section_id, last_seen) "
+                    "VALUES (?, 'imdb:tt36431487', '2', '2026-08-12T19:50:09+00:00')",
+                    (rating_key,),
+                )
+
+        stats = walk_all(
+            conn,
+            FakeSource(
+                section_list=[shows_section], records={("2", PLEX_TYPE_EPISODE): [e14, e16]}
+            ),
+        )
+        mapped = {
+            row["rating_key"]: row["item_id"]
+            for row in _rows(conn, "SELECT rating_key, item_id FROM plex_items")
+        }
+        rows = {
+            row["item_id"]: (row["episode"], row["title"])
+            for row in _rows(conn, "SELECT item_id, episode, title FROM items")
+        }
+
+    assert mapped == {"149812": "imdb:tt36431487", "149814": expected_fork}
+    assert rows["imdb:tt36431487"] == (14, "Irrational Treasure [800th episode]")
+    assert rows[expected_fork] == (16, "Extreme Makeover: Homer Edition")
+    (forked,) = stats.identities_forked
+    assert forked.rating_key == "149814"
+    assert forked.forked_id == expected_fork
 
 
 def test_several_external_ids_matching_different_identities_resolve_by_priority_order(

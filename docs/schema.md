@@ -122,6 +122,23 @@ were indistinguishable before this column existed. See
 [ADR-0008's amendment](./adr/0008-the-walk-never-repoints-an-existing-item-id) for what this means
 when the id Plex stops reporting is the one an `item_id` was derived from.
 
+**An `item_id` covering two rating keys means one title Plex lists twice — the walk now refuses
+the case where it does not.** Two copies of a film in two sections, and one episode Plex lists
+under two season numbers, both land two rating keys on one identity, which is intended. But Plex
+also hands a freshly-aired episode still showing as `TBA` the TVDB id of a *different* episode of
+the same show, and one shared id was enough for the walk to adopt the other episode's identity,
+overwrite its title, and leave it with no row at all: *The Simpsons* S37E16 took S37E14's
+`imdb:tt36431487` and S37E14 vanished from the store
+([issue #58](https://github.com/McBrideMusings/plex-db-ex/issues/58)). No column changed for this
+— the walk now compares titles before adopting an identity another rating key already holds: same
+title, it
+merges as before; different title, the record takes an id derived from only the external ids
+nothing else has claimed — an `fs:` path hash when the shared id was the only one Plex reported
+for it. `external_ids` keeps pointing the shared id at whichever title had it first, so a reader
+looking up `tvdb 11464298` still gets S37E14. Every occurrence is named in `plexdb walk`'s
+summary, and a store already holding a fused row is repaired by the next walk — the episode whose
+own GUIDs derive the contested id keeps it, the other one moves off.
+
 ### Namespaces in use
 
 | Namespace | Writer | Keys |

@@ -26,6 +26,19 @@ episodes in separate lists that all start at 1, so a bare `tmdb://1678`
 means *Godzilla* on a movie and *The Golden Girls* on a show. Matching
 across kinds handed the show the movie's identity and fused two unrelated
 titles into one row.
+
+**ADR-0008's fourth amendment** (issue #58): an identity is only adopted
+from an external id if no *other* Plex rating key already holds it under a
+different title. Plex gives a freshly-aired episode whose metadata is still
+`TBA` the TVDB id of a different episode of the same show, and one shared id
+was enough to adopt: *The Simpsons* S37E16 landed on S37E14's
+`imdb:tt36431487`, overwrote its title, and S37E14 stopped existing in the
+store. Every other identity in the author's library held by two rating keys
+is one title Plex lists twice, under the same title string — so the title is
+what separates a genuine duplicate from two different episodes Plex
+confused. A contested record forks to an id derived from only the ids no
+other identity has claimed, which for that episode is none of them: it lands
+under `fs:` rather than being named after an id Plex got wrong.
 """
 
 from __future__ import annotations
@@ -69,6 +82,40 @@ class KeptIdentity(NamedTuple):
     derived_id: str
 
 
+class ForkedIdentity(NamedTuple):
+    """One title that resolved onto an identity another rating key already held
+    under a different title, and forked to its own id instead (issue #58).
+
+    The counterpart to `KeptIdentity`: both describe a title whose derived id
+    disagreed with what the store already had, and they record the two
+    opposite outcomes — keeping the stored identity (the usual, correct case)
+    and refusing it (a Plex-side id collision between two different titles).
+    """
+
+    label: str
+    rating_key: str
+    #: The identity this title's external id matched and did **not** adopt.
+    contested_id: str
+    #: The rating key already holding `contested_id`, under `contested_title`.
+    contested_by: str
+    contested_title: str
+    #: The id this title landed under instead — derived from only the external
+    #: ids no other identity has claimed, so `fs:` when all of them are taken.
+    forked_id: str
+
+
+@dataclass
+class _Claim:
+    """Which rating keys hold one `item_id`, and the title it currently carries.
+
+    The title is the one written most recently for that identity, which is what
+    a later record in the same walk is compared against.
+    """
+
+    title: str
+    rating_keys: set[str]
+
+
 @dataclass
 class WalkStats:
     """What one walk touched — the summary `plexdb walk` prints on completion."""
@@ -86,6 +133,10 @@ class WalkStats:
     #: remove-and-re-add that changed the rating key but not the GUIDs, or a
     #: GUID set that gained an id already recorded elsewhere.
     identities_kept: list[KeptIdentity] = field(default_factory=list)
+    #: Every title that refused an identity because another rating key already
+    #: held it under a different title (issue #58). Empty on a library where
+    #: Plex has not given two different titles one external id.
+    identities_forked: list[ForkedIdentity] = field(default_factory=list)
 
     def kept_by(self, found_by: str) -> list[KeptIdentity]:
         """The kept identities one of `_resolve_existing`'s two paths found."""
@@ -205,6 +256,37 @@ def _resolve_existing(
     return None
 
 
+def _contesting_claim(
+    item_id: str,
+    rating_key: str,
+    title: str,
+    claims: dict[str, _Claim],
+) -> tuple[str, str] | None:
+    """The `(rating key, title)` already holding `item_id` under a different
+    title, if there is one — issue #58's discriminator.
+
+    A different rating key holding the identity is not on its own a problem:
+    two copies of one film, and one episode Plex lists under two season
+    numbers, both land two rating keys on one identity and are meant to. What
+    separates those from two *different* episodes Plex handed one TVDB id is
+    the title, so that is what is compared — normalised for case and
+    surrounding whitespace only, since anything looser would merge episodes
+    that genuinely differ by a word.
+
+    The *same* rating key holding the identity is never contested: that is the
+    same physical title, whose own title Plex is free to correct.
+    """
+    claim = claims.get(item_id)
+    if claim is None:
+        return None
+    others = sorted(key for key in claim.rating_keys if key != rating_key)
+    if not others:
+        return None
+    if claim.title.strip().casefold() == title.strip().casefold():
+        return None
+    return others[0], claim.title
+
+
 def _write_item(
     conn: sqlite3.Connection,
     record: dict[str, Any],
@@ -216,6 +298,7 @@ def _write_item(
     stats: WalkStats,
     existing_by_rating_key: dict[str, str],
     existing_by_external_id: dict[tuple[str, str, str], str],
+    claims: dict[str, _Claim],
     show_item_ids: dict[str, str],
 ) -> None:
     """Upsert one Plex record as an `items` row, its `external_ids`, and its
@@ -234,10 +317,54 @@ def _write_item(
     if derived_id.startswith("fs:"):
         stats.fallback_to_path += 1
 
+    title = str(record.get("title") or "")
     resolved = _resolve_existing(
         external_ids, rating_key, kind, existing_by_external_id, existing_by_rating_key
     )
-    if resolved is not None and resolved.item_id != derived_id:
+    contested = (
+        _contesting_claim(resolved.item_id, rating_key, title, claims)
+        if resolved is not None
+        and resolved.found_by == "external_id"
+        # A record whose own GUID set derives exactly the identity it matched is
+        # that identity's rightful holder and never forks, whatever else claims
+        # it. Without this, the two Simpsons episodes already fused in the live
+        # store would *both* fork on the next walk — S37E14 too, since the row
+        # it rightfully owns currently carries S37E16's title — and
+        # `imdb:tt36431487` would be left addressed by nothing. With it, E14
+        # keeps the id and rewrites the title, E16 forks, and one walk repairs
+        # the fusion.
+        and resolved.item_id != derived_id
+        else None
+    )
+    if resolved is not None and contested is not None:
+        # Plex gave two different titles one external id — a freshly-aired
+        # episode still showing as `TBA` gets the TVDB id of another episode of
+        # the same show (issue #58). Adopting the identity here would overwrite
+        # the other title's row with this one's and leave that title with no row
+        # at all; keeping it is what lost *The Simpsons* S37E14. So this record
+        # takes an id of its own, derived from only the external ids no other
+        # identity has claimed — which, when the shared id is the only one Plex
+        # reports for it, is none of them, so it lands under the `fs:` path
+        # hash rather than being named after an id that belongs to a different
+        # title.
+        contested_by, contested_title = contested
+        unclaimed = [
+            (ns, value)
+            for ns, value in external_ids
+            if existing_by_external_id.get((ns, value, kind)) is None
+        ]
+        item_id = identity.derive_item_id(unclaimed, canonical)
+        stats.identities_forked.append(
+            ForkedIdentity(
+                label=_label(record, kind),
+                rating_key=rating_key,
+                contested_id=resolved.item_id,
+                contested_by=contested_by,
+                contested_title=contested_title,
+                forked_id=item_id,
+            )
+        )
+    elif resolved is not None and resolved.item_id != derived_id:
         # Either this rating key's GUID set changed since the last walk
         # (Plex re-matched it, or it gained a GUID it previously lacked —
         # caught by the rating key), or the rating key itself changed while
@@ -306,7 +433,7 @@ def _write_item(
         (
             item_id,
             kind,
-            record.get("title") or "",
+            title,
             title_sort,
             show_title,
             show_item_id,
@@ -354,6 +481,17 @@ def _write_item(
     )
 
     existing_by_rating_key[rating_key] = item_id
+    # Mirrors the two rows just written: this rating key now holds this
+    # identity, under this title. A record later in the same pass whose only
+    # shared external id points here is compared against exactly this — the two
+    # Simpsons episodes arrive one after the other in one walk, so the claim has
+    # to be visible immediately, not only to the next walk.
+    claim = claims.get(item_id)
+    if claim is None:
+        claims[item_id] = _Claim(title=title, rating_keys={rating_key})
+    else:
+        claim.title = title
+        claim.rating_keys.add(rating_key)
     for namespace, value in external_ids:
         # Mirrors the DB's own `ON CONFLICT (ns, value, kind) DO UPDATE SET
         # last_seen = ...` above: only `last_seen` moves on conflict,
@@ -397,6 +535,18 @@ def walk_all(
         (row["ns"], row["value"], row["kind"]): row["item_id"]
         for row in conn.execute("SELECT ns, value, kind, item_id FROM external_ids")
     }
+    claims: dict[str, _Claim] = {}
+    for row in conn.execute(
+        "SELECT p.item_id AS item_id, p.rating_key AS rating_key, i.title AS title "
+        "FROM plex_items p JOIN items i ON i.item_id = p.item_id"
+    ):
+        claim = claims.get(row["item_id"])
+        if claim is None:
+            claims[row["item_id"]] = _Claim(
+                title=row["title"] or "", rating_keys={row["rating_key"]}
+            )
+        else:
+            claim.rating_keys.add(row["rating_key"])
     show_item_ids: dict[str, str] = {
         row["rating_key"]: row["item_id"]
         for row in conn.execute(
@@ -427,6 +577,7 @@ def walk_all(
                         stats=stats,
                         existing_by_rating_key=existing_by_rating_key,
                         existing_by_external_id=existing_by_external_id,
+                        claims=claims,
                         show_item_ids=show_item_ids,
                     )
 

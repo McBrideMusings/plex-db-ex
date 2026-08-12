@@ -65,6 +65,23 @@ def _cmd_walk(args: argparse.Namespace) -> int:
             print(f"        kept {entry.kept_id}, would have derived {entry.derived_id}")
         if len(kept) > _KEPT_SHOWN:
             print(f"    ... and {len(kept) - _KEPT_SHOWN} more")
+    forked = stats.identities_forked
+    if forked:
+        # Issue #58: Plex gave two different titles one external id, so this
+        # title took an id of its own rather than overwriting the other one's
+        # row. Always named in full and never capped — this is rare (one
+        # occurrence in the author's library) and each line is a Plex-side
+        # mismatch worth fixing at the source.
+        print(
+            f"{len(forked)} title(s) matched an id another rating key already holds under a "
+            f"different title; took an id of their own rather than overwriting it"
+        )
+        for fork in forked:
+            print(f"    {fork.label} [rating key {fork.rating_key}]")
+            print(
+                f"        landed on {fork.forked_id}; {fork.contested_id} is "
+                f"{fork.contested_title!r} [rating key {fork.contested_by}]"
+            )
     return 0
 
 
