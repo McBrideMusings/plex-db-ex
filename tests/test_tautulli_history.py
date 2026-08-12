@@ -73,7 +73,9 @@ def _seed_play(
 
 
 def _play(conn: sqlite3.Connection, history_key: str) -> sqlite3.Row:
-    row = conn.execute("SELECT * FROM plays WHERE history_key = ?", (history_key,)).fetchone()
+    row: sqlite3.Row = conn.execute(
+        "SELECT * FROM plays WHERE history_key = ?", (history_key,)
+    ).fetchone()
     assert row is not None
     return row
 
