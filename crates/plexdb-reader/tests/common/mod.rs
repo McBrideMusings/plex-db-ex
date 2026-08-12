@@ -66,6 +66,20 @@ INSERT INTO edges (from_id, to_id, edge_type, rank, fetched_at) VALUES
     ('imdb:tt1', 'imdb:tt3', 'tmdb_similar',         2, '2026-01-01T00:00:00+00:00'),
     ('imdb:tt2', 'imdb:tt1', 'tmdb_recommendations', 1, '2026-01-01T00:00:00+00:00');
 
+-- Two crowd lists from different sources, one fully populated (MDBList-shaped:
+-- rank and the list's own size/likes), one carrying only what a mentions-only
+-- source like a subreddit would have. tt1 sits on both, so its membership
+-- rows exercise both nullable shapes at once; tt2 sits on the ranked list
+-- with neither rank nor mentions recorded (an unordered entry).
+INSERT INTO collection (collection_id, source, name, url, size, likes, observed_at) VALUES
+    ('mdblist:100', 'mdblist', 'Best Heists', 'https://mdblist.com/lists/100', 50, 1200, '2026-01-01T00:00:00+00:00'),
+    ('reddit:heist', 'reddit', NULL, NULL, NULL, NULL, '2026-01-01T00:00:00+00:00');
+
+INSERT INTO collection_membership (collection_id, item_id, rank, mentions, observed_at) VALUES
+    ('mdblist:100',  'imdb:tt1', 3,    NULL, '2026-01-01T00:00:00+00:00'),
+    ('reddit:heist', 'imdb:tt1', NULL, 7,    '2026-01-02T00:00:00+00:00'),
+    ('mdblist:100',  'imdb:tt2', NULL, NULL, '2026-01-01T00:00:00+00:00');
+
 -- Three shows, to exercise ADR-0011's season unit:
 --   ttfin   two seasons of 5, watched exactly one season   -> r = 1.0, kept
 --   ttbail  one season of 10, watched twice                -> r = 0.2, dropped

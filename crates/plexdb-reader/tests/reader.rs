@@ -152,6 +152,94 @@ fn edges_are_queryable_in_both_directions_filtered_by_type() {
     assert!(none.is_empty());
 }
 
+#[test]
+fn collections_for_returns_both_sources_with_their_own_nullable_fields_intact() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("plexdb.db");
+    common::build_fixture(&path);
+    let reader = Reader::open(&path).expect("open the fixture store");
+
+    let memberships = reader
+        .collections_for("imdb:tt1")
+        .expect("query collection memberships");
+
+    assert_eq!(
+        memberships.len(),
+        2,
+        "tt1 sits on two lists from two different sources"
+    );
+
+    // Ordered by collection_id: "mdblist:100" sorts before "reddit:heist".
+    let mdblist = &memberships[0];
+    assert_eq!(mdblist.collection_id, "mdblist:100");
+    assert_eq!(mdblist.source, "mdblist");
+    assert_eq!(mdblist.name.as_deref(), Some("Best Heists"));
+    assert_eq!(
+        mdblist.url.as_deref(),
+        Some("https://mdblist.com/lists/100")
+    );
+    assert_eq!(mdblist.size, Some(50));
+    assert_eq!(mdblist.likes, Some(1200));
+    assert_eq!(mdblist.rank, Some(3), "MDBList records a rank");
+    assert_eq!(
+        mdblist.mentions, None,
+        "MDBList never fills mentions — must stay None, not 0"
+    );
+
+    let reddit = &memberships[1];
+    assert_eq!(reddit.collection_id, "reddit:heist");
+    assert_eq!(reddit.source, "reddit");
+    assert_eq!(
+        reddit.name, None,
+        "a source that recorded no name stays None"
+    );
+    assert_eq!(reddit.url, None);
+    assert_eq!(
+        reddit.size, None,
+        "a mentions-only source has no list length"
+    );
+    assert_eq!(reddit.likes, None);
+    assert_eq!(
+        reddit.rank, None,
+        "a mentions source never ranks — must stay None, not 0"
+    );
+    assert_eq!(reddit.mentions, Some(7));
+}
+
+#[test]
+fn collections_for_an_unordered_entry_keeps_rank_and_mentions_distinguishable_from_zero() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("plexdb.db");
+    common::build_fixture(&path);
+    let reader = Reader::open(&path).expect("open the fixture store");
+
+    let memberships = reader
+        .collections_for("imdb:tt2")
+        .expect("query collection memberships");
+
+    assert_eq!(memberships.len(), 1);
+    let entry = &memberships[0];
+    assert_eq!(entry.collection_id, "mdblist:100");
+    assert_eq!(
+        entry.rank, None,
+        "an unordered entry on an otherwise-ranked list must not collapse to rank 0"
+    );
+    assert_eq!(entry.mentions, None);
+}
+
+#[test]
+fn collections_for_a_title_on_no_lists_is_empty_not_an_error() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("plexdb.db");
+    common::build_fixture(&path);
+    let reader = Reader::open(&path).expect("open the fixture store");
+
+    let memberships = reader
+        .collections_for("imdb:tt3")
+        .expect("query collection memberships for a title on no lists");
+    assert!(memberships.is_empty());
+}
+
 /// Two weights are equal to within floating-point noise. The rollup sums
 /// square roots, so exact comparison would fail on rounding rather than on
 /// anything meaningful.
