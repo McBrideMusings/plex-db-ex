@@ -71,10 +71,11 @@ CREATE TABLE items (
 -- a kind is a write-time error rather than a silent duplicate. `kind` matches
 -- items.type: 'movie', 'show' or 'episode'.
 CREATE TABLE external_ids (
-    item_id TEXT NOT NULL REFERENCES items(item_id) ON DELETE CASCADE,
-    ns      TEXT NOT NULL,
-    value   TEXT NOT NULL,
-    kind    TEXT NOT NULL,
+    item_id   TEXT NOT NULL REFERENCES items(item_id) ON DELETE CASCADE,
+    ns        TEXT NOT NULL,
+    value     TEXT NOT NULL,
+    kind      TEXT NOT NULL,
+    last_seen TEXT NOT NULL,
     PRIMARY KEY (ns, value, kind)
 );
 
@@ -110,6 +111,16 @@ numbers everything in one shared list and Plex's own `plex://` ids are already t
 so neither collides — but `kind` is in the key for every namespace rather than the two that
 happen to need it. A store that fused identities before schema version 5 is repaired with
 `plexdb repair-identities`.
+
+**`last_seen` is stamped by every walk that observes the row** — schema v8
+([issue #57](https://github.com/McBrideMusings/plex-db-ex/issues/57)), following
+`plex_items.last_seen`'s precedent one level up. A row Plex reports again on a later walk gets
+`last_seen` moved forward; a row Plex stops reporting keeps whatever value it already had, so its
+`last_seen` falls behind the current walk's timestamp. That is the only way this table can tell
+"Plex stopped publishing this id" apart from "Plex published it once and we kept it" — the two
+were indistinguishable before this column existed. See
+[ADR-0008's amendment](./adr/0008-the-walk-never-repoints-an-existing-item-id) for what this means
+when the id Plex stops reporting is the one an `item_id` was derived from.
 
 ### Namespaces in use
 
@@ -474,6 +485,25 @@ lists that both start at 1 (see v5 above).
 A `collection` row is the staleness cursor for its own list: a fetched list always leaves one
 behind even when none of its entries resolved, so this source needs no `enrichment_cursor` row the
 way the TMDB sweeps do.
+
+## Version 8 — external_ids records when an id was last observed
+
+[Issue #57](https://github.com/McBrideMusings/plex-db-ex/issues/57). `external_ids` gains
+`last_seen`; see the table definition and the note under it near the top of this document.
+
+The column is `NOT NULL`, and SQLite cannot add one of those to a table that already holds rows, so
+the migration rebuilds `external_ids` the way v5 did: create the new shape, copy every row across,
+drop the old table, rename.
+
+Existing rows are backfilled with the migration's own timestamp, which means "present when this
+store was migrated," not "Plex reported this id then." The column starts meaning what it says on
+the very next walk: every id Plex still reports gets `last_seen` moved forward, and every id it
+stops reporting is left exactly where it was.
+
+Nothing before this schema version could distinguish a GUID Plex had genuinely dropped from one
+that just missed a single fetch — a rate limit, a timeout, a partial index. Two walks now answer
+that on their own: an id whose `last_seen` predates the current walk was not in the most recent
+report.
 
 ## Not yet built
 

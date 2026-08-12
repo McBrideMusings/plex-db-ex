@@ -522,8 +522,8 @@ def _seed_one_movie(store: Path) -> None:
             "('imdb:tt0468569', 'movie', 'The Dark Knight')"
         )
         conn.execute(
-            "INSERT INTO external_ids (item_id, ns, value, kind) "
-            "VALUES ('imdb:tt0468569', 'tmdb', '155', 'movie')"
+            "INSERT INTO external_ids (item_id, ns, value, kind, last_seen) "
+            "VALUES ('imdb:tt0468569', 'tmdb', '155', 'movie', '2026-01-01T00:00:00+00:00')"
         )
 
 
@@ -603,8 +603,8 @@ def _seed_movies(store: Path, n: int) -> None:
                 (item_id, f"Movie {i}"),
             )
             conn.execute(
-                "INSERT INTO external_ids (item_id, ns, value, kind) "
-                "VALUES (?, 'tmdb', ?, 'movie')",
+                "INSERT INTO external_ids (item_id, ns, value, kind, last_seen) "
+                "VALUES (?, 'tmdb', ?, 'movie', '2026-01-01T00:00:00+00:00')",
                 (item_id, str(i)),
             )
 
@@ -677,8 +677,8 @@ def test_enrich_tmdb_edges_writes_rows_and_reports_a_summary(
             "('imdb:tt0372784', 'movie', 'Batman Begins')"
         )
         conn.execute(
-            "INSERT INTO external_ids (item_id, ns, value, kind) "
-            "VALUES ('imdb:tt0372784', 'tmdb', '272', 'movie')"
+            "INSERT INTO external_ids (item_id, ns, value, kind, last_seen) "
+            "VALUES ('imdb:tt0372784', 'tmdb', '272', 'movie', '2026-01-01T00:00:00+00:00')"
         )
     capsys.readouterr()
 

@@ -128,6 +128,42 @@ def test_v7_moves_every_bookkeeping_row_out_of_enrichment(tmp_path: Path) -> Non
     ]
 
 
+def test_v8_backfills_last_seen_on_every_existing_external_ids_row(tmp_path: Path) -> None:
+    """Issue #57. Built against v1–v7's shape (mirroring the real store's
+    starting point before this migration ever runs), with an existing
+    external_ids row that predates the column entirely, then v8 applied
+    alone."""
+    store = tmp_path / "plexdb.db"
+    conn = sqlite3.connect(store)
+    try:
+        conn.executescript(
+            schema._V1
+            + schema._V2
+            + schema._V3
+            + schema._V4
+            + schema._V5
+            + schema._V6
+            + schema._V7
+        )
+        conn.execute("INSERT INTO items (item_id, type, title) VALUES ('imdb:tt1', 'movie', 'X')")
+        conn.execute(
+            "INSERT INTO external_ids (item_id, ns, value, kind) "
+            "VALUES ('imdb:tt1', 'imdb', 'tt1', 'movie')"
+        )
+        conn.commit()
+
+        conn.executescript(schema._V8)
+
+        rows = conn.execute("SELECT ns, value, last_seen FROM external_ids").fetchall()
+    finally:
+        conn.close()
+
+    assert len(rows) == 1
+    ns, value, last_seen = rows[0]
+    assert (ns, value) == ("imdb", "tt1")
+    assert last_seen is not None
+
+
 def test_a_current_store_carries_every_migrations_tables_and_nothing_else(
     tmp_path: Path,
 ) -> None:
@@ -147,7 +183,7 @@ def test_the_columns_the_first_slice_depends_on_are_present(tmp_path: Path) -> N
     init(store)
 
     assert {"item_id", "type", "title", "year"} <= _columns(store, "items")
-    assert {"item_id", "ns", "value"} <= _columns(store, "external_ids")
+    assert {"item_id", "ns", "value", "last_seen"} <= _columns(store, "external_ids")
     assert {"rating_key", "item_id", "section_id"} <= _columns(store, "plex_items")
     assert {"item_id", "namespace", "key", "value", "fetched_at"} <= _columns(store, "enrichment")
 
@@ -243,12 +279,12 @@ def test_v5_lets_a_movie_and_a_show_hold_the_same_tmdb_number(tmp_path: Path) ->
         conn.execute("INSERT INTO items (item_id, type, title) VALUES ('m', 'movie', 'Godzilla')")
         conn.execute("INSERT INTO items (item_id, type, title) VALUES ('s', 'show', 'Golden')")
         conn.execute(
-            "INSERT INTO external_ids (item_id, ns, value, kind) "
-            "VALUES ('m', 'tmdb', '1678', 'movie')"
+            "INSERT INTO external_ids (item_id, ns, value, kind, last_seen) "
+            "VALUES ('m', 'tmdb', '1678', 'movie', '2026-01-01T00:00:00+00:00')"
         )
         conn.execute(
-            "INSERT INTO external_ids (item_id, ns, value, kind) "
-            "VALUES ('s', 'tmdb', '1678', 'show')"
+            "INSERT INTO external_ids (item_id, ns, value, kind, last_seen) "
+            "VALUES ('s', 'tmdb', '1678', 'show', '2026-01-01T00:00:00+00:00')"
         )
         conn.commit()
 
@@ -262,8 +298,8 @@ def test_v5_lets_a_movie_and_a_show_hold_the_same_tmdb_number(tmp_path: Path) ->
         conn.execute("INSERT INTO items (item_id, type, title) VALUES ('m2', 'movie', 'Copy')")
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute(
-                "INSERT INTO external_ids (item_id, ns, value, kind) "
-                "VALUES ('m2', 'tmdb', '1678', 'movie')"
+                "INSERT INTO external_ids (item_id, ns, value, kind, last_seen) "
+                "VALUES ('m2', 'tmdb', '1678', 'movie', '2026-01-01T00:00:00+00:00')"
             )
 
 
@@ -438,8 +474,8 @@ def test_foreign_keys_are_enforced(tmp_path: Path) -> None:
     with open_store(store) as conn:
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute(
-                "INSERT INTO external_ids (item_id, ns, value, kind) "
-                "VALUES ('missing', 'imdb', 'tt1', 'movie')"
+                "INSERT INTO external_ids (item_id, ns, value, kind, last_seen) "
+                "VALUES ('missing', 'imdb', 'tt1', 'movie', '2026-01-01T00:00:00+00:00')"
             )
 
 

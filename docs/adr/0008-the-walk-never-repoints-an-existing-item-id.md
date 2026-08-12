@@ -83,6 +83,33 @@ Identities already fused cannot be undone by re-walking: both rating keys are in
 pointing at the fused id, so the walk finds it by rating key and this ADR's rule keeps it.
 `plexdb repair-identities` deletes them and re-derives from Plex instead.
 
+## Third amendment: a title reporting fewer GUIDs than before is now observable, and still keeps its identity
+
+Every case above is about a title's GUID set *changing shape* — gaining an id, or a wholesale
+re-match. None of them cover a title reporting **fewer** ids than a prior walk recorded, with the
+id `item_id` was derived from untouched. That case reached this store on 12 August 2026: `plexdb
+walk` printed 9 titles whose stored `item_id` disagreed with a fresh derivation
+([issue #56](https://github.com/McBrideMusings/plex-db-ex/issues/56)), and five were not
+explainable from anything `walk` recorded — each had its previously-strongest GUID vanish from
+Plex's report, leaving only the tier below, with nothing to say whether Plex genuinely dropped the
+match or one fetch simply came back short.
+
+**Resolved: this store does not act on a dropped GUID, only makes it visible.** `external_ids`
+gains `last_seen`, stamped by every walk that observes a row (schema v8, issue #57). An id a walk
+no longer reports keeps its prior `last_seen`; every id it does report gets the current walk's
+timestamp. Two walks now distinguish "Plex stopped publishing this id" from "Plex published it
+once and we kept it" — a fact this store previously could not represent at all, since every id sat
+in the table identically regardless of how recently Plex had actually reported it.
+
+**The never-repoint rule itself is unaffected.** `_resolve_existing` still finds the title by
+whichever of its ids it does have (identity.PRIORITY order), so a title that drops its strongest
+GUID keeps the `item_id` already assigned — it does not fork, and it does not re-derive. `walk`'s
+disagreement count (the trigger for issue #56) is still printed exactly as before; `last_seen`
+gives a person investigating that count a way to tell a genuine drop from a transient miss without
+guessing, but changes nothing about which `item_id` a title is assigned. Whether a store should
+ever *act* on a stale id — expiring it, or re-deriving `item_id` once one is missing long enough —
+is a separate decision, deliberately out of scope here.
+
 ## Consequences
 
 An `item_id` can stop matching what `derive_item_id` would produce from a title's *current* GUID

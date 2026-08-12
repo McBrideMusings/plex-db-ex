@@ -55,7 +55,8 @@ def _seed(
     )
     if tmdb_id is not None:
         conn.execute(
-            "INSERT INTO external_ids (item_id, ns, value, kind) VALUES (?, 'tmdb', ?, ?)",
+            "INSERT INTO external_ids (item_id, ns, value, kind, last_seen) "
+            "VALUES (?, 'tmdb', ?, ?, '2026-01-01T00:00:00+00:00')",
             (item_id, tmdb_id, item_type),
         )
     conn.commit()
@@ -346,7 +347,8 @@ def test_two_tmdb_ids_resolving_to_the_same_local_item_do_not_crash_the_sweep(
         # A second, stale/duplicate tmdb id landing on the same local item —
         # both resolve to BATMAN_BEGINS.
         conn.execute(
-            "INSERT INTO external_ids (item_id, ns, value, kind) VALUES (?, 'tmdb', ?, 'movie')",
+            "INSERT INTO external_ids (item_id, ns, value, kind, last_seen) "
+            "VALUES (?, 'tmdb', ?, 'movie', '2026-01-01T00:00:00+00:00')",
             (BATMAN_BEGINS, "99999"),
         )
         conn.commit()

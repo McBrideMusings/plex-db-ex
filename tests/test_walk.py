@@ -9,11 +9,14 @@ episodes in both seasons, covering issue #3's acceptance criteria.
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import pytest
 from plex_fixtures import FakeSource, recorded_source
 
+from plexdb import walk as walk_module
 from plexdb.identity import canonical_path, derive_item_id
 from plexdb.plex_client import PLEX_TYPE_EPISODE, PLEX_TYPE_MOVIE, PLEX_TYPE_SHOW, Section
 from plexdb.store import init as init_store
@@ -244,6 +247,82 @@ def test_a_titles_guid_set_changing_between_walks_keeps_its_identity_rather_than
             )
         }
         assert guids == {("imdb", "tt1111111"), ("imdb", "tt2222222")}
+
+
+def test_a_dropped_guid_keeps_its_older_last_seen_while_reported_ids_get_the_newer_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #57's whole point. A walk that simply re-stamped every
+    `external_ids` row it touches for a title — rather than only the ids
+    actually present in that title's `Guid` array — would pass a test that
+    only checked "does every row for this item_id have last_seen set". This
+    asserts the two rows individually: the id a fixture drops must keep the
+    *first* walk's timestamp, and the id still reported must move to the
+    *second* walk's timestamp, so a re-stamp-everything bug fails here."""
+    store = tmp_path / "plexdb.db"
+    movies_section = Section(key="1", type="movie", title="Movies")
+    first_record = {
+        "ratingKey": "999",
+        "type": "movie",
+        "title": "Test Movie",
+        "year": 2000,
+        "Guid": [{"id": "imdb://tt1111111"}, {"id": "tmdb://42"}],
+        "Media": [{"Part": [{"file": "/media/movies/Test Movie (2000)/test.mkv"}]}],
+    }
+    first_pass = FakeSource(
+        section_list=[movies_section],
+        records={("1", PLEX_TYPE_MOVIE): [first_record]},
+    )
+
+    first_walk_time = "2026-01-01T00:00:00+00:00"
+    second_walk_time = "2026-01-02T00:00:00+00:00"
+    stamps = iter([first_walk_time, second_walk_time])
+
+    # Two walks in the same real second would stamp identical timestamps, so
+    # the clock is handed one fixed instant per walk instead.
+    class _StampedClock(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> _StampedClock:
+            return cls.fromisoformat(next(stamps))
+
+    monkeypatch.setattr(walk_module, "datetime", _StampedClock)
+
+    def _last_seen(conn: Any) -> dict[tuple[str, str], str]:
+        return {
+            (r["ns"], r["value"]): r["last_seen"]
+            for r in _rows(
+                conn,
+                "SELECT ns, value, last_seen FROM external_ids WHERE item_id = 'imdb:tt1111111'",
+            )
+        }
+
+    with _open(store) as conn:
+        walk_all(conn, first_pass)
+        assert _last_seen(conn) == {
+            ("imdb", "tt1111111"): first_walk_time,
+            ("tmdb", "42"): first_walk_time,
+        }
+
+        # Second walk: Plex no longer reports the tmdb id at all — only the
+        # imdb one survives, unchanged.
+        dropped_guid_record = dict(first_record)
+        dropped_guid_record["Guid"] = [{"id": "imdb://tt1111111"}]
+        second_pass = FakeSource(
+            section_list=[movies_section],
+            records={("1", PLEX_TYPE_MOVIE): [dropped_guid_record]},
+        )
+        walk_all(conn, second_pass)
+
+        seen_after_second = _last_seen(conn)
+
+    # The row Plex still reports moved forward to the second walk's stamp.
+    assert seen_after_second[("imdb", "tt1111111")] == second_walk_time
+    # The row Plex stopped reporting is still present — ADR-0008: dropping an
+    # id never deletes it — but carries its OLDER, first-walk timestamp. A
+    # walk that re-stamped everything it touched for this item_id would have
+    # moved this to second_walk_time too, which is exactly the bug this
+    # column exists to make visible instead of hiding.
+    assert seen_after_second[("tmdb", "42")] == first_walk_time
 
 
 def test_a_titles_rating_key_changing_between_walks_keeps_its_identity_by_external_id(
