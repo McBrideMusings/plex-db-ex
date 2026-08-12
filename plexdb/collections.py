@@ -33,7 +33,12 @@ from datetime import UTC, datetime, timedelta
 
 from .identity import PRIORITY
 from .mdblist_client import MDBListSource
-from .staleness import DEFAULT_STALE_DAYS, is_stale
+
+# Re-exported (redundant `as` alias) so tests can check that every sweep binds
+# the exact same function/constant object rather than a drifted copy — see
+# test_staleness.py.
+from .staleness import DEFAULT_STALE_DAYS as DEFAULT_STALE_DAYS
+from .staleness import is_stale as is_stale
 
 #: The value written to `collection.source` by this module's MDBList harvest.
 MDBLIST_SOURCE = "mdblist"

@@ -40,9 +40,15 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from .errors import TMDbError
-from .staleness import DEFAULT_STALE_DAYS, is_stale
+
+# Re-exported (redundant `as` alias) so tests can check that every sweep binds
+# the exact same function/constant object rather than a drifted copy — see
+# test_staleness.py and test_tmdb_common.py.
+from .staleness import DEFAULT_STALE_DAYS as DEFAULT_STALE_DAYS
+from .staleness import is_stale as is_stale
 from .tmdb_client import TMDbSource
-from .tmdb_common import MAX_CONSECUTIVE_FAILURES, media_type_for
+from .tmdb_common import MAX_CONSECUTIVE_FAILURES as MAX_CONSECUTIVE_FAILURES
+from .tmdb_common import media_type_for as media_type_for
 
 #: This module's two edge types. Distinct, and never merged into one.
 RECOMMENDATIONS_EDGE_TYPE = "tmdb_recommendations"

@@ -8,6 +8,7 @@ and `enrichment` rows that are already in the store by the time it runs.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -30,7 +31,7 @@ ACCOUNT = 1
 
 
 @pytest.fixture
-def store(tmp_path: Path) -> sqlite3.Connection:
+def store(tmp_path: Path) -> Iterator[sqlite3.Connection]:
     path = tmp_path / "plexdb.db"
     init_store(path)
     conn = sqlite3.connect(path)
