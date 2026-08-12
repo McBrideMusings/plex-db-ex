@@ -59,9 +59,10 @@ Recompute rather than store-and-invalidate: watch history changes constantly, an
 
 ## 3. Schema sketch
 
-::: warning `item_id` resolved by [ADR-0002](./adr/0002-item-id-is-the-entry-id-string) and [ADR-0005](./adr/0005-the-store-walks-plex-itself-and-augments-never-replaces)
+::: warning `item_id` resolved by [ADR-0002](./adr/0002-item-id-is-first-hit-wins-over-external-guids) and [ADR-0005](./adr/0005-the-store-walks-plex-itself-and-augments-never-replaces)
 `item_id` is the opaque first-hit-wins string `imdb:` → `tmdb:` → `tvdb:` → `plex:`, else
-`fs:<hash>` — byte-identical to `etv-station`'s `entry_id`. An `external_ids(item_id, ns, value)`
+`fs:<hash>`, specified case by case in `tests/fixtures/item_id.json`. An
+`external_ids(item_id, ns, value)`
 table carries every other id a title is known by. The store walks Plex itself to build both,
 because watch history identifies titles only by `ratingKey` and a `plex://` agent GUID.
 :::

@@ -47,7 +47,7 @@ first attempt.
 ## Version 1 — identity and enrichment
 
 Every table keys on `item_id` — the opaque, deterministic string described in
-[ADR-0002](./adr/0002-item-id-is-the-entry-id-string), derived first-hit-wins from external
+[ADR-0002](./adr/0002-item-id-is-first-hit-wins-over-external-guids), derived first-hit-wins from external
 GUIDs: `imdb:tt1375666`, else `tmdb:…`, else `tvdb:…`, else `plex:…`, else `fs:<hash>`.
 
 ```sql

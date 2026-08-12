@@ -10,14 +10,13 @@ implementations agree on real data — [#5](https://github.com/McBrideMusings/pl
 the measurement that proves it, and the reason the rest of this milestone exists.
 
 - [x] [#1](https://github.com/McBrideMusings/plex-db-ex/issues/1) The store opens: package skeleton and schema v1
-- [x] [#2](https://github.com/McBrideMusings/plex-db-ex/issues/2) Derive `item_id`, and author the shared identity fixture
-- [ ] [etv-station#180](https://github.com/McBrideMusings/etv-station/issues/180) `etv-station` adopts that fixture
-- [x] [#18](https://github.com/McBrideMusings/plex-db-ex/issues/18) Treat an empty GUID value as absent — Python half; [etv-station#184](https://github.com/McBrideMusings/etv-station/issues/184) is the Rust half and is still open
+- [x] [#2](https://github.com/McBrideMusings/plex-db-ex/issues/2) Derive `item_id`, and publish the identity fixture that specifies the rule
+- [x] [#18](https://github.com/McBrideMusings/plex-db-ex/issues/18) Treat an empty GUID value as absent
 - [x] [#15](https://github.com/McBrideMusings/plex-db-ex/issues/15) Publish a read-only snapshot for consumers
 - [x] [#16](https://github.com/McBrideMusings/plex-db-ex/issues/16) Set the busy timeout explicitly instead of inheriting it
 - [x] [#3](https://github.com/McBrideMusings/plex-db-ex/issues/3) Walk the Plex library into items and external ids
 - [x] [#4](https://github.com/McBrideMusings/plex-db-ex/issues/4) Fetch TMDB keywords into namespaced enrichment, cached
-- [x] [#5](https://github.com/McBrideMusings/plex-db-ex/issues/5) Reconcile derived identities against `etv-station`'s catalog
+- [x] [#5](https://github.com/McBrideMusings/plex-db-ex/issues/5) Reconcile derived identities against another store's — built here, then removed: a writer opening a consumer's database runs ADR-0001's arrow backwards. The check belongs to whoever reads this store, and is refiled as [etv-station#269](https://github.com/McBrideMusings/etv-station/issues/269)
 - [x] [#23](https://github.com/McBrideMusings/plex-db-ex/issues/23) A movie and a TV show sharing a TMDB number became one title — schema v5 puts the media kind in the external-id key, and `plexdb repair-identities` splits the 1,407 already fused
 
 ## Next

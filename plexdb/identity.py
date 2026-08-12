@@ -1,17 +1,17 @@
 """Deriving `item_id` — the identity every table in the store keys on.
 
-**This rule exists twice.** The other copy is Rust, in `etv-station` at
-`crates/etv-station/src/catalog/identity.rs`, where it is called `entry_id`. The
-two must agree byte for byte: if they drift, every join between this store and
-that consumer silently returns nothing and neither side raises
-([ADR-0002](../docs/adr/0002-item-id-is-the-entry-id-string.md)).
+First-hit-wins over the external GUIDs Plex reports — `imdb:` → `tmdb:` →
+`tvdb:` → `plex:` — falling back to `fs:<fnv1a hex of canonical path>` when a
+title carries none of them
+([ADR-0002](../docs/adr/0002-item-id-is-first-hit-wins-over-external-guids.md)).
 
-Nothing enforces that at runtime, so it is enforced by test: both sides read the
-same `tests/fixtures/entry_id.json` and check they produce the same answers, and
-both pin its SHA-256 so an edit on one side fails on both
-([ADR-0006](../docs/adr/0006-the-identity-fixture-is-duplicated-and-guarded-by-a-hash.md)).
-
-Change nothing here without changing the Rust and the fixture in the same breath.
+**The rule is published, so changing it is a schema change.** Its specification
+is `tests/fixtures/item_id.json`, a table of inputs and the exact id each must
+produce
+([ADR-0006](../docs/adr/0006-the-identity-fixture-is-the-published-spec-of-the-rule.md)).
+Anything deriving these ids reads that file. Change the code here and the
+fixture in the same breath, or the published spec stops describing what this
+store actually does.
 """
 
 from __future__ import annotations

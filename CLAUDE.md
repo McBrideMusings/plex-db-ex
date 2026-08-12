@@ -20,10 +20,11 @@ consumer opens it read-only. The schema is the public API — a schema change br
 consumer at once, with no version negotiation (ADR-0001).
 
 **`item_id` is not a TMDb id.** It is the opaque first-hit-wins string
-`imdb:tt1375666` → `tmdb:…` → `tvdb:…` → `plex:…`, else `fs:<hash>` — byte-identical to what
-`etv-station` derives in `crates/etv-station/src/catalog/identity.rs`. The two implementations
-are tested against one shared fixture; if they drift, every join silently returns nothing
-(ADR-0002).
+`imdb:tt1375666` → `tmdb:…` → `tvdb:…` → `plex:…`, else `fs:<hash>` (ADR-0002). The rule is
+published, so changing it is a schema change: its specification is
+`tests/fixtures/item_id.json`, and the code and that file move together or the spec stops
+describing the store. Who else derives these ids, and how they keep up, is their business — this
+store keeps no register of its readers.
 
 **Enrichment is namespaced and opaque.** No first-class `mood` / `keywords` / `award` columns.
 A writer may wipe and rewrite only rows in its own namespace, and the store never interprets a

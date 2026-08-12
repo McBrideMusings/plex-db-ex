@@ -90,11 +90,12 @@ duplicating it in Rust would mean two crawlers against the same rate limits drif
 immediately. ([ADR-0001](./adr/0001-one-writer-many-readers-sqlite-file-is-the-interface))
 
 **`item_id` is an opaque first-hit-wins string over external GUIDs** — `imdb:` before `tmdb:`
-before `tvdb:` before `plex:`, falling back to a hash of the canonical path — identical to what
-`etv-station` already derives, so the two agree with no coordination. A separate `external_ids`
+before `tvdb:` before `plex:`, falling back to a hash of the canonical path. It is derivable by
+anything holding the same Plex record, with no lookup and no shared state, which is what lets two
+processes name the same title without either asking the other. A separate `external_ids`
 table carries every other id a title is known by, because the enrichment fetcher needs a TMDb id
 that the primary key is not guaranteed to be, and because TVDB-only shows and anime have no TMDb
-id at all. ([ADR-0002](./adr/0002-item-id-is-the-entry-id-string))
+id at all. ([ADR-0002](./adr/0002-item-id-is-first-hit-wins-over-external-guids))
 
 **The derivation rule now exists in two languages**, which is a real duplication across a
 language seam. Both implementations are pinned to one shared fixture — a table of GUID sets and
@@ -178,10 +179,11 @@ worth pinning:
 - A play with completion data and a play without both round-trip, since the second is the normal
   Plex-only case rather than an error.
 
-**The shared identity fixture** is the second seam, and it exists precisely because it crosses a
-language boundary. A file of GUID sets and expected ids is read by the Python tests here and by
-the Rust tests in `etv-station`. Neither side may edit it unilaterally; a change that breaks the
-other is the failure this seam is for.
+**The identity fixture** is the second seam. A file of GUID sets, paths and the exact id each
+must produce is the published specification of the derivation rule (ADR-0006), not private test
+data — the code here is checked against it like any other reader would be. Editing the rule and
+the fixture together is what keeps the published spec true; nothing here tracks who else reads
+it.
 
 External sources are never called in tests — every adapter is exercised against recorded
 responses, which is also what makes the "did it re-fetch?" assertions possible.

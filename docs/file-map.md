@@ -29,7 +29,7 @@ plex-db-ex/
 │   │   └── walk.py
 │   ├── config.py          settings from .env; never a default for a URL or a token
 │   ├── errors.py          the errors a user is meant to see, as one `error: …` line
-│   ├── identity.py        item_id derivation — mirrored in etv-station, guarded by a fixture
+│   ├── identity.py        item_id derivation — first-hit-wins over external GUIDs, path hash as the floor; specified by tests/fixtures/item_id.json
 │   ├── enrich_tmdb.py     TMDB keyword sweep: namespaced, cached, staleness-gated, tolerant of a failing title (aborts after 3 in a row)
 │   ├── plays.py           watch-history ingest: Plex history into plays, incrementally, plus the Tautulli match that enriches them
 │   ├── clusters.py        clusters a *configured* shared account's plays into latent users by fingerprint, joining devices that share a recurring single-account IP (issue #27), and scores keyword overlap between them over show/movie units — a show counts once however many episodes were watched (issue #25); a cluster under 20 plays is folded into one unattributed bucket rather than called a person (issue #28); every other account is one named person with a single profile, no device or cluster numbers; read-only, persists nothing
@@ -53,7 +53,7 @@ plex-db-ex/
 │   └── baseline.sh        copies of the live store over ssh: `pull` to ./data, `backup` left on the host, `list`. VACUUM INTO on the host rather than scp, because the store is in WAL mode and a plain copy leaves the sidecar's rows behind
 ├── tests/                 pytest; no test reaches the network
 │   └── fixtures/
-│       ├── entry_id.json  SHARED WITH etv-station — copied there, hash-pinned in both
+│       ├── item_id.json   the published specification of the item_id rule (ADR-0006), run by test_identity.py
 │       └── mdblist/       trimmed recordings of MDBList's live responses, including a two-page list that proves paging
 ├── data/                  plexdb.db lives here (gitignored)
 └── docs/
@@ -76,5 +76,5 @@ mirrors or will absorb.
 
 | Repo | Language | What matters here |
 |---|---|---|
-| `~/Projects/etv-station` | Rust | `crates/etv-station/src/catalog/identity.rs` — the `entry_id` derivation this store must match byte for byte. `docs/adr/0002` — the Rhai plugin contract the reader crate plugs into. |
+| `~/Projects/etv-station` | Rust | A consumer, not a dependency — nothing here is owed to it. `docs/adr/0002` there is the Rhai plugin contract the reader crate plugs into. |
 | `~/Projects/curator` | Python | `curator/clients/`, `harvest/`, `resolve/`, `enrich/` — the acquisition code this store absorbs. `curator/curator/schema.sql` — `keyword_cache` and `resolution_cache`, the caching discipline already in production. |

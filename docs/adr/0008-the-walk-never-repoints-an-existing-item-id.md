@@ -43,9 +43,9 @@ in two real situations:
   identity; keying on the rating key does not, and leaves no record that the two rating keys are
   the same title.
 
-Neither raises. The symptom is a join returning nothing — the failure ADR-0002 and the shared
-fixture exist to prevent, one level up, in storage policy rather than derivation. The fixture
-cannot catch it: both sides pass every case in it.
+Neither raises. The symptom is a row addressed by an id nothing looks up any more — the failure
+ADR-0002 and its fixture exist to prevent, one level up, in storage policy rather than
+derivation. The fixture cannot catch it: every case in it still passes.
 
 **Resolved: try both, external id first, then rating key.** External id is the stronger signal and
 survives rating-key churn; the rating key catches the wholesale re-match that external ids miss.
@@ -88,16 +88,13 @@ pointing at the fused id, so the walk finds it by rating key and this ADR's rule
 An `item_id` can stop matching what `derive_item_id` would produce from a title's *current* GUID
 set — it reflects the GUID set at first walk, not necessarily the latest one. `external_ids`
 remains the right table to search a title by any GUID it has ever carried; `items.item_id` is not
-guaranteed to be the "best" id a fresh derivation would produce after a re-match. Reconciling this
-store's ids against another source of truth (`etv-station`'s catalog,
-[#5](https://github.com/McBrideMusings/plex-db-ex/issues/5)) will need to account for that rather
-than assume `item_id` always equals a fresh derivation.
+guaranteed to be the "best" id a fresh derivation would produce after a re-match. **So an
+`item_id` in this store is not always what ADR-0002's rule would return today**, and anything
+checking the two against each other has to allow for it rather than treat a difference as
+derivation drift.
 
-An `item_id` can also cover more than one Plex rating key, where `etv-station`'s `entry_id` never
-does — it keys every rating key separately. After the second amendment those are only genuine
-duplicates (one title present in two library sections), but the divergence is real and a join
-across the two stores will land on a different row count for them. Whatever compares the two must
-read such a title as having inherited its identity rather than as the two derivation rules having
-drifted. That comparison used to live here as `plexdb reconcile-etv`; it now belongs to
-`etv-station`, which already reads this store's published snapshot and so holds both halves
-without the writer reaching into a consumer's database.
+An `item_id` can also cover more than one Plex rating key. After the second amendment those are
+only genuine duplicates — one title present in two library sections — but the divergence is real,
+and a reader that keys strictly per rating key will count rows differently. Both facts are
+consequences of retaining identity, not defects, and both belong in the schema documentation so a
+reader can plan for them.

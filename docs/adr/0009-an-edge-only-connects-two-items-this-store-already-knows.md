@@ -23,7 +23,7 @@ target some other way.
   on, or schedule. Nothing downstream has to guard against a target it cannot resolve.
 - **Invent an id for the unwalked target, e.g. `tmdb:<id>`, and store the edge anyway.** Rejected.
   `item_id` is derived first-hit-wins over GUIDs in a fixed priority order
-  ([ADR-0002](./0002-item-id-is-the-entry-id-string)): `imdb:` beats `tmdb:`. A recommendation
+  ([ADR-0002](./0002-item-id-is-first-hit-wins-over-external-guids)): `imdb:` beats `tmdb:`. A recommendation
   response carries only a TMDB id, so an invented id would always land on the weaker `tmdb:` form.
   If that title is later walked and carries an IMDb GUID, the walk derives `imdb:…` for it — a
   *different* string from the edge already on file. The edge becomes an orphan under an id nothing

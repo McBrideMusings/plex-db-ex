@@ -80,9 +80,10 @@ class Config:
     #: With no root to strip, an item_id for a GUID-less title is a hash of
     #: wherever the disk happens to be mounted, so two correct installs
     #: against one Plex server name the same file differently. Measured: 1,521
-    #: titles disagreed with `etv-station` for exactly this reason. `walk`
-    #: therefore refuses to run while this is empty rather than writing ids
-    #: that look fine and join with nothing.
+    #: titles — every title in the library with no external id at all — got a
+    #: mount-dependent id for exactly this reason. `walk` therefore refuses to
+    #: run while this is empty rather than writing ids that look fine and join
+    #: with nothing.
     source_roots: tuple[str, ...]
     #: Plex account ids `plexdb latent-users` treats as genuinely shared by
     #: more than one person, and therefore clusters by device fingerprint

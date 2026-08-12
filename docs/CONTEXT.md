@@ -29,8 +29,8 @@ time occupied, per-title equates a nine-minute special with a seven-season run (
 _Avoid_: play count, watch count, completion
 
 **item_id**:
-A title's identity everywhere in the Store — the opaque string `etv-station` derives from
-external GUIDs, first-hit-wins `imdb:` → `tmdb:` → `tvdb:` → `plex:`, else `fs:<hash>`.
+A title's identity everywhere in the Store — an opaque string derived from the external GUIDs
+Plex reports, first-hit-wins `imdb:` → `tmdb:` → `tvdb:` → `plex:`, else `fs:<hash>`.
 _Avoid_: tmdb_id, rating key, GUID
 
 **External id**:
@@ -135,16 +135,17 @@ _Avoid_: cache, provider
 
 - [ADR-0001](./adr/0001-one-writer-many-readers-sqlite-file-is-the-interface.md) — one
   writer, many readers; the SQLite file is the interface.
-- [ADR-0002](./adr/0002-item-id-is-the-entry-id-string.md) — `item_id` is the `entry_id`
-  string, with `external_ids` alongside it.
+- [ADR-0002](./adr/0002-item-id-is-first-hit-wins-over-external-guids.md) — `item_id` is
+  first-hit-wins over external GUIDs with a path hash as the floor, and `external_ids`
+  alongside it.
 - [ADR-0003](./adr/0003-rust-reader-crate-behind-a-plugin-capability-grant.md) — a typed
   Rust reader crate, reached by Rhai plugins through a capability grant.
 - [ADR-0004](./adr/0004-the-store-owns-watch-history.md) — the Store owns watch history;
   Plex is the required source, Tautulli an optional adapter.
 - [ADR-0005](./adr/0005-the-store-walks-plex-itself-and-augments-never-replaces.md) — the
   Store walks Plex itself and augments Plex rather than replacing it.
-- [ADR-0006](./adr/0006-the-identity-fixture-is-duplicated-and-guarded-by-a-hash.md) — the
-  identity fixture is duplicated in both repos and guarded by a hash.
+- [ADR-0006](./adr/0006-the-identity-fixture-is-the-published-spec-of-the-rule.md) — the
+  identity fixture is the published specification of the derivation rule.
 - [ADR-0007](./adr/0007-readers-get-a-snapshot-not-the-live-store.md) — Readers get a
   Snapshot, not the live Store.
 - [ADR-0008](./adr/0008-the-walk-never-repoints-an-existing-item-id.md) — the walk never
