@@ -1,6 +1,7 @@
 .env
 *.local.*
 data/
+deploy/
 tmp/
 node_modules/
 docs/.vitepress/cache
