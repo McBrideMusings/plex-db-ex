@@ -71,6 +71,34 @@ def test_the_two_mount_cases_really_do_collapse() -> None:
     assert mac["expect"].startswith("fs:"), "this pair is about the path-hash fallback"
 
 
+def test_the_two_independent_stores_really_are_independent() -> None:
+    """Guard the fixture's headline claim.
+
+    Two stores agreeing while each is told about both mounts is a weaker claim
+    than the one #24 is about. If somebody adds the other side's root to either
+    case's `source_roots`, both assertions above still pass and the deployment
+    shape stops being tested.
+    """
+    by_name = {case["name"]: case for case in _cases("end_to_end_cases")}
+    side_a = by_name[
+        "two independent stores, each stripping only its own single configured root, "
+        "still agree — side A's own view of the file"
+    ]
+    side_b = by_name[
+        "two independent stores, each stripping only its own single configured root, "
+        "still agree — side B's own, differently-mounted view of the same file"
+    ]
+
+    assert len(side_a["source_roots"]) == 1, "side A must know only its own mount"
+    assert len(side_b["source_roots"]) == 1, "side B must know only its own mount"
+    assert not set(side_a["source_roots"]) & set(side_b["source_roots"]), (
+        "neither store may be configured with the other's mount"
+    )
+    assert side_a["raw"] != side_b["raw"], "the two sides must reach the file by different paths"
+    assert side_a["expect"] == side_b["expect"], "two views of one file must give one id"
+    assert side_a["expect"].startswith("fs:"), "this pair is about the path-hash fallback"
+
+
 def test_fnv1a_matches_the_published_vectors() -> None:
     """The hash is a documented algorithm, not ours.
 

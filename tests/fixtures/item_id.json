@@ -327,7 +327,10 @@
     "raw path + roots, canonicalised and then derived, in one step.",
     "This is the pairing that matters: the same file reached through two different",
     "mounts must land on ONE id. Canonicalisation feeding the hash is the mechanism,",
-    "and only an end-to-end case actually checks the two are wired together."
+    "and only an end-to-end case actually checks the two are wired together.",
+    "The last pair is the deployment shape: two separate stores, each configured with",
+    "only its own mount and no knowledge that the other's exists, still agreeing. A case",
+    "that hands one store both mounts proves something weaker."
   ],
   "end_to_end_cases": [
     {
@@ -364,6 +367,24 @@
         ]
       ],
       "expect": "imdb:tt1375666"
+    },
+    {
+      "name": "two independent stores, each stripping only its own single configured root, still agree — side A's own view of the file",
+      "raw": "/media/concerts/coachella-2019.mkv",
+      "source_roots": [
+        "/media"
+      ],
+      "external_ids": [],
+      "expect": "fs:a08133ff0c858d24"
+    },
+    {
+      "name": "two independent stores, each stripping only its own single configured root, still agree — side B's own, differently-mounted view of the same file",
+      "raw": "/Volumes/library/concerts/coachella-2019.mkv",
+      "source_roots": [
+        "/Volumes/library"
+      ],
+      "external_ids": [],
+      "expect": "fs:a08133ff0c858d24"
     }
   ]
 }
