@@ -209,7 +209,12 @@ class LiveMDBListClient:
             resp.raise_for_status()
         except httpx.HTTPError:
             raise MDBListError(f"MDBList returned {resp.status_code} for {url}") from None
-        return resp.json()
+        try:
+            return resp.json()
+        except ValueError:
+            raise MDBListError(
+                f"MDBList returned a response that is not JSON for {url}"
+            ) from None
 
 
 def _optional_int(value: Any) -> int | None:
