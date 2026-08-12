@@ -1,5 +1,6 @@
 .env
 *.local.*
+.claude/skills/verify/
 data/
 deploy/
 tmp/
