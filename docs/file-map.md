@@ -23,6 +23,7 @@ plex-db-ex/
 │   │   ├── init.py
 │   │   ├── latent_users.py
 │   │   ├── publish.py
+│   │   ├── repair_fs_identities.py
 │   │   ├── repair_identities.py
 │   │   ├── schedule.py
 │   │   ├── sweep.py
@@ -42,6 +43,7 @@ plex-db-ex/
 │   ├── collections.py     crowd-list harvest into collection/collection_membership: rank is array position, replace-wholesale per collection_id, no computed weight (ADR-0012), an entry outside the library dropped rather than invented
 │   ├── tmdb_edges.py      TMDB recommendations/similar sweep: two edge types, replace-wholesale per (from_id, edge_type), cached via enrichment_cursor rows under the tmdb_edges namespace
 │   ├── repair.py          splits identities that fused two unrelated titles sharing a TMDB/TVDB number (issue #23): deletes them, re-walks Plex, rewinds the play cursor over what went with them
+│   ├── repair_fs_identities.py  moves an fs: item_id that names a disk mount point onto what the rule derives today, carrying every referencing row in one transaction (issue #55). The walk cannot do this — ADR-0008 keeps an assigned item_id put, because a walk cannot know the move is safe; a person pointing this at a known problem can. Backs up first, handles two ids merging onto one corrected id, and rolls back on any row loss it did not expect
 │   ├── walk.py            the library walk: Plex sections into items, external_ids, plex_items; an external id only ever matches within its own media kind
 │   ├── schema.py          the DDL and the append-only migration list
 │   ├── sources.py         what a Gated Source is — an external source whose units carry a fetched_at and are re-fetched only once stale; holds the credential check, the derived <NAME>_STALE_DAYS window, the client build, the store handle and the --stale-days/--rewipe flags, so a source declares only what varies. Not harvest-plex-collections (replaces wholesale, never stales — its input is Plex, not a rate-limited API) and not enrich-tautulli-plays (matches rows)
