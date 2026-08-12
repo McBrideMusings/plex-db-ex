@@ -21,6 +21,29 @@ outright, because a newer writer may have added rows this build cannot see. A st
 **Versions 1, 2, 3 and 4 are live.** Everything under "Not yet built" is the target for later
 slices.
 
+### A migration is copied before it runs, and rolled back if it goes wrong
+
+Every pending migration and the version row go in one transaction, so a process killed partway
+leaves the store untouched. That covers a crash. It does not cover a migration that is simply
+wrong — bad SQL commits perfectly happily, and this list is forward-only, so there is nothing to
+run backwards.
+
+`plexdb init` therefore copies the store before applying anything, into
+`backups/plexdb.pre-v<target>.db` beside it (`PLEXDB_BACKUP_DIR` moves the directory). After the
+migration it checks that the store reports the target version, that `PRAGMA quick_check` says
+`ok`, and that `items`, `plays` and `enrichment` did not lose rows. Any of those failing restores
+the copy and reports which file it came back from.
+
+Those three tables are guarded because no re-run reproduces them: watch history Tautulli
+eventually forgets, and a TMDB sweep paid for against a rate limit. Edges, collections and cursors
+are re-fetchable and are not guarded, so a migration that rebuilds one of them passes. A future
+migration that genuinely must drop guarded rows has to relax the guard on purpose.
+
+A store that is already current is not copied — `init` runs at the top of every sweep, and a copy
+per sweep would fill the disk with identical files. Copies are never pruned: a second attempt at
+the same version writes `plexdb.pre-v9.2.db` rather than overwriting the one taken before the
+first attempt.
+
 ## Version 1 — identity and enrichment
 
 Every table keys on `item_id` — the opaque, deterministic string described in

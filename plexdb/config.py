@@ -104,6 +104,13 @@ class Config:
     #: whichever checkout happens to sit next to this one; the check that
     #: it's present lives at the point of use, the `reconcile-etv` command.
     etv_catalog_path: Path | None
+    #: Where `plexdb init` puts the copy it takes before applying a migration.
+    #: Defaults to a `backups/` directory beside the store, so the container
+    #: needs no extra mount and a dev checkout needs no extra setting — the
+    #: copy lands next to the thing it is a copy of. Every copy is kept:
+    #: migrations are forward-only, so a copy is the only route back past its
+    #: own migration.
+    backup_dir: Path
 
     @classmethod
     def from_env(cls, *, env_file: Path | None = None) -> Config:
@@ -122,8 +129,13 @@ class Config:
         source_roots = tuple(root.strip() for root in source_roots_raw.split(",") if root.strip())
         etv_catalog_raw = os.environ.get("ETV_CATALOG_PATH", "").strip()
         etv_catalog_path = Path(etv_catalog_raw).expanduser() if etv_catalog_raw else None
+        store_path = Path(raw).expanduser()
+        backup_raw = os.environ.get("PLEXDB_BACKUP_DIR", "").strip()
+        backup_dir = (
+            Path(backup_raw).expanduser() if backup_raw else store_path.parent / "backups"
+        )
         return cls(
-            store_path=Path(raw).expanduser(),
+            store_path=store_path,
             snapshot_path=snapshot_path,
             plex_url=os.environ.get("PLEX_URL", "").strip(),
             plex_token=os.environ.get("PLEX_TOKEN", "").strip(),
@@ -132,4 +144,5 @@ class Config:
             tautulli_url=os.environ.get("TAUTULLI_URL", "").strip(),
             tautulli_api_key=os.environ.get("TAUTULLI_API_KEY", "").strip(),
             etv_catalog_path=etv_catalog_path,
+            backup_dir=backup_dir,
         )

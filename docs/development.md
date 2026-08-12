@@ -73,3 +73,71 @@ only thing that shows what the arithmetic says about your library.
 When a change is worth checking against real data, pull a copy and run it there. When it is worth
 checking against the real *service* — an API's response shape, a rate limit — run it against a
 copy too, and read the result before letting it near the host.
+
+## Copies are taken with `VACUUM INTO`, never `cp`
+
+The store runs in WAL mode, so rows that are fully committed can still be sitting in the `-wal`
+sidecar rather than in the main file. A `cp`, `scp` or `rsync` of `plexdb.db` taken while a sweep is
+running grabs the main file and leaves those rows behind. The result opens cleanly, passes an
+integrity check, and is quietly missing the last stretch of work — the worst shape a bad backup can
+take, because nothing about it looks wrong.
+
+Every copy in this project therefore goes through `VACUUM INTO`, which reads through a normal
+connection, sees the sidecar, and writes one self-contained file with no sidecars of its own. That
+is what `plexdb publish` already used for snapshots ([`store.py`](../plexdb/store.py)), what
+[`tools/baseline.sh`](../tools/baseline.sh) uses for pulls and manual backups, and what
+[`plexdb/backup.py`](../plexdb/backup.py) uses before a migration.
+
+```
+admin pull-baseline      # consistent copy, host -> ./data/plexdb.db
+admin backup-baseline    # consistent copy, left on the host in backups/
+admin backups            # what the host is holding
+```
+
+## A migration takes a copy first, and rolls back if the result is wrong
+
+`schema.apply` wraps every pending migration and the version row in one transaction, so a process
+killed partway leaves the file untouched. That protects against a **crash**. It does nothing about a
+migration that is simply **wrong** — bad SQL commits perfectly happily, and migrations here are
+forward-only, so there is no down-migration to run.
+
+So `plexdb init` — the first step of every sweep — does this instead, in
+[`store.migrate`](../plexdb/store.py):
+
+1. If the store is already current, stop. Nothing is copied; a copy per sweep would fill the disk.
+2. Otherwise copy the store to `backups/plexdb.pre-v<target>.db` beside it, and record the row
+   counts of `items`, `plays` and `enrichment` — the three tables no re-run reproduces.
+3. Apply the migrations.
+4. Check three things, in the order where a failure of one makes the next meaningless: the store
+   reports the version it was migrated to, `PRAGMA quick_check` says `ok`, and none of those three
+   tables lost rows.
+5. If the migration raised, or any of those checks failed, **put the copy back** and report the
+   failure with the copy's path in it.
+
+Every copy is kept. A second attempt at the same version writes `plexdb.pre-v9.2.db` rather than
+overwriting the copy taken before the first attempt — that one is older and therefore the more
+valuable of the two. `PLEXDB_BACKUP_DIR` moves the directory; unset, it is `backups/` beside the
+store, so the container needs no extra mount.
+
+**A row guard is deliberately narrow.** `edges`, collections and cursors are re-fetchable, so a
+migration that rebuilds one of those is not a red flag and is not guarded. If a future migration
+genuinely needs to drop plays or enrichment rows, that guard has to be relaxed for it on purpose,
+which is the point.
+
+## Working a change that touches the schema
+
+1. `admin pull-baseline` — a fresh consistent copy of the real store.
+2. Write the migration and the code, with tests.
+3. `admin dev init` against the pulled copy. Read what it prints: the backup path, the version
+   change, and the before/after row counts per guarded table. This is the rehearsal, and it is
+   worth doing on real data because the fixtures cannot show you what your migration does to
+   115,453 enrichment rows.
+4. `admin vet`.
+5. Merge to `main`.
+6. `admin deploy image` — **after** the merge, never before. The deploy builds the image for
+   `linux/amd64` here, ships it over ssh, and recreates the container. The migration itself runs on
+   the host at the next sweep, inside `init`, with the backup and the rollback above.
+7. `admin logs live` at the next scheduled run to watch it land.
+
+There is no automatic deploy on merge, on purpose: the host has one store, the migration is
+forward-only, and a person deciding when it happens is worth more than the minutes it saves.

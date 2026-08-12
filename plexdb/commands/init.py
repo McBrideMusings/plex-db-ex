@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 
 from ..config import Config
-from ..store import init as init_store
+from ..store import migrate
 from ..sweep import Step
 
 NAME = "init"
@@ -17,14 +17,25 @@ SWEEP = Step.REQUIRED
 
 def _cmd_init(_args: argparse.Namespace) -> int:
     config = Config.from_env()
-    was, now = init_store(config.store_path)
+    result = migrate(config.store_path, config.backup_dir)
     where = config.store_path.resolve()
-    if was == now:
-        print(f"store already current at schema v{now}: {where}")
-    elif was == 0:
-        print(f"created store at schema v{now}: {where}")
-    else:
-        print(f"migrated store v{was} -> v{now}: {where}")
+    if result.was == result.now and result.was > 0:
+        print(f"store already current at schema v{result.now}: {where}")
+        return 0
+    if result.was == 0:
+        print(f"created store at schema v{result.now}: {where}")
+        return 0
+
+    print(f"backed up to {result.backup}")
+    print(f"migrated store v{result.was} -> v{result.now}: {where}")
+    for table, after in sorted(result.counts_after.items()):
+        before = result.counts_before.get(table)
+        if before is None:
+            print(f"  {table}: {after:,} rows (new)")
+        elif before == after:
+            print(f"  {table}: {after:,} rows")
+        else:
+            print(f"  {table}: {before:,} -> {after:,} rows")
     return 0
 
 

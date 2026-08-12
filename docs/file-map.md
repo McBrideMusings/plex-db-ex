@@ -49,7 +49,10 @@ plex-db-ex/
 │   ├── sources.py         what a Gated Source is — an external source whose units carry a fetched_at and are re-fetched only once stale; holds the credential check, the derived <NAME>_STALE_DAYS window, the client build, the store handle and the --stale-days/--rewipe flags, so a source declares only what varies. Not harvest-plex-collections (replaces wholesale, never stales — its input is Plex, not a rate-limited API) and not enrich-tautulli-plays (matches rows)
 │   ├── sweep.py           one scheduled run: the steps a command opts into by declaring SWEEP, ordered by ORDER, a required step's failure ending the run and a best-effort one's only reported (ADR-0014); ConfigError reads as "not configured", anything else as "not reachable"
 │   ├── schedule.py        the container entrypoint's clock and nothing else (ADR-0015): parse PLEXDB_SCHEDULE as HH:MM, sleep to the next occurrence, run one sweep, repeat. In the package rather than the Dockerfile so `next_fire` — midnight rollover, the sweep that ends inside its own minute — is a pure function with tests instead of a `sleep` loop nobody can check
-│   └── store.py           opening the store, and publishing the read-only snapshot consumers open
+│   ├── backup.py          copies of the store taken before a migration and kept forever: VACUUM INTO so a copy taken mid-sweep is consistent, guarded row counts for items/plays/enrichment, and the restore that puts one back. The transaction in schema.apply covers a crash; this covers SQL that runs perfectly and does the wrong thing
+│   └── store.py           opening the store, publishing the read-only snapshot consumers open, and `migrate` — back up, apply, verify version + quick_check + row counts, roll back on any of them
+├── tools/
+│   └── baseline.sh        copies of the live store over ssh: `pull` to ./data, `backup` left on the host, `list`. VACUUM INTO on the host rather than scp, because the store is in WAL mode and a plain copy leaves the sidecar's rows behind
 ├── tests/                 pytest; no test reaches the network
 │   └── fixtures/
 │       ├── entry_id.json  SHARED WITH etv-station — copied there, hash-pinned in both
