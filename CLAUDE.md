@@ -88,6 +88,7 @@ admin lint       ruff check
 admin fmt        ruff format
 admin vet        lint + typecheck + test
 admin pull-baseline  copy the host store down into ./data
+admin host-exec <...> run one plexdb command in the deployed container, now
 admin logs live  tail the container on the host
 admin diff       show run-config drift between the container and the last deploy
 admin docs       serve the docs site

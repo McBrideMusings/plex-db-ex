@@ -52,7 +52,8 @@ plex-db-ex/
 │   ├── backup.py          copies of the store taken before a migration and kept forever: VACUUM INTO so a copy taken mid-sweep is consistent, guarded row counts for items/plays/enrichment, and the restore that puts one back. The transaction in schema.apply covers a crash; this covers SQL that runs perfectly and does the wrong thing
 │   └── store.py           opening the store, publishing the read-only snapshot consumers open, and `migrate` — back up, apply, verify version + quick_check + row counts, roll back on any of them
 ├── tools/
-│   └── baseline.sh        copies of the live store over ssh: `pull` to ./data, `backup` left on the host, `list`. VACUUM INTO on the host rather than scp, because the store is in WAL mode and a plain copy leaves the sidecar's rows behind
+│   ├── baseline.sh        copies of the live store over ssh: `pull` to ./data, `backup` left on the host, `list`. VACUUM INTO on the host rather than scp, because the store is in WAL mode and a plain copy leaves the sidecar's rows behind
+│   └── host-exec.sh       one plexdb command inside the deployed container, now rather than at the scheduler's next sweep — the container's own CLI, so the store is still written by the one writer. Refuses while a sweep is running
 ├── tests/                 pytest; no test reaches the network
 │   └── fixtures/
 │       ├── item_id.json   the published specification of the item_id rule (ADR-0006), run by test_identity.py
