@@ -28,7 +28,9 @@ not to produce.
 - **Keep the existing identity; still record every GUID seen.** Chosen: no `item_id` ever moves
   once assigned, and every external id a title has ever carried through this store stays
   searchable — satisfying both halves of issue #3's requirement ("keeps its identity ... rather
-  than silently forking"), and counted (`identity_kept_on_guid_change`) rather than silent.
+  than silently forking"), and named in the walk's own output (`WalkStats.identities_kept`, each
+  entry carrying the title, the id kept and the id that would have been derived) rather than
+  silent.
 
 ## Amendment: an existing identity is found by external id first, then by rating key
 
