@@ -282,10 +282,19 @@ def _write_item(
         # applied to one external id instead of the whole title. `kind` is in
         # the key because a TMDB or TVDB number is unique only inside one
         # media type (issue #23).
+        #
+        # `last_seen` always moves to `now`, even on conflict: this row was
+        # in Plex's `Guid` array for this record on this walk, so it was
+        # observed regardless of which item_id ends up owning it — including
+        # an id an earlier record in this same pass already claimed. Only
+        # the ids this loop visits are stamped, so one Plex stops reporting
+        # keeps whatever last_seen it already had (issue #57), which is the
+        # whole reason the column exists.
         conn.execute(
-            "INSERT INTO external_ids (item_id, ns, value, kind) VALUES (?, ?, ?, ?) "
-            "ON CONFLICT (ns, value, kind) DO NOTHING",
-            (item_id, namespace, value, kind),
+            "INSERT INTO external_ids (item_id, ns, value, kind, last_seen) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT (ns, value, kind) DO UPDATE SET last_seen = excluded.last_seen",
+            (item_id, namespace, value, kind, now),
         )
 
     conn.execute(
@@ -302,11 +311,13 @@ def _write_item(
 
     existing_by_rating_key[rating_key] = item_id
     for namespace, value in external_ids:
-        # Mirrors the DB's own `ON CONFLICT (ns, value) DO NOTHING` above:
-        # first claim wins. Without this, a second title later in this same
-        # pass that shares one of these external ids but was not yet in the
-        # store when this walk started would miss the match — it would only
-        # exist in `external_ids` from a moment ago, not in the snapshot
+        # Mirrors the DB's own `ON CONFLICT (ns, value, kind) DO UPDATE SET
+        # last_seen = ...` above: only `last_seen` moves on conflict,
+        # `item_id` never does — first claim still wins the identity. Without
+        # this, a second title later in this same pass that shares one of
+        # these external ids but was not yet in the store when this walk
+        # started would miss the match — it would only exist in
+        # `external_ids` from a moment ago, not in the snapshot
         # `existing_by_external_id` was preloaded from — and fork instead
         # of resolving to this identity.
         existing_by_external_id.setdefault((namespace, value, kind), item_id)

@@ -556,7 +556,7 @@ mod tests {
             setup
                 .execute_batch(
                     "CREATE TABLE schema_version (version INTEGER NOT NULL);
-                     INSERT INTO schema_version (version) VALUES (7);
+                     INSERT INTO schema_version (version) VALUES (8);
                      CREATE TABLE items (item_id TEXT PRIMARY KEY);
                      CREATE TABLE enrichment (
                          item_id    TEXT NOT NULL,

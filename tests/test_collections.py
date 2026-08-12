@@ -43,7 +43,8 @@ def _seed(
     )
     for ns, value in ids.items():
         conn.execute(
-            "INSERT INTO external_ids (item_id, ns, value, kind) VALUES (?, ?, ?, ?)",
+            "INSERT INTO external_ids (item_id, ns, value, kind, last_seen) "
+            "VALUES (?, ?, ?, ?, '2026-01-01T00:00:00+00:00')",
             (item_id, ns, value, item_type),
         )
     conn.commit()

@@ -69,7 +69,8 @@ def _fused_store(path: Path, *, with_play: bool = True) -> None:
             ("tvdb", "71292"),
         ):
             conn.execute(
-                "INSERT INTO external_ids (item_id, ns, value, kind) VALUES (?, ?, ?, 'movie')",
+                "INSERT INTO external_ids (item_id, ns, value, kind, last_seen) "
+                "VALUES (?, ?, ?, 'movie', '2024-01-01T00:00:00+00:00')",
                 (FUSED_ID, ns, value),
             )
         for rating_key, section in (("5550", "1"), ("141718", "2")):
