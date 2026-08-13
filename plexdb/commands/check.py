@@ -12,7 +12,7 @@ from __future__ import annotations
 import argparse
 
 from ..config import Config
-from ..health import Report, inspect
+from ..health import STALE_DAYS, Freshness, Report, inspect
 
 NAME = "check"
 #: First. It is what you run before deciding whether to run anything else, and
@@ -22,6 +22,21 @@ ORDER = 1
 
 def _megabytes(size: int) -> str:
     return f"{size / 1_000_000:,.0f} MB"
+
+
+def _freshness(entry: Freshness) -> str:
+    """One freshness line's value.
+
+    A stamp too old to be normal says so on the line itself: `8.9 days ago` only
+    reads as wrong if you already know what normal is. A stamp that cannot be
+    read is printed verbatim, because a mangled value and a table nobody has
+    written to must not look the same.
+    """
+    if entry.when is None or entry.age_days is None:
+        return f"unreadable timestamp {entry.raw!r}"
+    when = entry.when.isoformat(timespec="seconds")
+    flag = " — STALE" if entry.stale else ""
+    return f"{when} ({entry.age_days:.1f} days ago){flag}"
 
 
 def _version_line(report: Report) -> str:
@@ -51,10 +66,9 @@ def render(report: Report) -> list[str]:
         lines.append(f"  {table}: {count:,}")
 
     if report.freshness:
-        lines.append("freshness:")
+        lines.append(f"freshness (flagged over {STALE_DAYS:.0f} days):")
         for entry in report.freshness:
-            when = entry.when.isoformat(timespec="seconds")
-            lines.append(f"  {entry.label}: {when} ({entry.age_days:.1f} days ago)")
+            lines.append(f"  {entry.label}: {_freshness(entry)}")
 
     lines.append(f"fs: identities: {report.fs_identities:,}")
 

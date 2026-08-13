@@ -53,6 +53,9 @@ counted), the `fs:` count, and what the backups directory holds.
 It exits **non-zero when the store is behind, damaged, or unreadable** — and zero for everything
 else. Stale plays and a rising `fs:` count are things to look at, not things to fail on; a
 non-zero exit for those would make the command useless as a gate the first night a source is down.
+A stamp older than three days is marked `— STALE` on its own line, and a value that is not a
+timestamp at all is printed verbatim, so a mangled `fetched_at` cannot read as a table nobody has
+written to.
 
 The gap it closes ([#59](https://github.com/McBrideMusings/plex-db-ex/issues/59)): there was no way
 to learn a store's schema version without either migrating it or copying 130 MB down to a laptop.
@@ -166,8 +169,9 @@ which is the point.
 7. `admin logs live` — the migration runs as the container starts, with the backup and the rollback
    above, so the schema is current within seconds of the deploy rather than at the next sweep.
    Watch for `migrated store vN -> vN+1` and the backup path.
-8. `admin host-exec check` — read-only confirmation that the live store landed at the version the
-   deployed code expects, with `quick_check` ok and the guarded counts intact.
+`admin deploy` finishes by running `plexdb check` inside the container it just recreated, so a
+startup migration that rolled itself back ends the deploy non-zero instead of being found at the
+next sweep. That step waits out the migration rather than racing it.
 
 There is no automatic deploy on merge, on purpose: the host has one store, the migration is
 forward-only, and a person deciding when it happens is worth more than the minutes it saves.

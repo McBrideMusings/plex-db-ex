@@ -31,8 +31,9 @@ EXPECTED_SWEEP = [
     ("publish", Step.REQUIRED),
 ]
 
-# Commands that exist and are deliberately not in a sweep.
-NOT_IN_A_SWEEP = {"sweep", "check", "repair-identities", "latent-users"}
+# Commands that exist and are deliberately not in a sweep. `schedule` wraps a
+# whole run rather than taking part in one, and `check` only reads.
+NOT_IN_A_SWEEP = {"sweep", "check", "schedule", "repair-identities", "latent-users"}
 
 
 def test_the_sweep_runs_these_steps_in_this_order() -> None:

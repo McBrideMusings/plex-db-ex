@@ -89,14 +89,16 @@ admin fmt        ruff format
 admin vet        lint + typecheck + test
 admin pull-baseline  copy the host store down into ./data
 admin host-exec <...> run one plexdb command in the deployed container, now
+admin dev check  report the store's health read-only; non-zero if it is behind or damaged
 admin logs live  tail the container on the host
 admin diff       show run-config drift between the container and the last deploy
 admin docs       serve the docs site
 ```
 
 `admin deploy` takes a copy of the live store on the host first, then builds for `linux/amd64`
-here, ships the image over ssh with `docker save | docker load`, and recreates the container
-from the `[docker_run]` table — nothing pulls from a registry. **The migration runs as the
+here, ships the image over ssh with `docker save | docker load`, recreates the container
+from the `[docker_run]` table — nothing pulls from a registry — and finishes by running
+`plexdb check` inside it, so a startup migration that rolled itself back ends the deploy. **The migration runs as the
 container starts** (`plexdb/schedule.py`), so the store matches the code that was just deployed
 rather than waiting for the next sweep; it takes its own pre-migration copy and rolls itself back
 on any row loss. The container's mounts and credentials are read from

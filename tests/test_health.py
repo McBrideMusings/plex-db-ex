@@ -90,6 +90,63 @@ def test_freshness_reports_the_newest_row_of_each_kind_and_its_age(tmp_path: Pat
     assert ages["newest play"] == pytest.approx(2.0)
     assert ages["newest enrichment"] == pytest.approx(3.0)
     assert ages["newest rating key seen"] == pytest.approx(1.5)
+    assert not any(entry.stale for entry in report.freshness)
+
+
+def test_a_stamp_older_than_the_window_is_flagged_on_its_own_line(tmp_path: Path) -> None:
+    """An age alone only reads as wrong to someone who already knows what
+    normal is, so the line says so."""
+    path = tmp_path / "plexdb.db"
+    init(path)
+    _populate(path)
+
+    late = datetime(2026, 8, 20, 12, 0, tzinfo=UTC)
+    report = inspect(path, tmp_path / "backups", now=late)
+
+    assert all(entry.stale for entry in report.freshness)
+    printed = "\n".join(render(report))
+    assert "newest play: 2026-08-10T12:00:00+00:00 (10.0 days ago) — STALE" in printed
+    assert "freshness (flagged over 3 days):" in printed
+
+
+def test_a_timestamp_that_cannot_be_read_is_printed_rather_than_dropped(tmp_path: Path) -> None:
+    """A mangled fetched_at and a table nobody has ever written to must not
+    produce the same report."""
+    path = tmp_path / "plexdb.db"
+    init(path)
+    _populate(path)
+    with open_store(path) as conn:
+        conn.execute("UPDATE enrichment SET fetched_at = 'yesterday, ish'")
+        conn.commit()
+
+    report = inspect(path, tmp_path / "backups", now=NOW)
+    entry = next(e for e in report.freshness if e.label == "newest enrichment")
+
+    assert entry.unreadable
+    assert entry.raw == "yesterday, ish"
+    assert "newest enrichment: unreadable timestamp 'yesterday, ish'" in "\n".join(render(report))
+
+
+def test_rating_keys_are_ordered_as_numbers_not_as_text(tmp_path: Path) -> None:
+    """Sorted as text, a duplicate holding rating keys 9 and 100 prints
+    `100, 9`."""
+    path = tmp_path / "plexdb.db"
+    init(path)
+    with open_store(path) as conn:
+        conn.execute(
+            "INSERT INTO items (item_id, type, title) VALUES ('imdb:tt2', 'movie', 'Ronin')"
+        )
+        for rating_key in ("100", "9"):
+            conn.execute(
+                "INSERT INTO plex_items (rating_key, item_id, section_id, last_seen) "
+                "VALUES (?, 'imdb:tt2', '1', '2026-08-11T00:00:00+00:00')",
+                (rating_key,),
+            )
+        conn.commit()
+
+    report = inspect(path, tmp_path / "backups", now=NOW)
+
+    assert report.duplicates[0].rating_keys == ("9", "100")
 
 
 def test_identities_with_more_than_one_rating_key_are_named_not_counted(tmp_path: Path) -> None:

@@ -55,7 +55,7 @@ plex-db-ex/
 │   └── store.py           opening the store, publishing the read-only snapshot consumers open, and `migrate` — back up, apply, verify version + quick_check + row counts, roll back on any of them. `quick_check` is exposed rather than inlined so `plexdb check` asks the same question of a live store that `migrate` asks of a just-migrated one
 ├── tools/
 │   ├── baseline.sh        copies of the live store over ssh: `pull` to ./data, `backup` left on the host (also the first step of `admin deploy`, so there is a snapshot from before the new code existed) and pruned to the newest MANUAL_KEEP=10, `list`. VACUUM INTO on the host rather than scp, because the store is in WAL mode and a plain copy leaves the sidecar's rows behind. Only manual copies are pruned — a pre-migration one never is
-│   └── host-exec.sh       one plexdb command inside the deployed container, now rather than at the scheduler's next sweep — the container's own CLI, so the store is still written by the one writer. Refuses while a sweep is running
+│   └── host-exec.sh       one plexdb command inside the deployed container, now rather than at the scheduler's next sweep — the container's own CLI, so the store is still written by the one writer. Refuses while a sweep is running, except for `check`, which writes nothing and instead waits out a migration in progress — which is what lets it be the last step of `admin deploy`
 ├── tests/                 pytest; no test reaches the network
 │   └── fixtures/
 │       ├── item_id.json   the published specification of the item_id rule (ADR-0006), run by test_identity.py

@@ -36,13 +36,33 @@ COUNTED_TABLES = (
 )
 
 
+#: How old the newest row of a kind may be before the report says so. The sweep
+#: runs nightly, so one missed night plus slack: anything past this means a step
+#: has been failing quietly, or — for plays — that nobody watched anything for
+#: three days, which is worth a glance either way. It changes no exit code; a
+#: quiet week is not a damaged store.
+STALE_DAYS = 3.0
+
+
 @dataclass(frozen=True)
 class Freshness:
     """The newest timestamp in one table, and how old it is."""
 
     label: str
-    when: datetime
-    age_days: float
+    #: Exactly what the column held, kept so a value that could not be read is
+    #: still shown rather than disappearing from the report.
+    raw: str
+    #: `None` when `raw` is not a timestamp this code can read.
+    when: datetime | None
+    age_days: float | None
+
+    @property
+    def unreadable(self) -> bool:
+        return self.when is None
+
+    @property
+    def stale(self) -> bool:
+        return self.age_days is not None and self.age_days > STALE_DAYS
 
 
 @dataclass(frozen=True)
@@ -113,29 +133,27 @@ def _has(conn: sqlite3.Connection, table: str, column: str, tables: set[str]) ->
     return table in tables and column in _columns(conn, table)
 
 
-def _newest_text(conn: sqlite3.Connection, table: str, column: str) -> datetime | None:
-    """The newest value of an ISO-8601 text timestamp column.
+def _read_text(raw: str) -> datetime | None:
+    """An ISO-8601 text stamp as a datetime, or `None` if it cannot be read.
 
     Every writer stamps these with an offset-aware `isoformat()`, so a value
     without one is not something this store produced; it is read as UTC rather
-    than raising, because a check that dies on one odd row tells you less than
-    one that reports the row.
+    than raising. A value that is not a timestamp at all is reported verbatim by
+    the caller rather than dropped — a mangled `fetched_at` must not read the
+    same as a table nobody has ever written to.
     """
-    row = conn.execute(f"SELECT max({column}) FROM {table}").fetchone()
-    if row is None or row[0] is None:
-        return None
     try:
-        when = datetime.fromisoformat(str(row[0]))
+        when = datetime.fromisoformat(raw)
     except ValueError:
         return None
     return when if when.tzinfo else when.replace(tzinfo=UTC)
 
 
-def _newest_epoch(conn: sqlite3.Connection, table: str, column: str) -> datetime | None:
-    row = conn.execute(f"SELECT max({column}) FROM {table}").fetchone()
-    if row is None or row[0] is None:
+def _read_epoch(raw: str) -> datetime | None:
+    try:
+        return datetime.fromtimestamp(int(raw), tz=UTC)
+    except (ValueError, OverflowError, OSError):
         return None
-    return datetime.fromtimestamp(int(row[0]), tz=UTC)
 
 
 def _freshness(conn: sqlite3.Connection, tables: set[str], now: datetime) -> tuple[Freshness, ...]:
@@ -154,10 +172,13 @@ def _freshness(conn: sqlite3.Connection, tables: set[str], now: datetime) -> tup
     for label, table, column, epoch in candidates:
         if not _has(conn, table, column, tables):
             continue
-        when = _newest_epoch(conn, table, column) if epoch else _newest_text(conn, table, column)
-        if when is None:
+        row = conn.execute(f"SELECT max({column}) FROM {table}").fetchone()  # noqa: S608
+        if row is None or row[0] is None:
             continue
-        found.append(Freshness(label, when, (now - when).total_seconds() / 86400))
+        raw = str(row[0])
+        when = _read_epoch(raw) if epoch else _read_text(raw)
+        age = None if when is None else (now - when).total_seconds() / 86400
+        found.append(Freshness(label, raw, when, age))
     return tuple(found)
 
 
@@ -182,10 +203,21 @@ def _duplicates(conn: sqlite3.Connection, tables: set[str]) -> tuple[Duplicate, 
         Duplicate(
             item_id=str(row["item_id"]),
             title=str(row["title"]),
-            rating_keys=tuple(sorted(str(row["keys"]).split(","))),
+            rating_keys=_sorted_keys(str(row["keys"])),
         )
         for row in rows
     )
+
+
+def _sorted_keys(concatenated: str) -> tuple[str, ...]:
+    """`group_concat` has no defined order, so the keys are sorted here — as
+    numbers where they are numbers, since Plex's rating keys are digits and
+    sorting them as text puts 100 before 9."""
+
+    def order(key: str) -> tuple[int, int, str]:
+        return (0, int(key), "") if key.isdigit() else (1, 0, key)
+
+    return tuple(sorted(concatenated.split(","), key=order))
 
 
 def _fs_identities(conn: sqlite3.Connection, tables: set[str]) -> int:
