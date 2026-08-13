@@ -31,6 +31,7 @@ from plexdb.store import open_store
 from plexdb.walk import walk_all
 
 EXPECTED_COMMANDS = {
+    "check",
     "sweep",
     "migrate",
     "walk",
@@ -51,6 +52,9 @@ EXPECTED_COMMANDS = {
 # plays, enrich it, publish it last. Each module owns its own ORDER, so this
 # list is the only place the sequence is written down.
 EXPECTED_COMMAND_ORDER = [
+    # First, and not a step of the sweep: the read-only question you ask before
+    # deciding to run anything else (`plexdb/commands/check.py`).
+    "check",
     "sweep",
     "migrate",
     "walk",

@@ -32,7 +32,7 @@ EXPECTED_SWEEP = [
 ]
 
 # Commands that exist and are deliberately not in a sweep.
-NOT_IN_A_SWEEP = {"sweep", "repair-identities", "latent-users"}
+NOT_IN_A_SWEEP = {"sweep", "check", "repair-identities", "latent-users"}
 
 
 def test_the_sweep_runs_these_steps_in_this_order() -> None:

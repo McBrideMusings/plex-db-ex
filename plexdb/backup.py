@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import shutil
 import sqlite3
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -48,23 +49,29 @@ class Backup:
     size: int
 
 
-def guarded_counts(conn: sqlite3.Connection) -> dict[str, int]:
-    """Row counts for every table in `GUARDED_TABLES` that exists yet.
+def counts_for(conn: sqlite3.Connection, tables: Sequence[str]) -> dict[str, int]:
+    """Row counts for every named table that exists yet, in the order given.
 
     A table missing from the store is left out rather than counted as zero:
     before the migration that creates it, absent and empty are the same thing,
     and reporting `0` would make the migration that fills it look like growth
-    from nothing when it was creation.
+    from nothing when it was creation. `plexdb check` runs against stores older
+    than this build for the same reason, so it wants the same treatment.
     """
     present = {
         row[0]
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
     }
     counts: dict[str, int] = {}
-    for table in GUARDED_TABLES:
+    for table in tables:
         if table in present:
             counts[table] = int(conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0])
     return counts
+
+
+def guarded_counts(conn: sqlite3.Connection) -> dict[str, int]:
+    """Row counts for every table in `GUARDED_TABLES` that exists yet."""
+    return counts_for(conn, GUARDED_TABLES)
 
 
 def _unique_path(directory: Path, stem: str) -> Path:

@@ -90,6 +90,12 @@ def _connect(path: Path) -> sqlite3.Connection:
 @contextmanager
 def open_readonly(path: Path) -> Iterator[sqlite3.Connection]:
     """Open the store read-only. Any write raises rather than being applied."""
+    if path.is_dir():
+        # Without this, SQLite opens a directory happily and the first statement
+        # fails with `disk I/O error`, which reads as a failing disk rather than
+        # a path pointing one level too high. `open_store` has said so plainly
+        # since it was written; a reader deserves the same sentence.
+        raise StoreError(f"{path} is a directory, not a store — point PLEXDB_PATH at a file")
     if not path.exists():
         raise FileNotFoundError(f"no store at {path}")
     try:
@@ -146,6 +152,16 @@ class Migration:
         return self.was != self.now
 
 
+def quick_check(conn: sqlite3.Connection) -> str:
+    """SQLite's own verdict on whether the file is structurally sound.
+
+    `"ok"` means sound; anything else is the first problem it found. Read-only,
+    so `plexdb check` runs the same check on a live store that `migrate` runs on
+    a just-migrated one — there is one definition of "damaged", not two.
+    """
+    return str(conn.execute("PRAGMA quick_check").fetchone()[0])
+
+
 def _verify(conn: sqlite3.Connection, before: dict[str, int]) -> str | None:
     """Check a just-migrated store, returning the first problem or `None`.
 
@@ -157,7 +173,7 @@ def _verify(conn: sqlite3.Connection, before: dict[str, int]) -> str | None:
     if now != schema.SCHEMA_VERSION:
         return f"store reports schema v{now} after migrating to v{schema.SCHEMA_VERSION}"
 
-    check = conn.execute("PRAGMA quick_check").fetchone()[0]
+    check = quick_check(conn)
     if check != "ok":
         return f"sqlite reports the migrated store is damaged: {check}"
 

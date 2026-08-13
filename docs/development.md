@@ -35,6 +35,31 @@ Pull it whenever you want a clean slate. Break it however you like: drop tables,
 under development, rewrite the taste rollup and see what the vector does, inject fabricated plays
 to test a hypothesis. When it is wrecked, pull again.
 
+## Asking a store how it is
+
+```
+plexdb check                 # whatever is at PLEXDB_PATH
+admin dev check              # the pulled copy in ./data
+admin host-exec check        # the live store, from the host, now
+```
+
+`plexdb check` opens the store **read-only**: it never migrates it, never backs it up, and writes
+nothing at all, so it is safe against the live store at any moment, mid-sweep included. It prints
+the schema version and whether this build agrees with it, `PRAGMA quick_check`, row counts for the
+seven tables the shape of the store is visible in, the newest play, enrichment row and id-seen
+stamp with the age of each, every identity more than one rating key points at (named, not
+counted), the `fs:` count, and what the backups directory holds.
+
+It exits **non-zero when the store is behind, damaged, or unreadable** — and zero for everything
+else. Stale plays and a rising `fs:` count are things to look at, not things to fail on; a
+non-zero exit for those would make the command useless as a gate the first night a source is down.
+
+The gap it closes ([#59](https://github.com/McBrideMusings/plex-db-ex/issues/59)): there was no way
+to learn a store's schema version without either migrating it or copying 130 MB down to a laptop.
+A walk run right after a deploy failed with `table external_ids has no column named last_seen` and
+read as a broken command, when the store was simply at v7 while the deployed code expected v8.
+`admin host-exec check` now answers that in a second, before deciding whether to deploy at all.
+
 ## Data flows up once, and then almost never again
 
 **Seeding — done once.** The baseline was seeded from a laptop store that already held the plays
@@ -141,6 +166,8 @@ which is the point.
 7. `admin logs live` — the migration runs as the container starts, with the backup and the rollback
    above, so the schema is current within seconds of the deploy rather than at the next sweep.
    Watch for `migrated store vN -> vN+1` and the backup path.
+8. `admin host-exec check` — read-only confirmation that the live store landed at the version the
+   deployed code expects, with `quick_check` ok and the guarded counts intact.
 
 There is no automatic deploy on merge, on purpose: the host has one store, the migration is
 forward-only, and a person deciding when it happens is worth more than the minutes it saves.

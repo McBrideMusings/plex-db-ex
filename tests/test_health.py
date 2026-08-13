@@ -1,0 +1,216 @@
+"""`plexdb check` reports on a store without altering it.
+
+The case it exists for is a store the running build does not agree with, so
+these drive it against a current store, a store one version behind, and a
+damaged one.
+"""
+
+from __future__ import annotations
+
+import argparse
+import sqlite3
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+
+from plexdb import schema
+from plexdb.commands.check import _cmd_check, render
+from plexdb.errors import StoreError
+from plexdb.health import inspect
+from plexdb.store import init, open_store
+
+NOW = datetime(2026, 8, 12, 12, 0, 0, tzinfo=UTC)
+
+
+def _store_at(path: Path, version: int) -> None:
+    """Build a store at exactly `version` by applying only that many migrations."""
+    with open_store(path, create=True) as conn:
+        script = "".join(schema.MIGRATIONS[:version])
+        conn.executescript(script)
+        conn.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
+        conn.execute("DELETE FROM schema_version")
+        conn.execute("INSERT INTO schema_version (version) VALUES (?)", (version,))
+        conn.commit()
+
+
+def _populate(path: Path) -> None:
+    with open_store(path) as conn:
+        conn.execute(
+            "INSERT INTO items (item_id, type, title) VALUES ('imdb:tt1', 'movie', 'Heat')"
+        )
+        conn.execute(
+            "INSERT INTO items (item_id, type, title) VALUES ('fs:abc', 'movie', 'Home Video')"
+        )
+        for rating_key in ("11", "12"):
+            conn.execute(
+                "INSERT INTO plex_items (rating_key, item_id, section_id, last_seen) "
+                "VALUES (?, 'imdb:tt1', '1', '2026-08-11T00:00:00+00:00')",
+                (rating_key,),
+            )
+        conn.execute(
+            "INSERT INTO plays (history_key, item_id, plex_account_id, viewed_at) "
+            "VALUES ('h1', 'imdb:tt1', 1, ?)",
+            (int(datetime(2026, 8, 10, 12, 0, tzinfo=UTC).timestamp()),),
+        )
+        conn.execute(
+            "INSERT INTO enrichment (item_id, namespace, key, value, fetched_at) "
+            "VALUES ('imdb:tt1', 'tmdb_keywords', 'keyword', 'heist', "
+            "'2026-08-09T12:00:00+00:00')"
+        )
+        conn.commit()
+
+
+def test_a_current_populated_store_is_healthy_and_reports_what_is_in_it(tmp_path: Path) -> None:
+    path = tmp_path / "plexdb.db"
+    init(path)
+    _populate(path)
+
+    report = inspect(path, tmp_path / "backups", now=NOW)
+
+    assert report.healthy
+    assert report.version == schema.SCHEMA_VERSION
+    assert report.quick_check == "ok"
+    assert report.counts["items"] == 2
+    assert report.counts["plays"] == 1
+    assert report.counts["enrichment"] == 1
+    assert report.fs_identities == 1
+
+
+def test_freshness_reports_the_newest_row_of_each_kind_and_its_age(tmp_path: Path) -> None:
+    """A store whose newest play is days old is a store whose ingest stopped,
+    and nothing else in the report would show it."""
+    path = tmp_path / "plexdb.db"
+    init(path)
+    _populate(path)
+
+    report = inspect(path, tmp_path / "backups", now=NOW)
+    ages = {entry.label: entry.age_days for entry in report.freshness}
+
+    assert ages["newest play"] == pytest.approx(2.0)
+    assert ages["newest enrichment"] == pytest.approx(3.0)
+    assert ages["newest rating key seen"] == pytest.approx(1.5)
+
+
+def test_identities_with_more_than_one_rating_key_are_named_not_counted(tmp_path: Path) -> None:
+    path = tmp_path / "plexdb.db"
+    init(path)
+    _populate(path)
+
+    report = inspect(path, tmp_path / "backups", now=NOW)
+
+    assert len(report.duplicates) == 1
+    assert report.duplicates[0].item_id == "imdb:tt1"
+    assert report.duplicates[0].title == "Heat"
+    assert report.duplicates[0].rating_keys == ("11", "12")
+    assert "imdb:tt1  Heat  [11, 12]" in "\n".join(render(report))
+
+
+def test_a_store_one_version_behind_is_reported_rather_than_crashing_on_it(tmp_path: Path) -> None:
+    """The failure this command exists for: a walk died with `no column named
+    last_seen` because the store was at v7 while the deployed code expected v8.
+    A check that could only read a current store could not have said so."""
+    path = tmp_path / "plexdb.db"
+    behind = schema.SCHEMA_VERSION - 1
+    _store_at(path, behind)
+
+    report = inspect(path, tmp_path / "backups", now=NOW)
+
+    assert not report.healthy
+    assert report.version == behind
+    assert report.sound
+    assert f"store is at v{behind}" in render(report)[1]
+    assert "run plexdb migrate" in render(report)[1]
+
+
+def test_a_store_newer_than_this_build_says_to_upgrade_not_to_migrate(tmp_path: Path) -> None:
+    path = tmp_path / "plexdb.db"
+    init(path)
+    with open_store(path) as conn:
+        conn.execute("UPDATE schema_version SET version = ?", (schema.SCHEMA_VERSION + 1,))
+        conn.commit()
+
+    report = inspect(path, tmp_path / "backups", now=NOW)
+
+    assert not report.healthy
+    assert "upgrade plex-db-ex" in render(report)[1]
+
+
+def test_a_store_with_a_version_table_and_no_row_is_reported_as_damaged(tmp_path: Path) -> None:
+    path = tmp_path / "plexdb.db"
+    init(path)
+    with open_store(path) as conn:
+        conn.execute("DELETE FROM schema_version")
+        conn.commit()
+
+    with pytest.raises(StoreError, match="damaged"):
+        inspect(path, tmp_path / "backups", now=NOW)
+
+
+def test_check_writes_nothing_to_the_store(tmp_path: Path) -> None:
+    """The whole point: safe against the live file mid-sweep. A read-only
+    connection makes a write raise, and the file's mtime and size confirm
+    nothing landed."""
+    path = tmp_path / "plexdb.db"
+    init(path)
+    _populate(path)
+    before = path.stat()
+
+    inspect(path, tmp_path / "backups", now=NOW)
+
+    after = path.stat()
+    assert (after.st_size, after.st_mtime_ns) == (before.st_size, before.st_mtime_ns)
+
+
+def test_backups_are_counted_and_sized_and_an_absent_directory_is_not_an_empty_one(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "plexdb.db"
+    init(path)
+
+    assert inspect(path, tmp_path / "nothing-here", now=NOW).backups is None
+
+    backups = tmp_path / "backups"
+    backups.mkdir()
+    (backups / "plexdb.pre-v8.db").write_bytes(b"x" * 2048)
+    (backups / "plexdb.manual-2026.db").write_bytes(b"x" * 1024)
+    (backups / "notes.txt").write_text("ignored")
+
+    found = inspect(path, backups, now=NOW).backups
+    assert found is not None
+    assert (found.count, found.size) == (2, 3072)
+
+
+def test_the_exit_code_is_zero_when_current_and_one_when_behind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Non-zero is what makes it usable as a deploy gate."""
+    path = tmp_path / "plexdb.db"
+    monkeypatch.setenv("PLEXDB_PATH", str(path))
+    monkeypatch.setenv("PLEXDB_BACKUP_DIR", str(tmp_path / "backups"))
+    init(path)
+
+    assert _cmd_check(argparse.Namespace()) == 0
+    assert "quick_check: ok" in capsys.readouterr().out
+
+    with open_store(path) as conn:
+        conn.execute("UPDATE schema_version SET version = 1")
+        conn.commit()
+
+    assert _cmd_check(argparse.Namespace()) == 1
+
+
+def test_a_file_that_is_not_a_database_is_reported_not_traced(tmp_path: Path) -> None:
+    path = tmp_path / "plexdb.db"
+    path.write_text("this is not a database")
+
+    with pytest.raises((StoreError, sqlite3.DatabaseError)):
+        inspect(path, tmp_path / "backups", now=NOW)
+
+
+def test_a_path_pointing_at_a_directory_says_so_rather_than_disk_io_error(tmp_path: Path) -> None:
+    """SQLite opens a directory happily and fails on the first statement with
+    `disk I/O error`, which reads as a failing disk instead of a path one level
+    too high."""
+    with pytest.raises(StoreError, match="is a directory, not a store"):
+        inspect(tmp_path, tmp_path / "backups", now=NOW)
