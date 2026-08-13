@@ -54,12 +54,33 @@ cmd_pull() {
                 ', ' || (SELECT count(*) FROM enrichment) || ' enrichment rows';"
 }
 
+# How many manual copies to keep. A `plexdb.pre-v<N>.db` is never pruned — it is
+# the only route back past migration N, and there is at most one per schema
+# version — but a manual copy is one somebody took before touching something,
+# and the tenth-oldest is a duplicate of a store that has been migrated twice
+# since. At ~130 MB each they are what fills the disk.
+MANUAL_KEEP=10
+
+prune_manual() {
+    # Newest first, skip the first MANUAL_KEEP, delete the rest. Name-sorted is
+    # date-sorted: the stamp is UTC `YYYYMMDDTHHMMSSZ`, so it sorts the same way
+    # it reads, with no dependency on the host's mtimes surviving a copy.
+    ssh "$TARGET" "ls -1 '$BACKUP_DIR'/plexdb.manual-*.db 2>/dev/null | sort -r | tail -n +$((MANUAL_KEEP + 1)) | while read -r old; do echo \"pruned \$old\"; rm -f \"\$old\"; done"
+}
+
 cmd_backup() {
+    # `backup` is also the first step of `admin deploy`, which forwards its own
+    # flags here. A preview must not leave a 136 MB file on the host.
+    if [ "${1:-}" = "--dry-run" ]; then
+        echo "dry run: would copy the store into $BACKUP_DIR/plexdb.manual-<stamp>.db"
+        return 0
+    fi
     local remote="$BACKUP_DIR/plexdb.manual-$(stamp).db"
     ssh "$TARGET" "mkdir -p '$BACKUP_DIR'"
     remote_vacuum "$remote"
     echo "backed up on $UNRAID_HOST: $remote"
     ssh "$TARGET" "ls -lh '$remote'"
+    prune_manual
 }
 
 cmd_list() {
@@ -68,7 +89,7 @@ cmd_list() {
 
 case "${1:-}" in
     pull)   cmd_pull ;;
-    backup) cmd_backup ;;
+    backup) shift; cmd_backup "$@" ;;
     list)   cmd_list ;;
     *)      echo "usage: baseline.sh pull|backup|list" >&2; exit 2 ;;
 esac

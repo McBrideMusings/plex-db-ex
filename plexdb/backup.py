@@ -6,9 +6,19 @@ pending migration and the version row in one transaction, so a process killed
 partway through leaves the file untouched — but that protects against a *crash*,
 not against a migration that is simply wrong. Bad SQL commits perfectly happily.
 
-So a copy is taken first, and it is kept. Every copy is kept: they are the only
-route back past their own migration, and forward-only migrations have no other
-way home.
+So a copy is taken first, and it is kept.
+
+**Nothing this module writes is ever pruned.** Every copy taken here is a
+pre-migration one, and the two kinds of copy in the backups directory are not
+worth the same. A `plexdb.pre-v<N>.db` is
+the only route back past migration N, there is at most one per schema version,
+and the list of versions grows by one every few weeks — so the whole set is
+bounded by the schema's own history and none of it is redundant. A
+`plexdb.manual-<timestamp>.db` is a copy someone took before touching something,
+and the tenth-oldest of those is a duplicate of a store that has since been
+migrated twice; at ~130 MB each they are what actually fills a disk. Those are
+taken on the host and pruned there, by `tools/baseline.sh` — nothing in this
+package deletes a backup.
 """
 
 from __future__ import annotations

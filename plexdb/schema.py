@@ -370,7 +370,7 @@ def current_version(conn: sqlite3.Connection) -> int:
     if version is None:
         raise StoreError(
             "store has a schema_version table but no version row — it is damaged. "
-            "Restore it from a backup, or delete the file and re-run `plexdb init` "
+            "Restore it from a backup, or delete the file and re-run `plexdb migrate` "
             "to rebuild it from Plex."
         )
     return int(version[0])
@@ -380,7 +380,7 @@ def apply(conn: sqlite3.Connection) -> tuple[int, int]:
     """Bring a store up to `SCHEMA_VERSION`, and report where it started and ended.
 
     Applying an already-current store is a no-op, so this is safe to run on
-    every startup — which is what makes `plexdb init` re-runnable.
+    every startup — which is what makes `plexdb migrate` re-runnable.
 
     Raises:
         StoreError: the store is newer than this code understands. That means a

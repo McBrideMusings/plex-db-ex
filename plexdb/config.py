@@ -98,7 +98,7 @@ class Config:
     #: Empty when unset.
     tautulli_url: str
     tautulli_api_key: str
-    #: Where `plexdb init` puts the copy it takes before applying a migration.
+    #: Where `plexdb migrate` puts the copy it takes before applying a migration.
     #: Defaults to a `backups/` directory beside the store, so the container
     #: needs no extra mount and a dev checkout needs no extra setting — the
     #: copy lands next to the thing it is a copy of. Every copy is kept:

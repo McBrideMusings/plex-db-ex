@@ -68,7 +68,11 @@ def test_run_scheduler_waits_before_the_first_sweep_and_then_repeats(
         return 0
 
     schedule.run_scheduler(
-        sweep=sweep, sleep=slept.append, clock=lambda: next(times), iterations=2
+        sweep=sweep,
+        sleep=slept.append,
+        clock=lambda: next(times),
+        migrate=lambda: None,
+        iterations=2,
     )
 
     assert slept == [1800.0, 86400.0]
@@ -91,6 +95,7 @@ def test_run_scheduler_keeps_going_after_a_sweep_that_failed(
         sweep=failing_sweep,
         sleep=lambda _seconds: None,
         clock=lambda: datetime(2026, 8, 11, 3, 0),
+        migrate=lambda: None,
         iterations=3,
     )
 
@@ -101,8 +106,42 @@ def test_run_scheduler_refuses_to_start_with_no_schedule_set(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv(schedule.SCHEDULE_VAR, "")
+    migrated: list[int] = []
     with pytest.raises(ConfigError):
-        schedule.run_scheduler(sweep=lambda: 0, sleep=lambda _seconds: None, iterations=1)
+        schedule.run_scheduler(
+            sweep=lambda: 0,
+            sleep=lambda _seconds: None,
+            migrate=lambda: migrated.append(1),
+            iterations=1,
+        )
+    # Nothing touches the store when the container is misconfigured: a schedule
+    # that does not parse means no sweep will ever run, so migrating the file
+    # would alter a live database on the way to exiting.
+    assert migrated == []
+
+
+def test_run_scheduler_migrates_the_store_before_the_first_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The schema is brought up to date by the code that is running, at the
+    moment it starts — not by the first sweep, which can be most of a day later
+    (issue #58's repair failed on a column the store did not have yet)."""
+    monkeypatch.setenv(schedule.SCHEDULE_VAR, "03:30")
+    order: list[str] = []
+
+    def sweep() -> int:
+        order.append("sweep")
+        return 0
+
+    schedule.run_scheduler(
+        sweep=sweep,
+        sleep=lambda _seconds: order.append("sleep"),
+        clock=lambda: datetime(2026, 8, 11, 3, 0),
+        migrate=lambda: order.append("migrate"),
+        iterations=1,
+    )
+
+    assert order == ["migrate", "sleep", "sweep"]
 
 
 def test_schedule_is_not_itself_a_step_of_the_sweep() -> None:

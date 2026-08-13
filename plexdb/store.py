@@ -59,7 +59,7 @@ def open_store(path: Path, *, create: bool = False) -> Iterator[sqlite3.Connecti
     if create:
         _ensure_parent(path)
     elif not path.exists():
-        raise FileNotFoundError(f"no store at {path} — run `plexdb init` first")
+        raise FileNotFoundError(f"no store at {path} — run `plexdb migrate` first")
 
     conn = _connect(path)
     try:
@@ -119,7 +119,7 @@ def init(path: Path) -> tuple[int, int]:
     Returns the version it was at and the version it is now, so a caller can
     tell "created" from "already current" without inspecting the file.
 
-    This takes no backup and checks nothing afterwards. `plexdb init` calls
+    This takes no backup and checks nothing afterwards. `plexdb migrate` calls
     `migrate` instead; this is the bare primitive, for building a store that has
     nothing in it yet to lose.
     """

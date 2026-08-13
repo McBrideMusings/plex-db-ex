@@ -75,29 +75,66 @@ def next_fire(now: datetime, at: tuple[int, int]) -> datetime:
     return candidate
 
 
+def _migrate_store() -> None:
+    """Bring the store to the schema this build expects, and say what happened.
+
+    Deliberately not wrapped: a store that fails to migrate has already been
+    rolled back to the copy `store.migrate` took, and the right thing then is to
+    take the container down loudly rather than sweep a store at a schema this
+    code does not match. Under `restart: unless-stopped` that is a restart loop
+    with the reason in `docker logs`, which is louder than a sweep writing
+    against the wrong shape.
+    """
+    from .config import Config
+    from .store import migrate
+
+    config = Config.from_env()
+    result = migrate(config.store_path, config.backup_dir)
+    if result.was == 0:
+        print(f"created store at schema v{result.now}", flush=True)
+    elif result.migrated:
+        print(f"backed up to {result.backup}", flush=True)
+        print(f"migrated store v{result.was} -> v{result.now}", flush=True)
+    else:
+        print(f"store already current at schema v{result.now}", flush=True)
+
+
 def run_scheduler(
     *,
     sweep: Callable[[], int] | None = None,
     sleep: Callable[[float], None] | None = None,
     clock: Callable[[], datetime] | None = None,
+    migrate: Callable[[], None] | None = None,
     iterations: int | None = None,
 ) -> int:
-    """Wait until the next scheduled time, run one sweep, repeat.
+    """Migrate the store, then wait until the next scheduled time, run one sweep,
+    repeat.
 
     Runs forever under a container. `iterations` bounds the loop so a test can
-    watch it complete a fixed number of cycles; `sweep`, `sleep` and `clock`
-    are injectable for the same reason. Nothing else supplies them.
+    watch it complete a fixed number of cycles; `sweep`, `sleep`, `clock` and
+    `migrate` are injectable for the same reason. Nothing else supplies them.
 
-    Never runs a sweep at startup. The first run is at the next scheduled time,
-    which is what makes "set the schedule a few minutes out and watch it" a
-    real check that the schedule works rather than a check that the entrypoint
-    runs.
+    **The migration runs at startup, once the schedule parses.** It used to
+    wait for the first sweep's own `migrate` step, which meant a freshly
+    deployed image could sit for most of a day running code that expected a
+    column the store did not have yet — and anything run against the store in
+    that window failed on the missing column rather than on anything it did
+    wrong (issue #58's repair hit exactly that). Doing it here ties the schema to
+    the code that is running rather than to the clock, and covers a restart
+    nobody deployed for. It is a no-op on a store already current, so a restart
+    loop cannot fill the disk with copies.
+
+    Never runs a *sweep* at startup, which is unchanged. The first sweep is at
+    the next scheduled time, which is what makes "set the schedule a few minutes
+    out and watch it" a real check that the schedule works rather than a check
+    that the entrypoint runs.
     """
     from .sweep import run_sweep
 
     do_sweep = run_sweep if sweep is None else sweep
     do_sleep = time.sleep if sleep is None else sleep
     now_fn = datetime.now if clock is None else clock
+    do_migrate = _migrate_store if migrate is None else migrate
 
     raw = os.environ.get(SCHEDULE_VAR, "").strip()
     if not raw:
@@ -106,6 +143,11 @@ def run_scheduler(
             f"(the container's TZ decides the zone)"
         )
     at = parse_schedule(raw)
+
+    # After the schedule is validated and before anything is swept: a container
+    # started with a malformed PLEXDB_SCHEDULE has no business migrating a store
+    # it is never going to sweep.
+    do_migrate()
 
     completed = 0
     while iterations is None or completed < iterations:

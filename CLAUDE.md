@@ -82,7 +82,7 @@ only forward-looking doc.
 ```
 admin build      uv sync
 admin dev <...>  run the plexdb CLI, args forwarded
-admin deploy     build the image and recreate the container on the Unraid host
+admin deploy     copy the live store, build the image, recreate the container on the host
 admin test       pytest
 admin lint       ruff check
 admin fmt        ruff format
@@ -94,9 +94,12 @@ admin diff       show run-config drift between the container and the last deploy
 admin docs       serve the docs site
 ```
 
-`admin deploy` builds for `linux/amd64` here, ships the image over ssh with
-`docker save | docker load`, and recreates the container from the `[docker_run]` table —
-nothing pulls from a registry. The container's mounts and credentials are read from
+`admin deploy` takes a copy of the live store on the host first, then builds for `linux/amd64`
+here, ships the image over ssh with `docker save | docker load`, and recreates the container
+from the `[docker_run]` table — nothing pulls from a registry. **The migration runs as the
+container starts** (`plexdb/schedule.py`), so the store matches the code that was just deployed
+rather than waiting for the next sweep; it takes its own pre-migration copy and rolls itself back
+on any row loss. The container's mounts and credentials are read from
 `/boot/config/plexdb.env` **on the host**, never from a checkout's `.env`: those mount paths
 name directories on the Unraid box, and resolving them from a laptop would mount a laptop
 path onto the server.

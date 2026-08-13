@@ -28,7 +28,7 @@ leaves the store untouched. That covers a crash. It does not cover a migration t
 wrong — bad SQL commits perfectly happily, and this list is forward-only, so there is nothing to
 run backwards.
 
-`plexdb init` therefore copies the store before applying anything, into
+`plexdb migrate` therefore copies the store before applying anything, into
 `backups/plexdb.pre-v<target>.db` beside it (`PLEXDB_BACKUP_DIR` moves the directory). After the
 migration it checks that the store reports the target version, that `PRAGMA quick_check` says
 `ok`, and that `items`, `plays` and `enrichment` did not lose rows. Any of those failing restores
@@ -39,7 +39,7 @@ eventually forgets, and a TMDB sweep paid for against a rate limit. Edges, colle
 are re-fetchable and are not guarded, so a migration that rebuilds one of them passes. A future
 migration that genuinely must drop guarded rows has to relax the guard on purpose.
 
-A store that is already current is not copied — `init` runs at the top of every sweep, and a copy
+A store that is already current is not copied — `migrate` runs at the top of every sweep and again whenever the container starts, and a copy
 per sweep would fill the disk with identical files. Copies are never pruned: a second attempt at
 the same version writes `plexdb.pre-v9.2.db` rather than overwriting the one taken before the
 first attempt.

@@ -1,4 +1,11 @@
-"""`plexdb init` — create the store and apply the schema."""
+"""`plexdb migrate` — bring the store up to the current schema, creating it if
+it does not exist yet.
+
+Named for what it does on a store that already holds twenty months of watch
+history, which is every run but the first. It was called `init` until the name
+sent someone looking for a set-up command and left the one that alters a live
+database sounding harmless.
+"""
 
 from __future__ import annotations
 
@@ -8,14 +15,14 @@ from ..config import Config
 from ..store import migrate
 from ..sweep import Step
 
-NAME = "init"
+NAME = "migrate"
 ORDER = 10
 #: Applies pending migrations. A sweep against a store the build cannot open
 #: has nothing to walk into.
 SWEEP = Step.REQUIRED
 
 
-def _cmd_init(_args: argparse.Namespace) -> int:
+def _cmd_migrate(_args: argparse.Namespace) -> int:
     config = Config.from_env()
     result = migrate(config.store_path, config.backup_dir)
     where = config.store_path.resolve()
@@ -40,8 +47,8 @@ def _cmd_init(_args: argparse.Namespace) -> int:
 
 
 def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    init_parser = sub.add_parser(
+    migrate_parser = sub.add_parser(
         NAME,
-        help="create the store and apply the schema; safe to re-run",
+        help="bring the store up to the current schema (creates it if absent); safe to re-run",
     )
-    init_parser.set_defaults(func=_cmd_init)
+    migrate_parser.set_defaults(func=_cmd_migrate)

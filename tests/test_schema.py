@@ -401,7 +401,7 @@ def test_a_store_missing_its_version_row_is_damaged_not_empty(tmp_path: Path) ->
 
 
 def test_opening_a_missing_store_says_so(tmp_path: Path) -> None:
-    with pytest.raises(FileNotFoundError, match="plexdb init"):
+    with pytest.raises(FileNotFoundError, match="plexdb migrate"):
         with open_store(tmp_path / "absent.db"):
             pass
 

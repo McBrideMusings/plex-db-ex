@@ -32,7 +32,7 @@ wrong run rather than a cosmetic quirk.
 source** — as `|| true` on some lines of a script and not others. Each command declares it instead:
 
 ```python
-SWEEP = Step.REQUIRED  # init, walk, ingest-plays, publish
+SWEEP = Step.REQUIRED  # migrate, walk, ingest-plays, publish
 SWEEP = Step.BEST_EFFORT  # tautulli, keywords, edges, mdblist
 ```
 

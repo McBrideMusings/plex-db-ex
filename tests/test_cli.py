@@ -32,7 +32,7 @@ from plexdb.walk import walk_all
 
 EXPECTED_COMMANDS = {
     "sweep",
-    "init",
+    "migrate",
     "walk",
     "publish",
     "enrich-tmdb-keywords",
@@ -52,7 +52,7 @@ EXPECTED_COMMANDS = {
 # list is the only place the sequence is written down.
 EXPECTED_COMMAND_ORDER = [
     "sweep",
-    "init",
+    "migrate",
     "walk",
     "repair-identities",
     "repair-fs-identities",
@@ -215,7 +215,7 @@ def test_init_creates_the_store_and_says_where(
     store = tmp_path / "plexdb.db"
     monkeypatch.setenv("PLEXDB_PATH", str(store))
 
-    assert main(["init"]) == 0
+    assert main(["migrate"]) == 0
 
     out = capsys.readouterr().out
     assert "created store" in out
@@ -227,10 +227,10 @@ def test_a_second_init_reports_no_change(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setenv("PLEXDB_PATH", str(tmp_path / "plexdb.db"))
-    main(["init"])
+    main(["migrate"])
     capsys.readouterr()
 
-    assert main(["init"]) == 0
+    assert main(["migrate"]) == 0
     assert "already current" in capsys.readouterr().out
 
 
@@ -239,7 +239,7 @@ def test_an_empty_store_path_is_an_error_not_a_default(
 ) -> None:
     monkeypatch.setenv("PLEXDB_PATH", "   ")
 
-    assert main(["init"]) == 1
+    assert main(["migrate"]) == 1
     assert "PLEXDB_PATH" in capsys.readouterr().err
 
 
@@ -272,7 +272,7 @@ def test_a_bad_store_path_prints_a_message_not_a_traceback(
 
     monkeypatch.setenv("PLEXDB_PATH", str(target))
     try:
-        assert main(["init"]) == 1
+        assert main(["migrate"]) == 1
     finally:
         if kind == "unwritable-parent":
             (tmp_path / "locked").chmod(0o700)
@@ -382,7 +382,7 @@ def test_publish_writes_a_snapshot_and_says_where(
     snapshot = tmp_path / "plexdb.snapshot.db"
     monkeypatch.setenv("PLEXDB_PATH", str(store))
     monkeypatch.setenv("PLEXDB_SNAPSHOT_PATH", str(snapshot))
-    main(["init"])
+    main(["migrate"])
     capsys.readouterr()
 
     assert main(["publish"]) == 0
@@ -399,7 +399,7 @@ def test_publish_without_a_snapshot_path_configured_is_an_error_not_a_default(
     store = tmp_path / "plexdb.db"
     monkeypatch.setenv("PLEXDB_PATH", str(store))
     monkeypatch.delenv("PLEXDB_SNAPSHOT_PATH", raising=False)
-    main(["init"])
+    main(["migrate"])
     capsys.readouterr()
 
     assert main(["publish"]) == 1
@@ -412,7 +412,7 @@ def test_walk_writes_items_and_reports_a_summary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     store = _configure_walk(tmp_path, monkeypatch)
-    main(["init"])
+    main(["migrate"])
     capsys.readouterr()
 
     assert main(["walk"]) == 0
@@ -431,7 +431,7 @@ def test_walk_scoped_to_one_section(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     _configure_walk(tmp_path, monkeypatch)
-    main(["init"])
+    main(["migrate"])
     capsys.readouterr()
 
     assert main(["walk", "--section", "1"]) == 0
@@ -453,7 +453,7 @@ def test_walk_without_plex_credentials_configured_is_an_error_not_a_default(
     monkeypatch.setenv("PLEX_URL", "")
     monkeypatch.setenv("PLEX_TOKEN", "")
     monkeypatch.setenv("PLEX_SOURCE_ROOTS", "/media")
-    main(["init"])
+    main(["migrate"])
     capsys.readouterr()
 
     assert main(["walk"]) == 1
@@ -475,7 +475,7 @@ def test_walk_without_a_source_root_refuses_rather_than_writing_mount_bound_ids(
     """
     _configure_walk(tmp_path, monkeypatch)
     monkeypatch.setenv("PLEX_SOURCE_ROOTS", "")
-    main(["init"])
+    main(["migrate"])
     capsys.readouterr()
 
     assert main(["walk"]) == 1
@@ -494,7 +494,7 @@ def test_walk_without_a_store_says_so_not_a_traceback(
     assert main(["walk"]) == 1
     err = capsys.readouterr().err
     assert err.startswith("error: ")
-    assert "plexdb init" in err
+    assert "plexdb migrate" in err
     assert "Traceback" not in err
 
 
@@ -532,7 +532,7 @@ def test_enrich_tmdb_keywords_writes_rows_and_reports_a_summary(
 ) -> None:
     fake = FakeTMDbSource(keywords_by_id={("155", "movie"): ["superhero", "gotham city"]})
     store = _configure_enrich(tmp_path, monkeypatch, fake)
-    main(["init"])
+    main(["migrate"])
     _seed_one_movie(store)
     capsys.readouterr()
 
@@ -562,7 +562,7 @@ def test_a_second_enrich_tmdb_keywords_run_does_not_refetch(
 ) -> None:
     fake = FakeTMDbSource(keywords_by_id={("155", "movie"): ["superhero"]})
     store = _configure_enrich(tmp_path, monkeypatch, fake)
-    main(["init"])
+    main(["migrate"])
     _seed_one_movie(store)
     capsys.readouterr()
     main(["enrich-tmdb-keywords"])
@@ -581,7 +581,7 @@ def test_enrich_tmdb_keywords_rewipe_forces_a_full_refetch(
 ) -> None:
     fake = FakeTMDbSource(keywords_by_id={("155", "movie"): ["superhero"]})
     store = _configure_enrich(tmp_path, monkeypatch, fake)
-    main(["init"])
+    main(["migrate"])
     _seed_one_movie(store)
     main(["enrich-tmdb-keywords"])
     capsys.readouterr()
@@ -616,7 +616,7 @@ def test_enrich_tmdb_keywords_reports_titles_failed_prominently(
     # 3-consecutive abort threshold, so the sweep completes and reports it.
     fake = FakeTMDbSource(keywords_by_id={("2", "movie"): ["ok"]}, fail_calls={1})
     store = _configure_enrich(tmp_path, monkeypatch, fake)
-    main(["init"])
+    main(["migrate"])
     _seed_movies(store, 2)
     capsys.readouterr()
 
@@ -632,7 +632,7 @@ def test_enrich_tmdb_keywords_aborts_after_three_consecutive_failures(
 ) -> None:
     fake = FakeTMDbSource(fail_calls={1, 2, 3})
     store = _configure_enrich(tmp_path, monkeypatch, fake)
-    main(["init"])
+    main(["migrate"])
     _seed_movies(store, 5)
     capsys.readouterr()
 
@@ -669,7 +669,7 @@ def test_enrich_tmdb_edges_writes_rows_and_reports_a_summary(
 ) -> None:
     fake = FakeTMDbSource(recommendations_by_id={("155", "movie"): ["272"]})
     store = _configure_enrich_edges(tmp_path, monkeypatch, fake)
-    main(["init"])
+    main(["migrate"])
     _seed_one_movie(store)
     with sqlite3.connect(store) as conn:
         conn.execute(
@@ -701,7 +701,7 @@ def test_a_second_enrich_tmdb_edges_run_does_not_refetch(
 ) -> None:
     fake = FakeTMDbSource(recommendations_by_id={("155", "movie"): []})
     store = _configure_enrich_edges(tmp_path, monkeypatch, fake)
-    main(["init"])
+    main(["migrate"])
     _seed_one_movie(store)
     capsys.readouterr()
     main(["enrich-tmdb-edges"])
@@ -721,7 +721,7 @@ def test_enrich_tmdb_edges_rewipe_forces_a_full_refetch(
 ) -> None:
     fake = FakeTMDbSource(recommendations_by_id={("155", "movie"): []})
     store = _configure_enrich_edges(tmp_path, monkeypatch, fake)
-    main(["init"])
+    main(["migrate"])
     _seed_one_movie(store)
     main(["enrich-tmdb-edges"])
     capsys.readouterr()
@@ -739,7 +739,7 @@ def test_enrich_tmdb_edges_without_an_api_key_is_an_error_not_a_default(
     store = tmp_path / "plexdb.db"
     monkeypatch.setenv("PLEXDB_PATH", str(store))
     monkeypatch.setenv("TMDB_API_KEY", "")
-    main(["init"])
+    main(["migrate"])
     capsys.readouterr()
 
     assert main(["enrich-tmdb-edges"]) == 1
@@ -965,7 +965,7 @@ def test_enrich_tmdb_keywords_without_an_api_key_is_an_error_not_a_default(
     # Set (not delete): see the matching comment on the walk test above —
     # deleting would let the worktree's own `.env` leak a real key back in.
     monkeypatch.setenv("TMDB_API_KEY", "")
-    main(["init"])
+    main(["migrate"])
     capsys.readouterr()
 
     assert main(["enrich-tmdb-keywords"]) == 1
@@ -983,7 +983,7 @@ def test_ingest_plays_without_plex_credentials_configured_is_an_error_not_a_defa
     # Set (not delete): see the same note on `test_walk_without_plex_credentials…`.
     monkeypatch.setenv("PLEX_URL", "")
     monkeypatch.setenv("PLEX_TOKEN", "")
-    main(["init"])
+    main(["migrate"])
     capsys.readouterr()
 
     assert main(["ingest-plays"]) == 1
@@ -1006,6 +1006,6 @@ def test_ingest_plays_without_a_store_says_so_not_a_traceback(
     assert main(["ingest-plays"]) == 1
     err = capsys.readouterr().err
     assert err.startswith("error: ")
-    assert "plexdb init" in err
+    assert "plexdb migrate" in err
     assert "Traceback" not in err
 

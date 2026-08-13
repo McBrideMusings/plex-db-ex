@@ -65,7 +65,7 @@ The distinction to hold on to:
 
 ## Testing does not touch either store
 
-Every test builds its own store in a temp directory from `plexdb init`, and no test reaches the
+Every test builds its own store in a temp directory from `plexdb migrate`, and no test reaches the
 network. That is why the suite is safe to run anywhere, and why a fixture is never a substitute for
 driving a change against a pulled copy — the fixture proves the arithmetic, the real store is the
 only thing that shows what the arithmetic says about your library.
@@ -101,7 +101,7 @@ killed partway leaves the file untouched. That protects against a **crash**. It 
 migration that is simply **wrong** — bad SQL commits perfectly happily, and migrations here are
 forward-only, so there is no down-migration to run.
 
-So `plexdb init` — the first step of every sweep — does this instead, in
+So `plexdb migrate` — the first step of every sweep — does this instead, in
 [`store.migrate`](../plexdb/store.py):
 
 1. If the store is already current, stop. Nothing is copied; a copy per sweep would fill the disk.
@@ -128,16 +128,19 @@ which is the point.
 
 1. `admin pull-baseline` — a fresh consistent copy of the real store.
 2. Write the migration and the code, with tests.
-3. `admin dev init` against the pulled copy. Read what it prints: the backup path, the version
+3. `admin dev migrate` against the pulled copy. Read what it prints: the backup path, the version
    change, and the before/after row counts per guarded table. This is the rehearsal, and it is
    worth doing on real data because the fixtures cannot show you what your migration does to
    115,453 enrichment rows.
 4. `admin vet`.
 5. Merge to `main`.
-6. `admin deploy image` — **after** the merge, never before. The deploy builds the image for
-   `linux/amd64` here, ships it over ssh, and recreates the container. The migration itself runs on
-   the host at the next sweep, inside `init`, with the backup and the rollback above.
-7. `admin logs live` at the next scheduled run to watch it land.
+6. `admin deploy image` — **after** the merge, never before. The deploy takes a copy of the live
+   store first (`plexdb.manual-<stamp>.db` on the host, so there is a snapshot from before the new
+   code existed), then builds the image for `linux/amd64` here, ships it over ssh, and recreates the
+   container.
+7. `admin logs live` — the migration runs as the container starts, with the backup and the rollback
+   above, so the schema is current within seconds of the deploy rather than at the next sweep.
+   Watch for `migrated store vN -> vN+1` and the backup path.
 
 There is no automatic deploy on merge, on purpose: the host has one store, the migration is
 forward-only, and a person deciding when it happens is worth more than the minutes it saves.

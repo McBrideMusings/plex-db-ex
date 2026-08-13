@@ -55,6 +55,30 @@ second writer against the same file.
   six hours on weekdays"; if that changes, a parser goes behind the same variable and no caller
   moves. `HH:MM` is what can be validated strictly today.
 
+## Amendment: the scheduler migrates the store at startup, before it waits
+
+"Never runs a sweep at startup" was read as "does nothing at startup", and the schema migration got
+left inside the sweep — which meant a freshly deployed image ran against a store at the *old* schema
+for as long as the wait lasted, up to a full day. That is not a theoretical window: repairing issue
+#58 on 12 August 2026 needed one `walk` against the live store minutes after the deploy, and it
+failed with `table external_ids has no column named last_seen`, because the store was still at v7
+while the code shipped for v8. Nothing was wrong with the command; the store was simply behind.
+
+**Resolved: `run_scheduler` migrates once at startup, after the schedule parses and before the first
+wait.** The schema now tracks the code that is running rather than the clock, so it is current within
+seconds of a deploy, and a container restarted for any other reason — an Unraid reboot, a manual
+`docker restart` — corrects the store too. It stays inside the sweep as well: both callers reach the
+same `store.migrate`, which takes its own copy, verifies version, `quick_check` and the guarded row
+counts, and rolls itself back on failure. A store already current is a no-op, so a restart loop
+cannot fill the disk with copies.
+
+A migration that fails takes the container down rather than being caught: the store has already been
+rolled back to the copy, and a crash loop with the reason in `docker logs` is louder than a sweep
+writing against a shape the code does not match.
+
+**Still never a sweep at startup.** The check the original decision protects — set the schedule a
+few minutes out, start it, watch it fire — is unchanged.
+
 ## Consequences
 
 **`plexdb schedule` never returns, and it is the only command that does not.** It declares no
@@ -65,9 +89,10 @@ sweeps until the process died. `tests/test_schedule.py` asserts the absence.
 is; with `TZ` unset that is UTC. The Unraid template carries it as a required variable for that
 reason.
 
-**The first run is at the next scheduled time, never at startup.** That is what makes "set the
+**The first *sweep* is at the next scheduled time, never at startup.** That is what makes "set the
 schedule a few minutes out, start it, and watch" a real check that the schedule works, rather than
-a check that the entrypoint runs.
+a check that the entrypoint runs. The schema migration is the one thing that does run at startup —
+see the amendment above.
 
 **A dev checkout never sets `PLEXDB_SCHEDULE`.** `plexdb sweep` remains the one-shot a person runs
 by hand on the Mac, unchanged.

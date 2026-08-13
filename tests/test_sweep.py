@@ -21,7 +21,7 @@ from plexdb.sweep import PlannedStep, Status, Step, plan, run_sweep
 # that silently reorders the run fails a test instead of quietly changing what
 # runs at 3am.
 EXPECTED_SWEEP = [
-    ("init", Step.REQUIRED),
+    ("migrate", Step.REQUIRED),
     ("walk", Step.REQUIRED),
     ("ingest-plays", Step.REQUIRED),
     ("enrich-tautulli-plays", Step.BEST_EFFORT),

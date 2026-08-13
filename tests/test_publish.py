@@ -139,7 +139,7 @@ def test_publish_replaces_an_existing_snapshot_atomically_not_partially(tmp_path
 
 
 def test_publishing_from_a_missing_store_says_so(tmp_path: Path) -> None:
-    with pytest.raises(FileNotFoundError, match="plexdb init"):
+    with pytest.raises(FileNotFoundError, match="plexdb migrate"):
         publish(tmp_path / "absent.db", tmp_path / "out.db")
 
 
