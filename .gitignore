@@ -1,6 +1,6 @@
 .env
 *.local.*
-.claude/skills/verify/
+.claude/skills/verify-project/
 data/
 deploy/
 tmp/
