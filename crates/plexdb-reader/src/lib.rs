@@ -299,7 +299,7 @@ impl Reader {
 
     /// Every unit one Plex account has ever played, as ids — the lifetime
     /// answer to "has this been watched", which no fixed-length history tail
-    /// can give (issue #62).
+    /// can give (issue #60).
     ///
     /// A unit is what [`Self::taste_vector_for`] weighs: a film is its own
     /// unit, an episode rolls up to its show. So a caller ranking films gets

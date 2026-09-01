@@ -597,7 +597,7 @@ fn opening_a_file_with_no_schema_version_table_says_so() {
     );
 }
 
-/// Issue #62: the lifetime "has this been played" set, which a fixed-length
+/// Issue #60: the lifetime "has this been played" set, which a fixed-length
 /// history tail cannot answer. Units, not rows — a film is itself, an episode
 /// rolls up to its show — so a caller ranking films or series joins nothing.
 #[test]
