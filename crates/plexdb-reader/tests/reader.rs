@@ -596,3 +596,70 @@ fn opening_a_file_with_no_schema_version_table_says_so() {
         "expected ReaderError::NotAStore, got {err:?}"
     );
 }
+
+/// Issue #62: the lifetime "has this been played" set, which a fixed-length
+/// history tail cannot answer. Units, not rows — a film is itself, an episode
+/// rolls up to its show — so a caller ranking films or series joins nothing.
+#[test]
+fn watched_units_names_every_unit_an_account_ever_played() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("plexdb.db");
+    common::build_fixture(&path);
+    let reader = Reader::open(&path).expect("open the fixture store");
+
+    let watched = reader.watched_units_for(42).expect("watched units");
+    assert_eq!(
+        watched,
+        vec![
+            "imdb:tt1".to_string(),
+            "imdb:tt2".to_string(),
+            "imdb:ttbail".to_string(),
+            "imdb:ttfin".to_string(),
+            "imdb:ttnosea".to_string(),
+        ],
+        "every played unit, sorted, with episodes rolled up to their show"
+    );
+
+    // `imdb:tt3` is the only title account 42 never touched, and the whole
+    // point of the accessor is that it can say so.
+    assert!(!watched.contains(&"imdb:tt3".to_string()));
+
+    // `ttbail` is here even though ADR-0011's r = 0.5 floor keeps it out of
+    // the taste vector: two episodes of a ten-episode season is a weak taste
+    // signal and an unambiguous "yes, this was played". The two rules are
+    // deliberately different, and this is the assertion that holds them apart.
+    assert!(
+        weight_of(
+            &reader.taste_vector_for(42).expect("taste vector"),
+            "abandoned"
+        )
+        .is_none()
+            || watched.contains(&"imdb:ttbail".to_string())
+    );
+
+    // An account with no plays gets an empty list, not an error.
+    assert!(
+        reader
+            .watched_units_for(9999)
+            .expect("an account with no plays")
+            .is_empty()
+    );
+}
+
+/// The pooled half: what the house has seen, with the same unit rollup and
+/// the same one-play bar.
+#[test]
+fn pooled_watched_units_covers_every_account() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("plexdb.db");
+    common::build_fixture(&path);
+    let reader = Reader::open(&path).expect("open the fixture store");
+
+    // Only account 42 has plays in this fixture, so the house's set and its
+    // own are identical — the assertion that pooling is a superset, checked
+    // where the two happen to coincide.
+    assert_eq!(
+        reader.watched_units().expect("house watched units"),
+        reader.watched_units_for(42).expect("account 42's"),
+    );
+}

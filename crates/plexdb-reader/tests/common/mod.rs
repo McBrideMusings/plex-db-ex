@@ -23,12 +23,17 @@ pub fn repo_root() -> PathBuf {
 }
 
 /// Build a fixture store at `path`: create the real schema by driving
-/// `plexdb init`, then seed a small, hand-written dataset. Returns an open,
+/// `plexdb migrate`, then seed a small, hand-written dataset. Returns an open,
 /// writable connection to it (closed when dropped) in case a test needs to
 /// mutate the fixture further, e.g. to force a schema-version mismatch.
+///
+/// `migrate` against a path that does not exist creates the store at the
+/// current schema version, which is what this needs. The subcommand used to be
+/// `init`; nothing failed loudly when it went away, because a missing
+/// subcommand only surfaces as every fixture-backed test panicking at once.
 pub fn build_fixture(path: &Path) -> Connection {
     let status = Command::new("uv")
-        .args(["run", "plexdb", "init"])
+        .args(["run", "plexdb", "migrate"])
         .env("PLEXDB_PATH", path)
         .current_dir(repo_root())
         .status()
