@@ -191,12 +191,18 @@ async function getJSON(url) {
 async function loadKind() {
   document.querySelectorAll(".seg button[data-kind]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.kind === state.kind)));
   document.getElementById("stats").textContent = "Loading…";
+  const kind = state.kind;
+  let data;
   try {
-    state.data = await getJSON(`/api/tags?kind=${state.kind}`);
-    document.getElementById("error").hidden = true;
+    data = await getJSON(`/api/tags?kind=${kind}`);
   } catch (err) {
-    showError(err); return;
+    if (state.kind === kind) showError(err);
+    return;
   }
+  // A quick Movies → Shows click can land the Movies list second; drop it.
+  if (state.kind !== kind) return;
+  state.data = data;
+  document.getElementById("error").hidden = true;
   const d = state.data;
   const singles = d.tags.filter(t => t.df === 1).length;
   document.getElementById("stats").textContent =
