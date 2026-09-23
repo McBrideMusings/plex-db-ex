@@ -93,6 +93,7 @@ admin dev check  report the store's health read-only; non-zero if it is behind o
 admin logs live  tail the container on the host
 admin diff       show run-config drift between the container and the last deploy
 admin docs       serve the docs site
+admin explore    serve the read-only tag explorer on http://localhost:5194
 ```
 
 `admin deploy` takes a copy of the live store on the host first, then builds for `linux/amd64`

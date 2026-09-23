@@ -42,6 +42,7 @@ EXPECTED_COMMANDS = {
     "ingest-plays",
     "enrich-tautulli-plays",
     "latent-users",
+    "explore",
     "repair-identities",
     "repair-fs-identities",
     "schedule",
@@ -66,6 +67,9 @@ EXPECTED_COMMAND_ORDER = [
     "enrich-tmdb-edges",
     "harvest-mdblist",
     "latent-users",
+    # Not a step of the sweep: a read-only browser view of what the steps above
+    # wrote (`plexdb/commands/explore.py`).
+    "explore",
     "publish",
     # Last, and not a step of the sweep — it wraps the whole run rather than
     # taking part in one (`plexdb/commands/schedule.py`).

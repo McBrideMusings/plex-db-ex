@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tag explorer — plexdb</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6b66; --line: #e3e2dd;
+    --accent: #2f5fb3; --accent-ink: #ffffff; --noise: #b3432f; --noise-bg: #fbeeea;
+    --chip: #eef1f7; --row-hover: #f2f4f8; --selected: #e4ebf8;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161615; --panel: #1f1f1d; --ink: #e9e8e3; --muted: #9a998f; --line: #34332f;
+      --accent: #7ea4ea; --accent-ink: #10131a; --noise: #ec8a74; --noise-bg: #3a231d;
+      --chip: #2a2f3a; --row-hover: #262a31; --selected: #2b3547;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  header { padding: 14px 20px 10px; border-bottom: 1px solid var(--line); background: var(--panel);
+           display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; }
+  h1 { font-size: 16px; margin: 0; font-weight: 650; }
+  .stats { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+  .seg button { border: 0; background: transparent; color: var(--ink); padding: 5px 12px; font: inherit; cursor: pointer; }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+  .controls { padding: 10px 20px; display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center;
+              border-bottom: 1px solid var(--line); }
+  .controls label { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); }
+  input[type="search"], input[type="number"] { font: inherit; color: var(--ink); background: var(--panel);
+              border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
+  input[type="search"] { width: 16em; }
+  input[type="number"] { width: 5em; }
+  .noisebar { margin-left: auto; display: inline-flex; gap: 8px; align-items: center; }
+  .noisebar strong { color: var(--noise); font-variant-numeric: tabular-nums; }
+  button.plain { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line);
+                 border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+  button.plain:hover { border-color: var(--accent); }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 0; align-items: start; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } aside { position: static !important; max-height: none !important; border-left: 0 !important; border-top: 1px solid var(--line); } }
+  .tablewrap { overflow-x: auto; padding: 0 20px 24px; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { position: sticky; top: 0; background: var(--bg); font-weight: 600; color: var(--muted); white-space: nowrap; z-index: 1; }
+  th.sortable { cursor: pointer; user-select: none; }
+  th.sortable:hover { color: var(--ink); }
+  th .arrow { display: inline-block; width: 1em; }
+  td.num, th.num { text-align: right; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: var(--row-hover); }
+  tbody tr.selected { background: var(--selected); }
+  tbody tr.noise td.tag { color: var(--noise); text-decoration: line-through; text-decoration-thickness: 1px; }
+  td.tag { font-weight: 550; }
+  .chip { display: inline-block; background: var(--chip); border-radius: 5px; padding: 1px 7px; margin: 1px 4px 1px 0;
+          cursor: pointer; white-space: nowrap; }
+  .chip:hover { outline: 1px solid var(--accent); }
+  .chip .n { color: var(--muted); margin-left: 4px; }
+  .more { padding: 12px 0; color: var(--muted); display: flex; gap: 12px; align-items: center; }
+  aside { position: sticky; top: 0; max-height: 100vh; overflow-y: auto; border-left: 1px solid var(--line);
+          background: var(--panel); padding: 16px 18px; min-height: 60vh; }
+  aside h2 { font-size: 17px; margin: 0 0 4px; overflow-wrap: anywhere; }
+  aside .sub { color: var(--muted); margin-bottom: 12px; font-variant-numeric: tabular-nums; }
+  aside ol { margin: 0; padding-left: 0; list-style: none; }
+  aside li { padding: 5px 0; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; gap: 10px; }
+  aside li .kw { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .empty { color: var(--muted); }
+  textarea#copyout { width: 100%; height: 6em; font: 12px ui-monospace, Menlo, monospace; margin-top: 8px; }
+  .err { color: var(--noise); padding: 12px 20px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Tag explorer</h1>
+  <div class="seg" role="group" aria-label="Title type">
+    <button type="button" data-kind="movie" aria-pressed="true">Movies</button>
+    <button type="button" data-kind="show" aria-pressed="false">Shows</button>
+  </div>
+  <span class="stats" id="stats">Loading…</span>
+</header>
+<div class="controls">
+  <label>Filter <input type="search" id="filter" placeholder="tag contains…" autocomplete="off"></label>
+  <label>Min titles <input type="number" id="mindf" min="1" value="2"></label>
+  <label><input type="checkbox" id="noiseonly"> Noise only</label>
+  <span class="noisebar">
+    Noise: <strong id="noisecount">0</strong>
+    <button type="button" class="plain" id="copy">Copy as JSON</button>
+    <button type="button" class="plain" id="clear">Clear</button>
+  </span>
+</div>
+<div id="error" class="err" hidden></div>
+<main>
+  <div class="tablewrap">
+    <table>
+      <thead><tr>
+        <th title="Mark as noise">Noise</th>
+        <th class="sortable" data-sort="value">Tag<span class="arrow"></span></th>
+        <th class="sortable num" data-sort="df">Titles<span class="arrow"></span></th>
+        <th class="num" title="Share of titles of this type that carry any keyword">% of N</th>
+        <th class="sortable num" data-sort="idf" title="1 + ln(N / titles)">IDF<span class="arrow"></span></th>
+        <th>Appears with (shared titles)</th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div class="more" id="more"></div>
+    <textarea id="copyout" readonly hidden></textarea>
+  </div>
+  <aside id="detail"><p class="empty">Click a tag to list the titles that carry it.</p></aside>
+</main>
+<script>
+"use strict";
+const PAGE = 300;
+const NOISE_KEY = "plexdb-explore:noise";
+const state = { kind: "movie", data: null, sort: "df", dir: -1, shown: PAGE, tag: null };
+
+function loadNoise() {
+  try { return new Set(JSON.parse(localStorage.getItem(NOISE_KEY) || "[]")); } catch { return new Set(); }
+}
+function saveNoise() {
+  try { localStorage.setItem(NOISE_KEY, JSON.stringify([...noise].sort())); } catch { /* storage off: list lasts this page view */ }
+  document.getElementById("noisecount").textContent = noise.size;
+}
+const noise = loadNoise();
+
+const el = (tag, props = {}, ...kids) => {
+  const node = Object.assign(document.createElement(tag), props);
+  for (const kid of kids) node.append(kid);
+  return node;
+};
+const fmt = n => n.toLocaleString("en-US");
+const noun = () => state.kind === "movie" ? "movies" : "shows";
+
+function readHash() {
+  const p = new URLSearchParams(location.hash.slice(1));
+  if (p.get("kind") === "show" || p.get("kind") === "movie") state.kind = p.get("kind");
+  state.tag = p.get("tag");
+}
+function writeHash() {
+  const p = new URLSearchParams({ kind: state.kind });
+  if (state.tag) p.set("tag", state.tag);
+  history.replaceState(null, "", "#" + p.toString());
+}
+
+async function getJSON(url) {
+  const res = await fetch(url);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || res.statusText);
+  return body;
+}
+
+async function loadKind() {
+  document.querySelectorAll(".seg button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.kind === state.kind)));
+  document.getElementById("stats").textContent = "Loading…";
+  try {
+    state.data = await getJSON(`/api/tags?kind=${state.kind}`);
+    document.getElementById("error").hidden = true;
+  } catch (err) {
+    showError(err); return;
+  }
+  const d = state.data;
+  const singles = d.tags.filter(t => t.df === 1).length;
+  document.getElementById("stats").textContent =
+    `${fmt(d.titles)} ${noun()} with keywords · ${fmt(d.tags.length)} tags · ${fmt(singles)} on one title only`;
+  state.shown = PAGE;
+  render();
+  if (state.tag) showTag(state.tag); else writeHash();
+}
+
+function showError(err) {
+  const box = document.getElementById("error");
+  box.textContent = `Could not load: ${err.message}`;
+  box.hidden = false;
+}
+
+function visible() {
+  const q = document.getElementById("filter").value.trim().toLowerCase();
+  const min = Math.max(1, Number(document.getElementById("mindf").value) || 1);
+  const only = document.getElementById("noiseonly").checked;
+  let tags = state.data.tags.filter(t => t.df >= min && (!q || t.value.includes(q)) && (!only || noise.has(t.value)));
+  const { sort, dir } = state;
+  tags = tags.slice().sort((a, b) => {
+    const x = a[sort], y = b[sort];
+    const c = typeof x === "string" ? x.localeCompare(y) : x - y;
+    return c * dir || a.value.localeCompare(b.value);
+  });
+  return tags;
+}
+
+function render() {
+  if (!state.data) return;
+  const tags = visible();
+  const n = state.data.titles;
+  const body = document.getElementById("rows");
+  body.replaceChildren();
+  for (const t of tags.slice(0, state.shown)) {
+    const box = el("input", { type: "checkbox", checked: noise.has(t.value), title: "Mark as noise" });
+    box.addEventListener("click", e => e.stopPropagation());
+    box.addEventListener("change", () => {
+      box.checked ? noise.add(t.value) : noise.delete(t.value);
+      saveNoise();
+      tr.classList.toggle("noise", box.checked);
+    });
+    const co = el("td");
+    for (const [value, count] of t.co) {
+      const chip = el("span", { className: "chip", title: `${fmt(count)} ${noun()} carry both` }, value, el("span", { className: "n" }, fmt(count)));
+      chip.addEventListener("click", e => { e.stopPropagation(); showTag(value); });
+      co.append(chip);
+    }
+    const tr = el("tr", {},
+      el("td", {}, box),
+      el("td", { className: "tag" }, t.value),
+      el("td", { className: "num" }, fmt(t.df)),
+      el("td", { className: "num" }, (100 * t.df / n).toFixed(t.df / n >= 0.01 ? 1 : 2) + "%"),
+      el("td", { className: "num" }, t.idf.toFixed(2)),
+      co);
+    tr.dataset.tag = t.value;
+    if (noise.has(t.value)) tr.classList.add("noise");
+    if (t.value === state.tag) tr.classList.add("selected");
+    tr.addEventListener("click", () => showTag(t.value));
+    body.append(tr);
+  }
+  const more = document.getElementById("more");
+  more.replaceChildren(`Showing ${fmt(Math.min(state.shown, tags.length))} of ${fmt(tags.length)} tags`);
+  if (tags.length > state.shown) {
+    const btn = el("button", { type: "button", className: "plain" }, `Show ${PAGE} more`);
+    btn.addEventListener("click", () => { state.shown += PAGE; render(); });
+    more.append(btn);
+  }
+  document.querySelectorAll("th.sortable").forEach(th => {
+    th.querySelector(".arrow").textContent = th.dataset.sort === state.sort ? (state.dir < 0 ? "↓" : "↑") : "";
+  });
+}
+
+async function showTag(value) {
+  state.tag = value;
+  writeHash();
+  document.querySelectorAll("tbody tr").forEach(tr => tr.classList.toggle("selected", tr.dataset.tag === value));
+  const aside = document.getElementById("detail");
+  const t = state.data && state.data.tags.find(x => x.value === value);
+  aside.replaceChildren(el("h2", {}, value), el("p", { className: "sub" }, "Loading…"));
+  let body;
+  try { body = await getJSON(`/api/titles?kind=${state.kind}&tag=${encodeURIComponent(value)}`); }
+  catch (err) { aside.querySelector(".sub").textContent = `Could not load: ${err.message}`; return; }
+  if (state.tag !== value) return;
+  const sub = t ? `${fmt(t.df)} ${noun()} · IDF ${t.idf.toFixed(2)}` : `not on any ${noun().slice(0, -1)}`;
+  const list = el("ol");
+  for (const x of body.titles) {
+    list.append(el("li", {},
+      el("span", {}, x.year ? `${x.title} (${x.year})` : x.title),
+      el("span", { className: "kw", title: "keywords this title carries" }, `${fmt(x.keywords)} kw`)));
+  }
+  aside.replaceChildren(el("h2", {}, value), el("p", { className: "sub" }, sub), list);
+}
+
+document.querySelectorAll(".seg button").forEach(b => b.addEventListener("click", () => {
+  if (state.kind === b.dataset.kind) return;
+  state.kind = b.dataset.kind; state.tag = null;
+  document.getElementById("detail").replaceChildren(el("p", { className: "empty" }, "Click a tag to list the titles that carry it."));
+  loadKind();
+}));
+document.querySelectorAll("th.sortable").forEach(th => th.addEventListener("click", () => {
+  const key = th.dataset.sort;
+  if (state.sort === key) state.dir = -state.dir;
+  else { state.sort = key; state.dir = key === "value" ? 1 : -1; }
+  render();
+}));
+for (const id of ["filter", "mindf", "noiseonly"]) {
+  document.getElementById(id).addEventListener("input", () => { state.shown = PAGE; render(); });
+}
+document.getElementById("copy").addEventListener("click", async () => {
+  const text = JSON.stringify([...noise].sort());
+  const out = document.getElementById("copyout");
+  const btn = document.getElementById("copy");
+  try {
+    await navigator.clipboard.writeText(text);
+    btn.textContent = "Copied"; out.hidden = true;
+  } catch {
+    // No clipboard outside a secure context (plain http on a LAN address): show it to copy by hand.
+    out.value = text; out.hidden = false; out.select();
+    btn.textContent = "Select and copy below";
+  }
+  setTimeout(() => { btn.textContent = "Copy as JSON"; }, 2000);
+});
+document.getElementById("clear").addEventListener("click", () => {
+  const btn = document.getElementById("clear");
+  if (btn.dataset.armed !== "1") {
+    btn.dataset.armed = "1"; btn.textContent = `Clear ${noise.size}?`;
+    setTimeout(() => { btn.dataset.armed = ""; btn.textContent = "Clear"; }, 3000);
+    return;
+  }
+  noise.clear(); saveNoise(); btn.dataset.armed = ""; btn.textContent = "Clear"; render();
+});
+
+document.getElementById("noisecount").textContent = noise.size;
+readHash();
+loadKind();
+</script>
+</body>
+</html>
