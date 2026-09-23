@@ -43,4 +43,9 @@ ENV PLEXDB_PATH=/data/plexdb.db \
 
 VOLUME ["/data", "/snapshot"]
 
+# The read-only tag explorer `plexdb schedule` serves beside the sweep when
+# PLEXDB_EXPLORE_PORT is set, reading the snapshot. Documentation only: whether
+# the port is published, and on which host address, is `[docker_run]`'s call.
+EXPOSE 5194
+
 ENTRYPOINT ["plexdb", "schedule"]

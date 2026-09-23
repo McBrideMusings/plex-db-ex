@@ -30,7 +30,12 @@ from importlib import resources
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from .errors import StoreError
 from .store import open_readonly
+
+#: Set in the container to have `plexdb schedule` serve the explorer beside the
+#: sweep, reading the published snapshot. Unset, the scheduler serves nothing.
+EXPLORE_PORT_VAR = "PLEXDB_EXPLORE_PORT"
 
 #: The media types TMDB has keywords for. An episode never carries them
 #: (`enrich_tmdb_keywords` enriches movies and shows only).
@@ -222,6 +227,13 @@ def make_server(store_path: Path, host: str, port: int) -> ThreadingHTTPServer:
                     self._json({"error": f"no route {url.path}"}, HTTPStatus.NOT_FOUND)
             except ValueError as err:
                 self._json({"error": str(err)}, HTTPStatus.BAD_REQUEST)
+            except FileNotFoundError:
+                # On the host this is the normal state until the first sweep
+                # publishes a snapshot, not a crash worth a traceback.
+                missing = f"no store at {store_path} yet — the next sweep publishes one"
+                self._json({"error": missing}, HTTPStatus.SERVICE_UNAVAILABLE)
+            except StoreError as err:
+                self._json({"error": str(err)}, HTTPStatus.SERVICE_UNAVAILABLE)
 
         def _json(self, body: dict[str, object], status: HTTPStatus = HTTPStatus.OK) -> None:
             data = json.dumps(body, separators=(",", ":")).encode()
@@ -239,3 +251,16 @@ def make_server(store_path: Path, host: str, port: int) -> ThreadingHTTPServer:
             pass
 
     return ThreadingHTTPServer((host, port), Handler)
+
+
+def serve_in_background(store_path: Path, host: str, port: int) -> ThreadingHTTPServer:
+    """Start the explorer on a daemon thread and return its server.
+
+    This is how the container serves it: a thread inside `plexdb schedule`, so
+    one image and one `[docker_run]` carry both. A daemon thread dies with the
+    scheduler rather than holding the container up after it, and an exception
+    in one request stays in that request's own thread.
+    """
+    server = make_server(store_path, host, port)
+    threading.Thread(target=server.serve_forever, name="explore", daemon=True).start()
+    return server

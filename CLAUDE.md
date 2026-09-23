@@ -102,7 +102,9 @@ from the `[docker_run]` table — nothing pulls from a registry — and finishes
 `plexdb check` inside it, so a startup migration that rolled itself back ends the deploy. **The migration runs as the
 container starts** (`plexdb/schedule.py`), so the store matches the code that was just deployed
 rather than waiting for the next sweep; it takes its own pre-migration copy and rolls itself back
-on any row loss. The container's mounts and credentials are read from
+on any row loss. After it, the container serves the read-only tag explorer over the snapshot on
+port 5194, published only on the host address `PLEXDB_EXPLORE_BIND` names — it has no login.
+The container's mounts and credentials are read from
 `/boot/config/plexdb.env` **on the host**, never from a checkout's `.env`: those mount paths
 name directories on the Unraid box, and resolving them from a laptop would mount a laptop
 path onto the server.

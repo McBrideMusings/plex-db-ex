@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import math
+import socket
 import threading
 import urllib.error
 import urllib.request
@@ -16,8 +17,10 @@ from pathlib import Path
 
 import pytest
 
-from plexdb.explore import build_index, make_server, titles_tagged
-from plexdb.store import init, open_readonly, open_store
+from plexdb import schedule
+from plexdb.errors import ConfigError
+from plexdb.explore import EXPLORE_PORT_VAR, build_index, make_server, titles_tagged
+from plexdb.store import init, open_readonly, open_store, publish
 
 FETCHED = "2026-08-09T12:00:00+00:00"
 
@@ -126,3 +129,40 @@ def test_server_refuses_what_it_cannot_answer(base_url: str) -> None:
     assert status == 400 and "episode" in json.loads(body)["error"]
     assert _get(f"{base_url}/api/titles?kind=movie")[0] == 400
     assert _get(f"{base_url}/api/nope")[0] == 404
+
+
+def _free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
+
+
+def test_scheduler_serves_the_snapshot_once_one_is_published(
+    store: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On the host the explorer runs inside `plexdb schedule` and reads the
+    snapshot. Before the first sweep publishes one it answers 503, not a
+    traceback; after, it serves the snapshot's numbers without a restart."""
+    snapshot = tmp_path / "snapshot" / "plexdb.snapshot.db"
+    port = _free_port()
+    monkeypatch.setenv(schedule.SCHEDULE_VAR, "03:30")
+    monkeypatch.setenv(EXPLORE_PORT_VAR, str(port))
+    monkeypatch.setenv("PLEXDB_PATH", str(store))
+    monkeypatch.setenv("PLEXDB_SNAPSHOT_PATH", str(snapshot))
+
+    schedule.run_scheduler(migrate=lambda: None, iterations=0)
+
+    url = f"http://127.0.0.1:{port}/api/tags?kind=movie"
+    assert _get(url)[0] == 503
+    publish(store, snapshot)
+    status, body = _get(url)
+    assert status == 200 and json.loads(body)["titles"] == 4
+
+
+def test_scheduler_refuses_an_explore_port_it_cannot_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(schedule.SCHEDULE_VAR, "03:30")
+    monkeypatch.setenv(EXPLORE_PORT_VAR, "http")
+    with pytest.raises(ConfigError, match=EXPLORE_PORT_VAR):
+        schedule.run_scheduler(migrate=lambda: None, iterations=0)

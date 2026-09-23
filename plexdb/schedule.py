@@ -99,20 +99,52 @@ def _migrate_store() -> None:
         print(f"store already current at schema v{result.now}", flush=True)
 
 
+def _start_explorer() -> None:
+    """Serve the tag explorer over the published snapshot, if asked to.
+
+    Off unless `PLEXDB_EXPLORE_PORT` is set. It reads the snapshot, never the
+    live store: ADR-0007 is where readers look, and the snapshot is a file the
+    writer only ever replaces by rename, so a request cannot see it half-written.
+    Bound on every interface inside the container; which host address the port
+    reaches is `[[docker_run.ports]]`'s decision, not this process's.
+    """
+    from .config import Config
+    from .explore import EXPLORE_PORT_VAR, serve_in_background
+
+    raw = os.environ.get(EXPLORE_PORT_VAR, "").strip()
+    if not raw:
+        return
+    if not raw.isdigit() or not 1 <= int(raw) <= 65535:
+        raise ConfigError(f"{EXPLORE_PORT_VAR} must be a port number, got {raw!r}")
+    snapshot = Config.from_env().snapshot_path
+    if snapshot is None:
+        raise ConfigError(
+            f"{EXPLORE_PORT_VAR} is set but PLEXDB_SNAPSHOT_PATH is not; "
+            "the explorer reads the published snapshot"
+        )
+    server = serve_in_background(snapshot, "0.0.0.0", int(raw))
+    print(f"tag explorer on port {server.server_port}, reading {snapshot}", flush=True)
+
+
 def run_scheduler(
     *,
     sweep: Callable[[], int] | None = None,
     sleep: Callable[[float], None] | None = None,
     clock: Callable[[], datetime] | None = None,
     migrate: Callable[[], None] | None = None,
+    explore: Callable[[], None] | None = None,
     iterations: int | None = None,
 ) -> int:
     """Migrate the store, then wait until the next scheduled time, run one sweep,
     repeat.
 
     Runs forever under a container. `iterations` bounds the loop so a test can
-    watch it complete a fixed number of cycles; `sweep`, `sleep`, `clock` and
-    `migrate` are injectable for the same reason. Nothing else supplies them.
+    watch it complete a fixed number of cycles; `sweep`, `sleep`, `clock`,
+    `migrate` and `explore` are injectable for the same reason. Nothing else
+    supplies them.
+
+    **The tag explorer starts after the migration**, when `PLEXDB_EXPLORE_PORT`
+    is set, and serves on its own thread for as long as the loop runs.
 
     **The migration runs at startup, once the schedule parses.** It used to
     wait for the first sweep's own `migrate` step, which meant a freshly
@@ -135,6 +167,7 @@ def run_scheduler(
     do_sleep = time.sleep if sleep is None else sleep
     now_fn = datetime.now if clock is None else clock
     do_migrate = _migrate_store if migrate is None else migrate
+    do_explore = _start_explorer if explore is None else explore
 
     raw = os.environ.get(SCHEDULE_VAR, "").strip()
     if not raw:
@@ -148,6 +181,7 @@ def run_scheduler(
     # started with a malformed PLEXDB_SCHEDULE has no business migrating a store
     # it is never going to sweep.
     do_migrate()
+    do_explore()
 
     completed = 0
     while iterations is None or completed < iterations:
