@@ -390,6 +390,8 @@ function render() {
       box.checked ? noise.add(t.value) : noise.delete(t.value);
       saveNoise();
       tr.classList.toggle("noise", box.checked);
+      // Under "Noise only" the row must leave or join the table at once.
+      if (document.getElementById("noiseonly").checked) render();
     });
     const co = el("td");
     for (const [value, count] of t.co) {
