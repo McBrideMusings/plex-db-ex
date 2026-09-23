@@ -2,10 +2,12 @@
 name = "plex-db-ex"
 version = "0.1.0"
 description = "Extended Plex metadata and affinity store"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "python-dotenv>=1.0",
     "httpx>=0.27",
+    "numpy>=2.0",
+    "scikit-learn>=1.5",
 ]
 
 [project.scripts]
@@ -32,8 +34,14 @@ line-length = 100
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+# scikit-learn and scipy ship no type information; the map is the one place
+# that calls them, through a handful of documented functions.
+[[tool.mypy.overrides]]
+module = ["sklearn.*", "scipy.*"]
+ignore_missing_imports = true

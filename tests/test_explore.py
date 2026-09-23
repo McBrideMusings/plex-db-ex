@@ -24,6 +24,7 @@ from plexdb.explore import (
     build_index,
     make_server,
     neighbourhood,
+    title_map,
     titles_tagged,
 )
 from plexdb.store import init, open_readonly, open_store, publish
@@ -98,6 +99,45 @@ def test_neighbourhood_ranks_co_tags_and_links_them_by_shared_titles(store: Path
     assert without.edges == (("based on comic", "superhero", 1),)
 
 
+def test_title_map_places_alike_titles_together(tmp_path: Path) -> None:
+    """Twenty westerns and twenty space films, each drawing from its own pool of
+    tags plus one shared packaging tag: every title's nearest neighbour on the
+    map must be the same kind of film."""
+    path = tmp_path / "plexdb.db"
+    init(path)
+    pools = {
+        "western": ["cowboy", "frontier", "sheriff", "outlaw", "horse", "desert"],
+        "space": ["spaceship", "alien", "astronaut", "planet", "robot", "galaxy"],
+    }
+    with open_store(path) as conn:
+        for genre, pool in pools.items():
+            for i in range(20):
+                item_id = f"tmdb:{genre}{i}"
+                conn.execute(
+                    "INSERT INTO items (item_id, type, title) VALUES (?, 'movie', ?)",
+                    (item_id, f"{genre} {i}"),
+                )
+                for keyword in [*(pool[(i + k) % 6] for k in range(3)), "stinger"]:
+                    conn.execute(
+                        "INSERT INTO enrichment (item_id, namespace, key, value, fetched_at) "
+                        "VALUES (?, 'tmdb_keywords', 'keyword', ?, ?)",
+                        (item_id, keyword, FETCHED),
+                    )
+        conn.commit()
+
+    with open_readonly(path) as conn:
+        tmap = title_map(conn, "movie", exclude=frozenset({"stinger"}))
+
+    assert len(tmap.points) == 40 and tmap.unplaced == 0
+    assert all(0.0 <= p.x <= 1.0 and 0.0 <= p.y <= 1.0 for p in tmap.points)
+    for point in tmap.points:
+        nearest = min(
+            (other for other in tmap.points if other is not point),
+            key=lambda other: math.dist((point.x, point.y), (other.x, other.y)),
+        )
+        assert ("western" in nearest.item_id) == ("western" in point.item_id), point.item_id
+
+
 def test_titles_tagged_lists_one_media_type_by_title(store: Path) -> None:
     with open_readonly(store) as conn:
         titles = titles_tagged(conn, "movie", "superhero")
@@ -150,6 +190,13 @@ def test_server_serves_the_page_and_both_endpoints(base_url: str) -> None:
     graph = json.loads(body)
     assert status == 200 and [n["value"] for n in graph["nodes"]] == ["superhero", "based on comic"]
     assert graph["edges"] == [["based on comic", "superhero", 1]]
+
+    status, body = _get(f"{base_url}/api/map?kind=movie")
+    tmap = json.loads(body)
+    assert status == 200 and len(tmap["points"]) + tmap["unplaced"] == 4
+
+    status, body = _get(f"{base_url}/api/title?item_id=imdb:tt1")
+    assert json.loads(body)["keywords"] == ["based on comic", "stinger", "superhero"]
 
 
 def test_server_refuses_what_it_cannot_answer(base_url: str) -> None:

@@ -228,6 +228,137 @@ def neighbourhood_json(hood: Neighbourhood) -> dict[str, object]:
     }
 
 
+#: A tag on fewer titles than this cannot place a title near any other, so it
+#: is left out of the map's vectors.
+MAP_MIN_DF = 2
+
+#: Dimensions the keyword vectors are reduced to before t-SNE, which is slow
+#: and noisy on 19,000 sparse columns and fine on 50 dense ones.
+MAP_SVD_COMPONENTS = 50
+
+
+@dataclass(frozen=True)
+class MapPoint:
+    item_id: str
+    title: str
+    year: int | None
+    #: Position in the unit square. Only distances mean anything.
+    x: float
+    y: float
+
+
+@dataclass(frozen=True)
+class TitleMap:
+    kind: str
+    points: tuple[MapPoint, ...]
+    #: Titles with keywords that are not on the map: none of their tags is
+    #: shared with another title once noise is excluded.
+    unplaced: int
+
+
+def title_map(
+    conn: sqlite3.Connection, kind: str, exclude: frozenset[str] = frozenset(), seed: int = 0
+) -> TitleMap:
+    """Every title of `kind` placed in 2D so titles with similar keywords sit close.
+
+    A title's vector is its tags weighted by the same IDF the table shows,
+    normalised to unit length so a title with forty tags is not louder than one
+    with five — the cosine a keyword scorer compares. Truncated SVD takes it to
+    `MAP_SVD_COMPONENTS` dimensions and t-SNE to two. `seed` fixes both, so the
+    same store and the same exclusions draw the same map.
+
+    numpy and scikit-learn are imported here rather than at the top of the
+    module, so every other `plexdb` command starts without loading them.
+    """
+    import numpy as np
+    from scipy.sparse import csr_matrix
+    from sklearn.decomposition import TruncatedSVD
+    from sklearn.manifold import TSNE
+    from sklearn.preprocessing import normalize
+
+    _check_kind(kind)
+    rows = conn.execute(
+        "SELECT e.item_id, e.value, i.title, i.year FROM enrichment e JOIN items i USING (item_id) "
+        "WHERE e.namespace = ? AND e.key = ? AND i.type = ?",
+        (_NAMESPACE, _KEY, kind),
+    ).fetchall()
+    carrying: set[str] = {r[0] for r in rows}
+    df = Counter(r[1] for r in rows)
+    n = len(carrying)
+    vocab = {
+        value: col
+        for col, value in enumerate(
+            sorted(v for v, c in df.items() if c >= MAP_MIN_DF and v not in exclude)
+        )
+    }
+
+    placed: dict[str, int] = {}
+    about: dict[str, tuple[str, int | None]] = {}
+    cells_r: list[int] = []
+    cells_c: list[int] = []
+    cells_v: list[float] = []
+    for item_id, value, title, year in rows:
+        col = vocab.get(value)
+        if col is None:
+            continue
+        row = placed.setdefault(item_id, len(placed))
+        about[item_id] = (title, year)
+        cells_r.append(row)
+        cells_c.append(col)
+        cells_v.append(1.0 + math.log(n / df[value]))
+
+    ids = sorted(placed, key=placed.__getitem__)
+    if len(ids) < 5 or len(vocab) < 3:
+        # Too few titles for t-SNE to mean anything; lay them on a line.
+        coords = np.array([[i / max(1, len(ids) - 1), 0.5] for i in range(len(ids))])
+    else:
+        matrix = csr_matrix((cells_v, (cells_r, cells_c)), shape=(len(ids), len(vocab)))
+        matrix = normalize(matrix)
+        components = min(MAP_SVD_COMPONENTS, len(vocab) - 1, len(ids) - 1)
+        reduced = TruncatedSVD(n_components=components, random_state=seed).fit_transform(matrix)
+        reduced = normalize(reduced)
+        coords = TSNE(
+            n_components=2,
+            perplexity=min(30.0, (len(ids) - 1) / 3),
+            init="pca",
+            random_state=seed,
+        ).fit_transform(reduced)
+        low, high = coords.min(axis=0), coords.max(axis=0)
+        coords = (coords - low) / np.where(high > low, high - low, 1.0)
+
+    points = tuple(
+        MapPoint(
+            item_id=item_id,
+            title=about[item_id][0],
+            year=about[item_id][1],
+            x=round(float(coords[i][0]), 5),
+            y=round(float(coords[i][1]), 5),
+        )
+        for i, item_id in enumerate(ids)
+    )
+    return TitleMap(kind=kind, points=points, unplaced=n - len(ids))
+
+
+def title_map_json(tmap: TitleMap) -> dict[str, object]:
+    return {
+        "kind": tmap.kind,
+        "unplaced": tmap.unplaced,
+        # Arrays rather than objects: ten thousand points, and the keys would
+        # be most of the payload.
+        "points": [[p.item_id, p.title, p.year, p.x, p.y] for p in tmap.points],
+    }
+
+
+def title_keywords(conn: sqlite3.Connection, item_id: str) -> list[str]:
+    """One title's keywords, by name."""
+    rows = conn.execute(
+        "SELECT value FROM enrichment WHERE item_id = ? AND namespace = ? AND key = ? "
+        "ORDER BY value",
+        (item_id, _NAMESPACE, _KEY),
+    ).fetchall()
+    return [r[0] for r in rows]
+
+
 def index_json(index: TagIndex) -> dict[str, object]:
     return {
         "kind": index.kind,
@@ -281,6 +412,37 @@ class _IndexCache:
             return payload
 
 
+class _MapCache:
+    """Computed maps, keyed on kind, exclusions and the store file's stamp.
+
+    A map takes tens of seconds, so a repeat of the same request must not pay
+    again, and one lock keeps two browser tabs from computing the same map at
+    once. A handful of entries covers flipping between Movies and Shows while
+    marking noise; the oldest goes first.
+    """
+
+    KEEP = 6
+
+    def __init__(self, store_path: Path) -> None:
+        self._path = store_path
+        self._lock = threading.Lock()
+        self._entries: dict[tuple[str, frozenset[str], tuple[int, int]], dict[str, object]] = {}
+
+    def get(self, kind: str, exclude: frozenset[str]) -> dict[str, object]:
+        stat = self._path.stat()
+        key = (kind, exclude, (stat.st_mtime_ns, stat.st_size))
+        with self._lock:
+            hit = self._entries.get(key)
+            if hit is not None:
+                return hit
+            with open_readonly(self._path) as conn:
+                payload = title_map_json(title_map(conn, kind, exclude))
+            self._entries[key] = payload
+            while len(self._entries) > self.KEEP:
+                del self._entries[next(iter(self._entries))]
+            return payload
+
+
 def _page() -> bytes:
     return resources.files("plexdb").joinpath("explore.html").read_bytes()
 
@@ -292,6 +454,7 @@ def make_server(store_path: Path, host: str, port: int) -> ThreadingHTTPServer:
     `serve_forever` in the foreground, and a test runs it on a thread.
     """
     cache = _IndexCache(store_path)
+    maps = _MapCache(store_path)
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802 — the stdlib's name
@@ -326,6 +489,17 @@ def make_server(store_path: Path, host: str, port: int) -> ThreadingHTTPServer:
                     with open_readonly(store_path) as conn:
                         hood = neighbourhood(conn, kind, tag, int(size), exclude)
                     self._json(neighbourhood_json(hood))
+                elif url.path == "/api/map":
+                    kind = query.get("kind", "movie")
+                    _check_kind(kind)
+                    self._json(maps.get(kind, frozenset(lists.get("exclude", []))))
+                elif url.path == "/api/title":
+                    item_id = query.get("item_id")
+                    if not item_id:
+                        raise ValueError("item_id is required")
+                    with open_readonly(store_path) as conn:
+                        keywords = title_keywords(conn, item_id)
+                    self._json({"item_id": item_id, "keywords": keywords})
                 else:
                     self._json({"error": f"no route {url.path}"}, HTTPStatus.NOT_FOUND)
             except ValueError as err:

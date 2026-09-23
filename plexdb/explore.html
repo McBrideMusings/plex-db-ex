@@ -81,6 +81,13 @@
   .graphbar { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; padding: 10px 0; color: var(--muted); }
   .graphbar select { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; }
   #graph { height: calc(100vh - 210px); min-height: 420px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+  #mapbox { position: relative; height: calc(100vh - 190px); min-height: 420px; background: var(--panel);
+            border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  #map { display: block; width: 100%; height: 100%; cursor: crosshair; }
+  #maptip { position: absolute; pointer-events: none; background: var(--ink); color: var(--bg); font-size: 12px;
+            padding: 3px 7px; border-radius: 5px; white-space: nowrap; transform: translate(10px, -130%); }
+  aside .chips { margin-top: 4px; }
+  aside .chip.noise { color: var(--noise); text-decoration: line-through; }
   .err { color: var(--noise); padding: 12px 20px; }
 </style>
 </head>
@@ -94,6 +101,7 @@
   <div class="seg" role="group" aria-label="View">
     <button type="button" data-view="table" aria-pressed="true">Table</button>
     <button type="button" data-view="graph" aria-pressed="false">Graph</button>
+    <button type="button" data-view="map" aria-pressed="false">Map</button>
   </div>
   <span class="stats" id="stats">Loading…</span>
 </header>
@@ -117,6 +125,10 @@
     </div>
     <div id="graph"></div>
   </div>
+  <div class="graphwrap" id="mapwrap" hidden>
+    <div class="graphbar"><span id="mnote"></span></div>
+    <div id="mapbox"><canvas id="map"></canvas><div id="maptip" hidden></div></div>
+  </div>
   <div class="tablewrap" id="tablewrap">
     <table>
       <thead><tr>
@@ -137,8 +149,8 @@
 "use strict";
 const PAGE = 300;
 const NOISE_KEY = "plexdb-explore:noise";
-const VIEWS = ["table", "graph"];
-const state = { kind: "movie", view: "table", data: null, sort: "df", dir: -1, shown: PAGE, tag: null };
+const VIEWS = ["table", "graph", "map"];
+const state = { kind: "movie", view: "table", data: null, sort: "df", dir: -1, shown: PAGE, tag: null, tagIds: new Set() };
 
 function loadNoise() {
   try { return new Set(JSON.parse(localStorage.getItem(NOISE_KEY) || "[]")); } catch { return new Set(); }
@@ -191,6 +203,7 @@ async function loadKind() {
     `${fmt(d.titles)} ${noun()} with keywords · ${fmt(d.tags.length)} tags · ${fmt(singles)} on one title only`;
   state.shown = PAGE;
   render();
+  if (state.view === "map") drawMap();
   if (state.tag) showTag(state.tag); else { writeHash(); if (state.view === "graph") drawGraph(); }
 }
 
@@ -199,9 +212,103 @@ function setView(view) {
   document.querySelectorAll(".seg button[data-view]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.view === view)));
   document.getElementById("tablewrap").hidden = view !== "table";
   document.getElementById("graphwrap").hidden = view !== "graph";
+  document.getElementById("mapwrap").hidden = view !== "map";
   writeHash();
   // Before the first load, loadKind draws it once the tag list is in.
   if (view === "graph" && state.data) drawGraph();
+  if (view === "map" && state.data) drawMap();
+}
+
+const map = { data: null, key: null, hover: -1 };
+async function drawMap() {
+  const note = document.getElementById("mnote");
+  const key = [state.kind, ...[...noise].sort()].join("\u0001");
+  if (map.key !== key) {
+    map.data = null; map.key = key; paintMap();
+    note.textContent = `Placing every ${noun().slice(0, -1)} by its keywords — the first time for a noise list takes about 20 seconds…`;
+    const p = new URLSearchParams({ kind: state.kind });
+    for (const t of noise) p.append("exclude", t);
+    let d;
+    try { d = await getJSON(`/api/map?${p}`); } catch (err) { note.textContent = `Could not load: ${err.message}`; map.key = null; return; }
+    if (map.key !== key) return;
+    map.data = d;
+  }
+  paintMap();
+}
+
+function mapNote() {
+  const d = map.data;
+  if (!d) return;
+  const lit = d.points.filter(p => state.tagIds.has(p[0])).length;
+  document.getElementById("mnote").textContent =
+    `${fmt(d.points.length)} ${noun()}, close together when their keywords are alike (t-SNE)`
+    + (d.unplaced ? `; ${fmt(d.unplaced)} share no tag with anything and are left off` : "")
+    + (state.tag ? `; ${fmt(lit)} carrying “${state.tag}” highlighted` : "; pick a tag to highlight the titles carrying it")
+    + (noise.size ? `; ${fmt(noise.size)} noise-marked tags ignored` : "")
+    + ". Hover a dot for its title, click it for its keywords.";
+}
+
+function mapGeometry() {
+  const canvas = document.getElementById("map");
+  const w = canvas.clientWidth, h = canvas.clientHeight, pad = 14;
+  return { canvas, w, h, px: x => pad + x * (w - 2 * pad), py: y => pad + y * (h - 2 * pad) };
+}
+
+function paintMap() {
+  if (state.view !== "map") return;
+  const { canvas, w, h, px, py } = mapGeometry();
+  const ratio = window.devicePixelRatio || 1;
+  canvas.width = Math.round(w * ratio); canvas.height = Math.round(h * ratio);
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  if (!map.data) return;
+  const css = getComputedStyle(document.documentElement);
+  const token = name => css.getPropertyValue(name).trim();
+  const lit = [];
+  ctx.fillStyle = token("--edge");
+  for (const p of map.data.points) {
+    if (state.tagIds.has(p[0])) { lit.push(p); continue; }
+    ctx.fillRect(px(p[3]) - 1.2, py(p[4]) - 1.2, 2.4, 2.4);
+  }
+  ctx.fillStyle = token("--centre");
+  for (const p of lit) { ctx.beginPath(); ctx.arc(px(p[3]), py(p[4]), 3.2, 0, 2 * Math.PI); ctx.fill(); }
+  const hovered = map.data.points[map.hover];
+  if (hovered) {
+    ctx.strokeStyle = token("--ink"); ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(px(hovered[3]), py(hovered[4]), 6, 0, 2 * Math.PI); ctx.stroke();
+  }
+  mapNote();
+}
+
+function nearestPoint(event) {
+  if (!map.data) return -1;
+  const { canvas, px, py } = mapGeometry();
+  const r = canvas.getBoundingClientRect();
+  const mx = event.clientX - r.left, my = event.clientY - r.top;
+  let best = -1, bestD = 64;
+  map.data.points.forEach((p, i) => {
+    const d = (px(p[3]) - mx) ** 2 + (py(p[4]) - my) ** 2;
+    if (d < bestD) { bestD = d; best = i; }
+  });
+  return best;
+}
+
+async function showTitle(point) {
+  const [itemId, title, year] = point;
+  const aside = document.getElementById("detail");
+  const heading = year ? `${title} (${year})` : title;
+  aside.replaceChildren(el("h2", {}, heading), el("p", { className: "sub" }, "Loading…"));
+  let body;
+  try { body = await getJSON(`/api/title?item_id=${encodeURIComponent(itemId)}`); }
+  catch (err) { aside.querySelector(".sub").textContent = `Could not load: ${err.message}`; return; }
+  const chips = el("div", { className: "chips" });
+  for (const value of body.keywords) {
+    const chip = el("span", { className: "chip" + (noise.has(value) ? " noise" : ""), title: "Highlight the titles carrying it" }, value);
+    chip.addEventListener("click", () => showTag(value));
+    chips.append(chip);
+  }
+  aside.replaceChildren(el("h2", {}, heading), el("p", { className: "sub" }, `${fmt(body.keywords.length)} keywords · ${itemId}`), chips);
 }
 
 let cy = null;
@@ -327,6 +434,8 @@ async function showTag(value) {
   try { body = await getJSON(`/api/titles?kind=${state.kind}&tag=${encodeURIComponent(value)}`); }
   catch (err) { aside.querySelector(".sub").textContent = `Could not load: ${err.message}`; return; }
   if (state.tag !== value) return;
+  state.tagIds = new Set(body.titles.map(x => x.item_id));
+  if (state.view === "map") paintMap();
   const sub = t ? `${fmt(t.df)} ${noun()} · IDF ${t.idf.toFixed(2)}` : `not on any ${noun().slice(0, -1)}`;
   const list = el("ol");
   for (const x of body.titles) {
@@ -339,9 +448,24 @@ async function showTag(value) {
 
 document.querySelectorAll(".seg button[data-view]").forEach(b => b.addEventListener("click", () => setView(b.dataset.view)));
 document.getElementById("gsize").addEventListener("change", drawGraph);
+const mapCanvas = document.getElementById("map");
+mapCanvas.addEventListener("mousemove", e => {
+  const i = nearestPoint(e);
+  const tip = document.getElementById("maptip");
+  if (i !== map.hover) { map.hover = i; paintMap(); }
+  if (i < 0) { tip.hidden = true; return; }
+  const p = map.data.points[i];
+  const r = mapCanvas.getBoundingClientRect();
+  tip.textContent = p[2] ? `${p[1]} (${p[2]})` : p[1];
+  tip.style.left = `${e.clientX - r.left}px`; tip.style.top = `${e.clientY - r.top}px`;
+  tip.hidden = false;
+});
+mapCanvas.addEventListener("mouseleave", () => { document.getElementById("maptip").hidden = true; map.hover = -1; paintMap(); });
+mapCanvas.addEventListener("click", e => { const i = nearestPoint(e); if (i >= 0) showTitle(map.data.points[i]); });
+window.addEventListener("resize", paintMap);
 document.querySelectorAll(".seg button[data-kind]").forEach(b => b.addEventListener("click", () => {
   if (state.kind === b.dataset.kind) return;
-  state.kind = b.dataset.kind; state.tag = null;
+  state.kind = b.dataset.kind; state.tag = null; state.tagIds = new Set();
   document.getElementById("detail").replaceChildren(el("p", { className: "empty" }, "Click a tag to list the titles that carry it."));
   loadKind();
 }));
