@@ -241,7 +241,3 @@ crowd lists — is already covered by TMDB's two edge types and by MDBList. Issu
 [#14](https://github.com/McBrideMusings/plex-db-ex/issues/14) and
 [#36](https://github.com/McBrideMusings/plex-db-ex/issues/36) are closed as not planned; `source`
 being a plain column means Trakt can arrive later without a migration.
-
-*(An earlier version of this paragraph said the id was "43 characters where Trakt's is 64". That
-was wrong — a working Trakt client id here was 43 characters of URL-safe base64, and the length
-was never the defect.)*
