@@ -5,18 +5,21 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tag explorer — plexdb</title>
 <link rel="icon" href="data:,">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.34.3/cytoscape.min.js"
+        integrity="sha512-SQebVa91Tn1DeP45Wo74monK/I9wiQg59uKc7P8vp3T7KQ9l5e8IMjZ1GJTgZehUVQt7eS61DTqldQUb1EHfnw=="
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <style>
   :root {
     --bg: #f7f7f5; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6b66; --line: #e3e2dd;
     --accent: #2f5fb3; --accent-ink: #ffffff; --noise: #b3432f; --noise-bg: #fbeeea;
-    --chip: #eef1f7; --row-hover: #f2f4f8; --selected: #e4ebf8;
+    --chip: #eef1f7; --row-hover: #f2f4f8; --selected: #e4ebf8; --centre: #c77d12; --edge: #b9bdc6;
     color-scheme: light;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #161615; --panel: #1f1f1d; --ink: #e9e8e3; --muted: #9a998f; --line: #34332f;
       --accent: #7ea4ea; --accent-ink: #10131a; --noise: #ec8a74; --noise-bg: #3a231d;
-      --chip: #2a2f3a; --row-hover: #262a31; --selected: #2b3547;
+      --chip: #2a2f3a; --row-hover: #262a31; --selected: #2b3547; --centre: #f0b04a; --edge: #4a4f5a;
       color-scheme: dark;
     }
   }
@@ -74,6 +77,10 @@
                      font: 12px ui-monospace, Menlo, monospace; color: var(--ink); background: var(--panel);
                      border: 1px solid var(--accent); border-radius: 6px; padding: 6px 8px; }
   [hidden] { display: none !important; }
+  .graphwrap { padding: 0 20px 20px; }
+  .graphbar { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; padding: 10px 0; color: var(--muted); }
+  .graphbar select { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; }
+  #graph { height: calc(100vh - 210px); min-height: 420px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
   .err { color: var(--noise); padding: 12px 20px; }
 </style>
 </head>
@@ -83,6 +90,10 @@
   <div class="seg" role="group" aria-label="Title type">
     <button type="button" data-kind="movie" aria-pressed="true">Movies</button>
     <button type="button" data-kind="show" aria-pressed="false">Shows</button>
+  </div>
+  <div class="seg" role="group" aria-label="View">
+    <button type="button" data-view="table" aria-pressed="true">Table</button>
+    <button type="button" data-view="graph" aria-pressed="false">Graph</button>
   </div>
   <span class="stats" id="stats">Loading…</span>
 </header>
@@ -99,7 +110,14 @@
 <textarea id="copyout" readonly hidden aria-label="Noise list as JSON"></textarea>
 <div id="error" class="err" hidden></div>
 <main>
-  <div class="tablewrap">
+  <div class="graphwrap" id="graphwrap" hidden>
+    <div class="graphbar">
+      <label>Neighbours <select id="gsize"><option>20</option><option selected>40</option><option>80</option><option>150</option></select></label>
+      <span id="gnote"></span>
+    </div>
+    <div id="graph"></div>
+  </div>
+  <div class="tablewrap" id="tablewrap">
     <table>
       <thead><tr>
         <th title="Mark as noise">Noise</th>
@@ -119,7 +137,8 @@
 "use strict";
 const PAGE = 300;
 const NOISE_KEY = "plexdb-explore:noise";
-const state = { kind: "movie", data: null, sort: "df", dir: -1, shown: PAGE, tag: null };
+const VIEWS = ["table", "graph"];
+const state = { kind: "movie", view: "table", data: null, sort: "df", dir: -1, shown: PAGE, tag: null };
 
 function loadNoise() {
   try { return new Set(JSON.parse(localStorage.getItem(NOISE_KEY) || "[]")); } catch { return new Set(); }
@@ -141,10 +160,11 @@ const noun = () => state.kind === "movie" ? "movies" : "shows";
 function readHash() {
   const p = new URLSearchParams(location.hash.slice(1));
   if (p.get("kind") === "show" || p.get("kind") === "movie") state.kind = p.get("kind");
+  if (VIEWS.includes(p.get("view"))) state.view = p.get("view");
   state.tag = p.get("tag");
 }
 function writeHash() {
-  const p = new URLSearchParams({ kind: state.kind });
+  const p = new URLSearchParams({ kind: state.kind, view: state.view });
   if (state.tag) p.set("tag", state.tag);
   history.replaceState(null, "", "#" + p.toString());
 }
@@ -157,7 +177,7 @@ async function getJSON(url) {
 }
 
 async function loadKind() {
-  document.querySelectorAll(".seg button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.kind === state.kind)));
+  document.querySelectorAll(".seg button[data-kind]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.kind === state.kind)));
   document.getElementById("stats").textContent = "Loading…";
   try {
     state.data = await getJSON(`/api/tags?kind=${state.kind}`);
@@ -171,7 +191,63 @@ async function loadKind() {
     `${fmt(d.titles)} ${noun()} with keywords · ${fmt(d.tags.length)} tags · ${fmt(singles)} on one title only`;
   state.shown = PAGE;
   render();
-  if (state.tag) showTag(state.tag); else writeHash();
+  if (state.tag) showTag(state.tag); else { writeHash(); if (state.view === "graph") drawGraph(); }
+}
+
+function setView(view) {
+  state.view = view;
+  document.querySelectorAll(".seg button[data-view]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.view === view)));
+  document.getElementById("tablewrap").hidden = view !== "table";
+  document.getElementById("graphwrap").hidden = view !== "graph";
+  writeHash();
+  // Before the first load, loadKind draws it once the tag list is in.
+  if (view === "graph" && state.data) drawGraph();
+}
+
+let cy = null;
+async function drawGraph() {
+  const note = document.getElementById("gnote");
+  if (!state.tag) {
+    note.textContent = "Pick a tag in the table or a co-tag chip to centre the graph on it.";
+    if (cy) { cy.destroy(); cy = null; }
+    return;
+  }
+  if (!window.cytoscape) {
+    note.textContent = "The graph library did not load — it comes from cdnjs.cloudflare.com, so this view needs internet access.";
+    return;
+  }
+  const centre = state.tag;
+  const p = new URLSearchParams({ kind: state.kind, tag: centre, size: document.getElementById("gsize").value });
+  for (const t of noise) p.append("exclude", t);
+  note.textContent = "Loading…";
+  let g;
+  try { g = await getJSON(`/api/graph?${p}`); } catch (err) { note.textContent = `Could not load: ${err.message}`; return; }
+  if (state.tag !== centre || state.view !== "graph") return;
+  note.textContent = `${fmt(g.nodes.length - 1)} tags sharing the most ${noun()} with “${centre}”; `
+    + `a line joins two tags on the same ${noun()}, thicker for more; node size is ${noun()} carrying it`
+    + (noise.size ? `; ${fmt(noise.size)} noise-marked tags left out` : "");
+  const maxDf = Math.max(...g.nodes.map(n => n.df));
+  const maxN = Math.max(1, ...g.edges.map(e => e[2]));
+  const elements = g.nodes.map(n => ({ data: {
+    id: n.value, label: n.value, size: 12 + 44 * Math.sqrt(n.df / maxDf), centre: n.value === centre ? 1 : 0 } }));
+  for (const [a, b, n] of g.edges) elements.push({ data: { id: `${a}\u0001${b}`, source: a, target: b, w: 0.6 + 7 * n / maxN } });
+  const css = getComputedStyle(document.documentElement);
+  const token = name => css.getPropertyValue(name).trim();
+  if (cy) cy.destroy();
+  cy = cytoscape({
+    container: document.getElementById("graph"),
+    elements,
+    style: [
+      { selector: "node", style: {
+        width: "data(size)", height: "data(size)", "background-color": token("--accent"),
+        label: "data(label)", "font-size": 11, color: token("--ink"), "text-valign": "bottom", "text-margin-y": 3,
+        "text-outline-color": token("--panel"), "text-outline-width": 2 } },
+      { selector: "node[centre = 1]", style: { "background-color": token("--centre"), "font-weight": "bold", "font-size": 13 } },
+      { selector: "edge", style: { width: "data(w)", "line-color": token("--edge"), "curve-style": "haystack", opacity: 0.8 } },
+    ],
+    layout: { name: "cose", animate: false, nodeRepulsion: () => 40000, idealEdgeLength: () => 120, nodeOverlap: 20, padding: 20 },
+  });
+  cy.on("tap", "node", e => showTag(e.target.id()));
 }
 
 function showError(err) {
@@ -243,6 +319,7 @@ async function showTag(value) {
   state.tag = value;
   writeHash();
   document.querySelectorAll("tbody tr").forEach(tr => tr.classList.toggle("selected", tr.dataset.tag === value));
+  if (state.view === "graph") drawGraph();
   const aside = document.getElementById("detail");
   const t = state.data && state.data.tags.find(x => x.value === value);
   aside.replaceChildren(el("h2", {}, value), el("p", { className: "sub" }, "Loading…"));
@@ -260,7 +337,9 @@ async function showTag(value) {
   aside.replaceChildren(el("h2", {}, value), el("p", { className: "sub" }, sub), list);
 }
 
-document.querySelectorAll(".seg button").forEach(b => b.addEventListener("click", () => {
+document.querySelectorAll(".seg button[data-view]").forEach(b => b.addEventListener("click", () => setView(b.dataset.view)));
+document.getElementById("gsize").addEventListener("change", drawGraph);
+document.querySelectorAll(".seg button[data-kind]").forEach(b => b.addEventListener("click", () => {
   if (state.kind === b.dataset.kind) return;
   state.kind = b.dataset.kind; state.tag = null;
   document.getElementById("detail").replaceChildren(el("p", { className: "empty" }, "Click a tag to list the titles that carry it."));
@@ -301,6 +380,7 @@ document.getElementById("clear").addEventListener("click", () => {
 
 document.getElementById("noisecount").textContent = noise.size;
 readHash();
+setView(state.view);
 loadKind();
 </script>
 </body>

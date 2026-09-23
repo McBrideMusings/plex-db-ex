@@ -19,7 +19,13 @@ import pytest
 
 from plexdb import schedule
 from plexdb.errors import ConfigError
-from plexdb.explore import EXPLORE_PORT_VAR, build_index, make_server, titles_tagged
+from plexdb.explore import (
+    EXPLORE_PORT_VAR,
+    build_index,
+    make_server,
+    neighbourhood,
+    titles_tagged,
+)
 from plexdb.store import init, open_readonly, open_store, publish
 
 FETCHED = "2026-08-09T12:00:00+00:00"
@@ -75,6 +81,23 @@ def test_counts_idf_and_co_tags_are_per_media_type(store: Path) -> None:
     assert {tag.value for tag in shows.tags} == {"superhero", "lawyer"}
 
 
+def test_neighbourhood_ranks_co_tags_and_links_them_by_shared_titles(store: Path) -> None:
+    with open_readonly(store) as conn:
+        hood = neighbourhood(conn, "movie", "superhero")
+        without = neighbourhood(conn, "movie", "superhero", exclude=frozenset({"stinger"}))
+
+    assert hood.nodes == (("superhero", 3, 3), ("stinger", 2, 2), ("based on comic", 1, 1))
+    assert hood.edges == (
+        ("stinger", "superhero", 2),
+        ("based on comic", "stinger", 1),
+        ("based on comic", "superhero", 1),
+    )
+    # A show's keyword never joins a movie graph.
+    assert "lawyer" not in {value for value, _, _ in hood.nodes}
+    assert without.nodes == (("superhero", 3, 3), ("based on comic", 1, 1))
+    assert without.edges == (("based on comic", "superhero", 1),)
+
+
 def test_titles_tagged_lists_one_media_type_by_title(store: Path) -> None:
     with open_readonly(store) as conn:
         titles = titles_tagged(conn, "movie", "superhero")
@@ -123,11 +146,17 @@ def test_server_serves_the_page_and_both_endpoints(base_url: str) -> None:
     status, body = _get(f"{base_url}/api/titles?kind=show&tag=superhero")
     assert status == 200 and [t["title"] for t in json.loads(body)["titles"]] == ["Daredevil"]
 
+    status, body = _get(f"{base_url}/api/graph?kind=movie&tag=superhero&exclude=stinger")
+    graph = json.loads(body)
+    assert status == 200 and [n["value"] for n in graph["nodes"]] == ["superhero", "based on comic"]
+    assert graph["edges"] == [["based on comic", "superhero", 1]]
+
 
 def test_server_refuses_what_it_cannot_answer(base_url: str) -> None:
     status, body = _get(f"{base_url}/api/tags?kind=episode")
     assert status == 400 and "episode" in json.loads(body)["error"]
     assert _get(f"{base_url}/api/titles?kind=movie")[0] == 400
+    assert _get(f"{base_url}/api/graph?kind=movie&tag=superhero&size=0")[0] == 400
     assert _get(f"{base_url}/api/nope")[0] == 404
 
 

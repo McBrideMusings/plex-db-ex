@@ -140,6 +140,94 @@ def titles_tagged(conn: sqlite3.Connection, kind: str, value: str) -> list[Title
     return [Title(item_id=r[0], title=r[1], year=r[2], keywords=r[3]) for r in rows]
 
 
+#: Tags drawn around the centre of a neighbourhood graph when the caller does
+#: not say. Forty is readable on one screen; the page offers more.
+NEIGHBOURS = 40
+
+#: Each node keeps only its strongest links. Forty tags that all co-occur
+#: somewhere would otherwise draw 780 edges and a solid disc.
+EDGES_PER_NODE = 4
+
+
+@dataclass(frozen=True)
+class Neighbourhood:
+    kind: str
+    centre: str
+    #: The centre first, then its co-occurring tags, most shared titles first.
+    #: Each is `(tag, titles carrying it, titles it shares with the centre)`.
+    nodes: tuple[tuple[str, int, int], ...]
+    #: `(a, b, shared titles)`, each pair once.
+    edges: tuple[tuple[str, str, int], ...]
+
+
+def neighbourhood(
+    conn: sqlite3.Connection,
+    kind: str,
+    centre: str,
+    size: int = NEIGHBOURS,
+    exclude: frozenset[str] = frozenset(),
+    edges_per_node: int = EDGES_PER_NODE,
+) -> Neighbourhood:
+    """The `size` tags that share the most titles with `centre`, and the
+    strongest links among them.
+
+    `exclude` drops tags before they are ranked, so a tag marked as noise frees
+    its place for the next one rather than leaving a hole.
+    """
+    _check_kind(kind)
+    shared = conn.execute(
+        "SELECT o.value, COUNT(*) FROM enrichment c "
+        "JOIN enrichment o ON o.item_id = c.item_id AND o.namespace = c.namespace "
+        "  AND o.key = c.key AND o.value != c.value "
+        "JOIN items i ON i.item_id = c.item_id "
+        "WHERE c.namespace = ? AND c.key = ? AND c.value = ? AND i.type = ? "
+        "GROUP BY o.value ORDER BY COUNT(*) DESC, o.value",
+        (_NAMESPACE, _KEY, centre, kind),
+    ).fetchall()
+    ranked = [(value, count) for value, count in shared if value not in exclude][:size]
+    members = [centre, *(value for value, _ in ranked)]
+
+    marks = ",".join("?" * len(members))
+    rows = conn.execute(
+        f"SELECT e.item_id, e.value FROM enrichment e JOIN items i USING (item_id) "
+        f"WHERE e.namespace = ? AND e.key = ? AND i.type = ? AND e.value IN ({marks})",
+        (_NAMESPACE, _KEY, kind, *members),
+    ).fetchall()
+    by_title: defaultdict[str, list[str]] = defaultdict(list)
+    for item_id, value in rows:
+        by_title[item_id].append(value)
+    df = Counter(value for _, value in rows)
+    pairs: Counter[tuple[str, str]] = Counter()
+    for values in by_title.values():
+        values.sort()
+        for i, a in enumerate(values):
+            for b in values[i + 1 :]:
+                pairs[(a, b)] += 1
+
+    strongest: defaultdict[str, list[tuple[int, str, str]]] = defaultdict(list)
+    for (a, b), count in pairs.items():
+        strongest[a].append((count, a, b))
+        strongest[b].append((count, a, b))
+    kept: set[tuple[str, str, int]] = set()
+    for links in strongest.values():
+        links.sort(key=lambda link: (-link[0], link[1], link[2]))
+        kept.update((a, b, count) for count, a, b in links[:edges_per_node])
+
+    with_centre = dict(ranked)
+    nodes = tuple((value, df[value], with_centre.get(value, df[value])) for value in members)
+    edges = tuple(sorted(kept, key=lambda e: (-e[2], e[0], e[1])))
+    return Neighbourhood(kind=kind, centre=centre, nodes=nodes, edges=edges)
+
+
+def neighbourhood_json(hood: Neighbourhood) -> dict[str, object]:
+    return {
+        "kind": hood.kind,
+        "centre": hood.centre,
+        "nodes": [{"value": v, "df": df, "shared": s} for v, df, s in hood.nodes],
+        "edges": [[a, b, n] for a, b, n in hood.edges],
+    }
+
+
 def index_json(index: TagIndex) -> dict[str, object]:
     return {
         "kind": index.kind,
@@ -208,7 +296,8 @@ def make_server(store_path: Path, host: str, port: int) -> ThreadingHTTPServer:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802 — the stdlib's name
             url = urlparse(self.path)
-            query = {k: v[0] for k, v in parse_qs(url.query).items()}
+            lists = parse_qs(url.query)
+            query = {k: v[0] for k, v in lists.items()}
             try:
                 if url.path == "/":
                     self._send(HTTPStatus.OK, "text/html; charset=utf-8", _page())
@@ -223,6 +312,20 @@ def make_server(store_path: Path, host: str, port: int) -> ThreadingHTTPServer:
                         raise ValueError("tag is required")
                     with open_readonly(store_path) as conn:
                         self._json(titles_json(kind, tag, titles_tagged(conn, kind, tag)))
+                elif url.path == "/api/graph":
+                    kind = query.get("kind", "movie")
+                    tag = query.get("tag")
+                    if not tag:
+                        raise ValueError("tag is required")
+                    size = query.get("size", str(NEIGHBOURS))
+                    if not size.isdigit() or not 1 <= int(size) <= 200:
+                        raise ValueError("size must be a number from 1 to 200")
+                    # Repeated `exclude=` rather than one comma list: a TMDB
+                    # keyword can itself contain a comma.
+                    exclude = frozenset(lists.get("exclude", []))
+                    with open_readonly(store_path) as conn:
+                        hood = neighbourhood(conn, kind, tag, int(size), exclude)
+                    self._json(neighbourhood_json(hood))
                 else:
                     self._json({"error": f"no route {url.path}"}, HTTPStatus.NOT_FOUND)
             except ValueError as err:
