@@ -38,6 +38,7 @@ EXPECTED_COMMANDS = {
     "publish",
     "enrich-tmdb-keywords",
     "enrich-tmdb-edges",
+    "refresh-map",
     "harvest-mdblist",
     "ingest-plays",
     "enrich-tautulli-plays",
@@ -65,6 +66,7 @@ EXPECTED_COMMAND_ORDER = [
     "enrich-tautulli-plays",
     "enrich-tmdb-keywords",
     "enrich-tmdb-edges",
+    "refresh-map",
     "harvest-mdblist",
     "latent-users",
     # Not a step of the sweep: a read-only browser view of what the steps above

@@ -10,7 +10,9 @@ from ..enrich_tmdb import NAMESPACE as TMDB_KEYWORDS_NAMESPACE
 from ..enrich_tmdb import EnrichStats, enrich_tmdb_keywords, wipe_namespace
 from ..sources import GatedSource
 from ..sweep import Step
+from ..titlemap import refresh_title_maps
 from ..tmdb_client import LiveTMDbClient
+from .refresh_map import describe
 
 NAME = "enrich-tmdb-keywords"
 ORDER = 50
@@ -22,6 +24,21 @@ SWEEP = Step.BEST_EFFORT
 
 def _wipe(conn: sqlite3.Connection) -> list[str]:
     return [f"wiped {wipe_namespace(conn)} row(s) from the {TMDB_KEYWORDS_NAMESPACE} namespace"]
+
+
+def _fetch_and_redraw(
+    conn: sqlite3.Connection, client: LiveTMDbClient, **kwargs: int
+) -> EnrichStats:
+    """Fetch, then leave the explorer's stored title map matching what landed.
+
+    The map is drawn from these rows, so this is the one place that both writes
+    them and knows they are done. A pass that changed nothing costs one
+    fingerprint comparison per kind.
+    """
+    stats = enrich_tmdb_keywords(conn, client, **kwargs)
+    for line in describe(refresh_title_maps(conn)):
+        print(line)
+    return stats
 
 
 def _report(stats: EnrichStats) -> list[str]:
@@ -50,7 +67,7 @@ SOURCE = GatedSource(
     # Binding the class here directly would capture it at import and silently
     # ignore the patch — the test would hit the live API.
     make_client=lambda api_key: LiveTMDbClient(api_key),
-    refresh=enrich_tmdb_keywords,
+    refresh=_fetch_and_redraw,
     wipe=_wipe,
     report=_report,
 )

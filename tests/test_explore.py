@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from plexdb import schedule
+from plexdb import explore, schedule
 from plexdb.errors import ConfigError
 from plexdb.explore import (
     EXPLORE_PORT_VAR,
@@ -28,6 +28,7 @@ from plexdb.explore import (
     titles_tagged,
 )
 from plexdb.store import init, open_readonly, open_store, publish
+from plexdb.titlemap import refresh_title_maps
 
 FETCHED = "2026-08-09T12:00:00+00:00"
 
@@ -197,6 +198,67 @@ def test_server_serves_the_page_and_both_endpoints(base_url: str) -> None:
 
     status, body = _get(f"{base_url}/api/title?item_id=imdb:tt1")
     assert json.loads(body)["keywords"] == ["based on comic", "stinger", "superhero"]
+
+
+def _add_keyword(store: Path, item_id: str, keyword: str) -> None:
+    with open_store(store) as conn:
+        conn.execute(
+            "INSERT INTO enrichment (item_id, namespace, key, value, fetched_at) "
+            "VALUES (?, 'tmdb_keywords', 'keyword', ?, '2026-09-01T00:00:00+00:00')",
+            (item_id, keyword),
+        )
+        conn.commit()
+
+
+def test_refresh_stores_both_kinds_and_skips_a_kind_whose_keywords_are_unchanged(
+    store: Path,
+) -> None:
+    with open_store(store) as conn:
+        first = refresh_title_maps(conn)
+        counts = conn.execute("SELECT kind, COUNT(*) FROM title_map GROUP BY kind")
+        rows = [tuple(r) for r in counts]
+        again = refresh_title_maps(conn)
+
+    assert [(r.kind, r.redrawn) for r in first] == [("movie", True), ("show", True)]
+    # Heat's only tag is on no other movie, so it is left off; so is the one show.
+    assert rows == [("movie", 3)]
+    assert [(r.kind, r.redrawn, r.placed) for r in again] == [
+        ("movie", False, 3),
+        ("show", False, 0),
+    ]
+
+    _add_keyword(store, "tvdb:9", "vigilante")
+    with open_store(store) as conn:
+        changed = refresh_title_maps(conn)
+    assert [(r.kind, r.redrawn) for r in changed] == [("movie", False), ("show", True)]
+
+
+def test_map_endpoint_serves_the_stored_map_and_draws_live_once_it_is_stale(
+    store: Path, base_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with open_store(store) as conn:
+        refresh_title_maps(conn)
+    drawn: list[frozenset[str]] = []
+    real = explore.title_map
+
+    def counting(conn, kind, exclude=frozenset(), seed=0):  # type: ignore[no-untyped-def]
+        drawn.append(exclude)
+        return real(conn, kind, exclude, seed)
+
+    monkeypatch.setattr(explore, "title_map", counting)
+
+    _, body = _get(f"{base_url}/api/map?kind=movie")
+    stored = json.loads(body)
+    assert drawn == []
+    assert sorted(p[1] for p in stored["points"]) == ["Iron Man", "Thor", "Unbreakable"]
+
+    _get(f"{base_url}/api/map?kind=movie&exclude=stinger")
+    assert drawn == [frozenset({"stinger"})]
+
+    _add_keyword(store, "imdb:tt4", "superhero")
+    _, body = _get(f"{base_url}/api/map?kind=movie")
+    assert drawn == [frozenset({"stinger"}), frozenset()]
+    assert len(json.loads(body)["points"]) == 4
 
 
 def test_server_refuses_what_it_cannot_answer(base_url: str) -> None:

@@ -225,19 +225,44 @@ function setView(view) {
   if (view === "map" && state.data) drawMap();
 }
 
-const map = { data: null, key: null, hover: -1 };
+// `data` is what is on screen. `dim` is set while it is the default map standing in for one
+// still being drawn without the noise tags. `defaults` keeps each kind's default map, which the
+// server has stored and answers in milliseconds.
+const map = { data: null, key: null, hover: -1, dim: false, defaults: {} };
+async function mapRequest(kind, exclude) {
+  const p = new URLSearchParams({ kind });
+  for (const t of exclude) p.append("exclude", t);
+  return getJSON(`/api/map?${p}`);
+}
 async function drawMap() {
   const note = document.getElementById("mnote");
-  const key = [state.kind, ...[...noise].sort()].join("\u0001");
+  const kind = state.kind;
+  const key = [kind, ...[...noise].sort()].join("\u0001");
   if (map.key !== key) {
-    map.data = null; map.key = key; paintMap();
-    note.textContent = `Placing every ${noun().slice(0, -1)} by its keywords — the first time for a noise list takes about 20 seconds…`;
-    const p = new URLSearchParams({ kind: state.kind });
-    for (const t of noise) p.append("exclude", t);
-    let d;
-    try { d = await getJSON(`/api/map?${p}`); } catch (err) { note.textContent = `Could not load: ${err.message}`; map.key = null; return; }
-    if (map.key !== key) return;
-    map.data = d;
+    map.key = key; map.hover = -1;
+    try {
+      let base = map.defaults[kind] || null;
+      map.data = base; map.dim = noise.size > 0 && base !== null;
+      note.textContent = `Placing every ${noun().slice(0, -1)} by its keywords…`;
+      paintMap();
+      if (!base) {
+        base = await mapRequest(kind, []);
+        if (map.key !== key) return;
+        map.defaults[kind] = base;
+        map.data = base; map.dim = noise.size > 0;
+        paintMap();
+      }
+      if (noise.size > 0) {
+        const live = await mapRequest(kind, noise);
+        if (map.key !== key) return;
+        map.data = live; map.dim = false;
+      }
+    } catch (err) {
+      if (map.key !== key) return;
+      map.data = null; map.dim = false; map.key = null; paintMap();
+      note.textContent = `Could not load: ${err.message}`;
+      return;
+    }
   }
   paintMap();
 }
@@ -245,9 +270,14 @@ async function drawMap() {
 function mapNote() {
   const d = map.data;
   if (!d) return;
+  if (map.dim) {
+    document.getElementById("mnote").textContent =
+      `Recomputing without ${fmt(noise.size)} noise-marked tag${noise.size === 1 ? "" : "s"} — this takes tens of seconds. Showing the default map, dimmed, until it lands…`;
+    return;
+  }
   const lit = d.points.filter(p => state.tagIds.has(p[0])).length;
   document.getElementById("mnote").textContent =
-    `${fmt(d.points.length)} ${noun()}, close together when their keywords are alike (t-SNE)`
+    `${fmt(d.points.length)} ${noun()}, close together when their keywords are alike (UMAP)`
     + (d.unplaced ? `; ${fmt(d.unplaced)} share no tag with anything and are left off` : "")
     + (state.tag ? `; ${fmt(lit)} carrying “${state.tag}” highlighted` : "; pick a tag to highlight the titles carrying it")
     + (noise.size ? `; ${fmt(noise.size)} noise-marked tags ignored` : "")
@@ -269,6 +299,7 @@ function paintMap() {
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
   ctx.clearRect(0, 0, w, h);
   if (!map.data) return;
+  ctx.globalAlpha = map.dim ? 0.35 : 1;
   const css = getComputedStyle(document.documentElement);
   const token = name => css.getPropertyValue(name).trim();
   const lit = [];

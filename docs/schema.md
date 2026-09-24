@@ -522,6 +522,36 @@ that just missed a single fetch — a rate limit, a timeout, a partial index. Tw
 that on their own: an id whose `last_seen` predates the current walk was not in the most recent
 report.
 
+## Version 9 — the tag explorer's stored title map
+
+`title_map` and `title_map_state`, written by `plexdb refresh-map`. Both are derived from
+`enrichment`, so a consumer that reads the keyword facts has no reason to read them.
+
+```
+title_map        (kind, item_id) PK, x REAL, y REAL
+title_map_state  kind PK, fingerprint TEXT, unplaced INTEGER, computed_at TEXT
+```
+
+`title_map` holds the default map of the tag explorer's Map view: each title of `kind`
+(`movie` or `show`) with a position in the unit square. Only distances mean anything. It is the
+map with no noise tag excluded, drawn from the `tmdb_keywords` rows by IDF-weighted keyword
+vectors, truncated SVD to 50 dimensions and UMAP with cosine distance. `item_id` carries no
+foreign key: a title that has left `items` drops out of the explorer's join, and the next refresh
+redraws the map without it.
+
+`title_map_state` holds one row per kind. `fingerprint` names the drawing recipe, the count of the
+kind's keyword rows, the count of titles carrying them and the newest keyword `fetched_at`.
+`unplaced` counts titles with keywords that share no tag with another title and so are off the
+map. `computed_at` is UTC.
+
+**Refresh rule.** `plexdb refresh-map` recomputes each kind's fingerprint and redraws only a kind
+whose stored fingerprint differs, replacing both tables' rows for the redrawn kinds in one
+transaction. It runs at the end of `enrich-tmdb-keywords` and as its own step of the sweep, after
+both TMDB steps and before `publish`, so the snapshot carries a current map. A reader that uses the
+map compares `fingerprint` against the same digest of the current keyword rows and treats a
+mismatch as no map; the explorer then draws it live, which takes tens of seconds for the movies.
+Nothing else interprets the fingerprint.
+
 ## Not yet built
 
 Further sources land as new `source` values rather than as schema changes:

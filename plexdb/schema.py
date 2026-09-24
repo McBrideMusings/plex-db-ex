@@ -345,8 +345,39 @@ ALTER TABLE external_ids_v8 RENAME TO external_ids;
 CREATE INDEX idx_external_ids_item ON external_ids(item_id);
 """
 
+#: Version 9 — the tag explorer's default title map, drawn by the writer and
+#: stored, so the explorer serves it without drawing anything.
+#:
+#: `title_map` holds one row per placed title and kind: a position in the unit
+#: square, where only distances mean anything. `title_map_state` holds one row
+#: per kind: the fingerprint of the keyword rows the map was drawn from, how
+#: many keyword-carrying titles it left off, and when. Nothing interprets the
+#: fingerprint except the explorer's freshness check, which recomputes it from
+#: the current keyword rows and serves the stored map only when the two match.
+#:
+#: Both tables are derived, so they carry no history and no foreign key: a
+#: title that leaves `items` drops out of the explorer's join, and the next
+#: `plexdb refresh-map` redraws the map without it. Purely additive — no rows
+#: in an existing table move, so there is nothing to lose.
+_V9 = """
+CREATE TABLE title_map (
+    kind    TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    x       REAL NOT NULL,
+    y       REAL NOT NULL,
+    PRIMARY KEY (kind, item_id)
+);
+
+CREATE TABLE title_map_state (
+    kind        TEXT PRIMARY KEY,
+    fingerprint TEXT NOT NULL,
+    unplaced    INTEGER NOT NULL,
+    computed_at TEXT NOT NULL
+);
+"""
+
 #: Append-only. Index i takes the store from version i to version i+1.
-MIGRATIONS: tuple[str, ...] = (_V1, _V2, _V3, _V4, _V5, _V6, _V7, _V8)
+MIGRATIONS: tuple[str, ...] = (_V1, _V2, _V3, _V4, _V5, _V6, _V7, _V8, _V9)
 
 #: The version a store is at once every migration has been applied.
 SCHEMA_VERSION = len(MIGRATIONS)

@@ -9,6 +9,7 @@ dependencies = [
     "numpy>=2.0",
     "scikit-learn>=1.5",
     "scipy>=1.13",
+    "umap-learn>=0.5.12",
 ]
 
 [project.scripts]
@@ -41,8 +42,8 @@ strict = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
-# scikit-learn and scipy ship no type information; the map is the one place
+# scikit-learn, scipy and umap-learn ship no type information; the map is the one place
 # that calls them, through a handful of documented functions.
 [[tool.mypy.overrides]]
-module = ["sklearn.*", "scipy.*"]
+module = ["sklearn.*", "scipy.*", "umap.*"]
 ignore_missing_imports = true

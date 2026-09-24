@@ -17,6 +17,7 @@ V2_TABLES = {"plays", "plays_ingest_cursor"}
 V3_TABLES = {"edges"}
 V6_TABLES = {"collection", "collection_membership"}
 V7_TABLES = {"enrichment_cursor"}
+V9_TABLES = {"title_map", "title_map_state"}
 #: V4 adds no new table — it only alters the existing `plays` table and adds
 #: an index (issue #9).
 
@@ -174,7 +175,7 @@ def test_a_current_store_carries_every_migrations_tables_and_nothing_else(
     # table `apply` itself creates — a table arriving early (or never
     # arriving) is a scope leak worth failing on.
     assert _tables(store) == (
-        V1_TABLES | V2_TABLES | V3_TABLES | V6_TABLES | V7_TABLES | {"schema_version"}
+        V1_TABLES | V2_TABLES | V3_TABLES | V6_TABLES | V7_TABLES | V9_TABLES | {"schema_version"}
     )
 
 
@@ -522,3 +523,20 @@ def test_edges_uniqueness_is_from_id_to_id_edge_type(tmp_path: Path) -> None:
                 "INSERT INTO edges (from_id, to_id, edge_type, rank, fetched_at) "
                 "VALUES ('imdb:tt1', 'imdb:tt2', 'tmdb_similar', 2, '2026-01-01T00:00:00+00:00')"
             )
+
+
+def test_v9_adds_the_stored_title_map_tables(tmp_path: Path) -> None:
+    conn = sqlite3.connect(tmp_path / "plexdb.db")
+    try:
+        conn.executescript("".join(schema.MIGRATIONS[:8]) + schema._V9)
+        columns = {
+            table: [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
+            for table in ("title_map", "title_map_state")
+        }
+    finally:
+        conn.close()
+
+    assert columns == {
+        "title_map": ["kind", "item_id", "x", "y"],
+        "title_map_state": ["kind", "fingerprint", "unplaced", "computed_at"],
+    }

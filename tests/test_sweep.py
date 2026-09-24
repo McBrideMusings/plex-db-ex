@@ -27,6 +27,7 @@ EXPECTED_SWEEP = [
     ("enrich-tautulli-plays", Step.BEST_EFFORT),
     ("enrich-tmdb-keywords", Step.BEST_EFFORT),
     ("enrich-tmdb-edges", Step.BEST_EFFORT),
+    ("refresh-map", Step.BEST_EFFORT),
     ("harvest-mdblist", Step.BEST_EFFORT),
     ("publish", Step.REQUIRED),
 ]

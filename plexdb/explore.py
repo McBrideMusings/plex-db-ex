@@ -232,9 +232,18 @@ def neighbourhood_json(hood: Neighbourhood) -> dict[str, object]:
 #: is left out of the map's vectors.
 MAP_MIN_DF = 2
 
-#: Dimensions the keyword vectors are reduced to before t-SNE, which is slow
+#: Dimensions the keyword vectors are reduced to before UMAP, which is slow
 #: and noisy on 19,000 sparse columns and fine on 50 dense ones.
 MAP_SVD_COMPONENTS = 50
+
+#: UMAP's neighbourhood size: how many nearest titles each title's position is
+#: pulled towards. Its own default; lowered only when a store is too small for it.
+MAP_NEIGHBOURS = 15
+
+#: Names how a map is drawn. It is part of a stored map's fingerprint, so
+#: changing the algorithm or any constant above and bumping this string makes
+#: every stored map stale and the next refresh redraws it.
+MAP_RECIPE = "umap-cosine-svd50-df2"
 
 
 @dataclass(frozen=True)
@@ -264,16 +273,16 @@ def title_map(
     A title's vector is its tags weighted by the same IDF the table shows,
     normalised to unit length so a title with forty tags is not louder than one
     with five — the cosine a keyword scorer compares. Truncated SVD takes it to
-    `MAP_SVD_COMPONENTS` dimensions and t-SNE to two. `seed` fixes both, so the
-    same store and the same exclusions draw the same map.
+    `MAP_SVD_COMPONENTS` dimensions and UMAP (cosine distance) to two. `seed`
+    fixes both, so the same store and the same exclusions draw the same map.
 
     numpy and scikit-learn are imported here rather than at the top of the
     module, so every other `plexdb` command starts without loading them.
     """
     import numpy as np
+    import umap
     from scipy.sparse import csr_matrix
     from sklearn.decomposition import TruncatedSVD
-    from sklearn.manifold import TSNE
     from sklearn.preprocessing import normalize
 
     _check_kind(kind)
@@ -309,7 +318,7 @@ def title_map(
 
     ids = sorted(placed, key=placed.__getitem__)
     if len(ids) < 5 or len(vocab) < 3:
-        # Too few titles for t-SNE to mean anything; lay them on a line.
+        # Too few titles for a layout to mean anything; lay them on a line.
         coords = np.array([[i / max(1, len(ids) - 1), 0.5] for i in range(len(ids))])
     else:
         matrix = csr_matrix((cells_v, (cells_r, cells_c)), shape=(len(ids), len(vocab)))
@@ -317,11 +326,12 @@ def title_map(
         components = min(MAP_SVD_COMPONENTS, len(vocab) - 1, len(ids) - 1)
         reduced = TruncatedSVD(n_components=components, random_state=seed).fit_transform(matrix)
         reduced = normalize(reduced)
-        coords = TSNE(
+        coords = umap.UMAP(
             n_components=2,
-            perplexity=min(30.0, (len(ids) - 1) / 3),
-            init="pca",
+            n_neighbors=min(MAP_NEIGHBOURS, len(ids) - 1),
+            metric="cosine",
             random_state=seed,
+            n_jobs=1,  # a seed already forces one thread; saying so silences UMAP's warning
         ).fit_transform(reduced)
         low, high = coords.min(axis=0), coords.max(axis=0)
         coords = (coords - low) / np.where(high > low, high - low, 1.0)
@@ -337,6 +347,53 @@ def title_map(
         for i, item_id in enumerate(ids)
     )
     return TitleMap(kind=kind, points=points, unplaced=n - len(ids))
+
+
+def keyword_fingerprint(conn: sqlite3.Connection, kind: str) -> str:
+    """A cheap digest of what the default map of `kind` is drawn from.
+
+    The recipe, the number of keyword rows, the number of titles carrying them
+    and the newest `fetched_at` among them. A re-fetch stamps a new
+    `fetched_at`, a wipe or a title leaving `items` changes the counts, and a
+    change to the drawing code changes `MAP_RECIPE`. Nothing reads it except
+    the comparison in `stored_map` and `plexdb.titlemap`.
+    """
+    _check_kind(kind)
+    rows, titles, newest = conn.execute(
+        "SELECT COUNT(*), COUNT(DISTINCT e.item_id), MAX(e.fetched_at) "
+        "FROM enrichment e JOIN items i USING (item_id) "
+        "WHERE e.namespace = ? AND e.key = ? AND i.type = ?",
+        (_NAMESPACE, _KEY, kind),
+    ).fetchone()
+    return f"{MAP_RECIPE}|{rows}|{titles}|{newest or ''}"
+
+
+def stored_map(conn: sqlite3.Connection, kind: str) -> dict[str, object] | None:
+    """The default map the writer stored, as `title_map_json` would give it, or
+    `None` when there is none or it was drawn from different keyword rows.
+
+    `None` is the caller's cue to draw it live. A store that predates the
+    `title_map` tables has neither, and reads as having no stored map.
+    """
+    _check_kind(kind)
+    try:
+        state = conn.execute(
+            "SELECT fingerprint, unplaced FROM title_map_state WHERE kind = ?", (kind,)
+        ).fetchone()
+        if state is None or state[0] != keyword_fingerprint(conn, kind):
+            return None
+        rows = conn.execute(
+            "SELECT m.item_id, i.title, i.year, m.x, m.y FROM title_map m "
+            "JOIN items i USING (item_id) WHERE m.kind = ? ORDER BY m.item_id",
+            (kind,),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return None
+    return {
+        "kind": kind,
+        "unplaced": state[1],
+        "points": [[r[0], r[1], r[2], r[3], r[4]] for r in rows],
+    }
 
 
 def title_map_json(tmap: TitleMap) -> dict[str, object]:
@@ -436,7 +493,9 @@ class _MapCache:
             if hit is not None:
                 return hit
             with open_readonly(self._path) as conn:
-                payload = title_map_json(title_map(conn, kind, exclude))
+                payload = None if exclude else stored_map(conn, kind)
+                if payload is None:
+                    payload = title_map_json(title_map(conn, kind, exclude))
             self._entries[key] = payload
             while len(self._entries) > self.KEEP:
                 del self._entries[next(iter(self._entries))]
