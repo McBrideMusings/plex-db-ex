@@ -261,6 +261,88 @@ def test_map_endpoint_serves_the_stored_map_and_draws_live_once_it_is_stale(
     assert len(json.loads(body)["points"]) == 4
 
 
+def test_map_cache_computes_one_key_once_across_concurrent_requests(
+    store: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    drawn: list[frozenset[str]] = []
+    real = explore.title_map
+
+    def slow(conn, kind, exclude=frozenset(), seed=0):  # type: ignore[no-untyped-def]
+        drawn.append(exclude)
+        started.set()
+        assert release.wait(120)
+        return real(conn, kind, exclude, seed)
+
+    monkeypatch.setattr(explore, "title_map", slow)
+    cache = explore._MapCache(store)
+    key = frozenset({"stinger"})
+    results: list[dict[str, object]] = []
+    threads = [
+        threading.Thread(target=lambda: results.append(cache.get("movie", key))) for _ in range(2)
+    ]
+    for t in threads:
+        t.start()
+    assert started.wait(120)
+    release.set()
+    for t in threads:
+        t.join(120)
+
+    assert drawn == [key]
+    assert len(results) == 2 and results[0] is results[1]
+
+
+def test_map_cache_does_not_hold_one_key_behind_another(
+    store: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    movie_started = threading.Event()
+    release = threading.Event()
+    real = explore.title_map
+
+    def gated(conn, kind, exclude=frozenset(), seed=0):  # type: ignore[no-untyped-def]
+        if kind == "movie":
+            movie_started.set()
+            assert release.wait(120)
+        return real(conn, kind, exclude, seed)
+
+    monkeypatch.setattr(explore, "title_map", gated)
+    maps = explore._MapCache(store)
+    tags = explore._IndexCache(store)
+    slow = threading.Thread(target=lambda: maps.get("movie", frozenset({"stinger"})))
+    slow.start()
+    try:
+        assert movie_started.wait(120)
+        # The movie draw stays gated throughout, so these can only finish if
+        # they do not share its lock.
+        shown = threading.Event()
+
+        def other_keys() -> None:
+            maps.get("show", frozenset())
+            tags.get("show")
+            shown.set()
+
+        threading.Thread(target=other_keys, daemon=True).start()
+        assert shown.wait(60)
+    finally:
+        release.set()
+        slow.join(120)
+
+
+def test_index_cache_recomputes_when_the_store_changes_and_drops_key_locks(
+    store: Path,
+) -> None:
+    tags = explore._IndexCache(store)
+    before = tags.get("show")
+    assert tags.get("show") is before
+    assert tags._cache._locks == {}
+
+    _add_keyword(store, "tvdb:9", "vigilante")
+    after = tags.get("show")
+    assert after is not before
+    assert "vigilante" in [t["value"] for t in after["tags"]]  # type: ignore[attr-defined]
+
+
 def test_server_refuses_what_it_cannot_answer(base_url: str) -> None:
     status, body = _get(f"{base_url}/api/tags?kind=episode")
     assert status == 400 and "episode" in json.loads(body)["error"]
