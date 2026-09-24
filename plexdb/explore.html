@@ -84,6 +84,10 @@
   #mapbox { position: relative; height: calc(100vh - 190px); min-height: 420px; background: var(--panel);
             border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
   #map { display: block; width: 100%; height: 100%; cursor: crosshair; }
+  /* The default map standing in while another computes: blurred and faded on a tinted ground,
+     because its dots are already pale and opacity alone does not show. */
+  #map.dim { filter: blur(2px) opacity(0.45); cursor: progress; }
+  #mapbox:has(#map.dim) { background: var(--chip); }
   #maptip { position: absolute; pointer-events: none; background: var(--ink); color: var(--bg); font-size: 12px;
             padding: 3px 7px; border-radius: 5px; white-space: nowrap; transform: translate(10px, -130%); }
   aside .chips { margin-top: 4px; }
@@ -298,8 +302,8 @@ function paintMap() {
   const ctx = canvas.getContext("2d");
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
   ctx.clearRect(0, 0, w, h);
+  canvas.classList.toggle("dim", map.dim && !!map.data);
   if (!map.data) return;
-  ctx.globalAlpha = map.dim ? 0.35 : 1;
   const css = getComputedStyle(document.documentElement);
   const token = name => css.getPropertyValue(name).trim();
   const lit = [];

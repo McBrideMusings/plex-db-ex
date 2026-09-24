@@ -238,12 +238,25 @@ MAP_SVD_COMPONENTS = 50
 
 #: UMAP's neighbourhood size: how many nearest titles each title's position is
 #: pulled towards. Its own default; lowered only when a store is too small for it.
+#: 30 was tried on the movie map and packed the centre tighter, so it stays at 15.
 MAP_NEIGHBOURS = 15
+
+#: UMAP's `min_dist` and `spread`: how tightly it may pack points together. A
+#: larger `min_dist` spreads a dense cluster out instead of piling it up.
+MAP_MIN_DIST = 0.8
+MAP_SPREAD = 1.5
+
+#: Each axis is clipped to these percentiles before scaling to the unit square,
+#: so a few far outliers do not shrink everyone else. Points beyond land on the border.
+MAP_CLIP = (1.0, 99.0)
 
 #: Names how a map is drawn. It is part of a stored map's fingerprint, so
 #: changing the algorithm or any constant above and bumping this string makes
 #: every stored map stale and the next refresh redraws it.
-MAP_RECIPE = "umap-cosine-svd50-df2"
+MAP_RECIPE = (
+    f"umap-cosine-svd{MAP_SVD_COMPONENTS}-df{MAP_MIN_DF}-nn{MAP_NEIGHBOURS}"
+    f"-md{MAP_MIN_DIST}-sp{MAP_SPREAD}-clip{MAP_CLIP[0]:g}-{MAP_CLIP[1]:g}"
+)
 
 
 @dataclass(frozen=True)
@@ -330,10 +343,13 @@ def title_map(
             n_components=2,
             n_neighbors=min(MAP_NEIGHBOURS, len(ids) - 1),
             metric="cosine",
+            min_dist=MAP_MIN_DIST,
+            spread=MAP_SPREAD,
             random_state=seed,
             n_jobs=1,  # a seed already forces one thread; saying so silences UMAP's warning
         ).fit_transform(reduced)
-        low, high = coords.min(axis=0), coords.max(axis=0)
+        low, high = np.percentile(coords, MAP_CLIP, axis=0)
+        coords = np.clip(coords, low, high)
         coords = (coords - low) / np.where(high > low, high - low, 1.0)
 
     points = tuple(
