@@ -238,7 +238,7 @@ MAP_SVD_COMPONENTS = 50
 
 #: UMAP's neighbourhood size: how many nearest titles each title's position is
 #: pulled towards. Its own default; lowered only when a store is too small for it.
-#: 30 was tried on the movie map and packed the centre tighter, so it stays at 15.
+#: Larger values pack the centre of the movie map tighter.
 MAP_NEIGHBOURS = 15
 
 #: UMAP's `min_dist` and `spread`: how tightly it may pack points together. A

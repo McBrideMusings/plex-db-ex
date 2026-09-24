@@ -546,8 +546,8 @@ map. `computed_at` is UTC.
 
 **Refresh rule.** `plexdb refresh-map` recomputes each kind's fingerprint and redraws only a kind
 whose stored fingerprint differs, replacing both tables' rows for the redrawn kinds in one
-transaction. It runs at the end of `enrich-tmdb-keywords` and as its own step of the sweep, after
-both TMDB steps and before `publish`, so the snapshot carries a current map. A reader that uses the
+transaction. It runs as its own step of the sweep, after both TMDB steps and before `publish`, so
+the snapshot carries a current map. A reader that uses the
 map compares `fingerprint` against the same digest of the current keyword rows and treats a
 mismatch as no map; the explorer then draws it live, which takes tens of seconds for the movies.
 Nothing else interprets the fingerprint.

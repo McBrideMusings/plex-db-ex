@@ -2,9 +2,8 @@
 
 Draws the default map (no noise excluded) of movies and of shows from the
 keyword rows and stores it, skipping a kind whose stored map was drawn from the
-same rows. `enrich-tmdb-keywords` does this itself after it writes; this is the
-step for what it cannot see — a walk that removed titles, a change to how the
-map is drawn — and the way to run it by hand against a pulled copy.
+same rows. The sweep runs it after both TMDB steps, and it is the way to run it
+by hand against a pulled copy.
 """
 
 from __future__ import annotations
