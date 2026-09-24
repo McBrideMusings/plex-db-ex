@@ -463,51 +463,61 @@ def titles_json(kind: str, value: str, titles: list[Title]) -> dict[str, object]
 class _KeyedCache:
     """Computed values by key: one compute per key, and no key waits on another.
 
-    A short-held guard protects the entries; each key being computed has its
-    own lock. A second request for the same key waits on that lock and then
-    reuses the result, while a request for any other key — computing or already
-    cached — never touches it. The oldest entry goes once more than `keep` are
-    held, and a key's lock is dropped as soon as its compute finishes.
+    A short-held guard protects the entries and the computes in flight. The
+    first request for a key computes it; a second request for the same key
+    waits on that compute's event and then looks again, so it reuses the result,
+    or, if the compute failed, becomes the next one to compute. A request for
+    any other key never touches the event. Each entry carries the generation it
+    was computed for, so a newer generation replaces it rather than sitting
+    beside it, and the oldest entry goes once more than `keep` are held.
     """
 
     def __init__(self, keep: int) -> None:
         self._keep = keep
         self._guard = threading.Lock()
-        self._locks: dict[object, threading.Lock] = {}
-        self._entries: dict[object, dict[str, object]] = {}
+        self._flights: dict[tuple[object, object], threading.Event] = {}
+        self._entries: dict[object, tuple[object, dict[str, object]]] = {}
 
-    def get(self, key: object, compute: Callable[[], dict[str, object]]) -> dict[str, object]:
-        with self._guard:
-            hit = self._entries.get(key)
-            if hit is not None:
-                return hit
-            lock = self._locks.setdefault(key, threading.Lock())
-        with lock:
+    def get(
+        self, key: object, generation: object, compute: Callable[[], dict[str, object]]
+    ) -> dict[str, object]:
+        while True:
             with self._guard:
                 hit = self._entries.get(key)
-                if hit is not None:
-                    return hit
+                if hit is not None and hit[0] == generation:
+                    return hit[1]
+                flight = self._flights.get((key, generation))
+                if flight is None:
+                    flight = self._flights[(key, generation)] = threading.Event()
+                    mine = True
+                else:
+                    mine = False
+            if not mine:
+                flight.wait()
+                continue
             try:
                 value = compute()
                 with self._guard:
-                    self._entries[key] = value
+                    self._entries.pop(key, None)
+                    self._entries[key] = (generation, value)
                     while len(self._entries) > self._keep:
                         del self._entries[next(iter(self._entries))]
+                return value
             finally:
                 with self._guard:
-                    self._locks.pop(key, None)
-            return value
+                    del self._flights[(key, generation)]
+                flight.set()
 
 
 class _IndexCache:
     """One `TagIndex` per kind, rebuilt when the store file changes.
 
-    Keyed on the kind and the file's size and modification time, so a newly
-    published snapshot — which `publish` renames into place — is picked up on
-    the next request without a restart.
+    Generation is the file's size and modification time, so a newly published
+    snapshot — which `publish` renames into place — is picked up on the next
+    request without a restart.
     """
 
-    KEEP = 4
+    KEEP = 2
 
     def __init__(self, store_path: Path) -> None:
         self._path = store_path
@@ -520,11 +530,11 @@ class _IndexCache:
             with open_readonly(self._path) as conn:
                 return index_json(build_index(conn, kind))
 
-        return self._cache.get((kind, (stat.st_mtime_ns, stat.st_size)), compute)
+        return self._cache.get(kind, (stat.st_mtime_ns, stat.st_size), compute)
 
 
 class _MapCache:
-    """Computed maps, keyed on kind, exclusions and the store file's stamp.
+    """Computed maps, keyed on kind and exclusions, per store file stamp.
 
     A map takes tens of seconds, so a repeat of the same request must not pay
     again, and a per-key lock keeps two browser tabs from computing the same
@@ -541,7 +551,6 @@ class _MapCache:
 
     def get(self, kind: str, exclude: frozenset[str]) -> dict[str, object]:
         stat = self._path.stat()
-        key = (kind, exclude, (stat.st_mtime_ns, stat.st_size))
 
         def compute() -> dict[str, object]:
             with open_readonly(self._path) as conn:
@@ -550,7 +559,7 @@ class _MapCache:
                     payload = title_map_json(title_map(conn, kind, exclude))
             return payload
 
-        return self._cache.get(key, compute)
+        return self._cache.get((kind, exclude), (stat.st_mtime_ns, stat.st_size), compute)
 
 
 def _page() -> bytes:

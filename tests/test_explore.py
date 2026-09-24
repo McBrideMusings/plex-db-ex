@@ -329,18 +329,63 @@ def test_map_cache_does_not_hold_one_key_behind_another(
         slow.join(120)
 
 
-def test_index_cache_recomputes_when_the_store_changes_and_drops_key_locks(
-    store: Path,
-) -> None:
+def test_index_cache_recomputes_when_the_store_changes(store: Path) -> None:
     tags = explore._IndexCache(store)
     before = tags.get("show")
     assert tags.get("show") is before
-    assert tags._cache._locks == {}
 
     _add_keyword(store, "tvdb:9", "vigilante")
     after = tags.get("show")
     assert after is not before
     assert "vigilante" in [t["value"] for t in after["tags"]]  # type: ignore[attr-defined]
+
+
+def test_keyed_cache_retries_after_a_failed_compute_without_overlapping() -> None:
+    cache = explore._KeyedCache(keep=2)
+    started = threading.Event()
+    release = threading.Event()
+    running = 0
+    peak = 0
+    calls = 0
+    guard = threading.Lock()
+
+    def compute() -> dict[str, object]:
+        nonlocal running, peak, calls
+        with guard:
+            calls += 1
+            first = calls == 1
+            running += 1
+            peak = max(peak, running)
+        try:
+            if first:
+                started.set()
+                assert release.wait(60)
+                raise RuntimeError("draw failed")
+            return {"ok": True}
+        finally:
+            with guard:
+                running -= 1
+
+    errors: list[BaseException] = []
+    results: list[dict[str, object]] = []
+
+    def request() -> None:
+        try:
+            results.append(cache.get("k", 1, compute))
+        except RuntimeError as err:
+            errors.append(err)
+
+    owner = threading.Thread(target=request)
+    owner.start()
+    assert started.wait(60)
+    waiter = threading.Thread(target=request)
+    waiter.start()
+    release.set()
+    owner.join(60)
+    waiter.join(60)
+
+    assert len(errors) == 1 and results == [{"ok": True}]
+    assert peak == 1
 
 
 def test_server_refuses_what_it_cannot_answer(base_url: str) -> None:
