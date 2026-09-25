@@ -21,9 +21,12 @@ from plexdb import explore, schedule
 from plexdb.errors import ConfigError
 from plexdb.explore import (
     EXPLORE_PORT_VAR,
+    RECIPES,
+    QueryError,
     build_index,
     make_server,
     neighbourhood,
+    run_query,
     title_map,
     titles_tagged,
 )
@@ -431,3 +434,88 @@ def test_scheduler_refuses_an_explore_port_it_cannot_read(
     monkeypatch.setenv(EXPLORE_PORT_VAR, "http")
     with pytest.raises(ConfigError, match=EXPLORE_PORT_VAR):
         schedule.run_scheduler(migrate=lambda: None, iterations=0)
+
+
+def _send(method: str, url: str, body: object | None = None) -> tuple[int, dict[str, object]]:
+    data = None if body is None else json.dumps(body).encode()
+    request = urllib.request.Request(url, data=data, method=method)
+    try:
+        with urllib.request.urlopen(request) as response:
+            return response.status, json.loads(response.read())
+    except urllib.error.HTTPError as err:
+        return err.code, json.loads(err.read())
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "DELETE FROM items",
+        "INSERT INTO items (item_id, type, title) VALUES ('x', 'movie', 'X')",
+        "DROP TABLE items",
+        "ATTACH DATABASE ':memory:' AS other",
+        "PRAGMA journal_mode = DELETE",
+        "SELECT 1; SELECT 2",
+    ],
+)
+def test_query_refuses_anything_but_one_select(store: Path, sql: str) -> None:
+    with pytest.raises(QueryError):
+        run_query(store, sql)
+    with open_readonly(store) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 6
+
+
+def test_query_returns_columns_rows_and_marks_blobs(store: Path) -> None:
+    out = run_query(store, "SELECT title, x'0102' AS b FROM items WHERE item_id = 'imdb:tt4'")
+    assert out["columns"] == ["title", "b"]
+    assert out["rows"] == [["Heat", "<blob 2 bytes>"]]
+    assert out["row_count"] == 1 and out["truncated"] is False
+
+
+def test_query_cuts_at_the_row_cap_and_says_so(store: Path) -> None:
+    out = run_query(store, "SELECT item_id FROM items", rows=4)
+    assert out["row_count"] == 4 and out["truncated"] is True
+    out = run_query(store, "SELECT item_id FROM items", rows=6)
+    assert out["row_count"] == 6 and out["truncated"] is False
+
+
+def test_query_stops_a_runaway_recursive_cte(store: Path) -> None:
+    runaway = (
+        "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n) SELECT COUNT(*) FROM n"
+    )
+    with pytest.raises(QueryError, match="stopped after"):
+        run_query(store, runaway, seconds=0.2)
+
+
+def test_every_recipe_runs_against_the_schema(store: Path) -> None:
+    for recipe in RECIPES:
+        run_query(store, recipe["sql"])
+
+
+def test_saved_queries_round_trip_through_the_server(base_url: str, store: Path) -> None:
+    url = f"{base_url}/api/saved"
+    assert _send("GET", url) == (200, {"queries": []})
+
+    entry = {"name": "heat", "sql": "SELECT 1", "note": "n"}
+    assert _send("PUT", url, entry) == (200, {"queries": [entry]})
+    edited = {**entry, "sql": "SELECT 2"}
+    assert _send("PUT", url, edited)[1] == {"queries": [edited]}
+    assert _send("GET", url)[1] == {"queries": [edited]}
+    assert (store.parent / "explore-queries.json").exists()
+
+    assert _send("DELETE", f"{url}?name=heat") == (200, {"queries": []})
+    assert _send("DELETE", f"{url}?name=heat")[0] == 404
+    assert _send("PUT", url, {"name": "", "sql": "SELECT 1"})[0] == 400
+
+
+def test_query_endpoint_answers_rows_and_400s_a_refusal(base_url: str) -> None:
+    url = f"{base_url}/api/query"
+    status, out = _send("POST", url, {"sql": "SELECT COUNT(*) AS n FROM items"})
+    assert status == 200 and out["rows"] == [[6]]
+    status, out = _send("POST", url, {"sql": "DELETE FROM items"})
+    assert status == 400 and "not authorized" in str(out["error"])
+
+
+def test_query_endpoint_refuses_an_oversize_body(base_url: str) -> None:
+    padding = "x" * (explore.MAX_BODY + 1)
+    status, out = _send("POST", f"{base_url}/api/query", {"sql": f"SELECT '{padding}'"})
+    assert status == 400 and "body is over" in str(out["error"])

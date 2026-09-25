@@ -22,6 +22,7 @@ import json
 import math
 import sqlite3
 import threading
+import time
 from collections import Counter, defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -562,11 +563,328 @@ class _MapCache:
         return self._cache.get((kind, exclude), (stat.st_mtime_ns, stat.st_size), compute)
 
 
+#: The Query tab's limits. The explorer has no login, locally or deployed, so
+#: these hold for every caller: a statement that runs past `QUERY_SECONDS` is
+#: aborted, and a result past `QUERY_ROWS` rows is cut and says so.
+QUERY_SECONDS = 5.0
+QUERY_ROWS = 500
+
+#: Largest request body the explorer reads. A pasted query is a few kilobytes.
+MAX_BODY = 1 << 20
+
+#: What a statement may do. Everything else — ATTACH, PRAGMA, every write and
+#: every DDL — meets the authorizer's refusal, on top of the read-only
+#: connection and `PRAGMA query_only`.
+_ALLOWED_ACTIONS = frozenset(
+    {
+        sqlite3.SQLITE_SELECT,
+        sqlite3.SQLITE_READ,
+        sqlite3.SQLITE_FUNCTION,
+        sqlite3.SQLITE_RECURSIVE,
+    }
+)
+
+
+class QueryError(ValueError):
+    """A query the store refused or could not finish; the message is SQLite's own."""
+
+
+def _deny_all_but_reads(action: int, *_: object) -> int:
+    return sqlite3.SQLITE_OK if action in _ALLOWED_ACTIONS else sqlite3.SQLITE_DENY
+
+
+def _cell(value: object) -> object:
+    if isinstance(value, bytes):
+        return f"<blob {len(value)} bytes>"
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)  # JSON has no inf
+    return value
+
+
+def run_query(
+    store_path: Path, sql: str, *, seconds: float = QUERY_SECONDS, rows: int = QUERY_ROWS
+) -> dict[str, object]:
+    """Run one SELECT against a fresh read-only connection and return its rows.
+
+    Raises `QueryError` for anything SQLite refuses: a syntax error, a second
+    statement, an action the authorizer denies, or a run past `seconds`.
+    """
+    if not sql.strip():
+        raise QueryError("no SQL to run")
+    started = time.monotonic()
+    deadline = started + seconds
+    timed_out = False
+
+    def past_deadline() -> int:
+        nonlocal timed_out
+        timed_out = time.monotonic() > deadline
+        return 1 if timed_out else 0
+
+    with open_readonly(store_path) as conn:
+        try:
+            conn.execute("PRAGMA query_only = ON")
+            conn.set_authorizer(_deny_all_but_reads)
+            conn.set_progress_handler(past_deadline, 1000)
+            cursor = conn.execute(sql)
+            if cursor.description is None:
+                raise QueryError("the statement returns no rows")
+            columns = [d[0] for d in cursor.description]
+            fetched = cursor.fetchmany(rows + 1)
+        except sqlite3.Error as err:
+            if timed_out:
+                raise QueryError(f"query stopped after {seconds:g} seconds") from err
+            raise QueryError(str(err)) from err
+    return {
+        "columns": columns,
+        "rows": [[_cell(v) for v in row] for row in fetched[:rows]],
+        "row_count": min(len(fetched), rows),
+        "truncated": len(fetched) > rows,
+        "elapsed_ms": round((time.monotonic() - started) * 1000),
+    }
+
+
+#: Read-only queries the Query tab offers as starting points. The first group
+#: orients in the schema; the second is the SQL behind each accessor of the
+#: `plexdb-reader` crate, with the values it binds written in as literals to edit.
+RECIPES: tuple[dict[str, str], ...] = (
+    {
+        "group": "Orientation",
+        "name": "Row counts per table",
+        "sql": (
+            "SELECT 'items' AS tbl, COUNT(*) AS n FROM items\n"
+            "UNION ALL SELECT 'plays', COUNT(*) FROM plays\n"
+            "UNION ALL SELECT 'enrichment', COUNT(*) FROM enrichment\n"
+            "UNION ALL SELECT 'edges', COUNT(*) FROM edges\n"
+            "UNION ALL SELECT 'collection', COUNT(*) FROM collection\n"
+            "UNION ALL SELECT 'collection_membership', COUNT(*) FROM collection_membership\n"
+            "UNION ALL SELECT 'external_ids', COUNT(*) FROM external_ids\n"
+            "UNION ALL SELECT 'plex_items', COUNT(*) FROM plex_items"
+        ),
+    },
+    {
+        "group": "Orientation",
+        "name": "Titles per type",
+        "sql": "SELECT type, COUNT(*) AS titles FROM items GROUP BY type ORDER BY titles DESC",
+    },
+    {
+        "group": "Orientation",
+        "name": "Top enrichment keys per namespace",
+        "sql": (
+            "SELECT namespace, key, COUNT(*) AS rows_, COUNT(DISTINCT item_id) AS titles,\n"
+            "       COUNT(DISTINCT value) AS distinct_values\n"
+            "FROM enrichment\n"
+            "GROUP BY namespace, key\n"
+            "ORDER BY rows_ DESC\n"
+            "LIMIT 50"
+        ),
+    },
+    {
+        "group": "Orientation",
+        "name": "Plays per account",
+        "sql": (
+            "SELECT plex_account_id, COUNT(*) AS plays, MIN(viewed_at) AS first_play,\n"
+            "       MAX(viewed_at) AS last_play\n"
+            "FROM plays\n"
+            "GROUP BY plex_account_id\n"
+            "ORDER BY plays DESC"
+        ),
+    },
+    {
+        "group": "Reader accessors",
+        "name": "enrichment_for: one title, one namespace",
+        "sql": (
+            "SELECT namespace, key, value, fetched_at\n"
+            "FROM enrichment\n"
+            "WHERE item_id = 'imdb:tt1375666' AND namespace = 'tmdb_keywords'\n"
+            "ORDER BY key, value"
+        ),
+    },
+    {
+        "group": "Reader accessors",
+        "name": "enrichment_for_many: several titles, one namespace",
+        "sql": (
+            "SELECT namespace, key, value, fetched_at, item_id\n"
+            "FROM enrichment\n"
+            "WHERE item_id IN ('imdb:tt1375666', 'imdb:tt0133093')\n"
+            "  AND namespace = 'tmdb_keywords'\n"
+            "ORDER BY item_id, key, value"
+        ),
+    },
+    {
+        "group": "Reader accessors",
+        "name": "edges_from: what a title points at",
+        "sql": (
+            "SELECT from_id, to_id, edge_type, rank, fetched_at\n"
+            "FROM edges\n"
+            "WHERE from_id = 'imdb:tt1375666' AND edge_type = 'tmdb_recommendations'\n"
+            "ORDER BY rank"
+        ),
+    },
+    {
+        "group": "Reader accessors",
+        "name": "edges_to: what points at a title",
+        "sql": (
+            "SELECT from_id, to_id, edge_type, rank, fetched_at\n"
+            "FROM edges\n"
+            "WHERE to_id = 'imdb:tt1375666' AND edge_type = 'tmdb_recommendations'\n"
+            "ORDER BY rank"
+        ),
+    },
+    {
+        "group": "Reader accessors",
+        "name": "collections_for: a title's collections",
+        "sql": (
+            "SELECT cm.collection_id, c.source, c.name, c.url, c.size, c.likes,\n"
+            "       cm.rank, cm.mentions, cm.observed_at\n"
+            "FROM collection_membership cm\n"
+            "JOIN collection c ON c.collection_id = cm.collection_id\n"
+            "WHERE cm.item_id = 'imdb:tt1375666'\n"
+            "ORDER BY cm.collection_id"
+        ),
+    },
+    {
+        "group": "Reader accessors",
+        "name": "taste_vector_for: plays per unit, one account",
+        "sql": (
+            "SELECT COALESCE(i.show_item_id, p.item_id) AS unit, COUNT(*) AS plays\n"
+            "FROM plays p\n"
+            "JOIN items i ON i.item_id = p.item_id\n"
+            "WHERE p.plex_account_id = 1\n"
+            "GROUP BY unit\n"
+            "ORDER BY unit"
+        ),
+    },
+    {
+        "group": "Reader accessors",
+        "name": "watched_units_for: one account's watched units",
+        "sql": (
+            "SELECT DISTINCT COALESCE(i.show_item_id, p.item_id) AS unit\n"
+            "FROM plays p\n"
+            "JOIN items i ON i.item_id = p.item_id\n"
+            "WHERE p.plex_account_id = 1\n"
+            "ORDER BY unit"
+        ),
+    },
+    {
+        "group": "Reader accessors",
+        "name": "watched_units: every account's watched units",
+        "sql": (
+            "SELECT DISTINCT COALESCE(i.show_item_id, p.item_id) AS unit\n"
+            "FROM plays p\n"
+            "JOIN items i ON i.item_id = p.item_id\n"
+            "ORDER BY unit"
+        ),
+    },
+    {
+        "group": "Reader accessors",
+        "name": "pooled_taste_vector: plays per unit, all accounts",
+        "sql": (
+            "SELECT COALESCE(i.show_item_id, p.item_id) AS unit, COUNT(*) AS plays\n"
+            "FROM plays p\n"
+            "JOIN items i ON i.item_id = p.item_id\n"
+            "GROUP BY unit\n"
+            "ORDER BY plays DESC"
+        ),
+    },
+    {
+        "group": "Reader accessors",
+        "name": "Season lengths (median-season input)",
+        "sql": (
+            "SELECT show_item_id, season, COUNT(*) AS episodes\n"
+            "FROM items\n"
+            "WHERE type = 'episode' AND show_item_id IS NOT NULL AND season IS NOT NULL\n"
+            "GROUP BY show_item_id, season\n"
+            "ORDER BY show_item_id, episodes"
+        ),
+    },
+    {
+        "group": "Reader accessors",
+        "name": "Attributes of one title (attributes_by_item, narrowed)",
+        "sql": (
+            "SELECT DISTINCT item_id, namespace, key, value\n"
+            "FROM enrichment\n"
+            "WHERE item_id = 'imdb:tt1375666'\n"
+            "ORDER BY item_id, namespace, key, value"
+        ),
+    },
+)
+
+
+class SavedQueries:
+    """Named queries in one JSON file beside the store, never inside it.
+
+    The store has one writer (ADR-0001), so what the Query tab saves lives in a
+    file of its own, replaced by rename so a reader never sees half of it.
+    """
+
+    NAME_MAX = 200
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._lock = threading.Lock()
+
+    def _read(self) -> list[dict[str, str]]:
+        try:
+            raw = json.loads(self._path.read_text())
+        except FileNotFoundError:
+            return []
+        except ValueError as err:
+            raise OSError(f"{self._path} is not valid JSON: {err}") from err
+        if not isinstance(raw, list) or not all(isinstance(q, dict) for q in raw):
+            raise OSError(f"{self._path} does not hold a list of queries")
+        return raw
+
+    def _write(self, queries: list[dict[str, str]]) -> None:
+        tmp = self._path.with_name(self._path.name + ".tmp")
+        try:
+            tmp.write_text(json.dumps(queries, indent=2) + "\n")
+            tmp.replace(self._path)
+        finally:
+            tmp.unlink(missing_ok=True)
+
+    def all(self) -> list[dict[str, str]]:
+        with self._lock:
+            return self._read()
+
+    def upsert(self, name: object, sql: object, note: object) -> list[dict[str, str]]:
+        if not isinstance(name, str) or not name.strip() or len(name) > self.NAME_MAX:
+            raise ValueError(f"name must be text of 1 to {self.NAME_MAX} characters")
+        if not isinstance(sql, str) or not sql.strip():
+            raise ValueError("sql must be text")
+        if note is None:
+            note = ""
+        if not isinstance(note, str):
+            raise ValueError("note must be text")
+        entry = {"name": name.strip(), "sql": sql, "note": note}
+        with self._lock:
+            queries = [q for q in self._read() if q.get("name") != entry["name"]]
+            queries.append(entry)
+            queries.sort(key=lambda q: q["name"].casefold())
+            self._write(queries)
+            return queries
+
+    def delete(self, name: str) -> list[dict[str, str]]:
+        with self._lock:
+            queries = self._read()
+            kept = [q for q in queries if q.get("name") != name]
+            if len(kept) == len(queries):
+                raise KeyError(name)
+            self._write(kept)
+            return kept
+
+
 def _page() -> bytes:
     return resources.files("plexdb").joinpath("explore.html").read_bytes()
 
 
-def make_server(store_path: Path, host: str, port: int) -> ThreadingHTTPServer:
+#: The saved-queries file's name, kept beside the store: `data/` locally, the
+#: snapshot's directory in the container, which is a writable mount that persists.
+SAVED_FILE = "explore-queries.json"
+
+
+def make_server(
+    store_path: Path, host: str, port: int, saved_path: Path | None = None
+) -> ThreadingHTTPServer:
     """An HTTP server for the explorer, bound but not yet serving.
 
     The caller owns the loop and the shutdown: `plexdb explore` runs
@@ -574,55 +892,28 @@ def make_server(store_path: Path, host: str, port: int) -> ThreadingHTTPServer:
     """
     cache = _IndexCache(store_path)
     maps = _MapCache(store_path)
+    saved = SavedQueries(saved_path or store_path.with_name(SAVED_FILE))
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802 — the stdlib's name
-            url = urlparse(self.path)
-            lists = parse_qs(url.query)
-            query = {k: v[0] for k, v in lists.items()}
+            self._serve(self._get)
+
+        def do_POST(self) -> None:  # noqa: N802
+            self._serve(self._post)
+
+        def do_PUT(self) -> None:  # noqa: N802
+            self._serve(self._put)
+
+        def do_DELETE(self) -> None:  # noqa: N802
+            self._serve(self._delete)
+
+        def _serve(self, route: Callable[[], None]) -> None:
             try:
-                if url.path == "/":
-                    self._send(HTTPStatus.OK, "text/html; charset=utf-8", _page())
-                elif url.path == "/api/tags":
-                    kind = query.get("kind", "movie")
-                    _check_kind(kind)
-                    self._json(cache.get(kind))
-                elif url.path == "/api/titles":
-                    kind = query.get("kind", "movie")
-                    tag = query.get("tag")
-                    if not tag:
-                        raise ValueError("tag is required")
-                    with open_readonly(store_path) as conn:
-                        self._json(titles_json(kind, tag, titles_tagged(conn, kind, tag)))
-                elif url.path == "/api/graph":
-                    kind = query.get("kind", "movie")
-                    tag = query.get("tag")
-                    if not tag:
-                        raise ValueError("tag is required")
-                    size = query.get("size", str(NEIGHBOURS))
-                    if not size.isdigit() or not 1 <= int(size) <= 200:
-                        raise ValueError("size must be a number from 1 to 200")
-                    # Repeated `exclude=` rather than one comma list: a TMDB
-                    # keyword can itself contain a comma.
-                    exclude = frozenset(lists.get("exclude", []))
-                    with open_readonly(store_path) as conn:
-                        hood = neighbourhood(conn, kind, tag, int(size), exclude)
-                    self._json(neighbourhood_json(hood))
-                elif url.path == "/api/map":
-                    kind = query.get("kind", "movie")
-                    _check_kind(kind)
-                    self._json(maps.get(kind, frozenset(lists.get("exclude", []))))
-                elif url.path == "/api/title":
-                    item_id = query.get("item_id")
-                    if not item_id:
-                        raise ValueError("item_id is required")
-                    with open_readonly(store_path) as conn:
-                        keywords = title_keywords(conn, item_id)
-                    self._json({"item_id": item_id, "keywords": keywords})
-                else:
-                    self._json({"error": f"no route {url.path}"}, HTTPStatus.NOT_FOUND)
+                route()
             except ValueError as err:
                 self._json({"error": str(err)}, HTTPStatus.BAD_REQUEST)
+            except KeyError as err:
+                self._json({"error": f"no saved query named {err.args[0]!r}"}, HTTPStatus.NOT_FOUND)
             except FileNotFoundError:
                 # On the host this is the normal state until the first sweep
                 # publishes a snapshot, not a crash worth a traceback.
@@ -630,6 +921,99 @@ def make_server(store_path: Path, host: str, port: int) -> ThreadingHTTPServer:
                 self._json({"error": missing}, HTTPStatus.SERVICE_UNAVAILABLE)
             except StoreError as err:
                 self._json({"error": str(err)}, HTTPStatus.SERVICE_UNAVAILABLE)
+            except OSError as err:
+                self._json({"error": f"saved queries: {err}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+
+        def _body(self) -> dict[str, object]:
+            length = self.headers.get("Content-Length", "")
+            if not length.isdigit():
+                raise ValueError("a JSON body with a Content-Length is required")
+            if int(length) > MAX_BODY:
+                raise ValueError(f"body is over {MAX_BODY} bytes")
+            try:
+                body = json.loads(self.rfile.read(int(length)))
+            except ValueError as err:
+                raise ValueError(f"body is not JSON: {err}") from err
+            if not isinstance(body, dict):
+                raise ValueError("body must be a JSON object")
+            return body
+
+        def _post(self) -> None:
+            if urlparse(self.path).path != "/api/query":
+                self._json({"error": f"no route {self.path}"}, HTTPStatus.NOT_FOUND)
+                return
+            sql = self._body().get("sql")
+            if not isinstance(sql, str):
+                raise ValueError("sql must be text")
+            self._json(run_query(store_path, sql))
+
+        def _put(self) -> None:
+            if urlparse(self.path).path != "/api/saved":
+                self._json({"error": f"no route {self.path}"}, HTTPStatus.NOT_FOUND)
+                return
+            body = self._body()
+            self._json(
+                {"queries": saved.upsert(body.get("name"), body.get("sql"), body.get("note"))}
+            )
+
+        def _delete(self) -> None:
+            url = urlparse(self.path)
+            if url.path != "/api/saved":
+                self._json({"error": f"no route {url.path}"}, HTTPStatus.NOT_FOUND)
+                return
+            name = parse_qs(url.query).get("name", [""])[0]
+            if not name:
+                raise ValueError("name is required")
+            self._json({"queries": saved.delete(name)})
+
+        def _get(self) -> None:
+            url = urlparse(self.path)
+            lists = parse_qs(url.query)
+            query = {k: v[0] for k, v in lists.items()}
+            if url.path == "/":
+                self._send(HTTPStatus.OK, "text/html; charset=utf-8", _page())
+            elif url.path == "/api/tags":
+                kind = query.get("kind", "movie")
+                _check_kind(kind)
+                self._json(cache.get(kind))
+            elif url.path == "/api/titles":
+                kind = query.get("kind", "movie")
+                tag = query.get("tag")
+                if not tag:
+                    raise ValueError("tag is required")
+                with open_readonly(store_path) as conn:
+                    self._json(titles_json(kind, tag, titles_tagged(conn, kind, tag)))
+            elif url.path == "/api/graph":
+                kind = query.get("kind", "movie")
+                tag = query.get("tag")
+                if not tag:
+                    raise ValueError("tag is required")
+                size = query.get("size", str(NEIGHBOURS))
+                if not size.isdigit() or not 1 <= int(size) <= 200:
+                    raise ValueError("size must be a number from 1 to 200")
+                # Repeated `exclude=` rather than one comma list: a TMDB
+                # keyword can itself contain a comma.
+                exclude = frozenset(lists.get("exclude", []))
+                with open_readonly(store_path) as conn:
+                    hood = neighbourhood(conn, kind, tag, int(size), exclude)
+                self._json(neighbourhood_json(hood))
+            elif url.path == "/api/map":
+                kind = query.get("kind", "movie")
+                _check_kind(kind)
+                self._json(maps.get(kind, frozenset(lists.get("exclude", []))))
+            elif url.path == "/api/saved":
+                self._json({"queries": saved.all()})
+            elif url.path == "/api/recipes":
+                self._json({"recipes": list(RECIPES)})
+            elif url.path == "/api/title":
+                item_id = query.get("item_id")
+                if not item_id:
+                    raise ValueError("item_id is required")
+                with open_readonly(store_path) as conn:
+                    keywords = title_keywords(conn, item_id)
+                self._json({"item_id": item_id, "keywords": keywords})
+            else:
+                self._json({"error": f"no route {url.path}"}, HTTPStatus.NOT_FOUND)
 
         def _json(self, body: dict[str, object], status: HTTPStatus = HTTPStatus.OK) -> None:
             data = json.dumps(body, separators=(",", ":")).encode()

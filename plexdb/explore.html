@@ -93,23 +93,58 @@
   aside .chips { margin-top: 4px; }
   aside .chip.noise { color: var(--noise); text-decoration: line-through; }
   .err { color: var(--noise); padding: 12px 20px; }
+  #querywrap { display: grid; grid-template-columns: minmax(0, 1fr) 320px; align-items: start; }
+  @media (max-width: 900px) { #querywrap { grid-template-columns: 1fr; } #qside { border-left: 0 !important; border-top: 1px solid var(--line); } }
+  #qmain { padding: 14px 20px 24px; min-width: 0; }
+  textarea#sql { display: block; width: 100%; height: 11em; resize: vertical; font: 13px/1.45 ui-monospace, Menlo, monospace;
+                 color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
+  textarea#sql:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+  .qbar { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; padding: 10px 0; }
+  button.primary { font: inherit; background: var(--accent); color: var(--accent-ink); border: 1px solid var(--accent);
+                   border-radius: 6px; padding: 4px 14px; cursor: pointer; }
+  button.primary:disabled { opacity: 0.6; cursor: progress; }
+  #qstatus { color: var(--muted); font-variant-numeric: tabular-nums; }
+  #qstatus.bad { color: var(--noise); }
+  #qstatus .warn { color: var(--centre); }
+  .qsave { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-left: auto; }
+  .qsave input[type="text"] { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line);
+                              border-radius: 6px; padding: 4px 8px; width: 11em; }
+  #qresult { max-height: 60vh; overflow: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+  #qresult table { width: auto; min-width: 100%; }
+  #qresult th { top: 0; background: var(--panel); }
+  #qresult td { white-space: nowrap; max-width: 40em; overflow: hidden; text-overflow: ellipsis; cursor: default; }
+  #qresult td.null { color: var(--muted); font-style: italic; }
+  #qresult tbody tr { cursor: default; }
+  #qside { border-left: 1px solid var(--line); background: var(--panel); padding: 14px 18px; min-height: 60vh; }
+  #qside h2 { font-size: 13px; margin: 14px 0 6px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  #qside h2:first-child { margin-top: 0; }
+  #qside ul { list-style: none; margin: 0; padding: 0; }
+  #qside li { display: flex; gap: 8px; align-items: baseline; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid var(--line); }
+  #qside li button.load { all: unset; cursor: pointer; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  #qside li button.load:hover, #qside li button.load:focus-visible { color: var(--accent); }
+  #qside li .note { display: block; color: var(--muted); font-size: 12px; }
+  #qside .group { color: var(--muted); font-size: 12px; margin: 8px 0 2px; }
 </style>
 </head>
 <body>
 <header>
   <h1>Tag explorer</h1>
-  <div class="seg" role="group" aria-label="Title type">
+  <div class="seg" role="group" aria-label="Section">
+    <button type="button" data-tab="tags" aria-pressed="true">Tags</button>
+    <button type="button" data-tab="query" aria-pressed="false">Query</button>
+  </div>
+  <div class="seg tagsonly" role="group" aria-label="Title type">
     <button type="button" data-kind="movie" aria-pressed="true">Movies</button>
     <button type="button" data-kind="show" aria-pressed="false">Shows</button>
   </div>
-  <div class="seg" role="group" aria-label="View">
+  <div class="seg tagsonly" role="group" aria-label="View">
     <button type="button" data-view="table" aria-pressed="true">Table</button>
     <button type="button" data-view="graph" aria-pressed="false">Graph</button>
     <button type="button" data-view="map" aria-pressed="false">Map</button>
   </div>
-  <span class="stats" id="stats">Loading…</span>
+  <span class="stats tagsonly" id="stats">Loading…</span>
 </header>
-<div class="controls">
+<div class="controls tagsonly">
   <label>Filter <input type="search" id="filter" placeholder="tag contains…" autocomplete="off"></label>
   <label>Min titles <input type="number" id="mindf" min="1" value="2"></label>
   <label><input type="checkbox" id="noiseonly"> Noise only</label>
@@ -121,7 +156,29 @@
 </div>
 <textarea id="copyout" readonly hidden aria-label="Noise list as JSON"></textarea>
 <div id="error" class="err" hidden></div>
-<main>
+<div id="querywrap" hidden>
+  <div id="qmain">
+    <textarea id="sql" spellcheck="false" aria-label="SQL"
+              placeholder="SELECT … — one read-only statement. Cmd/Ctrl+Enter runs it."></textarea>
+    <div class="qbar">
+      <button type="button" class="primary" id="qrun">Run</button>
+      <span id="qstatus"></span>
+      <span class="qsave">
+        <input type="text" id="qname" placeholder="Name" aria-label="Saved query name" autocomplete="off">
+        <input type="text" id="qnote" placeholder="Note (optional)" aria-label="Saved query note" autocomplete="off">
+        <button type="button" class="plain" id="qsavebtn">Save</button>
+      </span>
+    </div>
+    <div id="qresult" hidden></div>
+  </div>
+  <aside id="qside">
+    <h2>Saved queries</h2>
+    <ul id="qsaved"><li class="empty">None yet.</li></ul>
+    <h2>Recipes</h2>
+    <div id="qrecipes"></div>
+  </aside>
+</div>
+<main id="tagsmain">
   <div class="graphwrap" id="graphwrap" hidden>
     <div class="graphbar">
       <label>Neighbours <select id="gsize"><option>20</option><option selected>40</option><option>80</option><option>150</option></select></label>
@@ -154,7 +211,7 @@
 const PAGE = 300;
 const NOISE_KEY = "plexdb-explore:noise";
 const VIEWS = ["table", "graph", "map"];
-const state = { kind: "movie", view: "table", data: null, sort: "df", dir: -1, shown: PAGE, tag: null, tagIds: new Set() };
+const state = { tab: "tags", kind: "movie", view: "table", data: null, sort: "df", dir: -1, shown: PAGE, tag: null, tagIds: new Set() };
 
 function loadNoise() {
   try { return new Set(JSON.parse(localStorage.getItem(NOISE_KEY) || "[]")); } catch { return new Set(); }
@@ -177,10 +234,12 @@ function readHash() {
   const p = new URLSearchParams(location.hash.slice(1));
   if (p.get("kind") === "show" || p.get("kind") === "movie") state.kind = p.get("kind");
   if (VIEWS.includes(p.get("view"))) state.view = p.get("view");
+  if (p.get("tab") === "query") state.tab = "query";
   state.tag = p.get("tag");
 }
 function writeHash() {
   const p = new URLSearchParams({ kind: state.kind, view: state.view });
+  if (state.tab === "query") p.set("tab", "query");
   if (state.tag) p.set("tag", state.tag);
   history.replaceState(null, "", "#" + p.toString());
 }
@@ -545,10 +604,120 @@ document.getElementById("clear").addEventListener("click", () => {
   noise.clear(); saveNoise(); btn.dataset.armed = ""; btn.textContent = "Clear"; render();
 });
 
+// ---- Query tab ----
+// The server holds the guards (read-only, one statement, 5 s, 500 rows). Saved queries live in a
+// JSON file beside the store, so they follow the server rather than this browser.
+const q = { ready: false, running: false };
+const qEl = id => document.getElementById(id);
+
+function setTab(tab) {
+  state.tab = tab;
+  document.querySelectorAll(".seg button[data-tab]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.tab === tab)));
+  document.querySelectorAll(".tagsonly").forEach(n => { n.hidden = tab !== "tags"; });
+  qEl("tagsmain").hidden = tab !== "tags";
+  qEl("querywrap").hidden = tab !== "query";
+  if (tab === "tags") { document.getElementById("error").hidden = !document.getElementById("error").textContent; setView(state.view); }
+  else { document.getElementById("error").hidden = true; writeHash(); initQuery(); }
+}
+
+function qStatus(text, bad = false, ...extra) {
+  const box = qEl("qstatus");
+  box.className = bad ? "bad" : "";
+  box.replaceChildren(text, ...extra);
+}
+
+async function sendJSON(method, url, body) {
+  const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+  const out = await res.json();
+  if (!res.ok) throw new Error(out.error || res.statusText);
+  return out;
+}
+
+async function runQuery() {
+  if (q.running) return;
+  const sql = qEl("sql").value;
+  q.running = true; qEl("qrun").disabled = true;
+  qStatus("Running…");
+  let out;
+  try { out = await sendJSON("POST", "/api/query", { sql }); }
+  catch (err) { qStatus(err.message, true); qEl("qresult").hidden = true; return; }
+  finally { q.running = false; qEl("qrun").disabled = false; }
+  const head = el("tr", {}, ...out.columns.map(c => el("th", {}, c)));
+  const body = el("tbody");
+  for (const row of out.rows) {
+    body.append(el("tr", {}, ...row.map(v => {
+      const td = el("td", v === null ? { className: "null" } : {}, v === null ? "NULL" : String(v));
+      td.title = td.textContent;
+      return td;
+    })));
+  }
+  qEl("qresult").replaceChildren(el("table", {}, el("thead", {}, head), body));
+  qEl("qresult").hidden = false;
+  qStatus(`${fmt(out.row_count)} row${out.row_count === 1 ? "" : "s"} · ${fmt(out.elapsed_ms)} ms`, false,
+    ...(out.truncated ? [el("span", { className: "warn" }, ` · truncated: more rows exist, only the first ${fmt(out.row_count)} are shown`)] : []));
+}
+
+function loadIntoEditor(sql, name = "", note = "") {
+  qEl("sql").value = sql; qEl("qname").value = name; qEl("qnote").value = note;
+  qEl("sql").focus();
+}
+
+function paintSaved(queries) {
+  const list = qEl("qsaved");
+  if (!queries.length) { list.replaceChildren(el("li", { className: "empty" }, "None yet.")); return; }
+  list.replaceChildren(...queries.map(item => {
+    const load = el("button", { type: "button", className: "load", title: item.sql }, item.name);
+    if (item.note) load.append(el("span", { className: "note" }, item.note));
+    load.addEventListener("click", () => loadIntoEditor(item.sql, item.name, item.note));
+    const del = el("button", { type: "button", className: "plain", title: "Delete this saved query" }, "Delete");
+    del.addEventListener("click", async () => {
+      if (del.dataset.armed !== "1") {
+        del.dataset.armed = "1"; del.textContent = "Sure?";
+        setTimeout(() => { del.dataset.armed = ""; del.textContent = "Delete"; }, 3000);
+        return;
+      }
+      try { paintSaved((await sendJSON("DELETE", `/api/saved?name=${encodeURIComponent(item.name)}`)).queries); }
+      catch (err) { qStatus(err.message, true); }
+    });
+    return el("li", {}, load, del);
+  }));
+}
+
+async function saveQuery() {
+  const name = qEl("qname").value.trim();
+  if (!name) { qStatus("Give the query a name to save it.", true); qEl("qname").focus(); return; }
+  try {
+    const out = await sendJSON("PUT", "/api/saved", { name, sql: qEl("sql").value, note: qEl("qnote").value.trim() });
+    paintSaved(out.queries); qStatus(`Saved “${name}”.`);
+  } catch (err) { qStatus(err.message, true); }
+}
+
+async function initQuery() {
+  if (q.ready) return;
+  q.ready = true;
+  try {
+    paintSaved((await getJSON("/api/saved")).queries);
+    const box = qEl("qrecipes");
+    let group = null;
+    for (const r of (await getJSON("/api/recipes")).recipes) {
+      if (r.group !== group) { group = r.group; box.append(el("div", { className: "group" }, group)); }
+      const b = el("button", { type: "button", className: "load", title: r.sql }, r.name);
+      b.addEventListener("click", () => loadIntoEditor(r.sql, "", ""));
+      box.append(el("ul", {}, el("li", {}, b)));
+    }
+  } catch (err) { q.ready = false; qStatus(`Could not load: ${err.message}`, true); }
+}
+
+qEl("qrun").addEventListener("click", runQuery);
+qEl("qsavebtn").addEventListener("click", saveQuery);
+qEl("sql").addEventListener("keydown", e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); runQuery(); } });
+document.querySelectorAll(".seg button[data-tab]").forEach(b => b.addEventListener("click", () => setTab(b.dataset.tab)));
+
 document.getElementById("noisecount").textContent = noise.size;
 readHash();
 setView(state.view);
 loadKind();
+if (state.tab === "query") setTab("query");
 </script>
 </body>
 </html>
