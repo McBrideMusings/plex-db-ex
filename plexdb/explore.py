@@ -33,6 +33,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from .errors import StoreError
+from .identity import PRIORITY
 from .store import open_readonly
 
 #: Set in the container to have `plexdb schedule` serve the explorer beside the
@@ -601,6 +602,49 @@ def _cell(value: object) -> object:
     return value
 
 
+#: What an `item_id` starts with: each namespace `derive_item_id` ranks, then `fs:`.
+_ID_PREFIXES: tuple[str, ...] = (*(f"{ns}:" for ns in PRIORITY), "fs:")
+
+#: Ids per lookup statement, under SQLite's 999-variable limit on older builds.
+_LABEL_CHUNK = 500
+
+
+def _item_label(
+    kind: str,
+    title: str,
+    show_title: str | None,
+    season: int | None,
+    episode: int | None,
+    year: int | None,
+) -> str:
+    if kind == "episode" and show_title:
+        code = f" S{season:02d}E{episode:02d}" if season is not None and episode is not None else ""
+        return f"{show_title}{code}: {title}"
+    return f"{title} ({year})" if year is not None else title
+
+
+def _item_labels(conn: sqlite3.Connection, rows: list[list[object]]) -> dict[str, str]:
+    """A readable label for each item id found among the result cells.
+
+    One SELECT per chunk of ids on the query's own connection. An id with no
+    `items` row is left out, and a cell that is not id-shaped is never looked up.
+    """
+    ids = sorted(
+        {c for row in rows for c in row if isinstance(c, str) and c.startswith(_ID_PREFIXES)}
+    )
+    labels: dict[str, str] = {}
+    for start in range(0, len(ids), _LABEL_CHUNK):
+        chunk = ids[start : start + _LABEL_CHUNK]
+        marks = ",".join("?" * len(chunk))
+        for item_id, *fields in conn.execute(
+            "SELECT item_id, type, title, show_title, season, episode, year "
+            f"FROM items WHERE item_id IN ({marks})",
+            chunk,
+        ):
+            labels[item_id] = _item_label(*fields)
+    return labels
+
+
 def run_query(
     store_path: Path, sql: str, *, seconds: float = QUERY_SECONDS, rows: int = QUERY_ROWS
 ) -> dict[str, object]:
@@ -630,13 +674,19 @@ def run_query(
                 raise QueryError("the statement returns no rows")
             columns = [d[0] for d in cursor.description]
             fetched = cursor.fetchmany(rows + 1)
+            shown = [[_cell(v) for v in row] for row in fetched[:rows]]
+            # The user's statement finished inside its budget; the label lookup is
+            # decoration and must not turn that result into a timeout.
+            conn.set_progress_handler(None, 0)
+            labels = _item_labels(conn, shown)
         except sqlite3.Error as err:
             if timed_out:
                 raise QueryError(f"query stopped after {seconds:g} seconds") from err
             raise QueryError(str(err)) from err
     return {
         "columns": columns,
-        "rows": [[_cell(v) for v in row] for row in fetched[:rows]],
+        "rows": shown,
+        "labels": labels,
         "row_count": min(len(fetched), rows),
         "truncated": len(fetched) > rows,
         "elapsed_ms": round((time.monotonic() - started) * 1000),
@@ -703,31 +753,40 @@ RECIPES: tuple[dict[str, str], ...] = (
         "group": "Reader accessors",
         "name": "enrichment_for_many: several titles, one namespace",
         "sql": (
-            "SELECT namespace, key, value, fetched_at, item_id\n"
-            "FROM enrichment\n"
-            "WHERE item_id IN ('imdb:tt1375666', 'imdb:tt0133093')\n"
-            "  AND namespace = 'tmdb_keywords'\n"
-            "ORDER BY item_id, key, value"
+            "SELECT e.item_id, i.title, i.year, e.namespace, e.key, e.value, e.fetched_at\n"
+            "FROM enrichment e\n"
+            "LEFT JOIN items i ON i.item_id = e.item_id\n"
+            "WHERE e.item_id IN ('imdb:tt1375666', 'imdb:tt0133093')\n"
+            "  AND e.namespace = 'tmdb_keywords'\n"
+            "ORDER BY e.item_id, e.key, e.value"
         ),
     },
     {
         "group": "Reader accessors",
         "name": "edges_from: what a title points at",
         "sql": (
-            "SELECT from_id, to_id, edge_type, rank, fetched_at\n"
-            "FROM edges\n"
-            "WHERE from_id = 'imdb:tt1375666' AND edge_type = 'tmdb_recommendations'\n"
-            "ORDER BY rank"
+            "SELECT e.from_id, f.title AS from_title, e.to_id, t.title AS to_title,\n"
+            "       t.year AS to_year,\n"
+            "       e.edge_type, e.rank, e.fetched_at\n"
+            "FROM edges e\n"
+            "LEFT JOIN items f ON f.item_id = e.from_id\n"
+            "LEFT JOIN items t ON t.item_id = e.to_id\n"
+            "WHERE e.from_id = 'imdb:tt1375666' AND e.edge_type = 'tmdb_recommendations'\n"
+            "ORDER BY e.rank"
         ),
     },
     {
         "group": "Reader accessors",
         "name": "edges_to: what points at a title",
         "sql": (
-            "SELECT from_id, to_id, edge_type, rank, fetched_at\n"
-            "FROM edges\n"
-            "WHERE to_id = 'imdb:tt1375666' AND edge_type = 'tmdb_recommendations'\n"
-            "ORDER BY rank"
+            "SELECT e.from_id, f.title AS from_title, f.year AS from_year, e.to_id,\n"
+            "       t.title AS to_title,\n"
+            "       e.edge_type, e.rank, e.fetched_at\n"
+            "FROM edges e\n"
+            "LEFT JOIN items f ON f.item_id = e.from_id\n"
+            "LEFT JOIN items t ON t.item_id = e.to_id\n"
+            "WHERE e.to_id = 'imdb:tt1375666' AND e.edge_type = 'tmdb_recommendations'\n"
+            "ORDER BY e.rank"
         ),
     },
     {
@@ -746,9 +805,11 @@ RECIPES: tuple[dict[str, str], ...] = (
         "group": "Reader accessors",
         "name": "taste_vector_for: plays per unit, one account",
         "sql": (
-            "SELECT COALESCE(i.show_item_id, p.item_id) AS unit, COUNT(*) AS plays\n"
+            "SELECT COALESCE(i.show_item_id, p.item_id) AS unit, u.title, u.year,\n"
+            "       COUNT(*) AS plays\n"
             "FROM plays p\n"
             "JOIN items i ON i.item_id = p.item_id\n"
+            "LEFT JOIN items u ON u.item_id = COALESCE(i.show_item_id, p.item_id)\n"
             "WHERE p.plex_account_id = 1\n"
             "GROUP BY unit\n"
             "ORDER BY unit"
@@ -758,9 +819,10 @@ RECIPES: tuple[dict[str, str], ...] = (
         "group": "Reader accessors",
         "name": "watched_units_for: one account's watched units",
         "sql": (
-            "SELECT DISTINCT COALESCE(i.show_item_id, p.item_id) AS unit\n"
+            "SELECT DISTINCT COALESCE(i.show_item_id, p.item_id) AS unit, u.title, u.year\n"
             "FROM plays p\n"
             "JOIN items i ON i.item_id = p.item_id\n"
+            "LEFT JOIN items u ON u.item_id = COALESCE(i.show_item_id, p.item_id)\n"
             "WHERE p.plex_account_id = 1\n"
             "ORDER BY unit"
         ),
@@ -769,9 +831,10 @@ RECIPES: tuple[dict[str, str], ...] = (
         "group": "Reader accessors",
         "name": "watched_units: every account's watched units",
         "sql": (
-            "SELECT DISTINCT COALESCE(i.show_item_id, p.item_id) AS unit\n"
+            "SELECT DISTINCT COALESCE(i.show_item_id, p.item_id) AS unit, u.title, u.year\n"
             "FROM plays p\n"
             "JOIN items i ON i.item_id = p.item_id\n"
+            "LEFT JOIN items u ON u.item_id = COALESCE(i.show_item_id, p.item_id)\n"
             "ORDER BY unit"
         ),
     },
@@ -779,9 +842,11 @@ RECIPES: tuple[dict[str, str], ...] = (
         "group": "Reader accessors",
         "name": "pooled_taste_vector: plays per unit, all accounts",
         "sql": (
-            "SELECT COALESCE(i.show_item_id, p.item_id) AS unit, COUNT(*) AS plays\n"
+            "SELECT COALESCE(i.show_item_id, p.item_id) AS unit, u.title, u.year,\n"
+            "       COUNT(*) AS plays\n"
             "FROM plays p\n"
             "JOIN items i ON i.item_id = p.item_id\n"
+            "LEFT JOIN items u ON u.item_id = COALESCE(i.show_item_id, p.item_id)\n"
             "GROUP BY unit\n"
             "ORDER BY plays DESC"
         ),
@@ -790,21 +855,23 @@ RECIPES: tuple[dict[str, str], ...] = (
         "group": "Reader accessors",
         "name": "Season lengths (median-season input)",
         "sql": (
-            "SELECT show_item_id, season, COUNT(*) AS episodes\n"
-            "FROM items\n"
-            "WHERE type = 'episode' AND show_item_id IS NOT NULL AND season IS NOT NULL\n"
-            "GROUP BY show_item_id, season\n"
-            "ORDER BY show_item_id, episodes"
+            "SELECT e.show_item_id, s.title, s.year, e.season, COUNT(*) AS episodes\n"
+            "FROM items e\n"
+            "LEFT JOIN items s ON s.item_id = e.show_item_id\n"
+            "WHERE e.type = 'episode' AND e.show_item_id IS NOT NULL AND e.season IS NOT NULL\n"
+            "GROUP BY e.show_item_id, e.season\n"
+            "ORDER BY e.show_item_id, episodes"
         ),
     },
     {
         "group": "Reader accessors",
         "name": "Attributes of one title (attributes_by_item, narrowed)",
         "sql": (
-            "SELECT DISTINCT item_id, namespace, key, value\n"
-            "FROM enrichment\n"
-            "WHERE item_id = 'imdb:tt1375666'\n"
-            "ORDER BY item_id, namespace, key, value"
+            "SELECT DISTINCT e.item_id, i.title, i.year, e.namespace, e.key, e.value\n"
+            "FROM enrichment e\n"
+            "LEFT JOIN items i ON i.item_id = e.item_id\n"
+            "WHERE e.item_id = 'imdb:tt1375666'\n"
+            "ORDER BY e.item_id, e.namespace, e.key, e.value"
         ),
     },
 )

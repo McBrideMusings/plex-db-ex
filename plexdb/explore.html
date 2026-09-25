@@ -50,6 +50,7 @@
   .tablewrap { overflow-x: auto; padding: 0 20px 24px; }
   table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .cellid { color: var(--muted); font-size: 11px; }
   th { position: sticky; top: 0; background: var(--bg); font-weight: 600; color: var(--muted); white-space: nowrap; z-index: 1; }
   th.sortable { cursor: pointer; user-select: none; }
   th.sortable:hover { color: var(--ink); }
@@ -646,6 +647,12 @@ async function runQuery() {
   const body = el("tbody");
   for (const row of out.rows) {
     body.append(el("tr", {}, ...row.map(v => {
+      const label = typeof v === "string" && Object.hasOwn(out.labels, v) ? out.labels[v] : null;
+      if (label !== null) {
+        const td = el("td", {}, el("div", {}, label), el("div", { className: "cellid" }, v));
+        td.title = `${label}\n${v}`;
+        return td;
+      }
       const td = el("td", v === null ? { className: "null" } : {}, v === null ? "NULL" : String(v));
       td.title = td.textContent;
       return td;

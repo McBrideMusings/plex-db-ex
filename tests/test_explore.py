@@ -471,6 +471,35 @@ def test_query_returns_columns_rows_and_marks_blobs(store: Path) -> None:
     assert out["row_count"] == 1 and out["truncated"] is False
 
 
+def test_query_labels_item_ids_in_the_result_and_skips_the_rest(store: Path) -> None:
+    with open_store(store) as conn:
+        conn.execute(
+            "INSERT INTO items (item_id, type, title, show_title, show_item_id, season, episode)"
+            " VALUES ('plex:e1', 'episode', 'Pilot', 'Daredevil', 'tvdb:9', 1, 2)"
+        )
+        conn.commit()
+    out = run_query(
+        store,
+        "SELECT item_id FROM items WHERE item_id IN ('imdb:tt4', 'tvdb:9', 'plex:e1', 'fs:x') "
+        "UNION ALL SELECT 'tmdb:0'",
+    )
+    labels = out["labels"]
+    assert isinstance(labels, dict)
+    assert labels["imdb:tt4"] == "Heat (1995)"
+    assert labels["tvdb:9"] == "Daredevil (2015)"
+    assert labels["plex:e1"] == "Daredevil S01E02: Pilot"
+    assert labels["fs:x"] == "Bare"
+    assert "tmdb:0" not in labels
+
+
+def test_query_gives_a_string_that_is_not_id_shaped_no_label(store: Path) -> None:
+    with open_store(store) as conn:
+        conn.execute("INSERT INTO items (item_id, type, title) VALUES ('raw', 'movie', 'Raw')")
+        conn.commit()
+    out = run_query(store, "SELECT item_id, title FROM items WHERE item_id IN ('raw', 'imdb:tt4')")
+    assert out["labels"] == {"imdb:tt4": "Heat (1995)"}
+
+
 def test_query_cuts_at_the_row_cap_and_says_so(store: Path) -> None:
     out = run_query(store, "SELECT item_id FROM items", rows=4)
     assert out["row_count"] == 4 and out["truncated"] is True
