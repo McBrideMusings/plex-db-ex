@@ -78,22 +78,99 @@
                      font: 12px ui-monospace, Menlo, monospace; color: var(--ink); background: var(--panel);
                      border: 1px solid var(--accent); border-radius: 6px; padding: 6px 8px; }
   [hidden] { display: none !important; }
-  .graphwrap { padding: 0 20px 20px; }
-  .graphbar { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; padding: 10px 0; color: var(--muted); }
-  .graphbar select { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; }
-  #graph { height: calc(100vh - 210px); min-height: 420px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
-  #mapbox { position: relative; height: calc(100vh - 190px); min-height: 420px; background: var(--panel);
-            border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
-  #map { display: block; width: 100%; height: 100%; cursor: crosshair; }
+  #map { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
+  #map.dragging { cursor: grabbing; }
   /* The default map standing in while another computes: blurred and faded on a tinted ground,
      because its dots are already pale and opacity alone does not show. */
   #map.dim { filter: blur(2px) opacity(0.45); cursor: progress; }
   #mapbox:has(#map.dim) { background: var(--chip); }
-  #maptip { position: absolute; pointer-events: none; background: var(--ink); color: var(--bg); font-size: 12px;
-            padding: 3px 7px; border-radius: 5px; white-space: nowrap; transform: translate(10px, -130%); }
+  .vpctl { position: absolute; left: 10px; bottom: 10px; display: flex; gap: 4px; z-index: 6; }
+  .vpctl button { font: inherit; min-width: 30px; height: 30px; padding: 0 8px; cursor: pointer; color: var(--ink);
+                  background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
+  .vpctl button:hover { border-color: var(--accent); }
+  .searchbox { position: relative; }
+  .searchbox input[type="search"] { width: 20em; max-width: 100%; }
+  .sugg { position: absolute; z-index: 9; left: 0; top: calc(100% + 2px); min-width: 20em; max-height: 60vh; overflow: auto;
+          margin: 0; padding: 4px 0; list-style: none; color: var(--ink); }
+  .sugg .grp { padding: 4px 10px 2px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .sugg li.opt { padding: 4px 10px; cursor: pointer; display: flex; justify-content: space-between; gap: 12px; }
+  .sugg li.opt.on, .sugg li.opt:hover { background: var(--selected); }
+  .sugg li .n { color: var(--muted); white-space: nowrap; }
+  .tcard { position: absolute; width: 290px; max-width: calc(100% - 20px); max-height: calc(100% - 20px); overflow: auto;
+           background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 8px;
+           box-shadow: 0 6px 24px rgba(0,0,0,.2); padding: 12px; font-size: 13px; line-height: 1.4; }
+  .tcard.hover { pointer-events: none; z-index: 3; }
+  .tcard.pinned { right: 10px; top: 10px; z-index: 2; }
+  .tcard .close { position: absolute; top: 6px; right: 6px; width: 26px; height: 26px; padding: 0; cursor: pointer; font: inherit;
+                  color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
+  .tcard .close:hover { border-color: var(--accent); }
+  .tcard .top { display: flex; gap: 10px; }
+  .tcard .poster { flex: none; width: 68px; height: 102px; border-radius: 5px; background: var(--chip); color: var(--muted);
+                   display: flex; align-items: center; justify-content: center; font-size: 26px; font-weight: 650;
+                   border: 1px dashed var(--line); }
+  .tcard h3 { margin: 0 24px 2px 0; font-size: 15px; overflow-wrap: anywhere; }
+  .tcard .meta { color: var(--muted); }
+  .tcard .desc { margin: 8px 0; color: var(--muted); font-style: italic; }
+  .tcard h4 { margin: 8px 0 3px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .tcard .chip { cursor: default; }
+  .tcard.pinned .chip { cursor: pointer; }
+  .tcard ol { margin: 0; padding: 0; list-style: none; }
+  .tcard li { padding: 2px 0; display: flex; gap: 8px; }
+  .tcard li .rk { color: var(--muted); min-width: 2.2em; font-variant-numeric: tabular-nums; }
+  .tcard li.link { cursor: pointer; }
+  .tcard li.link:hover span:last-child { color: var(--accent); }
+  .tcard li.off { color: var(--muted); }
   aside .chips { margin-top: 4px; }
   aside .chip.noise { color: var(--noise); text-decoration: line-through; }
   .err { color: var(--noise); padding: 12px 20px; }
+  /* Graph and Map: the viewport fills everything under the header and the page never scrolls.
+     Every control floats over it as a panel; the space between panels belongs to the canvas. */
+  html:has(body.shell) { overflow: hidden; }
+  body.shell { height: 100vh; height: 100dvh; overflow: hidden; display: flex; flex-direction: column; }
+  body.shell header { flex: none; }
+  #stage { position: relative; }
+  body.shell #stage { flex: 1; min-height: 0; }
+  body.shell main { position: absolute; inset: 0; display: block; }
+  .graphwrap { position: absolute; inset: 0; }
+  #graph, #mapbox { position: absolute; inset: 0; background: var(--panel); overflow: hidden; }
+  .ov, body.shell .controls, body.shell aside#detail, .ovnote, .sugg {
+    background: color-mix(in srgb, var(--panel) 90%, transparent); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+    border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,.08); }
+  .ovtl { position: absolute; top: 10px; left: 10px; z-index: 8; display: flex; gap: 8px; align-items: center; max-width: calc(100% - 20px); }
+  .ovtl label { display: inline-flex; gap: 6px; align-items: center; padding: 4px 8px; color: var(--muted); }
+  .ovtl select { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; }
+  .ovnote { position: absolute; left: 150px; bottom: 10px; z-index: 1; max-width: min(560px, calc(100% - 170px));
+            padding: 4px 9px; font-size: 12px; line-height: 1.35; color: var(--muted); pointer-events: none; }
+  .ovnote:empty { display: none; }
+  #ctltoggle { display: none; }
+  .ctlbody { display: contents; }
+  body.shell .controls { position: absolute; z-index: 5; top: 56px; left: 10px; padding: 6px 8px; max-width: calc(100% - 20px);
+                         flex-direction: column; align-items: flex-start; gap: 8px; }
+  body.shell #ctltoggle { display: inline-block; }
+  body.shell .controls .ctlbody { display: none; }
+  body.shell .controls.open .ctlbody { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+  body.shell .noisebar { margin-left: 0; flex-wrap: wrap; }
+  body.shell #copyout { position: absolute; z-index: 9; left: 10px; bottom: 56px; width: min(420px, calc(100% - 20px)); margin: 0; }
+  body.shell #error { position: absolute; z-index: 9; top: 56px; left: 10px; max-width: calc(100% - 20px); padding: 8px 12px;
+                      background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+  /* The right-hand column holds the tag panel and the pinned title card, stacked. */
+  #rightcol { display: contents; }
+  body.shell #rightcol { display: flex; flex-direction: column; align-items: stretch; gap: 8px; position: absolute; z-index: 4;
+                         top: 10px; right: 10px; bottom: 10px; width: 340px; pointer-events: none; }
+  body.shell #rightcol > * { pointer-events: auto; flex: 0 1 auto; min-height: 0; overflow: auto; }
+  body.shell aside#detail { position: static !important; max-height: none !important; min-height: 0; padding: 12px 14px;
+                            border: 1px solid var(--line) !important; }
+  body.shell aside#detail:has(> p.empty) { display: none; }
+  body.shell .tcard.pinned { position: relative; top: auto; right: auto; width: auto; max-width: none; max-height: none; }
+  body:not([data-view="map"]) .tcard { display: none; }
+  @media (max-width: 600px) {
+    body.shell #rightcol { top: auto; left: 8px; right: 8px; bottom: 8px; width: auto; max-height: 50%; }
+    .vpctl { left: auto; right: 10px; bottom: auto; top: 10px; }
+    .ovnote { left: 10px; max-width: calc(100% - 20px); }
+    .searchbox input[type="search"] { width: min(20em, calc(100vw - 150px)); }
+    body.shell:has(#rightcol .tcard.pinned:not([hidden])) .ovnote,
+    body.shell:has(#rightcol aside#detail:not(:has(> p.empty))) .ovnote { display: none; }
+  }
   #querywrap { display: grid; grid-template-columns: minmax(0, 1fr) 320px; align-items: start; }
   @media (max-width: 900px) { #querywrap { grid-template-columns: 1fr; } #qside { border-left: 0 !important; border-top: 1px solid var(--line); } }
   #qmain { padding: 14px 20px 24px; min-width: 0; }
@@ -145,7 +222,10 @@
   </div>
   <span class="stats tagsonly" id="stats">Loading…</span>
 </header>
-<div class="controls tagsonly">
+<div id="stage">
+<div class="controls tagsonly" id="controls">
+  <button type="button" class="plain" id="ctltoggle" aria-expanded="false" aria-controls="ctlbody">Filters &amp; noise (<span id="ctlnoise">0</span>)</button>
+  <div class="ctlbody" id="ctlbody">
   <label>Filter <input type="search" id="filter" placeholder="tag contains…" autocomplete="off"></label>
   <label>Min titles <input type="number" id="mindf" min="1" value="2"></label>
   <label><input type="checkbox" id="noiseonly"> Noise only</label>
@@ -154,6 +234,7 @@
     <button type="button" class="plain" id="copy">Copy as JSON</button>
     <button type="button" class="plain" id="clear">Clear</button>
   </span>
+  </div>
 </div>
 <textarea id="copyout" readonly hidden aria-label="Noise list as JSON"></textarea>
 <div id="error" class="err" hidden></div>
@@ -181,15 +262,22 @@
 </div>
 <main id="tagsmain">
   <div class="graphwrap" id="graphwrap" hidden>
-    <div class="graphbar">
-      <label>Neighbours <select id="gsize"><option>20</option><option selected>40</option><option>80</option><option>150</option></select></label>
-      <span id="gnote"></span>
-    </div>
     <div id="graph"></div>
+    <div class="ovtl ov">
+      <label>Neighbours <select id="gsize"><option>20</option><option selected>40</option><option>80</option><option>150</option></select></label>
+    </div>
+    <span class="ovnote" id="gnote"></span>
   </div>
   <div class="graphwrap" id="mapwrap" hidden>
-    <div class="graphbar"><span id="mnote"></span></div>
-    <div id="mapbox"><canvas id="map"></canvas><div id="maptip" hidden></div></div>
+    <div id="mapbox"><canvas id="map"></canvas></div>
+    <div class="ovtl">
+      <div class="searchbox">
+        <input type="search" id="msearch" placeholder="Search a title or a tag…" autocomplete="off" aria-label="Search a title or a tag"
+               role="combobox" aria-expanded="false" aria-controls="msugg">
+        <ul class="sugg" id="msugg" role="listbox" hidden></ul>
+      </div>
+    </div>
+    <span class="ovnote" id="mnote"></span>
   </div>
   <div class="tablewrap" id="tablewrap">
     <table>
@@ -205,8 +293,11 @@
     </table>
     <div class="more" id="more"></div>
   </div>
-  <aside id="detail"><p class="empty">Click a tag to list the titles that carry it.</p></aside>
+  <div id="rightcol">
+    <aside id="detail"><p class="empty">Click a tag to list the titles that carry it.</p></aside>
+  </div>
 </main>
+</div>
 <script>
 "use strict";
 const PAGE = 300;
@@ -220,6 +311,7 @@ function loadNoise() {
 function saveNoise() {
   try { localStorage.setItem(NOISE_KEY, JSON.stringify([...noise].sort())); } catch { /* storage off: list lasts this page view */ }
   document.getElementById("noisecount").textContent = noise.size;
+  document.getElementById("ctlnoise").textContent = noise.size;
 }
 const noise = loadNoise();
 
@@ -283,16 +375,301 @@ function setView(view) {
   document.getElementById("tablewrap").hidden = view !== "table";
   document.getElementById("graphwrap").hidden = view !== "graph";
   document.getElementById("mapwrap").hidden = view !== "map";
+  document.body.dataset.view = view;
+  document.body.classList.toggle("shell", state.tab === "tags" && view !== "table");
   writeHash();
   // Before the first load, loadKind draws it once the tag list is in.
   if (view === "graph" && state.data) drawGraph();
   if (view === "map" && state.data) drawMap();
 }
 
+// ---- Viewport ----
+// One 2D canvas that the tag network and the title map both sit on. It owns zoom, pan, the
+// reset control and hit testing; the page hands it items (anything with x and y in world
+// units) and a draw function, and gets back hover and click. Wheel zoom goes toward the cursor
+// and the page never scrolls under it (the wheel listener is not passive so it can say so);
+// one pointer drags, two pinch.
+// The +, - and Reset buttons both viewports carry, laid over `parent`.
+function zoomBar(parent, { zoomIn, zoomOut, reset }) {
+  const bar = document.createElement("div");
+  bar.className = "vpctl";
+  for (const [label, title, fn] of [["+", "Zoom in", zoomIn], ["−", "Zoom out", zoomOut], ["Reset", "Show the whole picture", reset]]) {
+    const b = document.createElement("button");
+    Object.assign(b, { type: "button", textContent: label, title });
+    b.setAttribute("aria-label", title);
+    b.addEventListener("click", fn);
+    bar.append(b);
+  }
+  parent.append(bar);
+}
+
+class Viewport {
+  static MAX_ZOOM = 120;   // times the whole-picture scale
+  static HIT_PX = 9;       // how near the pointer must be to an item to pick it
+
+  constructor(canvas, { draw, onHover, onSelect }) {
+    Object.assign(this, { canvas, draw, onHover, onSelect });
+    this.items = []; this.bounds = { x0: 0, y0: 0, x1: 1, y1: 1 };
+    this.k = 1; this.tx = 0; this.ty = 0; this.k0 = 1;
+    this.fitted = true;            // still showing the whole picture, so a resize refits
+    this.hover = null; this.selected = null;
+    this.w = 0; this.h = 0; this.pad = 14; this.raf = 0;
+    this.grid = null; this.ptrs = new Map(); this.gesture = null; this.last = null;
+    canvas.addEventListener("wheel", e => this.wheel(e), { passive: false });
+    canvas.addEventListener("pointerdown", e => this.down(e));
+    canvas.addEventListener("pointermove", e => this.move(e));
+    canvas.addEventListener("pointerup", e => this.up(e, true));
+    canvas.addEventListener("pointercancel", e => this.up(e, false));
+    canvas.addEventListener("pointerleave", e => { if (e.pointerType === "mouse" && !this.ptrs.size) this.setHover(null, 0, 0); });
+    new ResizeObserver(() => this.resize()).observe(canvas);
+    zoomBar(canvas.parentElement, { zoomIn: () => this.zoomAt(this.w / 2, this.h / 2, 1.6),
+      zoomOut: () => this.zoomAt(this.w / 2, this.h / 2, 1 / 1.6), reset: () => this.reset() });
+  }
+
+  // World -> screen (CSS px inside the canvas).
+  sx(x) { return x * this.k + this.tx; }
+  sy(y) { return y * this.k + this.ty; }
+  get zoom() { return this.k / this.k0; }
+
+  // Replace the items. The index is a uniform grid in world units, sized for about two items per
+  // cell, so a lookup touches the few cells under the pointer however many items there are.
+  setItems(items, bounds) {
+    this.items = items; this.bounds = bounds; this.hover = null;
+    const bw = Math.max(bounds.x1 - bounds.x0, 1e-9), bh = Math.max(bounds.y1 - bounds.y0, 1e-9);
+    const cell = Math.sqrt(bw * bh / Math.max(1, items.length / 2));
+    const cols = Math.floor(bw / cell) + 1, rows = Math.floor(bh / cell) + 1;
+    const cells = new Map();
+    for (const it of items) {
+      const key = Math.floor((it.y - bounds.y0) / cell) * cols + Math.floor((it.x - bounds.x0) / cell);
+      const list = cells.get(key);
+      if (list) list.push(it); else cells.set(key, [it]);
+    }
+    this.grid = { cell, cols, rows, cells };
+    this.reset();
+  }
+
+  // The view that shows `b` centred in the screen area left after `pad` (a number of px all round,
+  // or {l, t, r, b} to keep clear of panels floating over one side).
+  viewFor(b, pad) {
+    const p = typeof pad === "number" ? { l: pad, t: pad, r: pad, b: pad } : pad;
+    const aw = this.w - p.l - p.r, ah = this.h - p.t - p.b;
+    const bw = Math.max(b.x1 - b.x0, 1e-9), bh = Math.max(b.y1 - b.y0, 1e-9);
+    const k = Math.max(1e-9, Math.min(aw / bw, ah / bh));
+    return { k, tx: p.l + aw / 2 - (b.x0 + bw / 2) * k, ty: p.t + ah / 2 - (b.y0 + bh / 2) * k };
+  }
+  reset() {
+    this.fitted = true;
+    if (this.w && this.h) {
+      const v = this.viewFor(this.bounds, this.pad);
+      Object.assign(this, { k: v.k, tx: v.tx, ty: v.ty, k0: v.k });
+    }
+    this.redraw();
+  }
+  // Fit the given items on screen, no closer than the zoom limit allows.
+  focusOn(items, pad = 70) {
+    if (!items.length || !this.w) return;
+    const b = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+    for (const it of items) { b.x0 = Math.min(b.x0, it.x); b.y0 = Math.min(b.y0, it.y); b.x1 = Math.max(b.x1, it.x); b.y1 = Math.max(b.y1, it.y); }
+    const v = this.viewFor(b, pad);
+    const k = Math.min(v.k, this.k0 * Viewport.MAX_ZOOM);
+    // Centre on the middle of the box within the free area, at the zoom the limit allows.
+    const p = typeof pad === "number" ? { l: pad, t: pad, r: pad, b: pad } : pad;
+    const cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2;
+    Object.assign(this, { k, tx: p.l + (this.w - p.l - p.r) / 2 - cx * k, ty: p.t + (this.h - p.t - p.b) / 2 - cy * k, fitted: false });
+    this.updateHover();
+    this.redraw();
+  }
+  centreOn(item) {
+    this.tx = this.w / 2 - item.x * this.k; this.ty = this.h / 2 - item.y * this.k; this.fitted = false;
+    this.redraw();
+  }
+
+  resize() {
+    const w = this.canvas.clientWidth, h = this.canvas.clientHeight;
+    if (!w || !h || (w === this.w && h === this.h)) return;
+    const [ow, oh] = [this.w, this.h];
+    this.w = w; this.h = h;
+    const ratio = window.devicePixelRatio || 1;
+    this.canvas.width = Math.round(w * ratio); this.canvas.height = Math.round(h * ratio);
+    if (this.fitted || !ow) this.reset();
+    else { this.tx += (w - ow) / 2; this.ty += (h - oh) / 2; this.redraw(); }
+  }
+
+  zoomAt(px, py, factor) {
+    const k = Math.min(Math.max(this.k * factor, this.k0 * 0.9), this.k0 * Viewport.MAX_ZOOM);
+    const f = k / this.k;
+    this.tx = px - (px - this.tx) * f; this.ty = py - (py - this.ty) * f; this.k = k;
+    this.fitted = false;
+    this.updateHover();
+    this.redraw();
+  }
+
+  wheel(e) {
+    e.preventDefault();
+    const r = this.canvas.getBoundingClientRect();
+    const dy = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? this.h : 1);
+    this.zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-dy * (e.ctrlKey ? 0.01 : 0.0015)));
+  }
+
+  point(e) { const r = this.canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
+  down(e) {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    this.canvas.setPointerCapture(e.pointerId);
+    this.ptrs.set(e.pointerId, this.point(e));
+    if (this.ptrs.size === 1) this.gesture = { start: this.point(e), moved: false };
+    else this.gesture = { pinch: true, ...this.pinchOf() };
+  }
+  pinchOf() {
+    const [a, b] = [...this.ptrs.values()];
+    return { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2 };
+  }
+  move(e) {
+    const p = this.point(e);
+    const prev = this.ptrs.get(e.pointerId);
+    if (!prev) { if (e.pointerType === "mouse") this.setHover(this.nearest(p.x, p.y), p.x, p.y); return; }
+    this.ptrs.set(e.pointerId, p);
+    const g = this.gesture;
+    if (!g) return;
+    if (g.pinch && this.ptrs.size >= 2) {
+      const n = this.pinchOf();
+      this.tx += n.cx - g.cx; this.ty += n.cy - g.cy;
+      this.zoomAt(n.cx, n.cy, n.d / g.d);
+      this.gesture = { pinch: true, ...n };
+    } else if (!g.pinch) {
+      if (!g.moved && Math.hypot(p.x - g.start.x, p.y - g.start.y) > 4) { g.moved = true; this.canvas.classList.add("dragging"); this.setHover(null, 0, 0); }
+      if (g.moved) { this.tx += p.x - prev.x; this.ty += p.y - prev.y; this.fitted = false; this.redraw(); }
+    }
+  }
+  up(e, ok) {
+    const g = this.gesture;
+    const p = this.point(e);
+    this.ptrs.delete(e.pointerId);
+    this.canvas.classList.remove("dragging");
+    if (this.ptrs.size === 1) {
+      // A pinch ended with one finger left: carry on as a drag from where it is.
+      const [rest] = this.ptrs.values();
+      this.gesture = { start: rest, moved: true };
+    } else if (!this.ptrs.size) {
+      this.gesture = null;
+      if (ok && g && !g.pinch && !g.moved) { const it = this.nearest(p.x, p.y); if (it) this.onSelect(it); }
+    }
+  }
+
+  // Nearest item within HIT_PX of a screen point, found through the grid in world coordinates.
+  nearest(sx, sy) {
+    const gr = this.grid;
+    if (!gr) return null;
+    const { x0, y0 } = this.bounds;
+    const wx = (sx - this.tx) / this.k, wy = (sy - this.ty) / this.k, r = Viewport.HIT_PX / this.k;
+    const cx0 = Math.max(0, Math.floor((wx - r - x0) / gr.cell)), cx1 = Math.min(gr.cols - 1, Math.floor((wx + r - x0) / gr.cell));
+    const cy0 = Math.max(0, Math.floor((wy - r - y0) / gr.cell)), cy1 = Math.min(gr.rows - 1, Math.floor((wy + r - y0) / gr.cell));
+    let best = null, bestD = Viewport.HIT_PX ** 2;
+    for (let cy = cy0; cy <= cy1; cy++) for (let cx = cx0; cx <= cx1; cx++) {
+      const list = gr.cells.get(cy * gr.cols + cx);
+      if (!list) continue;
+      for (const it of list) {
+        const d = (this.sx(it.x) - sx) ** 2 + (this.sy(it.y) - sy) ** 2;
+        if (d < bestD) { bestD = d; best = it; }
+      }
+    }
+    return best;
+  }
+
+  setHover(item, x, y) {
+    this.last = item ? { x, y } : null;
+    if (item !== this.hover) { this.hover = item; this.redraw(); }
+    this.onHover(item, x, y);
+  }
+  updateHover() { if (this.last) this.setHover(this.nearest(this.last.x, this.last.y), this.last.x, this.last.y); }
+
+  redraw() {
+    if (this.raf) return;
+    this.raf = requestAnimationFrame(() => { this.raf = 0; this.paint(); });
+  }
+  paint() {
+    if (!this.w) return;
+    const ctx = this.canvas.getContext("2d");
+    const ratio = this.canvas.width / this.w;
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    ctx.clearRect(0, 0, this.w, this.h);
+    this.draw(ctx, this);
+  }
+}
+
+// ---- Title card ----
+// What a title looks like on hover and when pinned. The poster and description slots hold a
+// placeholder until a source for them exists; the rest comes from /api/title.
+const detailCache = new Map();
+function titleDetail(itemId) {
+  if (!detailCache.has(itemId)) {
+    detailCache.set(itemId, getJSON(`/api/title?item_id=${encodeURIComponent(itemId)}`).catch(err => { detailCache.delete(itemId); throw err; }));
+  }
+  return detailCache.get(itemId);
+}
+
+class TitleCard {
+  constructor(box, { pinned, onClose, onTag, onPick, canPick }) {
+    this.pinned = pinned; this.onTag = onTag; this.onPick = onPick; this.canPick = canPick;
+    this.root = el("div", { className: "tcard " + (pinned ? "pinned" : "hover"), hidden: true });
+    if (pinned) {
+      this.root.setAttribute("role", "dialog"); this.root.setAttribute("aria-label", "Title details");
+      const x = el("button", { type: "button", className: "close", title: "Close (Esc)", textContent: "✕" });
+      x.setAttribute("aria-label", "Close the card");
+      x.addEventListener("click", onClose);
+      this.close = x;
+    }
+    this.itemId = null;
+    box.append(this.root);
+  }
+  hide() { this.itemId = null; this.root.hidden = true; }
+  // `item` is the map point, enough for a heading at once; the details fill in when they arrive.
+  async show(item) {
+    this.itemId = item.id;
+    this.paint(item, null, null);
+    this.root.hidden = false;
+    let detail = null, err = null;
+    try { detail = await titleDetail(item.id); } catch (e) { err = e; }
+    if (this.itemId === item.id) this.paint(item, detail, err);
+  }
+  paint(item, d, err) {
+    const title = d ? d.title : item.title, year = d ? d.year : item.year;
+    const facts = d ? [d.studio, d.content_rating].filter(Boolean).join(" · ") : "";
+    const head = el("div", {}, el("h3", {}, year ? `${title} (${year})` : title),
+      el("div", { className: "meta" }, d ? (facts || "no studio or rating on file") : err ? `Could not load: ${err.message}` : "Loading…"));
+    const parts = [el("div", { className: "top" }, el("div", { className: "poster", title: "No poster yet" }, (title || "?").trim().charAt(0).toUpperCase()), head),
+      el("p", { className: "desc" }, "No description yet.")];
+    if (d) {
+      const chips = el("div");
+      for (const value of d.keywords.slice(0, 40)) {
+        const chip = el("span", { className: "chip" + (noise.has(value) ? " noise" : "") }, value);
+        if (this.pinned) { chip.title = "Highlight the titles carrying it"; chip.addEventListener("click", () => this.onTag(value)); }
+        chips.append(chip);
+      }
+      if (d.keywords.length > 40) chips.append(el("span", { className: "meta" }, ` +${fmt(d.keywords.length - 40)} more`));
+      parts.push(el("h4", {}, `Tags (${fmt(d.keywords.length)})`), d.keywords.length ? chips : el("div", { className: "meta" }, "none"));
+      const list = el("ol");
+      for (const s of d.similar) {
+        const on = this.canPick(s.item_id);
+        const li = el("li", { className: on ? "link" : "off", title: on ? "Show it on the map" : "Not on the map" },
+          el("span", { className: "rk" }, `#${s.rank}`), el("span", {}, s.year ? `${s.title} (${s.year})` : s.title));
+        if (on && this.pinned) li.addEventListener("click", () => this.onPick(s.item_id));
+        list.append(li);
+      }
+      parts.push(el("h4", {}, "Similar titles"), d.similar.length ? list : el("div", { className: "meta" }, "none recorded"));
+    }
+    this.root.replaceChildren(...(this.close ? [this.close] : []), ...parts);
+  }
+}
+
+// ---- Map view ----
 // `data` is what is on screen. `dim` is set while it is the default map standing in for one
 // still being drawn without the noise tags. `defaults` keeps each kind's default map, which the
-// server has stored and answers in milliseconds.
-const map = { data: null, key: null, hover: -1, dim: false, defaults: {} };
+// server has stored and answers in milliseconds. `items` is `data.points` as viewport items.
+const map = { data: null, key: null, items: [], byId: new Map(), itemsOf: null, dim: false, defaults: {} };
+// `search` is null, or {type: "title"|"tag", label, ids: Set of item_ids to keep at full strength,
+// focus: the searched title's id}. Everything outside `ids` is drawn faded.
+const mapUI = { search: null, token: 0 };
+
 async function mapRequest(kind, exclude) {
   const p = new URLSearchParams({ kind });
   for (const t of exclude) p.append("exclude", t);
@@ -303,7 +680,7 @@ async function drawMap() {
   const kind = state.kind;
   const key = [kind, ...[...noise].sort()].join("\u0001");
   if (map.key !== key) {
-    map.key = key; map.hover = -1;
+    map.key = key;
     try {
       let base = map.defaults[kind] || null;
       map.data = base; map.dim = noise.size > 0 && base !== null;
@@ -343,76 +720,217 @@ function mapNote() {
   document.getElementById("mnote").textContent =
     `${fmt(d.points.length)} ${noun()}, close together when their keywords are alike (UMAP)`
     + (d.unplaced ? `; ${fmt(d.unplaced)} share no tag with anything and are left off` : "")
-    + (state.tag ? `; ${fmt(lit)} carrying “${state.tag}” highlighted` : "; pick a tag to highlight the titles carrying it")
+    + (state.tag ? `; ${fmt(lit)} carrying “${state.tag}” highlighted` : "")
     + (noise.size ? `; ${fmt(noise.size)} noise-marked tags ignored` : "")
-    + ". Hover a dot for its title, click it for its keywords.";
+    + ". Scroll to zoom, drag to pan, hover a dot for its card, click to pin it.";
 }
 
-function mapGeometry() {
-  const canvas = document.getElementById("map");
-  const w = canvas.clientWidth, h = canvas.clientHeight, pad = 14;
-  return { canvas, w, h, px: x => pad + x * (w - 2 * pad), py: y => pad + y * (h - 2 * pad) };
+// A new `data` becomes new viewport items; the selection follows its title if it is still there.
+function syncMapItems() {
+  if (map.itemsOf === map.data) return;
+  map.itemsOf = map.data;
+  const pts = map.data ? map.data.points : [];
+  map.items = pts.map(p => ({ id: p[0], title: p[1], year: p[2], x: p[3], y: p[4], lower: p[1].toLowerCase() }));
+  map.byId = new Map(map.items.map(it => [it.id, it]));
+  let b = { x0: 0, y0: 0, x1: 1, y1: 1 };
+  if (map.items.length) {
+    b = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+    for (const it of map.items) { b.x0 = Math.min(b.x0, it.x); b.y0 = Math.min(b.y0, it.y); b.x1 = Math.max(b.x1, it.x); b.y1 = Math.max(b.y1, it.y); }
+  }
+  const keep = mapVP.selected && map.byId.get(mapVP.selected.id);
+  mapVP.setItems(map.items, b);
+  if (keep) mapVP.selected = keep; else selectItem(null);
 }
 
 function paintMap() {
   if (state.view !== "map") return;
-  const { canvas, w, h, px, py } = mapGeometry();
-  const ratio = window.devicePixelRatio || 1;
-  canvas.width = Math.round(w * ratio); canvas.height = Math.round(h * ratio);
-  const ctx = canvas.getContext("2d");
-  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-  ctx.clearRect(0, 0, w, h);
-  canvas.classList.toggle("dim", map.dim && !!map.data);
-  if (!map.data) return;
+  syncMapItems();
+  document.getElementById("map").classList.toggle("dim", map.dim && !!map.data);
+  mapNote();
+  mapVP.resize();
+  mapVP.redraw();
+}
+
+function drawMapItems(ctx, vp) {
+  if (!map.items.length) return;
   const css = getComputedStyle(document.documentElement);
   const token = name => css.getPropertyValue(name).trim();
-  const lit = [];
+  const r = Math.min(4.5, 1.2 * Math.pow(vp.zoom, 0.4));
+  const S = mapUI.search ? mapUI.search.ids : null;
+  const near = (x, y) => x > -10 && y > -10 && x < vp.w + 10 && y < vp.h + 10;
   ctx.fillStyle = token("--edge");
-  for (const p of map.data.points) {
-    if (state.tagIds.has(p[0])) { lit.push(p); continue; }
-    ctx.fillRect(px(p[3]) - 1.2, py(p[4]) - 1.2, 2.4, 2.4);
+  ctx.globalAlpha = S ? 0.14 : 1;
+  const lit = [];
+  for (const it of map.items) {
+    if (S ? S.has(it.id) : state.tagIds.has(it.id)) { lit.push(it); continue; }
+    const x = vp.sx(it.x), y = vp.sy(it.y);
+    if (near(x, y)) ctx.fillRect(x - r, y - r, 2 * r, 2 * r);
   }
-  ctx.fillStyle = token("--centre");
-  for (const p of lit) { ctx.beginPath(); ctx.arc(px(p[3]), py(p[4]), 3.2, 0, 2 * Math.PI); ctx.fill(); }
-  const hovered = map.data.points[map.hover];
-  if (hovered) {
-    ctx.strokeStyle = token("--ink"); ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.arc(px(hovered[3]), py(hovered[4]), 6, 0, 2 * Math.PI); ctx.stroke();
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = token(S ? "--accent" : "--centre");
+  for (const it of lit) {
+    const x = vp.sx(it.x), y = vp.sy(it.y);
+    if (!near(x, y)) continue;
+    ctx.beginPath(); ctx.arc(x, y, r + 1, 0, 2 * Math.PI); ctx.fill();
   }
-  mapNote();
+  const ring = (it, colour, width, extra) => {
+    if (!it) return;
+    ctx.strokeStyle = colour; ctx.lineWidth = width;
+    ctx.beginPath(); ctx.arc(vp.sx(it.x), vp.sy(it.y), r + extra, 0, 2 * Math.PI); ctx.stroke();
+  };
+  if (mapUI.search && mapUI.search.focus) ring(map.byId.get(mapUI.search.focus), token("--centre"), 2, 5);
+  ring(vp.hover, token("--ink"), 1.5, 4);
+  ring(vp.selected, token("--ink"), 2.5, 6);
 }
 
-function nearestPoint(event) {
-  if (!map.data) return -1;
-  const { canvas, px, py } = mapGeometry();
-  const r = canvas.getBoundingClientRect();
-  const mx = event.clientX - r.left, my = event.clientY - r.top;
-  let best = -1, bestD = 64;
-  map.data.points.forEach((p, i) => {
-    const d = (px(p[3]) - mx) ** 2 + (py(p[4]) - my) ** 2;
-    if (d < bestD) { bestD = d; best = i; }
+// ---- Map: hover, selection, search ----
+const mapBox = document.getElementById("mapbox");
+const canPick = id => map.byId.has(id);
+const pinCard = new TitleCard(document.getElementById("rightcol"), { pinned: true, onClose: () => selectItem(null), onTag: v => { ++mapUI.token; mapUI.search = null; searchEl.value = ""; showTag(v); }, onPick: id => pickById(id), canPick });
+const hoverCard = new TitleCard(mapBox, { pinned: false, canPick });
+let hoverTimer = 0, hoverAt = { x: 0, y: 0 };
+// Beside the cursor, flipped or lifted so the whole card stays inside the canvas box.
+function placeHover() {
+  const { x, y } = hoverAt, root = hoverCard.root;
+  const w = root.offsetWidth || 290, h = root.offsetHeight || 0;
+  const left = x + 14 + w > mapBox.clientWidth ? x - 14 - w : x + 14;
+  root.style.left = `${Math.max(6, left)}px`;
+  root.style.top = `${Math.max(6, Math.min(y + 10, mapBox.clientHeight - h - 6))}px`;
+}
+const mapVP = new Viewport(document.getElementById("map"), {
+  draw: drawMapItems,
+  onHover(item, x, y) {
+    clearTimeout(hoverTimer);
+    if (!item || item === mapVP.selected) { hoverCard.hide(); return; }
+    // Follow the cursor at once; ask for the details once it rests, so a sweep of the mouse is not a burst of requests.
+    hoverAt = { x, y };
+    if (hoverCard.itemId !== item.id) {
+      hoverCard.hide();
+      hoverTimer = setTimeout(async () => {
+        if (mapVP.hover !== item || mapVP.selected === item) return;
+        const shown = hoverCard.show(item);
+        placeHover();
+        await shown; placeHover();
+      }, 90);
+    }
+    placeHover();
+  },
+  onSelect: item => selectItem(item),
+});
+
+function selectItem(item) {
+  mapVP.selected = item;
+  hoverCard.hide();
+  if (item) pinCard.show(item); else pinCard.hide();
+  mapVP.redraw();
+}
+// A similar title clicked in the card: pin it and bring it to the middle.
+function pickById(id) {
+  const it = map.byId.get(id);
+  if (!it) return;
+  selectItem(it);
+  mapVP.centreOn(it);
+}
+
+const searchEl = document.getElementById("msearch"), suggEl = document.getElementById("msugg");
+let suggRows = [], suggAt = 0;
+
+function suggestions(q) {
+  q = q.trim().toLowerCase();
+  if (!q) return [];
+  const titles = [];
+  for (const it of map.items) {
+    const at = it.lower.indexOf(q);
+    if (at < 0) continue;
+    titles.push([at === 0 ? 0 : 1, it]);
+  }
+  titles.sort((a, b) => a[0] - b[0] || a[1].lower.localeCompare(b[1].lower));
+  const tags = (state.data ? state.data.tags : []).filter(t => t.value.includes(q))
+    .sort((a, b) => (a.value.startsWith(q) ? 0 : 1) - (b.value.startsWith(q) ? 0 : 1) || b.df - a.df).slice(0, 6);
+  return [
+    ...titles.slice(0, 6).map(([, it]) => ({ type: "title", it, label: it.year ? `${it.title} (${it.year})` : it.title })),
+    ...tags.map(t => ({ type: "tag", tag: t.value, label: t.value, n: `${fmt(t.df)} ${noun()}` })),
+  ];
+}
+function paintSuggestions() {
+  suggRows = suggestions(searchEl.value);
+  suggAt = 0;
+  const kids = [];
+  let group = null;
+  suggRows.forEach((row, i) => {
+    if (row.type !== group) { group = row.type; kids.push(el("li", { className: "grp", role: "presentation" }, group === "title" ? "Titles" : "Tags")); }
+    const li = el("li", { className: "opt" + (i === suggAt ? " on" : ""), role: "option" }, el("span", {}, row.label), el("span", { className: "n" }, row.n || ""));
+    li.addEventListener("mousedown", e => { e.preventDefault(); chooseSuggestion(row); });
+    kids.push(li);
   });
-  return best;
+  suggEl.replaceChildren(...kids);
+  suggEl.hidden = !suggRows.length;
+  searchEl.setAttribute("aria-expanded", String(suggRows.length > 0));
+}
+function moveSuggestion(by) {
+  if (!suggRows.length) return;
+  suggAt = (suggAt + by + suggRows.length) % suggRows.length;
+  suggEl.querySelectorAll("li.opt").forEach((li, i) => li.classList.toggle("on", i === suggAt));
+  suggEl.querySelector("li.opt.on").scrollIntoView({ block: "nearest" });
+}
+function closeSuggestions() { suggEl.hidden = true; searchEl.setAttribute("aria-expanded", "false"); }
+
+async function chooseSuggestion(row) {
+  closeSuggestions();
+  searchEl.value = row.label;
+  const token = ++mapUI.token;
+  if (row.type === "title") {
+    let d;
+    try { d = await titleDetail(row.it.id); } catch { d = { similar: [] }; }
+    if (token !== mapUI.token) return;
+    const near = d.similar.map(s => map.byId.get(s.item_id)).filter(Boolean);
+    mapUI.search = { type: "title", label: row.label, focus: row.it.id, ids: new Set([row.it.id, ...near.map(n => n.id)]) };
+    selectItem(row.it);
+    // Keep the box clear of the pinned card: the right column on a wide window, the bottom half on a narrow one.
+    const narrow = window.innerWidth <= 600;
+    const rc = document.getElementById("rightcol").getBoundingClientRect();
+    mapVP.focusOn([row.it, ...near], narrow ? { l: 24, t: 70, r: 24, b: Math.round(mapVP.h * 0.5) + 16 }
+                                             : { l: 40, t: 70, r: rc.width + 40, b: 60 });
+  } else {
+    let body;
+    try { body = await getJSON(`/api/titles?kind=${state.kind}&tag=${encodeURIComponent(row.tag)}`); }
+    catch (err) { document.getElementById("mnote").textContent = `Could not load: ${err.message}`; return; }
+    if (token !== mapUI.token) return;
+    mapUI.search = { type: "tag", label: row.label, focus: null, ids: new Set(body.titles.map(t => t.item_id)) };
+  }
+  mapVP.redraw();
+}
+// Clearing puts the picture back: no fade, and a title search's zoom and pin are undone.
+function clearSearch() {
+  ++mapUI.token;
+  const was = mapUI.search;
+  mapUI.search = null;
+  searchEl.value = "";
+  closeSuggestions();
+  if (was && was.type === "title") { selectItem(null); mapVP.reset(); }
+  mapVP.redraw();
 }
 
-async function showTitle(point) {
-  const [itemId, title, year] = point;
-  const aside = document.getElementById("detail");
-  const heading = year ? `${title} (${year})` : title;
-  aside.replaceChildren(el("h2", {}, heading), el("p", { className: "sub" }, "Loading…"));
-  let body;
-  try { body = await getJSON(`/api/title?item_id=${encodeURIComponent(itemId)}`); }
-  catch (err) { aside.querySelector(".sub").textContent = `Could not load: ${err.message}`; return; }
-  const chips = el("div", { className: "chips" });
-  for (const value of body.keywords) {
-    const chip = el("span", { className: "chip" + (noise.has(value) ? " noise" : ""), title: "Highlight the titles carrying it" }, value);
-    chip.addEventListener("click", () => showTag(value));
-    chips.append(chip);
-  }
-  aside.replaceChildren(el("h2", {}, heading), el("p", { className: "sub" }, `${fmt(body.keywords.length)} keywords · ${itemId}`), chips);
-}
+searchEl.addEventListener("input", () => {
+  if (!searchEl.value.trim()) { clearSearch(); return; }
+  paintSuggestions();
+});
+searchEl.addEventListener("keydown", e => {
+  if (e.key === "ArrowDown") { e.preventDefault(); moveSuggestion(1); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); moveSuggestion(-1); }
+  else if (e.key === "Enter") { e.preventDefault(); if (suggRows[suggAt]) chooseSuggestion(suggRows[suggAt]); }
+  else if (e.key === "Escape") { e.stopPropagation(); if (!suggEl.hidden) closeSuggestions(); else clearSearch(); }
+});
+searchEl.addEventListener("blur", closeSuggestions);
+// Esc anywhere: first the pinned card, then a search.
+document.addEventListener("keydown", e => {
+  if (e.key !== "Escape" || state.view !== "map" || state.tab !== "tags") return;
+  if (mapVP.selected) selectItem(null); else if (mapUI.search) clearSearch();
+});
 
 let cy = null;
+const cyZoom = f => { if (cy) cy.zoom({ level: cy.zoom() * f, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } }); };
+zoomBar(document.getElementById("graphwrap"), { zoomIn: () => cyZoom(1.5), zoomOut: () => cyZoom(1 / 1.5), reset: () => { if (cy) cy.fit(undefined, 40); } });
 async function drawGraph() {
   const note = document.getElementById("gnote");
   if (!state.tag) {
@@ -551,24 +1069,10 @@ async function showTag(value) {
 
 document.querySelectorAll(".seg button[data-view]").forEach(b => b.addEventListener("click", () => setView(b.dataset.view)));
 document.getElementById("gsize").addEventListener("change", drawGraph);
-const mapCanvas = document.getElementById("map");
-mapCanvas.addEventListener("mousemove", e => {
-  const i = nearestPoint(e);
-  const tip = document.getElementById("maptip");
-  if (i !== map.hover) { map.hover = i; paintMap(); }
-  if (i < 0) { tip.hidden = true; return; }
-  const p = map.data.points[i];
-  const r = mapCanvas.getBoundingClientRect();
-  tip.textContent = p[2] ? `${p[1]} (${p[2]})` : p[1];
-  tip.style.left = `${e.clientX - r.left}px`; tip.style.top = `${e.clientY - r.top}px`;
-  tip.hidden = false;
-});
-mapCanvas.addEventListener("mouseleave", () => { document.getElementById("maptip").hidden = true; map.hover = -1; paintMap(); });
-mapCanvas.addEventListener("click", e => { const i = nearestPoint(e); if (i >= 0) showTitle(map.data.points[i]); });
-window.addEventListener("resize", paintMap);
 document.querySelectorAll(".seg button[data-kind]").forEach(b => b.addEventListener("click", () => {
   if (state.kind === b.dataset.kind) return;
   state.kind = b.dataset.kind; state.tag = null; state.tagIds = new Set();
+  clearSearch();
   document.getElementById("detail").replaceChildren(el("p", { className: "empty" }, "Click a tag to list the titles that carry it."));
   loadKind();
 }));
@@ -618,7 +1122,7 @@ function setTab(tab) {
   qEl("tagsmain").hidden = tab !== "tags";
   qEl("querywrap").hidden = tab !== "query";
   if (tab === "tags") { document.getElementById("error").hidden = !document.getElementById("error").textContent; setView(state.view); }
-  else { document.getElementById("error").hidden = true; writeHash(); initQuery(); }
+  else { document.body.classList.remove("shell"); document.getElementById("error").hidden = true; writeHash(); initQuery(); }
 }
 
 function qStatus(text, bad = false, ...extra) {
@@ -721,6 +1225,12 @@ qEl("sql").addEventListener("keydown", e => { if (e.key === "Enter" && (e.metaKe
 document.querySelectorAll(".seg button[data-tab]").forEach(b => b.addEventListener("click", () => setTab(b.dataset.tab)));
 
 document.getElementById("noisecount").textContent = noise.size;
+document.getElementById("ctlnoise").textContent = noise.size;
+document.getElementById("ctltoggle").addEventListener("click", () => {
+  const box = document.getElementById("controls");
+  const open = box.classList.toggle("open");
+  document.getElementById("ctltoggle").setAttribute("aria-expanded", String(open));
+});
 readHash();
 setView(state.view);
 loadKind();

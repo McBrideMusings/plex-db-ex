@@ -231,6 +231,48 @@ def test_server_serves_the_page_and_both_endpoints(base_url: str) -> None:
     assert json.loads(body)["keywords"] == ["based on comic", "stinger", "superhero"]
 
 
+def test_title_endpoint_returns_the_card_with_similar_titles_in_rank_order(
+    base_url: str, store: Path
+) -> None:
+    with open_store(store) as conn:
+        conn.execute(
+            "UPDATE items SET studio = 'Marvel', content_rating = 'PG-13' "
+            "WHERE item_id = 'imdb:tt1'"
+        )
+        for to_id, rank in (("imdb:tt3", 5), ("imdb:tt2", 1), ("imdb:tt4", 3)):
+            conn.execute(
+                "INSERT INTO edges (from_id, to_id, edge_type, rank, fetched_at) "
+                "VALUES ('imdb:tt1', ?, 'tmdb_similar', ?, ?)",
+                (to_id, rank, FETCHED),
+            )
+        # Another edge type from the same title is not a similar title.
+        conn.execute(
+            "INSERT INTO edges (from_id, to_id, edge_type, rank, fetched_at) "
+            "VALUES ('imdb:tt1', 'tvdb:9', 'tmdb_recommendations', 0, ?)",
+            (FETCHED,),
+        )
+        conn.commit()
+
+    status, body = _get(f"{base_url}/api/title?item_id=imdb:tt1")
+    card = json.loads(body)
+    assert status == 200
+    assert (card["title"], card["year"], card["studio"], card["content_rating"]) == (
+        "Iron Man",
+        2008,
+        "Marvel",
+        "PG-13",
+    )
+    assert [s["title"] for s in card["similar"]] == ["Thor", "Heat", "Unbreakable"]
+    assert card["similar"][0] == {"item_id": "imdb:tt2", "title": "Thor", "year": 2011, "rank": 1}
+
+
+def test_title_endpoint_refuses_a_missing_unknown_or_oversize_id(base_url: str) -> None:
+    assert _get(f"{base_url}/api/title")[0] == 400
+    assert _get(f"{base_url}/api/title?item_id=" + "x" * 201)[0] == 400
+    status, body = _get(f"{base_url}/api/title?item_id=imdb:nope")
+    assert status == 404 and "imdb:nope" in json.loads(body)["error"]
+
+
 def _add_keyword(store: Path, item_id: str, keyword: str) -> None:
     with open_store(store) as conn:
         conn.execute(

@@ -36,6 +36,7 @@ from urllib.parse import parse_qs, urlparse
 from .errors import StoreError
 from .identity import PRIORITY
 from .store import open_readonly
+from .tmdb_edges import SIMILAR_EDGE_TYPE
 
 #: Set in the container to have `plexdb schedule` serve the explorer beside the
 #: sweep, reading the published snapshot. Unset, the scheduler serves nothing.
@@ -456,6 +457,46 @@ def title_keywords(conn: sqlite3.Connection, item_id: str) -> list[str]:
         (item_id, _NAMESPACE, _KEY),
     ).fetchall()
     return [r[0] for r in rows]
+
+
+#: How many similar titles one card lists, and the longest item id a lookup takes.
+SIMILAR_LIMIT = 12
+MAX_ITEM_ID = 200
+
+
+class NoSuchTitle(LookupError):
+    """No item has the id a card was asked for."""
+
+
+def title_details(conn: sqlite3.Connection, item_id: str) -> dict[str, object]:
+    """What a title's card shows: its facts, its keywords, and its nearest similar titles.
+
+    The similar titles are the `tmdb_similar` edges out of it, in the rank TMDB
+    gave them; an edge's target is always an item in the store.
+    """
+    row = conn.execute(
+        "SELECT title, year, studio, content_rating FROM items WHERE item_id = ?", (item_id,)
+    ).fetchone()
+    if row is None:
+        raise NoSuchTitle(item_id)
+    similar = conn.execute(
+        "SELECT i.item_id, i.title, i.year, e.rank FROM edges e "
+        "JOIN items i ON i.item_id = e.to_id "
+        "WHERE e.from_id = ? AND e.edge_type = ? ORDER BY e.rank, i.title LIMIT ?",
+        (item_id, SIMILAR_EDGE_TYPE, SIMILAR_LIMIT),
+    ).fetchall()
+    return {
+        "item_id": item_id,
+        "title": row["title"],
+        "year": row["year"],
+        "studio": row["studio"],
+        "content_rating": row["content_rating"],
+        "keywords": title_keywords(conn, item_id),
+        "similar": [
+            {"item_id": r["item_id"], "title": r["title"], "year": r["year"], "rank": r["rank"]}
+            for r in similar
+        ],
+    }
 
 
 def index_json(index: TagIndex) -> dict[str, object]:
@@ -1029,6 +1070,10 @@ def make_server(
                 route()
             except ValueError as err:
                 self._json({"error": str(err)}, HTTPStatus.BAD_REQUEST)
+            except NoSuchTitle as err:
+                self._json(
+                    {"error": f"no title with item_id {err.args[0]!r}"}, HTTPStatus.NOT_FOUND
+                )
             except NoSuchQuery as err:
                 self._json({"error": f"no saved query named {err.args[0]!r}"}, HTTPStatus.NOT_FOUND)
             except FileNotFoundError:
@@ -1130,9 +1175,10 @@ def make_server(
                 item_id = query.get("item_id")
                 if not item_id:
                     raise ValueError("item_id is required")
+                if len(item_id) > MAX_ITEM_ID:
+                    raise ValueError(f"item_id is over {MAX_ITEM_ID} characters")
                 with open_readonly(store_path) as conn:
-                    keywords = title_keywords(conn, item_id)
-                self._json({"item_id": item_id, "keywords": keywords})
+                    self._json(title_details(conn, item_id))
             else:
                 self._json({"error": f"no route {url.path}"}, HTTPStatus.NOT_FOUND)
 
