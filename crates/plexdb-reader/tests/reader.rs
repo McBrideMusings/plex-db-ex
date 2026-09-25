@@ -14,12 +14,12 @@ fn enrichment_round_trips_filtered_by_namespace() {
 
     let reader = Reader::open(&path).expect("open the fixture store");
     let facts = reader
-        .enrichment_for("imdb:tt1", "tmdb_keywords")
+        .enrichment_for("imdb:tt1", "keywords")
         .expect("query enrichment");
 
     let values: Vec<&str> = facts.iter().map(|f| f.value.as_str()).collect();
     assert_eq!(values, vec!["ensemble cast", "heist"]);
-    assert!(facts.iter().all(|f| f.namespace == "tmdb_keywords"));
+    assert!(facts.iter().all(|f| f.namespace == "keywords"));
 
     // A namespace with nothing recorded comes back empty, not an error.
     let empty = reader
@@ -37,7 +37,7 @@ fn enrichment_for_many_groups_facts_by_id_matching_the_single_item_accessor() {
 
     let ids = ["imdb:tt1", "imdb:tt2", "imdb:tt3", "imdb:does-not-exist"];
     let grouped = reader
-        .enrichment_for_many(ids, "tmdb_keywords")
+        .enrichment_for_many(ids, "keywords")
         .expect("bulk query");
 
     // An id with no rows in the namespace is absent from the map — never an
@@ -54,7 +54,7 @@ fn enrichment_for_many_groups_facts_by_id_matching_the_single_item_accessor() {
     // returns for that id.
     for id in ["imdb:tt1", "imdb:tt2", "imdb:tt3"] {
         let single = reader
-            .enrichment_for(id, "tmdb_keywords")
+            .enrichment_for(id, "keywords")
             .expect("single-item query");
         assert_eq!(
             grouped.get(id).expect("id must be present"),
@@ -73,10 +73,10 @@ fn enrichment_for_many_deduplicates_a_repeated_id() {
 
     // imdb:tt1 passed twice must not double its facts in the result.
     let grouped = reader
-        .enrichment_for_many(["imdb:tt1", "imdb:tt1"], "tmdb_keywords")
+        .enrichment_for_many(["imdb:tt1", "imdb:tt1"], "keywords")
         .expect("bulk query with a repeated id");
     let single = reader
-        .enrichment_for("imdb:tt1", "tmdb_keywords")
+        .enrichment_for("imdb:tt1", "keywords")
         .expect("single-item query");
     assert_eq!(
         grouped.get("imdb:tt1").expect("id must be present"),
@@ -93,7 +93,7 @@ fn enrichment_for_many_of_empty_input_is_empty_without_erroring() {
     let reader = Reader::open(&path).expect("open the fixture store");
 
     let grouped = reader
-        .enrichment_for_many(std::iter::empty(), "tmdb_keywords")
+        .enrichment_for_many(std::iter::empty(), "keywords")
         .expect("empty input must not be an error");
     assert!(grouped.is_empty());
 }
@@ -107,14 +107,95 @@ fn enrichment_for_many_is_stable_across_calls() {
 
     let ids = ["imdb:tt1", "imdb:tt2", "imdb:tt3"];
     let first = reader
-        .enrichment_for_many(ids, "tmdb_keywords")
+        .enrichment_for_many(ids, "keywords")
         .expect("first bulk query");
     let second = reader
-        .enrichment_for_many(ids, "tmdb_keywords")
+        .enrichment_for_many(ids, "keywords")
         .expect("second bulk query against unchanged data");
     assert_eq!(
         first, second,
         "two calls against unchanged data must return identical results in identical order"
+    );
+}
+
+#[test]
+fn a_keyword_two_sources_carry_appears_once_and_takes_the_newer_stamp() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("plexdb.db");
+    common::build_fixture(&path);
+    let reader = Reader::open(&path).expect("open the fixture store");
+
+    // The fixture stores tt1's `heist` twice, once per source.
+    let single = reader
+        .enrichment_for("imdb:tt1", "keywords")
+        .expect("single-item query");
+    let heists: Vec<_> = single.iter().filter(|f| f.value == "heist").collect();
+    assert_eq!(heists.len(), 1, "heist must appear once, got {single:?}");
+    assert_eq!(heists[0].fetched_at, "2026-02-01T00:00:00+00:00");
+
+    let grouped = reader
+        .enrichment_for_many(["imdb:tt1"], "keywords")
+        .expect("bulk query");
+    assert_eq!(grouped["imdb:tt1"], single);
+}
+
+#[test]
+fn a_spelling_resolves_to_its_stored_keyword() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("plexdb.db");
+    common::build_fixture(&path);
+    let reader = Reader::open(&path).expect("open the fixture store");
+
+    assert_eq!(
+        reader.keyword_for_surface("Heists").expect("lookup"),
+        Some("heist".to_string())
+    );
+    // Case, edge whitespace and inner whitespace runs are the only spelling
+    // rules Rust applies.
+    assert_eq!(
+        reader.keyword_for_surface("  Bank-Heist ").expect("lookup"),
+        reader.keyword_for_surface("bank heist").expect("lookup"),
+    );
+    assert_eq!(
+        reader.keyword_for_surface("BANK   HEIST").expect("lookup"),
+        Some("bank heist".to_string())
+    );
+}
+
+#[test]
+fn an_unknown_spelling_resolves_to_none_not_an_error() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("plexdb.db");
+    common::build_fixture(&path);
+    let reader = Reader::open(&path).expect("open the fixture store");
+
+    assert_eq!(
+        reader.keyword_for_surface("no such thing").expect("lookup"),
+        None
+    );
+    assert_eq!(reader.keyword_for_surface("   ").expect("lookup"), None);
+}
+
+#[test]
+fn a_keyword_lists_every_spelling_recorded_for_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("plexdb.db");
+    common::build_fixture(&path);
+    let reader = Reader::open(&path).expect("open the fixture store");
+
+    assert_eq!(
+        reader.surfaces_for_keyword("bank heist").expect("lookup"),
+        vec!["Bank-Heist", "bank heist", "bank_heist"]
+    );
+    assert_eq!(
+        reader.surfaces_for_keyword("heist").expect("lookup"),
+        vec!["Heists", "heist"]
+    );
+    assert!(
+        reader
+            .surfaces_for_keyword("nothing")
+            .expect("lookup")
+            .is_empty()
     );
 }
 
@@ -361,8 +442,8 @@ fn nine_seasons_counts_about_three_films_not_nine() {
     // A nine-season show, one keyword, watched end to end: r = 9.
     conn.execute_batch(
         "INSERT INTO items (item_id, type, title) VALUES ('imdb:ttlong', 'show', 'Long Run');
-         INSERT INTO enrichment (item_id, namespace, key, value, fetched_at) VALUES
-             ('imdb:ttlong', 'tmdb_keywords', 'keyword', 'longrun', '2026-01-01T00:00:00+00:00');",
+         INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) VALUES
+             ('imdb:ttlong', 'keywords', 'tmdb', 'keyword', 'longrun', '2026-01-01T00:00:00+00:00');",
     )
     .expect("seed the long-running show");
     let mut sql = String::new();
