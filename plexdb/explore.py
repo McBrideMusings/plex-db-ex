@@ -1020,6 +1020,10 @@ def make_server(
                 self._json({"error": f"saved queries: {err}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
         def _body(self) -> dict[str, object]:
+            # A page on another site can send `text/plain` without a preflight;
+            # `application/json` it cannot, so requiring it keeps such a page out.
+            if self.headers.get_content_type() != "application/json":
+                raise ValueError("Content-Type must be application/json")
             length = self.headers.get("Content-Length", "")
             if not length.isdigit():
                 raise ValueError("a JSON body with a Content-Length is required")

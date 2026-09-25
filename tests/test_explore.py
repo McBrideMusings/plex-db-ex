@@ -439,7 +439,8 @@ def test_scheduler_refuses_an_explore_port_it_cannot_read(
 
 def _send(method: str, url: str, body: object | None = None) -> tuple[int, dict[str, object]]:
     data = None if body is None else json.dumps(body).encode()
-    request = urllib.request.Request(url, data=data, method=method)
+    headers = {} if data is None else {"Content-Type": "application/json"}
+    request = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
         with urllib.request.urlopen(request) as response:
             return response.status, json.loads(response.read())
@@ -566,8 +567,28 @@ def test_query_endpoint_refuses_an_oversize_body(base_url: str) -> None:
     # the header with no body keeps the client from writing into a closed socket.
     host, port = base_url.removeprefix("http://").split(":")
     conn = http.client.HTTPConnection(host, int(port))
-    conn.request("POST", "/api/query", headers={"Content-Length": str(explore.MAX_BODY + 1)})
+    conn.request(
+        "POST",
+        "/api/query",
+        headers={
+            "Content-Type": "application/json",
+            "Content-Length": str(explore.MAX_BODY + 1),
+        },
+    )
     response = conn.getresponse()
     out = json.loads(response.read())
     conn.close()
     assert response.status == 400 and "body is over" in str(out["error"])
+
+
+def test_query_endpoint_refuses_a_body_that_is_not_json_typed(base_url: str) -> None:
+    request = urllib.request.Request(
+        f"{base_url}/api/query",
+        data=json.dumps({"sql": "SELECT 1"}).encode(),
+        method="POST",
+        headers={"Content-Type": "text/plain"},
+    )
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        urllib.request.urlopen(request)
+    assert caught.value.code == 400
+    assert "application/json" in json.loads(caught.value.read())["error"]
