@@ -99,7 +99,8 @@
   .tcard { position: absolute; width: 290px; max-width: calc(100% - 20px); max-height: calc(100% - 20px); overflow: auto;
            background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 8px;
            box-shadow: 0 6px 24px rgba(0,0,0,.2); padding: 12px; font-size: 13px; line-height: 1.4; }
-  .tcard.hover { pointer-events: none; z-index: 3; }
+  .tcard.hover { pointer-events: none; z-index: 3; width: max-content; max-width: 260px; padding: 6px 10px; }
+  .tcard.hover h3 { margin: 0; font-size: 13px; font-weight: 600; }
   .tcard.pinned { right: 10px; top: 10px; z-index: 2; }
   .tcard .close { position: absolute; top: 6px; right: 6px; width: 26px; height: 26px; padding: 0; cursor: pointer; font: inherit;
                   color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
@@ -608,8 +609,8 @@ function titleDetail(itemId) {
 }
 
 class TitleCard {
-  constructor(box, { pinned, onClose, onTag, onPick, canPick }) {
-    this.pinned = pinned; this.onTag = onTag; this.onPick = onPick; this.canPick = canPick;
+  constructor(box, { pinned, onClose, onTag, onPick, canPick, onDetail }) {
+    this.pinned = pinned; this.onTag = onTag; this.onPick = onPick; this.canPick = canPick; this.onDetail = onDetail;
     this.root = el("div", { className: "tcard " + (pinned ? "pinned" : "hover"), hidden: true });
     if (pinned) {
       this.root.setAttribute("role", "dialog"); this.root.setAttribute("aria-label", "Title details");
@@ -627,11 +628,19 @@ class TitleCard {
     this.itemId = item.id;
     this.paint(item, null, null);
     this.root.hidden = false;
+    if (!this.pinned) return;
     let detail = null, err = null;
     try { detail = await titleDetail(item.id); } catch (e) { err = e; }
-    if (this.itemId === item.id) this.paint(item, detail, err);
+    if (this.itemId === item.id) {
+      this.paint(item, detail, err);
+      if (this.onDetail && detail) this.onDetail(item, detail);
+    }
   }
   paint(item, d, err) {
+    if (!this.pinned) {
+      this.root.replaceChildren(el("h3", {}, item.year ? `${item.title} (${item.year})` : item.title));
+      return;
+    }
     const title = d ? d.title : item.title, year = d ? d.year : item.year;
     const facts = d ? [d.studio, d.content_rating].filter(Boolean).join(" · ") : "";
     const head = el("div", {}, el("h3", {}, year ? `${title} (${year})` : title),
@@ -670,7 +679,9 @@ class TitleCard {
 const map = { data: null, key: null, items: [], byId: new Map(), itemsOf: null, dim: false, defaults: {}, labels: [], labelAt: new Map(), shown: [] };
 // `search` is null, or {type: "title"|"tag", label, ids: Set of item_ids to keep at full strength,
 // focus: the searched title's id}. Everything outside `ids` is drawn faded.
-const mapUI = { search: null, token: 0 };
+// `similar` is the item_ids of the pinned title's similar titles that are on this map: they are
+// drawn in the accent colour, with a line from the pinned title to each.
+const mapUI = { search: null, token: 0, similar: [] };
 
 async function mapRequest(kind, exclude) {
   const p = new URLSearchParams({ kind });
@@ -778,6 +789,15 @@ function drawMapItems(ctx, vp) {
     if (!near(x, y)) continue;
     ctx.beginPath(); ctx.arc(x, y, r + 1, 0, 2 * Math.PI); ctx.fill();
   }
+  if (vp.selected && mapUI.similar.length) {
+    const from = vp.selected, sim = mapUI.similar.map(id => map.byId.get(id)).filter(Boolean);
+    ctx.strokeStyle = token("--accent"); ctx.lineWidth = 1; ctx.globalAlpha = 0.55;
+    ctx.beginPath();
+    for (const it of sim) { ctx.moveTo(vp.sx(from.x), vp.sy(from.y)); ctx.lineTo(vp.sx(it.x), vp.sy(it.y)); }
+    ctx.stroke();
+    ctx.globalAlpha = 1; ctx.fillStyle = token("--accent");
+    for (const it of sim) { ctx.beginPath(); ctx.arc(vp.sx(it.x), vp.sy(it.y), r + 2, 0, 2 * Math.PI); ctx.fill(); }
+  }
   const ring = (it, colour, width, extra) => {
     if (!it) return;
     ctx.strokeStyle = colour; ctx.lineWidth = width;
@@ -831,7 +851,8 @@ function drawRegionLabels(ctx, vp, token) {
 // ---- Map: hover, selection, search ----
 const mapBox = document.getElementById("mapbox");
 const canPick = id => map.byId.has(id);
-const pinCard = new TitleCard(document.getElementById("rightcol"), { pinned: true, onClose: () => selectItem(null), onTag: v => { ++mapUI.token; mapUI.search = null; searchEl.value = ""; showTag(v); }, onPick: id => pickById(id), canPick });
+const pinCard = new TitleCard(document.getElementById("rightcol"), { pinned: true, onClose: () => selectItem(null), onTag: v => { ++mapUI.token; mapUI.search = null; searchEl.value = ""; showTag(v); }, onPick: id => pickById(id), canPick,
+  onDetail: (item, d) => { if (mapVP.selected === item) { mapUI.similar = d.similar.map(s => s.item_id).filter(canPick); mapVP.redraw(); } } });
 const hoverCard = new TitleCard(mapBox, { pinned: false, canPick });
 let hoverTimer = 0, hoverAt = { x: 0, y: 0 };
 // Beside the cursor, flipped or lifted so the whole card stays inside the canvas box.
@@ -865,6 +886,7 @@ const mapVP = new Viewport(document.getElementById("map"), {
 
 function selectItem(item) {
   mapVP.selected = item;
+  mapUI.similar = [];
   hoverCard.hide();
   if (item) pinCard.show(item); else pinCard.hide();
   mapVP.redraw();

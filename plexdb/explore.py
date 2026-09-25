@@ -192,19 +192,20 @@ def neighbourhood(
     its place for the next one rather than leaving a hole.
     """
     _check_kind(kind)
-    # Both sides of the self-join, and the `rows` fetch below, read through a
-    # DISTINCT (item_id, value) subquery rather than `enrichment` directly: a
-    # title carrying `value` from two sources must still contribute exactly
-    # one shared-title count per co-occurring keyword, not one per source.
+    # A title carrying `value` from two sources must still contribute exactly
+    # one shared-title count per co-occurring keyword, not one per source, so
+    # the count is of distinct titles. The self-join reads `enrichment`
+    # directly, which lets SQLite look each title's other keywords up by
+    # primary key; a DISTINCT subquery on either side made it materialise and
+    # re-index the whole namespace on every request (36 s on the real store).
     shared = conn.execute(
-        "SELECT o.value, COUNT(*) FROM "
-        "(SELECT DISTINCT item_id, value FROM enrichment WHERE namespace = ? AND key = ?) c "
-        "JOIN (SELECT DISTINCT item_id, value FROM enrichment WHERE namespace = ? AND key = ?) o "
-        "  ON o.item_id = c.item_id AND o.value != c.value "
+        "SELECT o.value, COUNT(DISTINCT o.item_id) AS n FROM enrichment c "
+        "JOIN enrichment o ON o.item_id = c.item_id AND o.namespace = c.namespace "
+        "  AND o.key = c.key AND o.value != c.value "
         "JOIN items i ON i.item_id = c.item_id "
-        "WHERE c.value = ? AND i.type = ? "
-        "GROUP BY o.value ORDER BY COUNT(*) DESC, o.value",
-        (_NAMESPACE, _KEY, _NAMESPACE, _KEY, centre, kind),
+        "WHERE c.namespace = ? AND c.key = ? AND c.value = ? AND i.type = ? "
+        "GROUP BY o.value ORDER BY n DESC, o.value",
+        (_NAMESPACE, _KEY, centre, kind),
     ).fetchall()
     ranked = [(value, count) for value, count in shared if value not in exclude][:size]
     members = [centre, *(value for value, _ in ranked)]
