@@ -27,6 +27,7 @@ from plexdb.explore import (
     build_index,
     make_server,
     neighbourhood,
+    region_labels,
     run_query,
     title_map,
     titles_tagged,
@@ -142,6 +143,46 @@ def test_title_map_places_alike_titles_together(tmp_path: Path) -> None:
             key=lambda other: math.dist((point.x, point.y), (other.x, other.y)),
         )
         assert ("western" in nearest.item_id) == ("western" in point.item_id), point.item_id
+
+
+def test_region_labels_name_each_region_by_its_own_tag_and_skip_noise(tmp_path: Path) -> None:
+    """Forty titles on two islands, one per genre, each tagged with its genre's
+    stemmed word plus a packaging tag: the labels name the islands, show the
+    readable spelling, and never use the excluded tag."""
+    path = tmp_path / "plexdb.db"
+    init(path)
+    points: list[tuple[str, float, float]] = []
+    with open_store(path) as conn:
+        for genre, stem, x0 in (("western", "outlaw", 0.0), ("space", "galaxi", 0.9)):
+            for i in range(20):
+                item_id = f"tmdb:{genre}{i}"
+                conn.execute(
+                    "INSERT INTO items (item_id, type, title) VALUES (?, 'movie', ?)",
+                    (item_id, item_id),
+                )
+                points.append((item_id, x0 + (i % 5) * 0.02, (i // 5) * 0.02))
+                # The western island's packaging tag out-scores its genre tag,
+                # so it names the region until it is excluded.
+                own = [stem] if genre == "space" or i < 15 else []
+                for keyword in (*own, *(["stinger"] if genre == "western" else [])):
+                    conn.execute(
+                        "INSERT INTO enrichment "
+                        "(item_id, namespace, source, key, value, fetched_at) "
+                        "VALUES (?, 'keywords', 'tmdb', 'keyword', ?, ?)",
+                        (item_id, keyword, FETCHED),
+                    )
+        conn.execute("INSERT INTO keyword_forms (surface, keyword) VALUES ('galaxies', 'galaxi')")
+        conn.commit()
+
+    with open_readonly(path) as conn:
+        labels = region_labels(conn, "movie", points, frozenset({"stinger"}))
+        with_noise = region_labels(conn, "movie", points)
+
+    assert {label.tag for label in labels} == {"outlaw", "galaxi"}
+    assert {label.text for label in labels} == {"outlaw", "galaxies"}
+    assert {label.tag for label in with_noise} == {"stinger", "galaxi"}
+    depths = {(label.node + 1).bit_length() - 1 for label in labels}
+    assert min(depths) == explore.LABEL_FIRST_DEPTH
 
 
 def test_titles_tagged_lists_one_media_type_by_title(store: Path) -> None:

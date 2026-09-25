@@ -25,12 +25,13 @@ import sqlite3
 import threading
 import time
 from collections import Counter, defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path
+from typing import Any, NamedTuple
 from urllib.parse import parse_qs, urlparse
 
 from .errors import StoreError
@@ -447,6 +448,139 @@ def title_map_json(tmap: TitleMap) -> dict[str, object]:
     }
 
 
+#: Region labels come from a k-d split of the map: depth `d` has up to `2**d`
+#: regions, holding about the same number of titles each, so a dense part of the
+#: map splits into many small regions and an empty part stays one. Labels start at
+#: depth 2 (four regions) and stop at depth 9 (512), or where a region has fewer
+#: than `LABEL_MIN_TITLES` titles.
+LABEL_FIRST_DEPTH = 2
+LABEL_LAST_DEPTH = 9
+LABEL_MIN_TITLES = 8
+
+
+class RegionLabel(NamedTuple):
+    #: The region's heap number: the children of `i` are `2i+1` and `2i+2`.
+    node: int
+    #: Median of the region's titles, and the span of the middle 80% of them,
+    #: in map units.
+    x: float
+    y: float
+    width: float
+    height: float
+    titles: int
+    #: The readable spelling to draw, and the stored keyword it stands for.
+    text: str
+    tag: str
+
+
+def readable_forms(conn: sqlite3.Connection) -> dict[str, str]:
+    """For each stored (stemmed) keyword, the raw spelling to show a person.
+
+    `keyword_forms` keeps every raw spelling that normalised to a stored
+    keyword but not how often a source used it, so the choice is the shortest
+    spelling, ties by name. A stored keyword with no entry, or a store that
+    predates the table, is absent, and the caller shows the stored form.
+    """
+    try:
+        rows = conn.execute("SELECT surface, keyword FROM keyword_forms").fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    best: dict[str, str] = {}
+    for surface, keyword in rows:
+        held = best.get(keyword)
+        if held is None or (len(surface), surface) < (len(held), held):
+            best[keyword] = surface
+    return best
+
+
+def region_labels(
+    conn: sqlite3.Connection,
+    kind: str,
+    points: Sequence[tuple[str, float, float]],
+    exclude: frozenset[str] = frozenset(),
+) -> list[RegionLabel]:
+    """Tag labels for the regions of a drawn map, coarse to fine.
+
+    `points` are `(item_id, x, y)`.
+
+    Regions are the nodes of a k-d split (see `LABEL_FIRST_DEPTH`). A region
+    is named by the tag with the highest count-in-region times IDF, the weight
+    the map itself uses, so a tag common everywhere does not name every region.
+    A tag that already names an ancestor is skipped, so each zoom level brings
+    new words. Tags in `exclude`, and tags the map left out of its vectors
+    (fewer than `MAP_MIN_DF` titles), never label anything.
+
+    A `RegionLabel` serialises as a JSON array in field order.
+    """
+    _check_kind(kind)
+    rows = conn.execute(
+        "SELECT k.item_id, k.value FROM "
+        "(SELECT DISTINCT item_id, value FROM enrichment WHERE namespace = ? AND key = ?) k "
+        "JOIN items i USING (item_id) WHERE i.type = ?",
+        (_NAMESPACE, _KEY, kind),
+    ).fetchall()
+    df = Counter(r[1] for r in rows)
+    n = len({r[0] for r in rows})
+    tags: dict[str, list[str]] = defaultdict(list)
+    for item_id, value in rows:
+        if df[value] >= MAP_MIN_DF and value not in exclude:
+            tags[item_id].append(value)
+    forms = readable_forms(conn)
+
+    def span(values: list[float]) -> tuple[float, float]:
+        values = sorted(values)
+        return values[len(values) // 2], (
+            values[int(0.9 * (len(values) - 1))] - values[int(0.1 * (len(values) - 1))]
+        )
+
+    labels: list[RegionLabel] = []
+    # (heap number, indexes into `points`, tags already naming an ancestor)
+    stack: list[tuple[int, list[int], frozenset[str]]] = [
+        (0, list(range(len(points))), frozenset())
+    ]
+    while stack:
+        node, members, used = stack.pop()
+        depth = (node + 1).bit_length() - 1
+        if depth > LABEL_LAST_DEPTH or len(members) < LABEL_MIN_TITLES:
+            continue
+        if depth >= LABEL_FIRST_DEPTH:
+            counts: Counter[str] = Counter()
+            for m in members:
+                counts.update(tags.get(points[m][0], ()))
+            floor = max(2, 0.05 * len(members))
+            scored = [
+                (count * (1.0 + math.log(n / df[tag])), tag)
+                for tag, count in counts.items()
+                if count >= floor and tag not in used
+            ]
+            if scored:
+                tag = min(scored, key=lambda s: (-s[0], s[1]))[1]
+                x, width = span([points[m][1] for m in members])
+                y, height = span([points[m][2] for m in members])
+                labels.append(
+                    RegionLabel(
+                        node,
+                        round(x, 4),
+                        round(y, 4),
+                        round(width, 4),
+                        round(height, 4),
+                        len(members),
+                        forms.get(tag, tag),
+                        tag,
+                    )
+                )
+                used = used | {tag}
+        xs = [points[m][1] for m in members]
+        ys = [points[m][2] for m in members]
+        axis = 1 if max(xs) - min(xs) >= max(ys) - min(ys) else 2
+        ordered = sorted(members, key=lambda m: (points[m][axis], points[m][0]))
+        half = len(ordered) // 2
+        stack.append((2 * node + 1, ordered[:half], used))
+        stack.append((2 * node + 2, ordered[half:], used))
+    labels.sort(key=lambda label: label.node)
+    return labels
+
+
 def title_keywords(conn: sqlite3.Connection, item_id: str) -> list[str]:
     """One title's keywords, by name."""
     # DISTINCT: a keyword two sources both list on this title is one keyword
@@ -623,6 +757,9 @@ class _MapCache:
                 payload = None if exclude else stored_map(conn, kind)
                 if payload is None:
                     payload = title_map_json(title_map(conn, kind, exclude))
+                rows: list[list[Any]] = payload["points"]  # type: ignore[assignment]
+                placed = [(p[0], p[3], p[4]) for p in rows]
+                payload = {**payload, "labels": region_labels(conn, kind, placed, exclude)}
             return payload
 
         return self._cache.get((kind, exclude), (stat.st_mtime_ns, stat.st_size), compute)

@@ -218,7 +218,7 @@
   <div class="seg tagsonly" role="group" aria-label="View">
     <button type="button" data-view="table" aria-pressed="true">Table</button>
     <button type="button" data-view="graph" aria-pressed="false">Graph</button>
-    <button type="button" data-view="map" aria-pressed="false">Map</button>
+    <button type="button" data-view="map" aria-pressed="false">Title map</button>
   </div>
   <span class="stats tagsonly" id="stats">Loading…</span>
 </header>
@@ -665,7 +665,9 @@ class TitleCard {
 // `data` is what is on screen. `dim` is set while it is the default map standing in for one
 // still being drawn without the noise tags. `defaults` keeps each kind's default map, which the
 // server has stored and answers in milliseconds. `items` is `data.points` as viewport items.
-const map = { data: null, key: null, items: [], byId: new Map(), itemsOf: null, dim: false, defaults: {} };
+// `labels` are the region labels of `data`, `labelAt` finds one by its region number, `shown` is
+// the text of the labels drawn in the last frame (what a test reads to see the labels change).
+const map = { data: null, key: null, items: [], byId: new Map(), itemsOf: null, dim: false, defaults: {}, labels: [], labelAt: new Map(), shown: [] };
 // `search` is null, or {type: "title"|"tag", label, ids: Set of item_ids to keep at full strength,
 // focus: the searched title's id}. Everything outside `ids` is drawn faded.
 const mapUI = { search: null, token: 0 };
@@ -722,7 +724,7 @@ function mapNote() {
     + (d.unplaced ? `; ${fmt(d.unplaced)} share no tag with anything and are left off` : "")
     + (state.tag ? `; ${fmt(lit)} carrying “${state.tag}” highlighted` : "")
     + (noise.size ? `; ${fmt(noise.size)} noise-marked tags ignored` : "")
-    + ". Scroll to zoom, drag to pan, hover a dot for its card, click to pin it.";
+    + ". Labels name each region and get finer as you zoom in. Scroll to zoom, drag to pan, hover a dot for its card, click to pin it.";
 }
 
 // A new `data` becomes new viewport items; the selection follows its title if it is still there.
@@ -732,6 +734,9 @@ function syncMapItems() {
   const pts = map.data ? map.data.points : [];
   map.items = pts.map(p => ({ id: p[0], title: p[1], year: p[2], x: p[3], y: p[4], lower: p[1].toLowerCase() }));
   map.byId = new Map(map.items.map(it => [it.id, it]));
+  map.labels = (map.data && map.data.labels || []).map(([node, x, y, w, h, n, text, tag]) =>
+    ({ node, x, y, w, h, n, text, tag, depth: Math.floor(Math.log2(node + 1)), tw: 0 }));
+  map.labelAt = new Map(map.labels.map(l => [l.node, l]));
   let b = { x0: 0, y0: 0, x1: 1, y1: 1 };
   if (map.items.length) {
     b = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
@@ -781,6 +786,46 @@ function drawMapItems(ctx, vp) {
   if (mapUI.search && mapUI.search.focus) ring(map.byId.get(mapUI.search.focus), token("--centre"), 2, 5);
   ring(vp.hover, token("--ink"), 1.5, 4);
   ring(vp.selected, token("--ink"), 2.5, 6);
+  drawRegionLabels(ctx, vp, token);
+}
+
+// Region labels, coarse to fine. Each region is named by one tag and is a node of a binary split
+// of the map (children of node i are 2i+1 and 2i+2). A label shows once its text fits inside its
+// region's width on screen (90px or more), and gives way once a finer label inside the region fits; a label that
+// would overlap one already placed (larger regions place first), or repeats one, is left out.
+const LABEL_FONT = depth => Math.max(11, 26 - 2.3 * (depth - 2));
+function drawRegionLabels(ctx, vp, token) {
+  map.shown = [];
+  if (!map.labels.length) return;
+  const fits = l => l.w * vp.k >= Math.max(90, l.tw * 0.8) && l.h * vp.k >= LABEL_FONT(l.depth);
+  for (const l of map.labels) if (!l.tw) { ctx.font = `600 ${LABEL_FONT(l.depth)}px system-ui, sans-serif`; l.tw = ctx.measureText(l.text).width; }
+  const shown = [];
+  for (const l of map.labels) {
+    if (map.dim && noise.has(l.tag)) continue;
+    if (!fits(l)) continue;
+    const kids = [2 * l.node + 1, 2 * l.node + 2].map(i => map.labelAt.get(i)).filter(Boolean);
+    if (kids.some(k => !(map.dim && noise.has(k.tag)) && fits(k))) continue;
+    const x = vp.sx(l.x), y = vp.sy(l.y), size = LABEL_FONT(l.depth);
+    if (x + l.tw / 2 < 0 || x - l.tw / 2 > vp.w || y + size < 0 || y - size > vp.h) continue;
+    shown.push({ l, x, y, size });
+  }
+  shown.sort((a, b) => b.l.n - a.l.n);
+  const placed = [], seen = new Set();
+  ctx.save();
+  ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.lineJoin = "round";
+  ctx.strokeStyle = token("--panel");
+  for (const { l, x, y, size } of shown) {
+    const box = { x0: x - l.tw / 2 - 4, x1: x + l.tw / 2 + 4, y0: y - size / 2 - 2, y1: y + size / 2 + 2 };
+    if (seen.has(l.text) || placed.some(b => box.x0 < b.x1 && box.x1 > b.x0 && box.y0 < b.y1 && box.y1 > b.y0)) continue;
+    placed.push(box); seen.add(l.text); map.shown.push(l.text);
+    ctx.font = `600 ${size}px system-ui, sans-serif`;
+    ctx.lineWidth = 4;
+    ctx.globalAlpha = mapUI.search ? 0.35 : 0.9;
+    ctx.strokeText(l.text, x, y);
+    ctx.fillStyle = token("--ink");
+    ctx.fillText(l.text, x, y);
+  }
+  ctx.restore();
 }
 
 // ---- Map: hover, selection, search ----
