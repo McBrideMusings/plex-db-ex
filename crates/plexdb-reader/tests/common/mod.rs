@@ -60,11 +60,11 @@ INSERT INTO items (item_id, type, title, year) VALUES
     ('imdb:tt2', 'movie', 'Beta',  2002),
     ('imdb:tt3', 'movie', 'Gamma', 2003);
 
-INSERT INTO enrichment (item_id, namespace, key, value, fetched_at) VALUES
-    ('imdb:tt1', 'tmdb_keywords', 'keyword', 'heist',         '2026-01-01T00:00:00+00:00'),
-    ('imdb:tt1', 'tmdb_keywords', 'keyword', 'ensemble cast', '2026-01-01T00:00:00+00:00'),
-    ('imdb:tt2', 'tmdb_keywords', 'keyword', 'heist',         '2026-01-01T00:00:00+00:00'),
-    ('imdb:tt3', 'tmdb_keywords', 'keyword', 'space',         '2026-01-01T00:00:00+00:00');
+INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) VALUES
+    ('imdb:tt1', 'keywords', 'tmdb', 'keyword', 'heist',         '2026-01-01T00:00:00+00:00'),
+    ('imdb:tt1', 'keywords', 'tmdb', 'keyword', 'ensemble cast', '2026-01-01T00:00:00+00:00'),
+    ('imdb:tt2', 'keywords', 'tmdb', 'keyword', 'heist',         '2026-01-01T00:00:00+00:00'),
+    ('imdb:tt3', 'keywords', 'tmdb', 'keyword', 'space',         '2026-01-01T00:00:00+00:00');
 
 INSERT INTO edges (from_id, to_id, edge_type, rank, fetched_at) VALUES
     ('imdb:tt1', 'imdb:tt2', 'tmdb_similar',         1, '2026-01-01T00:00:00+00:00'),
@@ -94,21 +94,36 @@ INSERT INTO items (item_id, type, title, year) VALUES
     ('imdb:ttbail',  'show', 'Abandoned',  2011),
     ('imdb:ttnosea', 'show', 'No Seasons', 2012);
 
-INSERT INTO enrichment (item_id, namespace, key, value, fetched_at) VALUES
-    ('imdb:ttfin',   'tmdb_keywords', 'keyword', 'sitcom',    '2026-01-01T00:00:00+00:00'),
-    ('imdb:ttfin',   'tmdb_keywords', 'keyword', 'workplace', '2026-01-01T00:00:00+00:00'),
-    ('imdb:ttbail',  'tmdb_keywords', 'keyword', 'bailed',    '2026-01-01T00:00:00+00:00'),
-    ('imdb:ttnosea', 'tmdb_keywords', 'keyword', 'seasonless','2026-01-01T00:00:00+00:00');
+INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) VALUES
+    ('imdb:ttfin',   'keywords', 'tmdb', 'keyword', 'sitcom',    '2026-01-01T00:00:00+00:00'),
+    ('imdb:ttfin',   'keywords', 'tmdb', 'keyword', 'workplace', '2026-01-01T00:00:00+00:00'),
+    ('imdb:ttbail',  'keywords', 'tmdb', 'keyword', 'bailed',    '2026-01-01T00:00:00+00:00'),
+    ('imdb:ttnosea', 'keywords', 'tmdb', 'keyword', 'seasonless','2026-01-01T00:00:00+00:00');
+
+-- A second keyword source (ADR-0016) lists `heist` on tt1 again, with a newer
+-- stamp. tt1's `heist` is therefore two rows in the store and must be one to
+-- every reader, and count once in the rollup.
+INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) VALUES
+    ('imdb:tt1', 'keywords', 'trakt', 'keyword', 'heist', '2026-02-01T00:00:00+00:00');
+
+-- Raw spellings, exactly as the source spelled them, capitalisation included,
+-- recorded against the stored, stemmed form.
+INSERT INTO keyword_forms (surface, keyword) VALUES
+    ('heist',     'heist'),
+    ('Heists',    'heist'),
+    ('bank heist', 'bank heist'),
+    ('Bank-Heist', 'bank heist'),
+    ('bank_heist', 'bank heist');
 
 -- Bookkeeping, exactly as `plexdb enrich-tmdb-keywords` writes it: rows in
 -- `enrichment_cursor`, never in `enrichment` (ADR-0013). Seeded here so the
 -- rollup is exercised against a store that has bookkeeping in it — a fixture
 -- with none would pass whether or not the rollup could tell the difference.
-INSERT INTO enrichment_cursor (item_id, namespace, key, fetched_at) VALUES
-    ('imdb:ttfin', 'tmdb_keywords', 'fetched', '2026-01-01T00:00:00+00:00'),
-    ('imdb:tt2',   'tmdb_keywords', 'fetched', '2026-01-01T00:00:00+00:00'),
-    ('imdb:ttfin', 'tmdb_edges',    'fetched_recommendations', '2026-01-01T00:00:00+00:00'),
-    ('imdb:ttfin', 'tmdb_edges',    'fetched_similar', '2026-01-01T00:00:00+00:00');
+INSERT INTO enrichment_cursor (item_id, namespace, source, key, fetched_at) VALUES
+    ('imdb:ttfin', 'keywords', 'tmdb', 'fetched', '2026-01-01T00:00:00+00:00'),
+    ('imdb:tt2',   'keywords', 'tmdb', 'fetched', '2026-01-01T00:00:00+00:00'),
+    ('imdb:ttfin', 'tmdb_edges', 'tmdb', 'fetched_recommendations', '2026-01-01T00:00:00+00:00'),
+    ('imdb:ttfin', 'tmdb_edges', 'tmdb', 'fetched_similar', '2026-01-01T00:00:00+00:00');
 "#;
 
 /// Episodes and the plays over them, built in code because a two-season show
