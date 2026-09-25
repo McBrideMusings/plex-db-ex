@@ -209,13 +209,13 @@ def test_two_fs_ids_converging_on_the_same_corrected_path_are_merged(tmp_path: P
         _seed_fs_item(conn, old_a, "5550", title="Dup A")
         _seed_fs_item(conn, old_b, "5551", title="Dup B")
         conn.execute(
-            "INSERT INTO enrichment (item_id, namespace, key, value, fetched_at) "
-            "VALUES (?, 'mdblist', 'list', 'top250', '2024-01-01T00:00:00+00:00')",
+            "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) "
+            "VALUES (?, 'mdblist', 'mdblist', 'list', 'top250', '2024-01-01T00:00:00+00:00')",
             (old_a,),
         )
         conn.execute(
-            "INSERT INTO enrichment (item_id, namespace, key, value, fetched_at) "
-            "VALUES (?, 'mdblist', 'list', 'top250', '2024-01-01T00:00:00+00:00')",
+            "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) "
+            "VALUES (?, 'mdblist', 'mdblist', 'list', 'top250', '2024-01-01T00:00:00+00:00')",
             (old_b,),
         )
         conn.commit()
@@ -320,13 +320,13 @@ def test_the_command_does_not_roll_back_a_legitimate_merge(
         _seed_fs_item(conn, old_a, "5550", title="Dup A")
         _seed_fs_item(conn, old_b, "5551", title="Dup B")
         conn.execute(
-            "INSERT INTO enrichment (item_id, namespace, key, value, fetched_at) "
-            "VALUES (?, 'mdblist', 'list', 'top250', '2024-01-01T00:00:00+00:00')",
+            "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) "
+            "VALUES (?, 'mdblist', 'mdblist', 'list', 'top250', '2024-01-01T00:00:00+00:00')",
             (old_a,),
         )
         conn.execute(
-            "INSERT INTO enrichment (item_id, namespace, key, value, fetched_at) "
-            "VALUES (?, 'mdblist', 'list', 'top250', '2024-01-01T00:00:00+00:00')",
+            "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) "
+            "VALUES (?, 'mdblist', 'mdblist', 'list', 'top250', '2024-01-01T00:00:00+00:00')",
             (old_b,),
         )
         conn.commit()

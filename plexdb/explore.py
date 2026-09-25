@@ -1,4 +1,4 @@
-"""The tag explorer — a read-only browser view over `tmdb_keywords`.
+"""The tag explorer — a read-only browser view over the `keywords` namespace.
 
 It exists to find keywords that describe a title's packaging rather than its
 subject. `duringcreditsstinger` is the case that started it: it tags 383 movies,
@@ -49,7 +49,9 @@ KINDS = ("movie", "show")
 #: travels with; the drill-down carries the rest.
 CO_TAGS = 5
 
-_NAMESPACE = "tmdb_keywords"
+#: Renamed from the TMDB-specific `tmdb_keywords` by ADR-0016, which moved the
+#: source into its own column — this explorer reads across every source.
+_NAMESPACE = "keywords"
 _KEY = "keyword"
 
 
@@ -766,7 +768,7 @@ RECIPES: tuple[dict[str, str], ...] = (
         "sql": (
             "SELECT namespace, key, value, fetched_at\n"
             "FROM enrichment\n"
-            "WHERE item_id = 'imdb:tt1375666' AND namespace = 'tmdb_keywords'\n"
+            "WHERE item_id = 'imdb:tt1375666' AND namespace = 'keywords'\n"
             "ORDER BY key, value"
         ),
     },
@@ -778,7 +780,7 @@ RECIPES: tuple[dict[str, str], ...] = (
             "FROM enrichment e\n"
             "LEFT JOIN items i ON i.item_id = e.item_id\n"
             "WHERE e.item_id IN ('imdb:tt1375666', 'imdb:tt0133093')\n"
-            "  AND e.namespace = 'tmdb_keywords'\n"
+            "  AND e.namespace = 'keywords'\n"
             "ORDER BY e.item_id, e.key, e.value"
         ),
     },

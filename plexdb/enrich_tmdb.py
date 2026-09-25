@@ -1,10 +1,18 @@
-"""Fetching TMDB keywords into the `tmdb_keywords` enrichment namespace, cached.
+"""Fetching TMDB keywords into the `keywords` enrichment namespace, cached.
 
 Enrichment is namespaced and opaque (`docs/schema.md`): this module owns exactly
-one namespace, `tmdb_keywords`, and never touches another writer's rows. A
-title's row set here is a snapshot, not an appended log — on a fresh fetch the
-whole set for that title is replaced, the same wipe-and-rewrite discipline the
+one `source` within the shared `keywords` namespace, `tmdb` (ADR-0016), and
+never touches another source's rows — a refresh here deletes and rewrites only
+`WHERE namespace = 'keywords' AND source = 'tmdb'`, so a keyword another source
+also lists survives this module wiping its own. A title's row set under this
+source is a snapshot, not an appended log — on a fresh fetch the whole set for
+that title-and-source is replaced, the same wipe-and-rewrite discipline the
 edges design uses.
+
+Every keyword is normalized and stemmed before it is stored
+(`keywords.normalize_keyword`) and every raw spelling TMDB returned is recorded
+in `keyword_forms`, so `heists` and `heist` land on one row and a reader can
+still show the spelling TMDB actually used.
 
 **Caching is the substance of this module, not a side effect.** A title inside
 its staleness threshold is never asked of `TMDbSource` at all — the check
@@ -31,14 +39,19 @@ from .errors import TMDbError
 # Re-exported (redundant `as` alias) so tests can check that every sweep binds
 # the exact same function/constant object rather than a drifted copy — see
 # test_staleness.py and test_tmdb_common.py.
+from .keywords import NAMESPACE as NAMESPACE
+from .keywords import upsert_keyword_form
 from .staleness import DEFAULT_STALE_DAYS as DEFAULT_STALE_DAYS
 from .staleness import is_stale as is_stale
 from .tmdb_client import TMDbSource
 from .tmdb_common import MAX_CONSECUTIVE_FAILURES as MAX_CONSECUTIVE_FAILURES
 from .tmdb_common import media_type_for as media_type_for
 
-#: This writer's namespace. No other module may write rows under it.
-NAMESPACE = "tmdb_keywords"
+#: The source-agnostic namespace every keyword source shares (ADR-0016), and
+#: this writer's own source name within it. No other module may write rows
+#: under `SOURCE`; another keyword source writes its own rows under this same
+#: `NAMESPACE`, tagged with its own `source`.
+SOURCE = "tmdb"
 _KEYWORD_KEY = "keyword"
 
 #: This writer's per-title progress marker, in `enrichment_cursor` rather than
@@ -73,8 +86,14 @@ class EnrichStats:
 
 
 def wipe_namespace(conn: sqlite3.Connection) -> int:
-    """Delete every `tmdb_keywords` row **and** this module's fetch cursors,
-    leaving every other namespace untouched. Returns the number of rows removed.
+    """Delete every `tmdb`-sourced `keywords` row **and** this module's fetch
+    cursors, leaving every other source's keywords — and every other namespace
+    — untouched. Returns the number of rows removed.
+
+    Scoped to `source = SOURCE` (ADR-0016): a keyword another source also
+    lists on a title must survive this module wiping its own, which is exactly
+    what a bare `namespace = ?` delete would not do once a second source shares
+    this namespace.
 
     Both tables, because they hold one module's state split across two places
     for a reader's benefit (ADR-0013), not two independent things. Wiping the
@@ -82,7 +101,9 @@ def wipe_namespace(conn: sqlite3.Connection) -> int:
     and empty, so `--rewipe` would silently fetch nothing.
     """
     with conn:
-        removed = conn.execute("DELETE FROM enrichment WHERE namespace = ?", (NAMESPACE,)).rowcount
+        removed = conn.execute(
+            "DELETE FROM enrichment WHERE namespace = ? AND source = ?", (NAMESPACE, SOURCE)
+        ).rowcount
         removed += conn.execute(
             "DELETE FROM enrichment_cursor WHERE namespace = ?", (NAMESPACE,)
         ).rowcount
@@ -96,7 +117,7 @@ def enrich_tmdb_keywords(
     stale_days: int = DEFAULT_STALE_DAYS,
 ) -> EnrichStats:
     """Fetch TMDB keywords for every walked movie/show carrying a `tmdb`
-    external id, writing them under the `tmdb_keywords` namespace.
+    external id, writing them under the `keywords` namespace as `source='tmdb'`.
 
     A title inside its staleness threshold is never asked of `source` at
     all. Each title's row set is committed on its own, so a sweep
@@ -178,8 +199,8 @@ def enrich_tmdb_keywords(
             # transactions, an interrupted sweep could leave a cursor saying
             # "fetched" over keywords that had already been deleted.
             conn.execute(
-                "DELETE FROM enrichment WHERE item_id = ? AND namespace = ?",
-                (item_id, NAMESPACE),
+                "DELETE FROM enrichment WHERE item_id = ? AND namespace = ? AND source = ?",
+                (item_id, NAMESPACE, SOURCE),
             )
             conn.execute(
                 "INSERT INTO enrichment_cursor (item_id, namespace, key, fetched_at) "
@@ -188,17 +209,23 @@ def enrich_tmdb_keywords(
                 "fetched_at = excluded.fetched_at",
                 (item_id, NAMESPACE, _CURSOR_KEY, now_iso),
             )
-            # `dict.fromkeys` dedupes while keeping first-seen order, in case
-            # a source ever repeats a name — the row's primary key includes
-            # `value`, so an unguarded duplicate would raise mid-insert.
-            unique_keywords = list(dict.fromkeys(keywords))
-            for keyword in unique_keywords:
+            # Every raw spelling TMDB returned is recorded in `keyword_forms`
+            # even when two of them stem to the same stored value — `heists`
+            # and `heist` are both worth remembering as surfaces TMDB used.
+            # The stored *values* are then deduped (`dict.fromkeys` keeps
+            # first-seen order) before the enrichment insert, since the row's
+            # primary key includes `value` and an unguarded duplicate there
+            # would raise mid-insert.
+            stored_values = list(
+                dict.fromkeys(upsert_keyword_form(conn, keyword) for keyword in keywords)
+            )
+            for value in stored_values:
                 conn.execute(
-                    "INSERT INTO enrichment (item_id, namespace, key, value, fetched_at) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (item_id, NAMESPACE, _KEYWORD_KEY, keyword, now_iso),
+                    "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (item_id, NAMESPACE, SOURCE, _KEYWORD_KEY, value, now_iso),
                 )
         stats.titles_fetched += 1
-        stats.keywords_written += len(unique_keywords)
+        stats.keywords_written += len(stored_values)
 
     return stats

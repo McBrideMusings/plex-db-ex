@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from plexdb import schema
+from plexdb import health, schema
 from plexdb.errors import StoreError
 from plexdb.store import init, open_readonly, open_store
 
@@ -18,6 +18,7 @@ V3_TABLES = {"edges"}
 V6_TABLES = {"collection", "collection_membership"}
 V7_TABLES = {"enrichment_cursor"}
 V9_TABLES = {"title_map", "title_map_state"}
+V10_TABLES = {"keyword_forms"}
 #: V4 adds no new table — it only alters the existing `plays` table and adds
 #: an index (issue #9).
 
@@ -138,13 +139,7 @@ def test_v8_backfills_last_seen_on_every_existing_external_ids_row(tmp_path: Pat
     conn = sqlite3.connect(store)
     try:
         conn.executescript(
-            schema._V1
-            + schema._V2
-            + schema._V3
-            + schema._V4
-            + schema._V5
-            + schema._V6
-            + schema._V7
+            schema._V1 + schema._V2 + schema._V3 + schema._V4 + schema._V5 + schema._V6 + schema._V7
         )
         conn.execute("INSERT INTO items (item_id, type, title) VALUES ('imdb:tt1', 'movie', 'X')")
         conn.execute(
@@ -175,7 +170,14 @@ def test_a_current_store_carries_every_migrations_tables_and_nothing_else(
     # table `apply` itself creates — a table arriving early (or never
     # arriving) is a scope leak worth failing on.
     assert _tables(store) == (
-        V1_TABLES | V2_TABLES | V3_TABLES | V6_TABLES | V7_TABLES | V9_TABLES | {"schema_version"}
+        V1_TABLES
+        | V2_TABLES
+        | V3_TABLES
+        | V6_TABLES
+        | V7_TABLES
+        | V9_TABLES
+        | V10_TABLES
+        | {"schema_version"}
     )
 
 
@@ -186,7 +188,9 @@ def test_the_columns_the_first_slice_depends_on_are_present(tmp_path: Path) -> N
     assert {"item_id", "type", "title", "year"} <= _columns(store, "items")
     assert {"item_id", "ns", "value", "last_seen"} <= _columns(store, "external_ids")
     assert {"rating_key", "item_id", "section_id"} <= _columns(store, "plex_items")
-    assert {"item_id", "namespace", "key", "value", "fetched_at"} <= _columns(store, "enrichment")
+    assert {"item_id", "namespace", "source", "key", "value", "fetched_at"} <= _columns(
+        store, "enrichment"
+    )
 
 
 def test_the_columns_the_plays_slice_depends_on_are_present(tmp_path: Path) -> None:
@@ -528,7 +532,8 @@ def test_edges_uniqueness_is_from_id_to_id_edge_type(tmp_path: Path) -> None:
 def test_v9_adds_the_stored_title_map_tables(tmp_path: Path) -> None:
     conn = sqlite3.connect(tmp_path / "plexdb.db")
     try:
-        conn.executescript("".join(schema.MIGRATIONS[:8]) + schema._V9)
+        v1_through_v8 = "".join(m for m in schema.MIGRATIONS[:8] if isinstance(m, str))
+        conn.executescript(v1_through_v8 + schema._V9)
         columns = {
             table: [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
             for table in ("title_map", "title_map_state")
@@ -540,3 +545,127 @@ def test_v9_adds_the_stored_title_map_tables(tmp_path: Path) -> None:
         "title_map": ["kind", "item_id", "x", "y"],
         "title_map_state": ["kind", "fingerprint", "unplaced", "computed_at"],
     }
+
+
+def _v9_store_with_keyword_data(path: Path) -> None:
+    """A store at v9 (ADR-0016's starting shape) with pre-migration keyword
+    rows: two spellings of the same idea on one item that will collide once
+    stemmed, a third that will not, and one row under an unrelated namespace
+    to exercise the "pick a fitting source" fallback."""
+    conn = sqlite3.connect(path)
+    try:
+        conn.executescript(
+            schema._V1
+            + schema._V2
+            + schema._V3
+            + schema._V4
+            + schema._V5
+            + schema._V6
+            + schema._V7
+            + schema._V8
+            + schema._V9
+            + "CREATE TABLE schema_version (version INTEGER NOT NULL);"
+            + "INSERT INTO schema_version (version) VALUES (9);"
+        )
+        conn.execute(
+            "INSERT INTO items (item_id, type, title) VALUES ('imdb:tt1', 'movie', 'Heat')"
+        )
+        conn.execute(
+            "INSERT INTO items (item_id, type, title) VALUES ('imdb:tt2', 'movie', 'Ronin')"
+        )
+        conn.executemany(
+            "INSERT INTO enrichment (item_id, namespace, key, value, fetched_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            [
+                # Collide after stemming — the newer fetched_at should win.
+                ("imdb:tt1", "tmdb_keywords", "keyword", "Heists", "2026-01-01T00:00:00+00:00"),
+                ("imdb:tt1", "tmdb_keywords", "keyword", "heist", "2026-01-02T00:00:00+00:00"),
+                # Distinct after stemming — survives as its own row.
+                (
+                    "imdb:tt1",
+                    "tmdb_keywords",
+                    "keyword",
+                    "bank-heist",
+                    "2026-01-03T00:00:00+00:00",
+                ),
+                # An unrelated namespace, untouched by the rename.
+                ("imdb:tt2", "mdblist", "list", "top250", "2024-01-01T00:00:00+00:00"),
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_v10_renames_tmdb_keywords_backfills_source_and_stems_merging_collisions(
+    tmp_path: Path,
+) -> None:
+    """ADR-0016. Built against the real v9 shape, then v10 run alone — the same
+    pattern `test_v7_moves_every_bookkeeping_row_out_of_enrichment` uses."""
+    store = tmp_path / "plexdb.db"
+    _v9_store_with_keyword_data(store)
+    conn = sqlite3.connect(store)
+    try:
+        schema._V10(conn)
+        conn.commit()
+
+        rows = conn.execute(
+            "SELECT item_id, namespace, source, key, value, fetched_at FROM enrichment "
+            "ORDER BY item_id, value"
+        ).fetchall()
+        forms = dict(conn.execute("SELECT surface, keyword FROM keyword_forms"))
+        namespaces = {r[1] for r in rows}
+    finally:
+        conn.close()
+
+    assert rows == [
+        ("imdb:tt1", "keywords", "tmdb", "keyword", "bank heist", "2026-01-03T00:00:00+00:00"),
+        # The two colliding rows merged into one, keeping the newer fetched_at.
+        ("imdb:tt1", "keywords", "tmdb", "keyword", "heist", "2026-01-02T00:00:00+00:00"),
+        # No known writer other than tmdb_keywords exists, so the fallback
+        # source is the namespace's own name.
+        ("imdb:tt2", "mdblist", "mdblist", "list", "top250", "2024-01-01T00:00:00+00:00"),
+    ]
+    assert "tmdb_keywords" not in namespaces
+    assert forms == {"Heists": "heist", "heist": "heist", "bank-heist": "bank heist"}
+
+
+def test_v10_is_reached_through_init_and_a_second_init_changes_nothing(tmp_path: Path) -> None:
+    """Acceptance: migrating a pre-migration fixture reaches the current
+    schema with no `tmdb_keywords` rows and a passing health report, and
+    running the migration again (via a second `init`, the only way `apply`
+    would ever run it twice) changes no rows."""
+    store = tmp_path / "plexdb.db"
+    _v9_store_with_keyword_data(store)
+
+    was, now = init(store)
+    assert (was, now) == (9, schema.SCHEMA_VERSION)
+
+    report = health.inspect(store, tmp_path / "backups")
+    assert report.healthy
+    assert report.legacy_tmdb_keywords == 0
+    assert report.keyword_counts == {"tmdb": 2}
+
+    with open_readonly(store) as conn:
+        before_rows = conn.execute(
+            "SELECT item_id, namespace, source, key, value, fetched_at FROM enrichment "
+            "ORDER BY item_id, namespace, source, key, value"
+        ).fetchall()
+        before_forms = conn.execute(
+            "SELECT surface, keyword FROM keyword_forms ORDER BY surface"
+        ).fetchall()
+
+    was2, now2 = init(store)
+    assert (was2, now2) == (schema.SCHEMA_VERSION, schema.SCHEMA_VERSION)
+
+    with open_readonly(store) as conn:
+        after_rows = conn.execute(
+            "SELECT item_id, namespace, source, key, value, fetched_at FROM enrichment "
+            "ORDER BY item_id, namespace, source, key, value"
+        ).fetchall()
+        after_forms = conn.execute(
+            "SELECT surface, keyword FROM keyword_forms ORDER BY surface"
+        ).fetchall()
+
+    assert after_rows == before_rows
+    assert after_forms == before_forms

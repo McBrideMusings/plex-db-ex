@@ -59,8 +59,8 @@ def store(tmp_path: Path) -> Path:
             )
             for keyword in keywords:
                 conn.execute(
-                    "INSERT INTO enrichment (item_id, namespace, key, value, fetched_at) "
-                    "VALUES (?, 'tmdb_keywords', 'keyword', ?, ?)",
+                    "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) "
+                    "VALUES (?, 'keywords', 'tmdb', 'keyword', ?, ?)",
                     (item_id, keyword, FETCHED),
                 )
         # A movie with no keywords is not part of N, just as a pool candidate
@@ -124,8 +124,9 @@ def test_title_map_places_alike_titles_together(tmp_path: Path) -> None:
                 )
                 for keyword in [*(pool[(i + k) % 6] for k in range(3)), "stinger"]:
                     conn.execute(
-                        "INSERT INTO enrichment (item_id, namespace, key, value, fetched_at) "
-                        "VALUES (?, 'tmdb_keywords', 'keyword', ?, ?)",
+                        "INSERT INTO enrichment "
+                        "(item_id, namespace, source, key, value, fetched_at) "
+                        "VALUES (?, 'keywords', 'tmdb', 'keyword', ?, ?)",
                         (item_id, keyword, FETCHED),
                     )
         conn.commit()
@@ -207,8 +208,8 @@ def test_server_serves_the_page_and_both_endpoints(base_url: str) -> None:
 def _add_keyword(store: Path, item_id: str, keyword: str) -> None:
     with open_store(store) as conn:
         conn.execute(
-            "INSERT INTO enrichment (item_id, namespace, key, value, fetched_at) "
-            "VALUES (?, 'tmdb_keywords', 'keyword', ?, '2026-09-01T00:00:00+00:00')",
+            "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) "
+            "VALUES (?, 'keywords', 'tmdb', 'keyword', ?, '2026-09-01T00:00:00+00:00')",
             (item_id, keyword),
         )
         conn.commit()

@@ -70,8 +70,11 @@ def test_keywords_land_as_enrichment_rows_with_a_fetched_at(tmp_path: Path) -> N
             "WHERE item_id = ? AND namespace = ? AND key = 'keyword' ORDER BY value",
             (MOVIE_ID, NAMESPACE),
         )
+        # Snowball's English stemmer reduces "city" to "citi" — expected, not a
+        # bug: stemming trades a real word for one that collapses with its
+        # plural/inflected forms, which is the whole point of normalizing.
         assert [(r["key"], r["value"]) for r in rows] == [
-            ("keyword", "gotham city"),
+            ("keyword", "gotham citi"),
             ("keyword", "superhero"),
         ]
         for row in rows:
@@ -141,15 +144,15 @@ def test_a_row_past_its_staleness_threshold_is_refetched_a_row_inside_it_is_not(
     assert source.calls == [("155", "movie"), ("1396", "tv"), ("155", "movie")]
 
 
-def test_wiping_one_namespace_leaves_another_namespace_untouched(tmp_path: Path) -> None:
+def test_wiping_this_source_leaves_another_namespace_untouched(tmp_path: Path) -> None:
     store = tmp_path / "plexdb.db"
     with _open(store) as conn:
         _seed(conn, item_id=MOVIE_ID, item_type="movie", title="The Dark Knight", tmdb_id="155")
         source = FakeTMDbSource(keywords_by_id={("155", "movie"): ["superhero"]})
         enrich_tmdb_keywords(conn, source)
         conn.execute(
-            "INSERT INTO enrichment (item_id, namespace, key, value, fetched_at) "
-            "VALUES (?, 'other_source', 'k', 'v', '2020-01-01T00:00:00+00:00')",
+            "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) "
+            "VALUES (?, 'other_namespace', 'x', 'k', 'v', '2020-01-01T00:00:00+00:00')",
             (MOVIE_ID,),
         )
         conn.commit()
@@ -161,7 +164,37 @@ def test_wiping_one_namespace_leaves_another_namespace_untouched(tmp_path: Path)
         }
 
     assert removed > 0
-    assert remaining_namespaces == {"other_source"}
+    assert remaining_namespaces == {"other_namespace"}
+
+
+def test_wiping_this_source_leaves_another_sources_keyword_on_the_item(tmp_path: Path) -> None:
+    """Acceptance: two sources both list `heist` on an item; refreshing one
+    source deletes only its own row (ADR-0016 scopes a refresh to `namespace =
+    'keywords' AND source = <that source>`), so the item still carries `heist`
+    through the other source."""
+    store = tmp_path / "plexdb.db"
+    with _open(store) as conn:
+        _seed(conn, item_id=MOVIE_ID, item_type="movie", title="The Dark Knight", tmdb_id="155")
+        source = FakeTMDbSource(keywords_by_id={("155", "movie"): ["heist"]})
+        enrich_tmdb_keywords(conn, source)
+        # A second source lists the same stored keyword on the same item.
+        conn.execute(
+            "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) "
+            "VALUES (?, 'keywords', 'mdblist', 'keyword', 'heist', '2020-01-01T00:00:00+00:00')",
+            (MOVIE_ID,),
+        )
+        conn.commit()
+
+        removed = wipe_namespace(conn)
+
+        remaining = _rows(
+            conn,
+            "SELECT source, value FROM enrichment WHERE item_id = ? AND namespace = 'keywords'",
+            (MOVIE_ID,),
+        )
+
+    assert removed > 0
+    assert [(r["source"], r["value"]) for r in remaining] == [("mdblist", "heist")]
 
 
 def test_a_title_with_no_tmdb_id_is_skipped_and_reported_not_errored(tmp_path: Path) -> None:
@@ -283,6 +316,49 @@ def test_three_consecutive_failures_abort_with_counts_and_the_tripping_error(
     # The sweep stopped at the third failing title — the fourth and fifth
     # were never asked for.
     assert source.calls == [("1", "movie"), ("2", "movie"), ("3", "movie")]
+
+
+def test_spelling_variants_from_two_sources_collapse_and_every_surface_is_recorded(
+    tmp_path: Path,
+) -> None:
+    """Acceptance: `Heists`, `heist`, `bank-heist` and `bank heist`, written by
+    two different sources, collapse to two stored values (`heist` and
+    `bank heist`) — and every raw spelling still appears in `keyword_forms`."""
+    from plexdb.keywords import upsert_keyword_form
+
+    store = tmp_path / "plexdb.db"
+    with _open(store) as conn:
+        _seed(conn, item_id=MOVIE_ID, item_type="movie", title="The Dark Knight", tmdb_id="155")
+        source = FakeTMDbSource(keywords_by_id={("155", "movie"): ["Heists", "bank-heist"]})
+        enrich_tmdb_keywords(conn, source)
+
+        # A second source stores its own spelling of the same two ideas,
+        # through the same normalization every keyword writer shares.
+        for surface in ("heist", "bank heist"):
+            stored = upsert_keyword_form(conn, surface)
+            conn.execute(
+                "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) "
+                "VALUES (?, 'keywords', 'mdblist', 'keyword', ?, '2020-01-01T00:00:00+00:00')",
+                (MOVIE_ID, stored),
+            )
+        conn.commit()
+
+        values = {
+            r["value"]
+            for r in _rows(
+                conn,
+                "SELECT value FROM enrichment WHERE item_id = ? AND namespace = 'keywords'",
+                (MOVIE_ID,),
+            )
+        }
+        form_rows = _rows(conn, "SELECT surface, keyword FROM keyword_forms")
+        forms = {r["surface"]: r["keyword"] for r in form_rows}
+
+    assert values == {"heist", "bank heist"}
+    assert forms["Heists"] == "heist"
+    assert forms["heist"] == "heist"
+    assert forms["bank-heist"] == "bank heist"
+    assert forms["bank heist"] == "bank heist"
 
 
 def test_no_bookkeeping_row_ever_lands_in_the_keyword_namespace(tmp_path: Path) -> None:

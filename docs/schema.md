@@ -91,12 +91,36 @@ CREATE TABLE plex_items (
 CREATE TABLE enrichment (
     item_id    TEXT NOT NULL REFERENCES items(item_id) ON DELETE CASCADE,
     namespace  TEXT NOT NULL,
+    source     TEXT NOT NULL,
     key        TEXT NOT NULL,
     value      TEXT NOT NULL,
     fetched_at TEXT NOT NULL,
-    PRIMARY KEY (item_id, namespace, key, value)
+    PRIMARY KEY (item_id, namespace, source, key, value)
+);
+
+-- Every raw keyword spelling a source has ever written, mapped to the
+-- normalized-and-stemmed value stored above it.
+CREATE TABLE keyword_forms (
+    surface TEXT PRIMARY KEY,
+    keyword TEXT NOT NULL
 );
 ```
+
+**`source` joined the primary key in schema v10**
+([ADR-0016](./adr/0016-keywords-are-one-source-agnostic-namespace-with-a-source-column)). Before it,
+a source's own name was encoded into the namespace string itself (`tmdb_keywords`), which meant a
+second keyword source needed a second namespace, and a source's refresh — a blanket `DELETE FROM
+enrichment WHERE namespace = ?` — would have deleted another source's rows sharing that namespace.
+Every keyword-bearing writer now shares the namespace `keywords` and scopes its own refresh to
+`WHERE namespace = 'keywords' AND source = <itself>`, so a keyword two sources both list on an item
+survives either one's refresh alone.
+
+**Every keyword is normalized and stemmed before it lands here** (`plexdb/keywords.py`): lowercase,
+trim, collapse whitespace, `-`/`_` become spaces, then each word is run through Snowball's English
+stemmer. `Heists`, `heist`, and `bank-heist`/`bank heist` all resolve to one stored value, so a
+consumer scoring by keyword-cosine sees one confirmed signal instead of unrelated near-misses.
+`keyword_forms` is what lets a reader still show the spelling a source actually used — every keyword
+write upserts a row mapping its raw `surface` to the `keyword` value stored in `enrichment`.
 
 `external_ids` is what lets an enrichment fetcher that needs a TMDb id find one without
 assuming the primary key is one. It is also where a Trakt slug, a Letterboxd URL, and a
@@ -141,9 +165,9 @@ own GUIDs derive the contested id keeps it, the other one moves off.
 
 ### Namespaces in use
 
-| Namespace | Writer | Keys |
-|---|---|---|
-| `tmdb_keywords` | `plexdb enrich-tmdb-keywords` | `keyword`, one row per keyword, `value` is the keyword text. Nothing else. Only `items.type` `movie` and `show` are enriched — TMDB has no keywords endpoint for an episode. |
+| Namespace | Source | Writer | Keys |
+|---|---|---|---|
+| `keywords` | `tmdb` | `plexdb enrich-tmdb-keywords` | `keyword`, one row per normalized-and-stemmed keyword, `value` is the stored keyword text (see `keyword_forms` above for the raw spelling). Nothing else. Only `items.type` `movie` and `show` are enriched — TMDB has no keywords endpoint for an episode. |
 
 ## enrichment_cursor
 
@@ -186,8 +210,8 @@ every reader — including one querying the published snapshot with plain SQLite
 makes an expected thing to do. A writer needing bookkeeping puts it here; nothing filters anything.
 
 `enrich-tmdb-keywords` re-fetches a title only once its row is older than `TMDB_KEYWORDS_STALE_DAYS`
-(default 45 days). `--rewipe` deletes every `tmdb_keywords` row before a sweep, forcing a full
-re-fetch, without touching any other namespace.
+(default 45 days). `--rewipe` deletes every `source = 'tmdb'` row under `keywords` before a sweep,
+forcing a full re-fetch, without touching another source's keywords or any other namespace.
 
 Foreign keys are enforced (`PRAGMA foreign_keys = ON`) and the live store runs in WAL mode for
 the writer's own benefit. Consumers never open that file. `plexdb publish` writes a consistent,
@@ -551,6 +575,17 @@ the snapshot carries a current map. A reader that uses the
 map compares `fingerprint` against the same digest of the current keyword rows and treats a
 mismatch as no map; the explorer then draws it live, which takes tens of seconds for the movies.
 Nothing else interprets the fingerprint.
+
+## Version 10 — keywords become one source-agnostic namespace
+
+`enrichment` gains `source` in its primary key, and `keyword_forms(surface, keyword)` is added
+([ADR-0016](./adr/0016-keywords-are-one-source-agnostic-namespace-with-a-source-column)). The
+migration renames `tmdb_keywords` to `keywords`, backfilling `source='tmdb'`; any other namespace
+present backfills `source` to its own name, there being no other writer to name a truer one; every
+keyword value is re-normalized and re-stemmed through `plexdb/keywords.py`'s shared function,
+merging any two rows a stemmer collision now unifies (the newer `fetched_at` wins); and
+`keyword_forms` is filled from every pre-migration raw value. `plexdb check` fails if any
+`tmdb_keywords` row survives it.
 
 ## Not yet built
 

@@ -555,10 +555,10 @@ def test_enrich_tmdb_keywords_writes_rows_and_reports_a_summary(
 
     with sqlite3.connect(store) as conn:
         count = conn.execute(
-            "SELECT count(*) FROM enrichment WHERE namespace = 'tmdb_keywords'"
+            "SELECT count(*) FROM enrichment WHERE namespace = 'keywords' AND source = 'tmdb'"
         ).fetchone()[0]
         cursors = conn.execute(
-            "SELECT count(*) FROM enrichment_cursor WHERE namespace = 'tmdb_keywords'"
+            "SELECT count(*) FROM enrichment_cursor WHERE namespace = 'keywords'"
         ).fetchone()[0]
     # Two keyword rows and nothing else. The fetch cursor is a row in
     # `enrichment_cursor`, not a third row here pretending to be a keyword
@@ -1018,4 +1018,3 @@ def test_ingest_plays_without_a_store_says_so_not_a_traceback(
     assert err.startswith("error: ")
     assert "plexdb migrate" in err
     assert "Traceback" not in err
-

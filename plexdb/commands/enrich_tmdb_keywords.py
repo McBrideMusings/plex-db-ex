@@ -1,5 +1,5 @@
 """`plexdb enrich-tmdb-keywords` — fetch TMDB keywords for walked movies and
-shows into the `tmdb_keywords` namespace."""
+shows into the `keywords` namespace, tagged `source='tmdb'` (ADR-0016)."""
 
 from __future__ import annotations
 
@@ -60,8 +60,8 @@ def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     SOURCE.register(
         sub,
         NAME,
-        help="fetch TMDB keywords for walked movies/shows into the tmdb_keywords "
-        "namespace; a fresh row is never re-fetched",
-        rewipe_help="delete every tmdb_keywords row before the sweep, forcing a full "
-        "re-fetch; other namespaces are untouched",
+        help="fetch TMDB keywords for walked movies/shows into the keywords "
+        "namespace (source='tmdb'); a fresh row is never re-fetched",
+        rewipe_help="delete every source='tmdb' keyword row before the sweep, forcing a "
+        "full re-fetch; another source's keywords and every other namespace are untouched",
     )

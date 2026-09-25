@@ -4,16 +4,26 @@ The schema **is** the public API of this project (ADR-0001). One process writes
 this file; every consumer opens it read-only, and there is no version
 negotiation — so a change here is a breaking change for every consumer at once.
 
-Migrations are an append-only list: index 0 is the statement batch that takes an
-empty database to version 1, index 1 takes it to version 2, and so on. Never
-edit a batch that has shipped; add another.
+Migrations are an append-only list: index 0 is the step that takes an empty
+database to version 1, index 1 takes it to version 2, and so on. Never edit a
+step that has shipped; add another. Most steps are a batch of SQL, run inside
+one transaction; a step needing logic no SQL statement can express — version
+10's keyword re-stemming — is a plain function taking the connection instead,
+run inside the same kind of transaction.
 """
 
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 
+from . import keywords
 from .errors import StoreError
+
+#: A migration is either a batch of SQL (every version through 9) or a Python
+#: step (version 10 on) — stemming needs the `snowballstemmer` package, which
+#: no SQL batch can call. `apply` below is what runs either kind.
+Migration = str | Callable[[sqlite3.Connection], None]
 
 #: Version 1 — identity and enrichment. The four tables the first slice needs
 #: and nothing more: what a title is, every id it is known by, where Plex keeps
@@ -376,8 +386,85 @@ CREATE TABLE title_map_state (
 );
 """
 
+
+#: Version 10 — one keyword namespace, per-source, normalized and stemmed
+#: (ADR-0016). `tmdb_keywords` renames to `keywords`; every existing keyword row
+#: backfills `source='tmdb'`, any other namespace present backfills `source`
+#: to its own namespace name (there being no other writer of `enrichment` yet
+#: to name a truer one); every keyword value is re-normalized and re-stemmed
+#: through `keywords.normalize_keyword`, merging rows that collide once
+#: `Heists` and `heist` land on the same stemmed value; and `keyword_forms`
+#: is filled from every pre-migration raw value so a reader can still show the
+#: spelling a source actually used.
+#:
+#: A plain function, not a SQL batch: stemming needs `snowballstemmer`, which
+#: no `CREATE TABLE`/`INSERT` can call. It rebuilds `enrichment` the same way
+#: `_V5` and `_V8` rebuilt `external_ids` — SQLite cannot add a column to an
+#: existing primary key — but has to do the column backfill and the value
+#: normalization in Python because the second one needs the stemmer.
+#:
+#: Where two pre-migration rows collide after normalization (`heists` and
+#: `heist` on the same item, from the same source), the newer `fetched_at`
+#: wins — the same "the newest fact stands" rule every write path already
+#: follows when it replaces a title's row set on a fresh fetch.
+def _V10(conn: sqlite3.Connection) -> None:
+    conn.execute("CREATE TABLE keyword_forms (surface TEXT PRIMARY KEY, keyword TEXT NOT NULL)")
+    conn.execute(
+        """
+        CREATE TABLE enrichment_v10 (
+            item_id    TEXT NOT NULL REFERENCES items(item_id) ON DELETE CASCADE,
+            namespace  TEXT NOT NULL,
+            source     TEXT NOT NULL,
+            key        TEXT NOT NULL,
+            value      TEXT NOT NULL,
+            fetched_at TEXT NOT NULL,
+            PRIMARY KEY (item_id, namespace, source, key, value)
+        )
+        """
+    )
+
+    rows = conn.execute(
+        "SELECT item_id, namespace, key, value, fetched_at FROM enrichment"
+    ).fetchall()
+
+    # Keyed on the *post*-migration primary key, so two pre-migration rows that
+    # normalize to the same value merge here rather than raising on insert.
+    merged: dict[tuple[str, str, str, str, str], str] = {}
+    for item_id, namespace, key, value, fetched_at in rows:
+        if namespace == "tmdb_keywords":
+            new_namespace = keywords.NAMESPACE
+            source = "tmdb"
+            stored_value = keywords.upsert_keyword_form(conn, value)
+        else:
+            # No other writer of `enrichment` exists yet (docs/schema.md's
+            # "Namespaces in use" lists exactly one), so the namespace itself
+            # is the only fitting source a migration run against a real store
+            # could name without guessing.
+            new_namespace = namespace
+            source = namespace
+            stored_value = value
+
+        row_key = (item_id, new_namespace, source, key, stored_value)
+        if row_key not in merged or fetched_at > merged[row_key]:
+            merged[row_key] = fetched_at
+
+    conn.executemany(
+        "INSERT INTO enrichment_v10 (item_id, namespace, source, key, value, fetched_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        [
+            (item_id, ns, source, key, value, fetched_at)
+            for (item_id, ns, source, key, value), fetched_at in merged.items()
+        ],
+    )
+
+    conn.execute("DROP TABLE enrichment")
+    conn.execute("ALTER TABLE enrichment_v10 RENAME TO enrichment")
+    conn.execute("CREATE INDEX idx_enrichment_ns_key ON enrichment(namespace, key)")
+    conn.execute("CREATE INDEX idx_enrichment_item_ns ON enrichment(item_id, namespace)")
+
+
 #: Append-only. Index i takes the store from version i to version i+1.
-MIGRATIONS: tuple[str, ...] = (_V1, _V2, _V3, _V4, _V5, _V6, _V7, _V8, _V9)
+MIGRATIONS: tuple[Migration, ...] = (_V1, _V2, _V3, _V4, _V5, _V6, _V7, _V8, _V9, _V10)
 
 #: The version a store is at once every migration has been applied.
 SCHEMA_VERSION = len(MIGRATIONS)
@@ -427,19 +514,37 @@ def apply(conn: sqlite3.Connection) -> tuple[int, int]:
     if start == SCHEMA_VERSION:
         return start, start
 
-    # One transaction around the DDL *and* the version row, so a process killed
-    # mid-migration leaves the store untouched rather than half-built.
-    #
-    # The BEGIN/COMMIT has to live inside the script text: `executescript`
+    conn.executescript(
+        "BEGIN;\nCREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);\nCOMMIT;\n"
+    )
+
+    # One transaction per step, around its DDL/data *and* the version row, so a
+    # process killed mid-migration leaves the store at the last step that fully
+    # landed rather than half-built. A SQL batch gets this via `executescript`
+    # (whose BEGIN/COMMIT has to live inside the script text — `executescript`
     # commits any open transaction before it runs, so wrapping the call in
-    # `with conn:` would not cover the DDL — and a crash between the tables
-    # landing and the version row being written would leave a store that is
-    # neither empty nor current, which no later run can repair.
-    script = "BEGIN;\n"
-    script += "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);\n"
-    script += "".join(MIGRATIONS[start:])
-    script += "DELETE FROM schema_version;\n"
-    script += f"INSERT INTO schema_version (version) VALUES ({SCHEMA_VERSION});\n"
-    script += "COMMIT;\n"
-    conn.executescript(script)
+    # `with conn:` would not cover the DDL); a Python step gets it via an
+    # explicit BEGIN/COMMIT around the call, rolled back on any exception.
+    for index in range(start, SCHEMA_VERSION):
+        migration = MIGRATIONS[index]
+        version = index + 1
+        if isinstance(migration, str):
+            conn.executescript(
+                "BEGIN;\n"
+                + migration
+                + "\nDELETE FROM schema_version;\n"
+                + f"INSERT INTO schema_version (version) VALUES ({version});\n"
+                + "COMMIT;\n"
+            )
+        else:
+            conn.execute("BEGIN")
+            try:
+                migration(conn)
+            except BaseException:
+                conn.execute("ROLLBACK")
+                raise
+            conn.execute("DELETE FROM schema_version")
+            conn.execute("INSERT INTO schema_version (version) VALUES (?)", (version,))
+            conn.execute("COMMIT")
+
     return start, SCHEMA_VERSION

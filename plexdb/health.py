@@ -98,6 +98,17 @@ class Report:
     #: `None` when `backup_dir` does not exist — a checkout that has never
     #: migrated has nothing to report, which is not an empty directory.
     backups: Backups | None
+    #: Keyword row counts under the `keywords` namespace, keyed by `source`
+    #: (ADR-0016). Empty on a store older than schema v10, which has no
+    #: `source` column to group by.
+    keyword_counts: dict[str, int]
+    #: Rows in `keyword_forms` — every raw spelling normalized so far.
+    keyword_forms_count: int
+    #: Rows still sitting under the pre-v10 `tmdb_keywords` namespace. Should
+    #: always be zero once a store is current; a nonzero count means the v10
+    #: migration ran but left something behind, or something wrote the old
+    #: namespace back after it ran.
+    legacy_tmdb_keywords: int
 
     @property
     def current(self) -> bool:
@@ -111,13 +122,14 @@ class Report:
     def healthy(self) -> bool:
         """Whether `plexdb check` exits zero.
 
-        Only two things make a store *wrong*: it is at a version this build does
-        not speak, or SQLite says the file is damaged. Nine-day-old plays and a
-        rising `fs:` count are things to look at, not things to fail on — a
-        non-zero exit for them would make the command useless as a gate the day
-        an enrichment source is down.
+        Three things make a store *wrong*: it is at a version this build does
+        not speak, SQLite says the file is damaged, or a `tmdb_keywords` row
+        survived the migration that was supposed to retire that namespace.
+        Nine-day-old plays and a rising `fs:` count are things to look at, not
+        things to fail on — a non-zero exit for them would make the command
+        useless as a gate the day an enrichment source is down.
         """
-        return self.current and self.sound
+        return self.current and self.sound and self.legacy_tmdb_keywords == 0
 
 
 def _tables(conn: sqlite3.Connection) -> set[str]:
@@ -230,6 +242,38 @@ def _fs_identities(conn: sqlite3.Connection, tables: set[str]) -> int:
     return int(row[0])
 
 
+def _keyword_counts(conn: sqlite3.Connection, tables: set[str]) -> dict[str, int]:
+    """Keyword rows per source, under the shared `keywords` namespace.
+
+    Defensive against a store older than schema v10: `enrichment` exists from
+    v1, but its `source` column arrives only with the ADR-0016 migration, and
+    this report runs against stores this build does not agree with.
+    """
+    if not _has(conn, "enrichment", "source", tables):
+        return {}
+    rows = conn.execute(
+        "SELECT source, count(*) FROM enrichment WHERE namespace = 'keywords' "
+        "GROUP BY source ORDER BY source"
+    ).fetchall()
+    return {str(row[0]): int(row[1]) for row in rows}
+
+
+def _keyword_forms_count(conn: sqlite3.Connection, tables: set[str]) -> int:
+    if "keyword_forms" not in tables:
+        return 0
+    return int(conn.execute("SELECT count(*) FROM keyword_forms").fetchone()[0])
+
+
+def _legacy_tmdb_keywords(conn: sqlite3.Connection, tables: set[str]) -> int:
+    """Rows still sitting under the namespace ADR-0016's migration retired."""
+    if "enrichment" not in tables:
+        return 0
+    row = conn.execute(
+        "SELECT count(*) FROM enrichment WHERE namespace = 'tmdb_keywords'"
+    ).fetchone()
+    return int(row[0])
+
+
 def _backups(directory: Path) -> Backups | None:
     """What is in the backups directory, or `None` when there is no such
     directory. Nothing prunes the pre-migration copies by design, so the number
@@ -256,4 +300,7 @@ def inspect(path: Path, backup_dir: Path, *, now: datetime | None = None) -> Rep
             fs_identities=_fs_identities(conn, tables),
             backup_dir=backup_dir.resolve(),
             backups=_backups(backup_dir),
+            keyword_counts=_keyword_counts(conn, tables),
+            keyword_forms_count=_keyword_forms_count(conn, tables),
+            legacy_tmdb_keywords=_legacy_tmdb_keywords(conn, tables),
         )

@@ -72,6 +72,17 @@ def render(report: Report) -> list[str]:
 
     lines.append(f"fs: identities: {report.fs_identities:,}")
 
+    if report.keyword_counts:
+        lines.append("keywords by source:")
+        for source, count in report.keyword_counts.items():
+            lines.append(f"  {source}: {count:,}")
+    lines.append(f"keyword_forms: {report.keyword_forms_count:,}")
+    if report.legacy_tmdb_keywords:
+        lines.append(
+            f"tmdb_keywords rows FAILED: {report.legacy_tmdb_keywords:,} row(s) never "
+            "migrated to the keywords namespace (ADR-0016) — run plexdb migrate"
+        )
+
     if report.duplicates:
         lines.append(f"identities with more than one rating key: {len(report.duplicates)}")
         for duplicate in report.duplicates:

@@ -26,7 +26,9 @@ NOW = datetime(2026, 8, 12, 12, 0, 0, tzinfo=UTC)
 def _store_at(path: Path, version: int) -> None:
     """Build a store at exactly `version` by applying only that many migrations."""
     with open_store(path, create=True) as conn:
-        script = "".join(schema.MIGRATIONS[:version])
+        # Every migration up to and including v9 is a SQL batch (v10 is the
+        # first Python step); this helper is never called at v10 itself.
+        script = "".join(m for m in schema.MIGRATIONS[:version] if isinstance(m, str))
         conn.executescript(script)
         conn.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
         conn.execute("DELETE FROM schema_version")
@@ -54,10 +56,11 @@ def _populate(path: Path) -> None:
             (int(datetime(2026, 8, 10, 12, 0, tzinfo=UTC).timestamp()),),
         )
         conn.execute(
-            "INSERT INTO enrichment (item_id, namespace, key, value, fetched_at) "
-            "VALUES ('imdb:tt1', 'tmdb_keywords', 'keyword', 'heist', "
+            "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) "
+            "VALUES ('imdb:tt1', 'keywords', 'tmdb', 'keyword', 'heist', "
             "'2026-08-09T12:00:00+00:00')"
         )
+        conn.execute("INSERT INTO keyword_forms (surface, keyword) VALUES ('heist', 'heist')")
         conn.commit()
 
 
@@ -75,6 +78,9 @@ def test_a_current_populated_store_is_healthy_and_reports_what_is_in_it(tmp_path
     assert report.counts["plays"] == 1
     assert report.counts["enrichment"] == 1
     assert report.fs_identities == 1
+    assert report.keyword_counts == {"tmdb": 1}
+    assert report.keyword_forms_count == 1
+    assert report.legacy_tmdb_keywords == 0
 
 
 def test_freshness_reports_the_newest_row_of_each_kind_and_its_age(tmp_path: Path) -> None:
@@ -236,6 +242,60 @@ def test_backups_are_counted_and_sized_and_an_absent_directory_is_not_an_empty_o
     found = inspect(path, backups, now=NOW).backups
     assert found is not None
     assert (found.count, found.size) == (2, 3072)
+
+
+def test_keyword_counts_are_grouped_by_source_and_printed(tmp_path: Path) -> None:
+    path = tmp_path / "plexdb.db"
+    init(path)
+    with open_store(path) as conn:
+        conn.execute(
+            "INSERT INTO items (item_id, type, title) VALUES ('imdb:tt1', 'movie', 'Heat')"
+        )
+        conn.executemany(
+            "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) "
+            "VALUES ('imdb:tt1', 'keywords', ?, 'keyword', ?, '2026-08-09T12:00:00+00:00')",
+            [("tmdb", "heist"), ("tmdb", "crime"), ("mdblist", "heist")],
+        )
+        conn.executemany(
+            "INSERT INTO keyword_forms (surface, keyword) VALUES (?, ?)",
+            [("heist", "heist"), ("crime", "crime")],
+        )
+        conn.commit()
+
+    report = inspect(path, tmp_path / "backups", now=NOW)
+    printed = "\n".join(render(report))
+
+    assert report.keyword_counts == {"mdblist": 1, "tmdb": 2}
+    assert report.keyword_forms_count == 2
+    assert "keywords by source:" in printed
+    assert "  tmdb: 2" in printed
+    assert "  mdblist: 1" in printed
+    assert "keyword_forms: 2" in printed
+
+
+def test_a_surviving_tmdb_keywords_row_fails_health_and_says_so(tmp_path: Path) -> None:
+    """The migration that folded `tmdb_keywords` into `keywords` (ADR-0016) is
+    supposed to leave none of the old namespace behind — a store that still
+    carries one is not current in the way that matters, even if its schema
+    version says otherwise."""
+    path = tmp_path / "plexdb.db"
+    init(path)
+    with open_store(path) as conn:
+        conn.execute(
+            "INSERT INTO items (item_id, type, title) VALUES ('imdb:tt1', 'movie', 'Heat')"
+        )
+        conn.execute(
+            "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) "
+            "VALUES ('imdb:tt1', 'tmdb_keywords', 'tmdb', 'keyword', 'heist', "
+            "'2026-08-09T12:00:00+00:00')"
+        )
+        conn.commit()
+
+    report = inspect(path, tmp_path / "backups", now=NOW)
+
+    assert not report.healthy
+    assert report.legacy_tmdb_keywords == 1
+    assert "tmdb_keywords rows FAILED: 1" in "\n".join(render(report))
 
 
 def test_the_exit_code_is_zero_when_current_and_one_when_behind(

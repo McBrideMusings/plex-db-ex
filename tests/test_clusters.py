@@ -102,19 +102,19 @@ def _seed_plays_at_floor(
 
 def _seed_keyword(conn: sqlite3.Connection, item_id: str, keyword: str) -> None:
     conn.execute(
-        "INSERT INTO enrichment (item_id, namespace, key, value, fetched_at) "
-        "VALUES (?, 'tmdb_keywords', 'keyword', ?, '2024-01-01T00:00:00+00:00')",
+        "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) "
+        "VALUES (?, 'keywords', 'tmdb', 'keyword', ?, '2024-01-01T00:00:00+00:00')",
         (item_id, keyword),
     )
 
 
 def _mark_enriched_with_no_keywords(conn: sqlite3.Connection, item_id: str) -> None:
-    """The sentinel `enrich_tmdb.py` writes for a title fetched but carrying
-    zero keywords — still "coverage" in the sense that TMDB was asked, but
-    contributes nothing to a keyword profile."""
+    """A row shaped like the old pre-ADR-0013 `_fetched` sentinel — not a
+    `keyword` row — to prove `build_keyword_profile`'s `key = ?` filter keeps
+    excluding anything that is not a keyword, whatever namespace it sits in."""
     conn.execute(
-        "INSERT INTO enrichment (item_id, namespace, key, value, fetched_at) "
-        "VALUES (?, 'tmdb_keywords', '_fetched', '1', '2024-01-01T00:00:00+00:00')",
+        "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) "
+        "VALUES (?, 'keywords', 'tmdb', '_fetched', '1', '2024-01-01T00:00:00+00:00')",
         (item_id,),
     )
 

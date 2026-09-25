@@ -198,9 +198,11 @@ LATENT_USER_FLOOR = 20
 #: runs over unchanged data).
 TOP_N_KEYWORDS = 20
 
-#: The namespace and key `enrich_tmdb.py` writes actual keyword values under
-#: (issue #4). Read-only here — this module never writes enrichment.
-_TMDB_KEYWORDS_NAMESPACE = "tmdb_keywords"
+#: The namespace and key every keyword source writes actual keyword values
+#: under (issue #4; renamed from the TMDB-specific `tmdb_keywords` by
+#: ADR-0016, which moved the source into its own column). Read-only here —
+#: this module never writes enrichment.
+_TMDB_KEYWORDS_NAMESPACE = "keywords"
 _KEYWORD_KEY = "keyword"
 
 
