@@ -6,6 +6,7 @@ talks to, against a small store whose counts can be worked out by hand.
 
 from __future__ import annotations
 
+import http.client
 import json
 import math
 import socket
@@ -545,6 +546,12 @@ def test_query_endpoint_answers_rows_and_400s_a_refusal(base_url: str) -> None:
 
 
 def test_query_endpoint_refuses_an_oversize_body(base_url: str) -> None:
-    padding = "x" * (explore.MAX_BODY + 1)
-    status, out = _send("POST", f"{base_url}/api/query", {"sql": f"SELECT '{padding}'"})
-    assert status == 400 and "body is over" in str(out["error"])
+    # The server answers from the header alone, without reading the body. Sending
+    # the header with no body keeps the client from writing into a closed socket.
+    host, port = base_url.removeprefix("http://").split(":")
+    conn = http.client.HTTPConnection(host, int(port))
+    conn.request("POST", "/api/query", headers={"Content-Length": str(explore.MAX_BODY + 1)})
+    response = conn.getresponse()
+    out = json.loads(response.read())
+    conn.close()
+    assert response.status == 400 and "body is over" in str(out["error"])
