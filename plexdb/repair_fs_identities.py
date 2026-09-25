@@ -61,8 +61,8 @@ _SIMPLE_TABLES: tuple[str, ...] = ("plex_items", "plays")
 #: instead of a bare `UPDATE`.
 _PK_COLUMNS: dict[str, tuple[str, ...]] = {
     "external_ids": ("ns", "value", "kind"),
-    "enrichment": ("namespace", "key", "value"),
-    "enrichment_cursor": ("namespace", "key"),
+    "enrichment": ("namespace", "source", "key", "value"),
+    "enrichment_cursor": ("namespace", "source", "key"),
     "collection_membership": ("collection_id",),
 }
 

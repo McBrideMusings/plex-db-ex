@@ -44,8 +44,9 @@ _Avoid_: GUID (Plex's word for the whole set), external key
 A namespaced key-value fact about one title, opaque to the Store.
 
 **Namespace**:
-A hard partition of enrichment rows owned by exactly one writer, which may wipe and
-rewrite only its own rows.
+A kind of enrichment fact (`keywords`, …), shared by every source that supplies it.
+A writer owns one source within a namespace and may wipe and rewrite only that
+source's rows.
 
 **Edge**:
 A directed item-to-item relationship carrying a source rank. A snapshot of what a

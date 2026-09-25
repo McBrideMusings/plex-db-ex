@@ -199,10 +199,9 @@ LATENT_USER_FLOOR = 20
 TOP_N_KEYWORDS = 20
 
 #: The namespace and key every keyword source writes actual keyword values
-#: under (issue #4; renamed from the TMDB-specific `tmdb_keywords` by
-#: ADR-0016, which moved the source into its own column). Read-only here —
-#: this module never writes enrichment.
-_TMDB_KEYWORDS_NAMESPACE = "keywords"
+#: under (issue #4, ADR-0016). Read-only here — this module never writes
+#: enrichment.
+_KEYWORDS_NAMESPACE = "keywords"
 _KEYWORD_KEY = "keyword"
 
 
@@ -592,7 +591,7 @@ def build_keyword_profile(
     rows = conn.execute(
         "SELECT DISTINCT item_id, value FROM enrichment "
         f"WHERE namespace = ? AND key = ? AND item_id IN ({placeholders})",
-        (_TMDB_KEYWORDS_NAMESPACE, _KEYWORD_KEY, *depth_by_unit.keys()),
+        (_KEYWORDS_NAMESPACE, _KEYWORD_KEY, *depth_by_unit.keys()),
     ).fetchall()
 
     counts: Counter[str] = Counter()

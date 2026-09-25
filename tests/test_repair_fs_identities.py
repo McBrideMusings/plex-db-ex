@@ -253,6 +253,66 @@ def test_two_fs_ids_converging_on_the_same_corrected_path_are_merged(tmp_path: P
         assert plays == {"h-5550": new_id, "h-5551": new_id}, "both plays carry across the merge"
 
 
+def test_a_merge_keeps_the_same_keyword_from_two_sources(tmp_path: Path) -> None:
+    """Two sources listing one keyword are two facts (ADR-0016). A merge folds
+    only a row that matches on source too, so neither source loses its copy."""
+    movie = {
+        "ratingKey": "5550",
+        "type": "movie",
+        "title": "Dup",
+        "Media": [{"Part": [{"file": "/media/movies/Dup/dup.mkv"}]}],
+    }
+    source = FakeSource(
+        section_list=[
+            Section(key="1", type="movie", title="Movies"),
+            Section(key="3", type="movie", title="More Movies"),
+        ],
+        records={
+            ("1", PLEX_TYPE_MOVIE): [movie],
+            ("3", PLEX_TYPE_MOVIE): [dict(movie, ratingKey="5551")],
+        },
+    )
+    old_a = derive_item_id([], canonical_path("/media/movies/Dup/dup.mkv", ()))
+    old_b = derive_item_id([], "/mnt/plex" + canonical_path("/media/movies/Dup/dup.mkv", ()))
+    new_id = derive_item_id([], canonical_path("/media/movies/Dup/dup.mkv", ("/media",)))
+
+    store = tmp_path / "plexdb.db"
+    init_store(store)
+    with open_store(store) as conn:
+        _seed_fs_item(conn, old_a, "5550", title="Dup A")
+        _seed_fs_item(conn, old_b, "5551", title="Dup B")
+        for item_id, src in ((old_a, "tmdb"), (old_b, "other")):
+            conn.execute(
+                "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) "
+                "VALUES (?, 'keywords', ?, 'keyword', 'heist', '2024-01-01T00:00:00+00:00')",
+                (item_id, src),
+            )
+            conn.execute(
+                "INSERT INTO enrichment_cursor (item_id, namespace, source, key, fetched_at) "
+                "VALUES (?, 'keywords', ?, 'fetched', '2024-01-01T00:00:00+00:00')",
+                (item_id, src),
+            )
+        conn.commit()
+
+        result = apply_fs_repairs(conn, plan_fs_repairs(conn, source, source_roots=("/media",)))
+
+        assert result.merges == 1
+        assert "enrichment" not in result.duplicates_dropped
+        assert "enrichment_cursor" not in result.duplicates_dropped
+        sources = sorted(
+            r["source"]
+            for r in conn.execute("SELECT source FROM enrichment WHERE item_id = ?", (new_id,))
+        )
+        assert sources == ["other", "tmdb"], "each source keeps its own heist row"
+        cursors = sorted(
+            r["source"]
+            for r in conn.execute(
+                "SELECT source FROM enrichment_cursor WHERE item_id = ?", (new_id,)
+            )
+        )
+        assert cursors == ["other", "tmdb"], "each source keeps its own fetch cursor"
+
+
 def test_plan_fs_repairs_is_read_only(tmp_path: Path) -> None:
     """The command relies on this to decide whether a backup is warranted
     before writing anything — planning must never itself write."""
