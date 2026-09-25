@@ -5,10 +5,11 @@ subject. `duringcreditsstinger` is the case that started it: it tags 383 movies,
 rides along with superhero films, and so lifts a superhero pick in a
 keyword-cosine ranking for a reason that has nothing to do with taste.
 
-Nothing here writes. Every request opens the store through `open_readonly`, so
+Nothing here writes the store. Every request opens it through `open_readonly`, so
 a handler bug meets SQLite's read-only mode rather than the one writer's file
-(ADR-0001). The noise list the page keeps lives in the viewer's browser, never
-on disk.
+(ADR-0001). The one file the explorer does write is the Query tab's saved
+queries, `explore-queries.json` beside the store. The noise list the page keeps
+lives in the viewer's browser, never on disk.
 
 The numbers are computed the way `taste-cosine.rhai` computes them for a pool,
 with the whole library of one type standing in for the pool: `df` is how many
@@ -570,6 +571,16 @@ class _MapCache:
 QUERY_SECONDS = 5.0
 QUERY_ROWS = 500
 
+#: Longest string or blob one SQL function may build (`SQLITE_LIMIT_LENGTH`). The
+#: progress handler cannot interrupt a single call such as `randomblob(9e8)`, and
+#: the explorer shares a process with the sweep, so an oversize value is refused
+#: instead of allocated.
+QUERY_VALUE_BYTES = 8 << 20
+
+#: Statements that may run at once. The server answers each request on its own
+#: thread; a third caller is told to retry rather than queued.
+QUERY_SLOTS = threading.BoundedSemaphore(2)
+
 #: Largest request body the explorer reads. A pasted query is a few kilobytes.
 MAX_BODY = 1 << 20
 
@@ -655,6 +666,15 @@ def run_query(
     """
     if not sql.strip():
         raise QueryError("no SQL to run")
+    if not QUERY_SLOTS.acquire(blocking=False):
+        raise QueryError("two queries are already running; try again in a moment")
+    try:
+        return _run_query(store_path, sql, seconds, rows)
+    finally:
+        QUERY_SLOTS.release()
+
+
+def _run_query(store_path: Path, sql: str, seconds: float, rows: int) -> dict[str, object]:
     started = time.monotonic()
     deadline = started + seconds
     timed_out = False
@@ -667,6 +687,7 @@ def run_query(
     with open_readonly(store_path) as conn:
         try:
             conn.execute("PRAGMA query_only = ON")
+            conn.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, QUERY_VALUE_BYTES)
             conn.set_authorizer(_deny_all_but_reads)
             conn.set_progress_handler(past_deadline, 1000)
             cursor = conn.execute(sql)
@@ -877,6 +898,10 @@ RECIPES: tuple[dict[str, str], ...] = (
 )
 
 
+class NoSuchQuery(LookupError):
+    """A delete named a saved query that is not there."""
+
+
 class SavedQueries:
     """Named queries in one JSON file beside the store, never inside it.
 
@@ -897,8 +922,11 @@ class SavedQueries:
             return []
         except ValueError as err:
             raise OSError(f"{self._path} is not valid JSON: {err}") from err
-        if not isinstance(raw, list) or not all(isinstance(q, dict) for q in raw):
-            raise OSError(f"{self._path} does not hold a list of queries")
+        if not isinstance(raw, list) or not all(
+            isinstance(q, dict) and all(isinstance(q.get(k), str) for k in ("name", "sql", "note"))
+            for q in raw
+        ):
+            raise OSError(f"{self._path} does not hold a list of name, sql and note entries")
         return raw
 
     def _write(self, queries: list[dict[str, str]]) -> None:
@@ -935,7 +963,7 @@ class SavedQueries:
             queries = self._read()
             kept = [q for q in queries if q.get("name") != name]
             if len(kept) == len(queries):
-                raise KeyError(name)
+                raise NoSuchQuery(name)
             self._write(kept)
             return kept
 
@@ -979,7 +1007,7 @@ def make_server(
                 route()
             except ValueError as err:
                 self._json({"error": str(err)}, HTTPStatus.BAD_REQUEST)
-            except KeyError as err:
+            except NoSuchQuery as err:
                 self._json({"error": f"no saved query named {err.args[0]!r}"}, HTTPStatus.NOT_FOUND)
             except FileNotFoundError:
                 # On the host this is the normal state until the first sweep

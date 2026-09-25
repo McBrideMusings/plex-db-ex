@@ -516,6 +516,22 @@ def test_query_stops_a_runaway_recursive_cte(store: Path) -> None:
         run_query(store, runaway, seconds=0.2)
 
 
+def test_query_refuses_a_value_over_the_length_limit(store: Path) -> None:
+    with pytest.raises(QueryError, match="too big"):
+        run_query(store, f"SELECT randomblob({explore.QUERY_VALUE_BYTES + 1})")
+
+
+def test_query_refuses_a_third_statement_while_two_run(store: Path) -> None:
+    held = [explore.QUERY_SLOTS.acquire(blocking=False) for _ in range(2)]
+    try:
+        with pytest.raises(QueryError, match="already running"):
+            run_query(store, "SELECT 1")
+    finally:
+        for _ in filter(None, held):
+            explore.QUERY_SLOTS.release()
+    assert run_query(store, "SELECT 1")["row_count"] == 1
+
+
 def test_every_recipe_runs_against_the_schema(store: Path) -> None:
     for recipe in RECIPES:
         run_query(store, recipe["sql"])
