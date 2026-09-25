@@ -433,6 +433,27 @@ def test_keyword_profile_counts_each_unit_at_most_once_per_keyword(
     assert profile.top_keywords[0] == ("superhero", 2)
 
 
+def test_keyword_profile_counts_a_keyword_once_even_when_two_sources_list_it(
+    store: sqlite3.Connection,
+) -> None:
+    """Two sources both writing `superhero` on the same item is one fact
+    about that unit, not two — the `source` column tells the rows apart in
+    `enrichment` (ADR-0016), but a taste profile must not count a unit twice
+    for a keyword just because two sources happen to agree on it."""
+    _seed_item(store, "item:1")
+    _seed_keyword(store, "item:1", "superhero")
+    store.execute(
+        "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) "
+        "VALUES (?, 'keywords', 'mdblist', 'keyword', ?, '2024-01-01T00:00:00+00:00')",
+        ("item:1", "superhero"),
+    )
+
+    profile = build_keyword_profile(store, [("item:1", 1)])
+
+    assert profile.units_with_coverage == 1
+    assert dict(profile.top_keywords) == {"superhero": 1}
+
+
 def test_keyword_profile_reports_zero_coverage_rather_than_an_empty_profile(
     store: sqlite3.Connection,
 ) -> None:

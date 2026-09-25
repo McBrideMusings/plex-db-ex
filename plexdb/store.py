@@ -130,7 +130,8 @@ def init(path: Path) -> tuple[int, int]:
     nothing in it yet to lose.
     """
     with open_store(path, create=True) as conn:
-        return schema.apply(conn)
+        was, now, _declared_shrinks = schema.apply(conn)
+        return was, now
 
 
 @dataclass(frozen=True)
@@ -162,12 +163,27 @@ def quick_check(conn: sqlite3.Connection) -> str:
     return str(conn.execute("PRAGMA quick_check").fetchone()[0])
 
 
-def _verify(conn: sqlite3.Connection, before: dict[str, int]) -> str | None:
+def _verify(
+    conn: sqlite3.Connection,
+    before: dict[str, int],
+    declared_shrinks: schema.DeclaredShrinks,
+) -> str | None:
     """Check a just-migrated store, returning the first problem or `None`.
 
     Three questions, in the order that a failure of one makes the next
     meaningless: is the store at the version it claims, is the file structurally
     sound, and is the history still there.
+
+    A guarded table shrinking is not automatically "the history is gone": a
+    migration can collapse rows on purpose (v10 merges keyword spellings that
+    normalize to the same fact once stemmed). Row counts alone cannot tell
+    that apart from real loss, so a migration that intends a shrink declares
+    the exact row count it expects the table to land at (`schema.apply`'s
+    `declared_shrinks`). A drop is accepted only when the actual after-count
+    matches that declared number exactly — a migration that both merges as
+    expected *and* loses something else unrelated lands on a different number
+    than it declared, and still trips this guard. A table with no declared
+    entry keeps the old all-or-nothing rule: any drop at all is a failure.
     """
     now = schema.current_version(conn)
     if now != schema.SCHEMA_VERSION:
@@ -181,6 +197,9 @@ def _verify(conn: sqlite3.Connection, before: dict[str, int]) -> str | None:
     for table, count_before in before.items():
         count_after = after.get(table, 0)
         if count_after < count_before:
+            expected = declared_shrinks.get(table)
+            if expected is not None and count_after == expected:
+                continue
             return (
                 f"{table} went from {count_before:,} rows to {count_after:,} — "
                 f"a migration lost {count_before - count_after:,} rows"
@@ -214,8 +233,8 @@ def migrate(path: Path, backup_dir: Path) -> Migration:
 
     try:
         with open_store(path, create=True) as conn:
-            was, now = schema.apply(conn)
-            problem = _verify(conn, counts_before) if taken is not None else None
+            was, now, declared_shrinks = schema.apply(conn)
+            problem = _verify(conn, counts_before, declared_shrinks) if taken is not None else None
             counts_after = backup.guarded_counts(conn)
     except Exception as err:
         if taken is not None:

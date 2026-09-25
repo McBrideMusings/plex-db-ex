@@ -23,7 +23,14 @@ from .errors import StoreError
 #: A migration is either a batch of SQL (every version through 9) or a Python
 #: step (version 10 on) — stemming needs the `snowballstemmer` package, which
 #: no SQL batch can call. `apply` below is what runs either kind.
-Migration = str | Callable[[sqlite3.Connection], None]
+#:
+#: A Python step may return a mapping of guarded-table name -> the exact row
+#: count it expects that table to hold once the step lands, for a table it
+#: intentionally shrinks (`store._verify` reads this — see `_V10`). `None` (or
+#: an empty mapping) means "this step never shrinks a guarded table on
+#: purpose," which is true of every step that isn't `_V10` today.
+DeclaredShrinks = dict[str, int]
+Migration = str | Callable[[sqlite3.Connection], DeclaredShrinks | None]
 
 #: Version 1 — identity and enrichment. The four tables the first slice needs
 #: and nothing more: what a title is, every id it is known by, where Plex keeps
@@ -395,7 +402,9 @@ CREATE TABLE title_map_state (
 #: through `keywords.normalize_keyword`, merging rows that collide once
 #: `Heists` and `heist` land on the same stemmed value; and `keyword_forms`
 #: is filled from every pre-migration raw value so a reader can still show the
-#: spelling a source actually used.
+#: spelling a source actually used. `enrichment_cursor` gets the same `source`
+#: column, backfilled the same way, so a per-title fetch cursor is scoped to
+#: one source exactly like the facts it vouches for.
 #:
 #: A plain function, not a SQL batch: stemming needs `snowballstemmer`, which
 #: no `CREATE TABLE`/`INSERT` can call. It rebuilds `enrichment` the same way
@@ -407,7 +416,20 @@ CREATE TABLE title_map_state (
 #: `heist` on the same item, from the same source), the newer `fetched_at`
 #: wins — the same "the newest fact stands" rule every write path already
 #: follows when it replaces a title's row set on a fresh fetch.
-def _V10(conn: sqlite3.Connection) -> None:
+#:
+#: **This is the one migration that can legitimately shrink `enrichment`.**
+#: `store._verify` rolls a migration back if a guarded table (`enrichment`
+#: among them) holds fewer rows afterwards than before — the right call for
+#: every migration except this one, whose whole point is to collapse rows
+#: that normalize to the same fact. Comparing row counts alone cannot tell
+#: "two pre-migration spellings landed on one fact, on purpose" apart from
+#: "this migration silently dropped something" — both look like a shrink. So
+#: this function returns the exact post-migration `enrichment` row count it
+#: computed (`len(merged)`) as a declared shrink: `_verify` accepts a drop in
+#: a guarded table only when the actual after-count matches the declared one
+#: exactly, so a `_V10` that *also* dropped an unrelated row — a real bug —
+#: still lands on a different number than declared and still trips the guard.
+def _V10(conn: sqlite3.Connection) -> DeclaredShrinks:
     conn.execute("CREATE TABLE keyword_forms (surface TEXT PRIMARY KEY, keyword TEXT NOT NULL)")
     conn.execute(
         """
@@ -462,6 +484,58 @@ def _V10(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX idx_enrichment_ns_key ON enrichment(namespace, key)")
     conn.execute("CREATE INDEX idx_enrichment_item_ns ON enrichment(item_id, namespace)")
 
+    # `enrichment_cursor` gains the same `source` column as `enrichment`
+    # above, but its fallback rule cannot be "the namespace names its own
+    # source" — unlike `enrichment` (whose one known writer already collapsed
+    # namespace and source to the same string, `tmdb_keywords`), this table
+    # already has a *second* real writer whose namespace and source differ:
+    # `tmdb_edges.py` writes cursor rows under `namespace='tmdb_edges'` but
+    # has always meant `source='tmdb'` — both of this table's edge-fetch cache
+    # entries and the keyword-fetch one come from the one enrichment source
+    # this store has ever had. So both known cursor namespaces backfill to
+    # `source='tmdb'` explicitly; only a namespace this migration cannot name
+    # falls back to using itself as source, the same guess `enrichment` makes
+    # for a hypothetical unknown writer.
+    #
+    # No two pre-migration cursor rows ever collide once `source` is added: a
+    # cursor's key is per (item_id, namespace, key) today, one row per title
+    # per writer, and every writer keeps its own key — so this is a plain
+    # column-add-and-copy, never a merge, and never a guarded-table shrink.
+    _CURSOR_NAMESPACE_SOURCES = {"tmdb_keywords": "tmdb", "tmdb_edges": "tmdb"}
+    conn.execute(
+        """
+        CREATE TABLE enrichment_cursor_v10 (
+            item_id    TEXT NOT NULL REFERENCES items(item_id) ON DELETE CASCADE,
+            namespace  TEXT NOT NULL,
+            source     TEXT NOT NULL,
+            key        TEXT NOT NULL,
+            fetched_at TEXT NOT NULL,
+            PRIMARY KEY (item_id, namespace, source, key)
+        )
+        """
+    )
+    cursor_rows = conn.execute(
+        "SELECT item_id, namespace, key, fetched_at FROM enrichment_cursor"
+    ).fetchall()
+    conn.executemany(
+        "INSERT INTO enrichment_cursor_v10 (item_id, namespace, source, key, fetched_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        [
+            (
+                item_id,
+                keywords.NAMESPACE if namespace == "tmdb_keywords" else namespace,
+                _CURSOR_NAMESPACE_SOURCES.get(namespace, namespace),
+                key,
+                fetched_at,
+            )
+            for item_id, namespace, key, fetched_at in cursor_rows
+        ],
+    )
+    conn.execute("DROP TABLE enrichment_cursor")
+    conn.execute("ALTER TABLE enrichment_cursor_v10 RENAME TO enrichment_cursor")
+
+    return {"enrichment": len(merged)}
+
 
 #: Append-only. Index i takes the store from version i to version i+1.
 MIGRATIONS: tuple[Migration, ...] = (_V1, _V2, _V3, _V4, _V5, _V6, _V7, _V8, _V9, _V10)
@@ -494,11 +568,17 @@ def current_version(conn: sqlite3.Connection) -> int:
     return int(version[0])
 
 
-def apply(conn: sqlite3.Connection) -> tuple[int, int]:
-    """Bring a store up to `SCHEMA_VERSION`, and report where it started and ended.
+def apply(conn: sqlite3.Connection) -> tuple[int, int, DeclaredShrinks]:
+    """Bring a store up to `SCHEMA_VERSION`, and report where it started and
+    ended, plus any guarded-table shrink a step declared as intended.
 
     Applying an already-current store is a no-op, so this is safe to run on
     every startup — which is what makes `plexdb migrate` re-runnable.
+
+    The third element is every `{table: expected_row_count}` a Python step
+    returned along the way (see `Migration`'s docstring and `_V10`) — empty
+    for a run that touched no such step, which is every run today except one
+    crossing v9 -> v10. `store._verify` is the only reader.
 
     Raises:
         StoreError: the store is newer than this code understands. That means a
@@ -512,11 +592,13 @@ def apply(conn: sqlite3.Connection) -> tuple[int, int]:
             f"{SCHEMA_VERSION} — upgrade plex-db-ex rather than writing with an older one"
         )
     if start == SCHEMA_VERSION:
-        return start, start
+        return start, start, {}
 
     conn.executescript(
         "BEGIN;\nCREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);\nCOMMIT;\n"
     )
+
+    declared_shrinks: DeclaredShrinks = {}
 
     # One transaction per step, around its DDL/data *and* the version row, so a
     # process killed mid-migration leaves the store at the last step that fully
@@ -539,12 +621,14 @@ def apply(conn: sqlite3.Connection) -> tuple[int, int]:
         else:
             conn.execute("BEGIN")
             try:
-                migration(conn)
+                result = migration(conn)
             except BaseException:
                 conn.execute("ROLLBACK")
                 raise
+            if result:
+                declared_shrinks.update(result)
             conn.execute("DELETE FROM schema_version")
             conn.execute("INSERT INTO schema_version (version) VALUES (?)", (version,))
             conn.execute("COMMIT")
 
-    return start, SCHEMA_VERSION
+    return start, SCHEMA_VERSION, declared_shrinks

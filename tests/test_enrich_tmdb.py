@@ -197,6 +197,37 @@ def test_wiping_this_source_leaves_another_sources_keyword_on_the_item(tmp_path:
     assert [(r["source"], r["value"]) for r in remaining] == [("mdblist", "heist")]
 
 
+def test_wiping_this_source_leaves_another_sources_cursor_row(tmp_path: Path) -> None:
+    """Acceptance: `enrichment_cursor` carries the same `source` column as
+    `enrichment` (ADR-0016). A TMDB wipe deletes only `source = 'tmdb'`
+    cursor rows in the `keywords` namespace, so a second source's own fetch
+    cursor for the same item survives — the same guarantee
+    `test_wiping_this_source_leaves_another_sources_keyword_on_the_item`
+    proves for the facts themselves."""
+    store = tmp_path / "plexdb.db"
+    with _open(store) as conn:
+        _seed(conn, item_id=MOVIE_ID, item_type="movie", title="The Dark Knight", tmdb_id="155")
+        source = FakeTMDbSource(keywords_by_id={("155", "movie"): ["heist"]})
+        enrich_tmdb_keywords(conn, source)
+        conn.execute(
+            "INSERT INTO enrichment_cursor (item_id, namespace, source, key, fetched_at) "
+            "VALUES (?, 'keywords', 'mdblist', 'fetched', '2020-01-01T00:00:00+00:00')",
+            (MOVIE_ID,),
+        )
+        conn.commit()
+
+        removed = wipe_namespace(conn)
+
+        remaining = _rows(
+            conn,
+            "SELECT source FROM enrichment_cursor WHERE item_id = ? AND namespace = 'keywords'",
+            (MOVIE_ID,),
+        )
+
+    assert removed > 0
+    assert [r["source"] for r in remaining] == ["mdblist"]
+
+
 def test_a_title_with_no_tmdb_id_is_skipped_and_reported_not_errored(tmp_path: Path) -> None:
     store = tmp_path / "plexdb.db"
     with _open(store) as conn:

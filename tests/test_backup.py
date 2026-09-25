@@ -201,6 +201,101 @@ def test_a_migration_that_raises_is_rolled_back_and_names_the_backup(
         assert conn.execute("SELECT count(*) FROM plays").fetchone()[0] == 1
 
 
+def _v9_store_with_colliding_keywords(path: Path) -> None:
+    """A real store at v9, holding two keyword spellings on one item
+    (`Heists` and `heist`) that will collide once v10 stems and merges them —
+    the shape that made `store.migrate`'s row-count guard misread an
+    intended merge as data loss before this test existed."""
+    conn = sqlite3.connect(path)
+    try:
+        script = "BEGIN;\nCREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);\n"
+        script += "".join(m for m in schema.MIGRATIONS[:9] if isinstance(m, str))
+        script += "INSERT INTO schema_version (version) VALUES (9);\nCOMMIT;\n"
+        conn.executescript(script)
+        conn.execute(
+            "INSERT INTO items (item_id, type, title) VALUES ('imdb:tt1', 'movie', 'Heat')"
+        )
+        conn.executemany(
+            "INSERT INTO enrichment (item_id, namespace, key, value, fetched_at) "
+            "VALUES ('imdb:tt1', 'tmdb_keywords', 'keyword', ?, ?)",
+            [
+                ("Heists", "2026-01-01T00:00:00+00:00"),
+                ("heist", "2026-01-02T00:00:00+00:00"),
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_migrate_lands_a_colliding_pre_v10_store_at_v10_with_rows_merged(
+    tmp_path: Path,
+) -> None:
+    """Acceptance: `store.migrate` — the real `plexdb migrate` path, which
+    `_verify` guards — must not roll back v10 just because two colliding
+    keyword spellings merged into one `enrichment` row. Every test that
+    exercised `_V10` before this one ran it through `schema.apply`/`init`
+    directly, never through `store.migrate`, so this guard was never proven
+    against the exact migration it exists to police."""
+    path = tmp_path / "plexdb.db"
+    _v9_store_with_colliding_keywords(path)
+
+    result = store.migrate(path, tmp_path / "backups")
+
+    assert result.was == 9
+    assert result.now == schema.SCHEMA_VERSION
+    assert result.backup is not None
+
+    with store.open_readonly(path) as conn:
+        rows = conn.execute(
+            "SELECT namespace, source, key, value FROM enrichment WHERE item_id = 'imdb:tt1'"
+        ).fetchall()
+    assert [tuple(r) for r in rows] == [("keywords", "tmdb", "keyword", "heist")]
+
+    # Idempotent: already current, nothing changes on a second run.
+    second = store.migrate(path, tmp_path / "backups")
+    assert not second.migrated
+
+
+def test_migrate_still_refuses_a_v10_that_also_loses_an_unrelated_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The declared-shrink guard (`store._verify`) accepts v10's merge only
+    down to the exact row count `_V10` itself computed. A `_V10` that merges
+    as expected *and* drops something else — simulating a bug in the
+    migration itself — must still be rolled back, not waved through just
+    because *some* shrink was declared."""
+    path = tmp_path / "plexdb.db"
+    _v9_store_with_colliding_keywords(path)
+
+    real_v10 = schema._V10
+
+    def _buggy_v10(conn: sqlite3.Connection) -> schema.DeclaredShrinks:
+        conn.execute(
+            "INSERT INTO items (item_id, type, title) VALUES ('imdb:tt2', 'movie', 'Ronin')"
+        )
+        conn.execute(
+            "INSERT INTO enrichment (item_id, namespace, key, value, fetched_at) "
+            "VALUES ('imdb:tt2', 'mdblist', 'list', 'top250', '2024-01-01T00:00:00+00:00')"
+        )
+        declared = real_v10(conn)
+        # The bug: silently drops a fact this migration never touched.
+        conn.execute("DELETE FROM enrichment WHERE item_id = 'imdb:tt2' AND namespace = 'mdblist'")
+        return declared
+
+    monkeypatch.setattr(schema, "MIGRATIONS", schema.MIGRATIONS[:9] + (_buggy_v10,))
+
+    with pytest.raises(StoreError, match="a migration lost 1 rows"):
+        store.migrate(path, tmp_path / "backups")
+
+    with store.open_readonly(path) as conn:
+        assert schema.current_version(conn) == 9
+        assert (
+            conn.execute("SELECT count(*) FROM enrichment WHERE item_id = 'imdb:tt1'").fetchone()[0]
+            == 2
+        ), "rolled back to the pre-migration store, colliding rows intact"
+
+
 def test_a_table_the_migration_creates_is_not_reported_as_row_loss(tmp_path: Path) -> None:
     """`guarded_counts` leaves out a table that does not exist yet. Counting it
     as zero would make the migration that creates it look like it destroyed

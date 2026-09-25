@@ -60,6 +60,11 @@ SIMILAR_EDGE_TYPE = "tmdb_similar"
 #: that prefix — one convention, known in one place, between working and
 #: silently wrong (issue #41).
 _CURSOR_NAMESPACE = "tmdb_edges"
+#: `enrichment_cursor`'s `source` column (ADR-0016 extended it past
+#: `enrichment`, to the same effect: a second writer of `_CURSOR_NAMESPACE`
+#: would collide with this module's own cursor rows without it). Both edge
+#: types here come from TMDB, so one constant covers both.
+_CURSOR_SOURCE = "tmdb"
 _CURSOR_KEYS: dict[str, str] = {
     RECOMMENDATIONS_EDGE_TYPE: "fetched_recommendations",
     SIMILAR_EDGE_TYPE: "fetched_similar",
@@ -99,8 +104,8 @@ def wipe_edge_type(conn: sqlite3.Connection, edge_type: str) -> tuple[int, int]:
     with conn:
         edges_removed = conn.execute("DELETE FROM edges WHERE edge_type = ?", (edge_type,)).rowcount
         cursor_removed = conn.execute(
-            "DELETE FROM enrichment_cursor WHERE namespace = ? AND key = ?",
-            (_CURSOR_NAMESPACE, _CURSOR_KEYS[edge_type]),
+            "DELETE FROM enrichment_cursor WHERE namespace = ? AND source = ? AND key = ?",
+            (_CURSOR_NAMESPACE, _CURSOR_SOURCE, _CURSOR_KEYS[edge_type]),
         ).rowcount
     return edges_removed, cursor_removed
 
@@ -168,8 +173,9 @@ def _sweep(
     cached_fetched_at: dict[str, str] = {
         row["item_id"]: row["fetched_at"]
         for row in conn.execute(
-            "SELECT item_id, fetched_at FROM enrichment_cursor WHERE namespace = ? AND key = ?",
-            (_CURSOR_NAMESPACE, cursor_key),
+            "SELECT item_id, fetched_at FROM enrichment_cursor "
+            "WHERE namespace = ? AND source = ? AND key = ?",
+            (_CURSOR_NAMESPACE, _CURSOR_SOURCE, cursor_key),
         )
     }
 
@@ -243,11 +249,11 @@ def _sweep(
                     (item_id, to_item_id, edge_type, rank, now_iso),
                 )
             conn.execute(
-                "INSERT INTO enrichment_cursor (item_id, namespace, key, fetched_at) "
-                "VALUES (?, ?, ?, ?) "
-                "ON CONFLICT(item_id, namespace, key) DO UPDATE SET "
+                "INSERT INTO enrichment_cursor (item_id, namespace, source, key, fetched_at) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(item_id, namespace, source, key) DO UPDATE SET "
                 "fetched_at = excluded.fetched_at",
-                (item_id, _CURSOR_NAMESPACE, cursor_key, now_iso),
+                (item_id, _CURSOR_NAMESPACE, _CURSOR_SOURCE, cursor_key, now_iso),
             )
         stats.titles_fetched += 1
         stats.edges_written += len(edges)

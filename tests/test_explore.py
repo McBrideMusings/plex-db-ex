@@ -155,6 +155,32 @@ def test_titles_tagged_lists_one_media_type_by_title(store: Path) -> None:
     ]
 
 
+def test_a_keyword_two_sources_both_list_counts_once(store: Path) -> None:
+    """`superhero` on Iron Man from a second source (ADR-0016's `source`
+    column lets both rows exist) must not inflate `build_index`'s per-tag
+    title count, nor duplicate Iron Man in `titles_tagged`, nor add to its own
+    reported keyword count."""
+    with open_store(store) as conn:
+        conn.execute(
+            "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) "
+            "VALUES ('imdb:tt1', 'keywords', 'mdblist', 'keyword', 'superhero', ?)",
+            (FETCHED,),
+        )
+        conn.commit()
+
+    with open_readonly(store) as conn:
+        movies = build_index(conn, "movie")
+        titles = titles_tagged(conn, "movie", "superhero")
+
+    by_value = {tag.value: tag for tag in movies.tags}
+    assert by_value["superhero"].df == 3, "still three titles, not four"
+    assert [(t.title, t.keywords) for t in titles] == [
+        ("Iron Man", 3),
+        ("Thor", 2),
+        ("Unbreakable", 1),
+    ], "Iron Man appears once, with its keyword count unchanged by the second source"
+
+
 @pytest.fixture
 def base_url(store: Path) -> Iterator[str]:
     server = make_server(store, "127.0.0.1", 0)

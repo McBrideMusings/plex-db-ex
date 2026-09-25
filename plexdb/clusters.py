@@ -585,8 +585,12 @@ def build_keyword_profile(
     depth_by_unit = dict(units)
 
     placeholders = ",".join("?" for _ in depth_by_unit)
+    # DISTINCT so a keyword two different sources both list on the same item
+    # (ADR-0016's `source` column lets both rows exist) contributes to this
+    # unit's profile once, not once per source — a unit's keyword set is what
+    # is being counted, not how many sources agree on each entry in it.
     rows = conn.execute(
-        "SELECT item_id, value FROM enrichment "
+        "SELECT DISTINCT item_id, value FROM enrichment "
         f"WHERE namespace = ? AND key = ? AND item_id IN ({placeholders})",
         (_TMDB_KEYWORDS_NAMESPACE, _KEYWORD_KEY, *depth_by_unit.keys()),
     ).fetchall()

@@ -98,9 +98,14 @@ def build_index(conn: sqlite3.Connection, kind: str, co_tags: int = CO_TAGS) -> 
     half a second and a `GROUP BY` over a self-join does not.
     """
     _check_kind(kind)
+    # DISTINCT so a keyword two sources both list on one title (ADR-0016's
+    # `source` column lets both rows exist) is one entry in that title's tag
+    # set, not two — both the per-tag title count (`df`) and every title's
+    # own tag list below would otherwise double-count it.
     rows = conn.execute(
-        "SELECT e.item_id, e.value FROM enrichment e JOIN items i USING (item_id) "
-        "WHERE e.namespace = ? AND e.key = ? AND i.type = ?",
+        "SELECT k.item_id, k.value FROM "
+        "(SELECT DISTINCT item_id, value FROM enrichment WHERE namespace = ? AND key = ?) k "
+        "JOIN items i USING (item_id) WHERE i.type = ?",
         (_NAMESPACE, _KEY, kind),
     ).fetchall()
 
@@ -134,14 +139,18 @@ def build_index(conn: sqlite3.Connection, kind: str, co_tags: int = CO_TAGS) -> 
 def titles_tagged(conn: sqlite3.Connection, kind: str, value: str) -> list[Title]:
     """Every title of `kind` carrying the keyword `value`, by title."""
     _check_kind(kind)
+    # DISTINCT on the outer query, and COUNT(DISTINCT ...) on the inner one:
+    # a title tagged `value` by two sources must appear once in this list, not
+    # once per source, and its own keyword count must count each distinct
+    # keyword once regardless of how many sources agree on it.
     rows = conn.execute(
-        "SELECT i.item_id, i.title, i.year, "
-        "  (SELECT COUNT(*) FROM enrichment k "
-        "   WHERE k.item_id = i.item_id AND k.namespace = e.namespace AND k.key = e.key) "
+        "SELECT DISTINCT i.item_id, i.title, i.year, "
+        "  (SELECT COUNT(DISTINCT k.value) FROM enrichment k "
+        "   WHERE k.item_id = i.item_id AND k.namespace = ? AND k.key = ?) "
         "FROM enrichment e JOIN items i USING (item_id) "
         "WHERE e.namespace = ? AND e.key = ? AND e.value = ? AND i.type = ? "
         "ORDER BY COALESCE(i.title_sort, i.title) COLLATE NOCASE, i.year",
-        (_NAMESPACE, _KEY, value, kind),
+        (_NAMESPACE, _KEY, _NAMESPACE, _KEY, value, kind),
     ).fetchall()
     return [Title(item_id=r[0], title=r[1], year=r[2], keywords=r[3]) for r in rows]
 
@@ -181,22 +190,28 @@ def neighbourhood(
     its place for the next one rather than leaving a hole.
     """
     _check_kind(kind)
+    # Both sides of the self-join, and the `rows` fetch below, read through a
+    # DISTINCT (item_id, value) subquery rather than `enrichment` directly: a
+    # title carrying `value` from two sources must still contribute exactly
+    # one shared-title count per co-occurring keyword, not one per source.
     shared = conn.execute(
-        "SELECT o.value, COUNT(*) FROM enrichment c "
-        "JOIN enrichment o ON o.item_id = c.item_id AND o.namespace = c.namespace "
-        "  AND o.key = c.key AND o.value != c.value "
+        "SELECT o.value, COUNT(*) FROM "
+        "(SELECT DISTINCT item_id, value FROM enrichment WHERE namespace = ? AND key = ?) c "
+        "JOIN (SELECT DISTINCT item_id, value FROM enrichment WHERE namespace = ? AND key = ?) o "
+        "  ON o.item_id = c.item_id AND o.value != c.value "
         "JOIN items i ON i.item_id = c.item_id "
-        "WHERE c.namespace = ? AND c.key = ? AND c.value = ? AND i.type = ? "
+        "WHERE c.value = ? AND i.type = ? "
         "GROUP BY o.value ORDER BY COUNT(*) DESC, o.value",
-        (_NAMESPACE, _KEY, centre, kind),
+        (_NAMESPACE, _KEY, _NAMESPACE, _KEY, centre, kind),
     ).fetchall()
     ranked = [(value, count) for value, count in shared if value not in exclude][:size]
     members = [centre, *(value for value, _ in ranked)]
 
     marks = ",".join("?" * len(members))
     rows = conn.execute(
-        f"SELECT e.item_id, e.value FROM enrichment e JOIN items i USING (item_id) "
-        f"WHERE e.namespace = ? AND e.key = ? AND i.type = ? AND e.value IN ({marks})",
+        f"SELECT k.item_id, k.value FROM "
+        f"(SELECT DISTINCT item_id, value FROM enrichment WHERE namespace = ? AND key = ?) k "
+        f"JOIN items i USING (item_id) WHERE i.type = ? AND k.value IN ({marks})",
         (_NAMESPACE, _KEY, kind, *members),
     ).fetchall()
     by_title: defaultdict[str, list[str]] = defaultdict(list)
@@ -305,9 +320,12 @@ def title_map(
     from sklearn.preprocessing import normalize
 
     _check_kind(kind)
+    # DISTINCT so a title's tag-frequency vector below counts each keyword it
+    # carries once, not once per source that happens to also list it.
     rows = conn.execute(
-        "SELECT e.item_id, e.value, i.title, i.year FROM enrichment e JOIN items i USING (item_id) "
-        "WHERE e.namespace = ? AND e.key = ? AND i.type = ?",
+        "SELECT k.item_id, k.value, i.title, i.year FROM "
+        "(SELECT DISTINCT item_id, value FROM enrichment WHERE namespace = ? AND key = ?) k "
+        "JOIN items i USING (item_id) WHERE i.type = ?",
         (_NAMESPACE, _KEY, kind),
     ).fetchall()
     carrying: set[str] = {r[0] for r in rows}
@@ -430,8 +448,10 @@ def title_map_json(tmap: TitleMap) -> dict[str, object]:
 
 def title_keywords(conn: sqlite3.Connection, item_id: str) -> list[str]:
     """One title's keywords, by name."""
+    # DISTINCT: a keyword two sources both list on this title is one keyword
+    # on this title, not two entries in the list a person reads.
     rows = conn.execute(
-        "SELECT value FROM enrichment WHERE item_id = ? AND namespace = ? AND key = ? "
+        "SELECT DISTINCT value FROM enrichment WHERE item_id = ? AND namespace = ? AND key = ? "
         "ORDER BY value",
         (item_id, _NAMESPACE, _KEY),
     ).fetchall()

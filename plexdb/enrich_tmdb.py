@@ -90,10 +90,12 @@ def wipe_namespace(conn: sqlite3.Connection) -> int:
     cursors, leaving every other source's keywords — and every other namespace
     — untouched. Returns the number of rows removed.
 
-    Scoped to `source = SOURCE` (ADR-0016): a keyword another source also
-    lists on a title must survive this module wiping its own, which is exactly
-    what a bare `namespace = ?` delete would not do once a second source shares
-    this namespace.
+    Scoped to `source = SOURCE` on both tables (ADR-0016): a keyword another
+    source also lists on a title must survive this module wiping its own, and
+    so must that other source's own fetch cursor — a bare `namespace = ?`
+    delete on `enrichment_cursor` would erase every source's cursor the
+    moment a second keyword source shares this namespace, not just this
+    module's.
 
     Both tables, because they hold one module's state split across two places
     for a reader's benefit (ADR-0013), not two independent things. Wiping the
@@ -105,7 +107,8 @@ def wipe_namespace(conn: sqlite3.Connection) -> int:
             "DELETE FROM enrichment WHERE namespace = ? AND source = ?", (NAMESPACE, SOURCE)
         ).rowcount
         removed += conn.execute(
-            "DELETE FROM enrichment_cursor WHERE namespace = ?", (NAMESPACE,)
+            "DELETE FROM enrichment_cursor WHERE namespace = ? AND source = ?",
+            (NAMESPACE, SOURCE),
         ).rowcount
         return removed
 
@@ -142,8 +145,9 @@ def enrich_tmdb_keywords(
     cached_fetched_at: dict[str, str] = {
         row["item_id"]: row["fetched_at"]
         for row in conn.execute(
-            "SELECT item_id, fetched_at FROM enrichment_cursor WHERE namespace = ? AND key = ?",
-            (NAMESPACE, _CURSOR_KEY),
+            "SELECT item_id, fetched_at FROM enrichment_cursor "
+            "WHERE namespace = ? AND source = ? AND key = ?",
+            (NAMESPACE, SOURCE, _CURSOR_KEY),
         )
     }
 
@@ -203,11 +207,11 @@ def enrich_tmdb_keywords(
                 (item_id, NAMESPACE, SOURCE),
             )
             conn.execute(
-                "INSERT INTO enrichment_cursor (item_id, namespace, key, fetched_at) "
-                "VALUES (?, ?, ?, ?) "
-                "ON CONFLICT(item_id, namespace, key) DO UPDATE SET "
+                "INSERT INTO enrichment_cursor (item_id, namespace, source, key, fetched_at) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(item_id, namespace, source, key) DO UPDATE SET "
                 "fetched_at = excluded.fetched_at",
-                (item_id, NAMESPACE, _CURSOR_KEY, now_iso),
+                (item_id, NAMESPACE, SOURCE, _CURSOR_KEY, now_iso),
             )
             # Every raw spelling TMDB returned is recorded in `keyword_forms`
             # even when two of them stem to the same stored value — `heists`

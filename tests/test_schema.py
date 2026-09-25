@@ -630,6 +630,44 @@ def test_v10_renames_tmdb_keywords_backfills_source_and_stems_merging_collisions
     assert forms == {"Heists": "heist", "heist": "heist", "bank-heist": "bank heist"}
 
 
+def test_v10_backfills_source_tmdb_for_both_known_cursor_namespaces(tmp_path: Path) -> None:
+    """`enrichment_cursor` gains `source` in the same migration as `enrichment`
+    (ADR-0016), but it has two real pre-migration writers, not one: the
+    keyword cursor (`namespace='tmdb_keywords'`, renamed to `keywords`) and
+    the edge cursor (`namespace='tmdb_edges'`, kept as-is). Both come from
+    TMDB, so both must backfill `source='tmdb'` — `tmdb_edges.py`'s own
+    `_CURSOR_SOURCE` reads and writes exactly that value, so a cursor row
+    left under any other source is invisible to it and gets re-fetched."""
+    store = tmp_path / "plexdb.db"
+    _v9_store_with_keyword_data(store)
+    conn = sqlite3.connect(store)
+    try:
+        conn.execute(
+            "INSERT INTO enrichment_cursor (item_id, namespace, key, fetched_at) "
+            "VALUES ('imdb:tt1', 'tmdb_keywords', 'fetched', '2026-01-02T00:00:00+00:00')"
+        )
+        conn.execute(
+            "INSERT INTO enrichment_cursor (item_id, namespace, key, fetched_at) "
+            "VALUES ('imdb:tt1', 'tmdb_edges', 'fetched_recommendations', "
+            "'2026-01-02T00:00:00+00:00')"
+        )
+        conn.commit()
+
+        schema._V10(conn)
+        conn.commit()
+
+        cursors = conn.execute(
+            "SELECT namespace, source, key FROM enrichment_cursor ORDER BY namespace"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    assert cursors == [
+        ("keywords", "tmdb", "fetched"),
+        ("tmdb_edges", "tmdb", "fetched_recommendations"),
+    ]
+
+
 def test_v10_is_reached_through_init_and_a_second_init_changes_nothing(tmp_path: Path) -> None:
     """Acceptance: migrating a pre-migration fixture reaches the current
     schema with no `tmdb_keywords` rows and a passing health report, and

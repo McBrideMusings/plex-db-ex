@@ -169,6 +169,14 @@ own GUIDs derive the contested id keeps it, the other one moves off.
 |---|---|---|---|
 | `keywords` | `tmdb` | `plexdb enrich-tmdb-keywords` | `keyword`, one row per normalized-and-stemmed keyword, `value` is the stored keyword text (see `keyword_forms` above for the raw spelling). Nothing else. Only `items.type` `movie` and `show` are enriched — TMDB has no keywords endpoint for an episode. |
 
+**A reader rolling up keyword rows into a count or a set reads `enrichment` through
+`SELECT DISTINCT item_id, value`, never a bare row count or row list.** Once a second source can list
+the same keyword on the same item, `namespace`+`key` alone matches one row per source — a bare
+`COUNT(*)` or unfiltered `SELECT value` would count or list that keyword once per agreeing source
+instead of once per item. `plexdb/clusters.py`'s `build_keyword_profile` and every keyword rollup
+in `plexdb/explore.py` (`build_index`, `titles_tagged`, `neighbourhood`, `title_map`,
+`title_keywords`) dedupe this way.
+
 ## enrichment_cursor
 
 How far each writer has got. **Never mixed into `enrichment`**
@@ -178,16 +186,24 @@ How far each writer has got. **Never mixed into `enrichment`**
 enrichment_cursor(
     item_id    TEXT NOT NULL REFERENCES items(item_id) ON DELETE CASCADE,
     namespace  TEXT NOT NULL,
+    source     TEXT NOT NULL,
     key        TEXT NOT NULL,
     fetched_at TEXT NOT NULL,
-    PRIMARY KEY (item_id, namespace, key)
+    PRIMARY KEY (item_id, namespace, source, key)
 )
 ```
 
-| Namespace | Key | Written by |
-|---|---|---|
-| `tmdb_keywords` | `fetched` | `enrich-tmdb-keywords`, one per title |
-| `tmdb_edges` | `fetched_recommendations`, `fetched_similar` | `enrich-tmdb-edges`, one per title per edge type |
+| Namespace | Source | Key | Written by |
+|---|---|---|---|
+| `keywords` | `tmdb` | `fetched` | `enrich-tmdb-keywords`, one per title |
+| `tmdb_edges` | `tmdb` | `fetched_recommendations`, `fetched_similar` | `enrich-tmdb-edges`, one per title per edge type |
+
+**`source` joined this table's primary key in the same schema v10 that added it to `enrichment`**
+([ADR-0016](./adr/0016-keywords-are-one-source-agnostic-namespace-with-a-source-column)): a
+per-title fetch cursor is state belonging to one writer, and without `source` a second writer of
+`keywords` would read and overwrite the first one's cursor row, and a `--rewipe` would delete both
+writers' cursors instead of just its own. `enrich-tmdb-keywords` and `enrich-tmdb-edges` both scope
+every cursor read, write, and delete to their own `source = 'tmdb'`.
 
 A cursor exists so a title whose result was **empty** is still cacheable. A movie TMDB has no
 keywords for leaves no `enrichment` row, and a title whose recommendations all fall outside the
@@ -578,14 +594,24 @@ Nothing else interprets the fingerprint.
 
 ## Version 10 — keywords become one source-agnostic namespace
 
-`enrichment` gains `source` in its primary key, and `keyword_forms(surface, keyword)` is added
+`enrichment` and `enrichment_cursor` both gain `source` in their primary key, and
+`keyword_forms(surface, keyword)` is added
 ([ADR-0016](./adr/0016-keywords-are-one-source-agnostic-namespace-with-a-source-column)). The
-migration renames `tmdb_keywords` to `keywords`, backfilling `source='tmdb'`; any other namespace
-present backfills `source` to its own name, there being no other writer to name a truer one; every
-keyword value is re-normalized and re-stemmed through `plexdb/keywords.py`'s shared function,
-merging any two rows a stemmer collision now unifies (the newer `fetched_at` wins); and
-`keyword_forms` is filled from every pre-migration raw value. `plexdb check` fails if any
-`tmdb_keywords` row survives it.
+migration renames `tmdb_keywords` to `keywords` on both tables, backfilling `source='tmdb'`; any
+other namespace present backfills `source` to its own name, there being no other writer to name a
+truer one; every keyword value is re-normalized and re-stemmed through `plexdb/keywords.py`'s
+shared function, merging any two `enrichment` rows a stemmer collision now unifies (the newer
+`fetched_at` wins); and `keyword_forms` is filled from every pre-migration raw value.
+`enrichment_cursor` rows never collide when `source` is added — one row per (item_id, namespace,
+key) already meant one row per writer — so only `enrichment` can shrink. `plexdb check` fails if
+any `tmdb_keywords` row survives it.
+
+**This is the one migration allowed to shrink a guarded table.** `store.migrate`'s row-count guard
+normally rolls back any migration that leaves `items`, `plays`, or `enrichment` with fewer rows
+than it found — the right call everywhere except here, where merging colliding keyword spellings
+is the point. So this step reports the exact `enrichment` row count it computed as a declared
+shrink, and the guard accepts a drop in that table only when the store lands on that exact number;
+any further loss, from this migration or a future one, still rolls the store back.
 
 ## Not yet built
 
