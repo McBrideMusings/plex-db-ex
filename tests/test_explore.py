@@ -29,6 +29,7 @@ from plexdb.explore import (
     region_labels,
     run_query,
     tag_network,
+    title_keywords_json,
     title_map,
     titles_tagged,
 )
@@ -232,6 +233,24 @@ def test_a_keyword_two_sources_both_list_counts_once(store: Path) -> None:
     ], "Iron Man appears once, with its keyword count unchanged by the second source"
 
 
+def test_title_keywords_json_carries_stored_form_and_readable_spelling(store: Path) -> None:
+    """A stemmed keyword like `stinger` reads fine as-is, but a title card still
+    needs both the stored form (to click, search and count by) and a readable
+    spelling from `keyword_forms` when one is on file."""
+    with open_store(store) as conn:
+        conn.execute("INSERT INTO keyword_forms (surface, keyword) VALUES ('stingers', 'stinger')")
+        conn.commit()
+
+    with open_readonly(store) as conn:
+        keywords = title_keywords_json(conn, "imdb:tt1")
+
+    assert keywords == [
+        {"value": "based on comic", "label": "based on comic"},
+        {"value": "stinger", "label": "stingers"},
+        {"value": "superhero", "label": "superhero"},
+    ]
+
+
 @pytest.fixture
 def base_url(store: Path) -> Iterator[str]:
     server = make_server(store, "127.0.0.1", 0)
@@ -283,7 +302,11 @@ def test_server_serves_the_page_and_both_endpoints(base_url: str) -> None:
     assert status == 200 and len(tmap["points"]) + tmap["unplaced"] == 4
 
     status, body = _get(f"{base_url}/api/title?item_id=imdb:tt1")
-    assert json.loads(body)["keywords"] == ["based on comic", "stinger", "superhero"]
+    assert json.loads(body)["keywords"] == [
+        {"value": "based on comic", "label": "based on comic"},
+        {"value": "stinger", "label": "stinger"},
+        {"value": "superhero", "label": "superhero"},
+    ]
 
 
 def test_title_endpoint_returns_the_card_with_similar_titles_in_rank_order(

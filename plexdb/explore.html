@@ -657,8 +657,8 @@ class TitleCard {
       el("p", { className: "desc" }, "No description yet.")];
     if (d) {
       const chips = el("div");
-      for (const value of d.keywords.slice(0, 40)) {
-        const chip = el("span", { className: "chip" + (noise.has(value) ? " noise" : "") }, value);
+      for (const { value, label } of d.keywords.slice(0, 40)) {
+        const chip = el("span", { className: "chip" + (noise.has(value) ? " noise" : "") }, label);
         if (this.pinned) { chip.title = "Highlight the titles carrying it"; chip.addEventListener("click", () => this.onTag(value)); }
         chips.append(chip);
       }

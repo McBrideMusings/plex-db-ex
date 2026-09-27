@@ -634,6 +634,13 @@ def title_keywords(conn: sqlite3.Connection, item_id: str) -> list[str]:
     return [r[0] for r in rows]
 
 
+def title_keywords_json(conn: sqlite3.Connection, item_id: str) -> list[dict[str, str]]:
+    """One title's keywords for the card: the stored form to click, search and
+    count by, and a readable spelling (`readable_forms`) to show a person."""
+    forms = readable_forms(conn)
+    return [{"value": v, "label": forms.get(v, v)} for v in title_keywords(conn, item_id)]
+
+
 #: How many similar titles one card lists, and the longest item id a lookup takes.
 SIMILAR_LIMIT = 12
 MAX_ITEM_ID = 200
@@ -666,7 +673,7 @@ def title_details(conn: sqlite3.Connection, item_id: str) -> dict[str, object]:
         "year": row["year"],
         "studio": row["studio"],
         "content_rating": row["content_rating"],
-        "keywords": title_keywords(conn, item_id),
+        "keywords": title_keywords_json(conn, item_id),
         "similar": [
             {"item_id": r["item_id"], "title": r["title"], "year": r["year"], "rank": r["rank"]}
             for r in similar
