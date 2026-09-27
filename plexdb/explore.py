@@ -864,6 +864,9 @@ QUERY_VALUE_BYTES = 8 << 20
 QUERY_SLOTS = threading.BoundedSemaphore(2)
 
 #: Largest request body the explorer reads. A pasted query is a few kilobytes.
+#: `SavedQueries.MAX_TOTAL_BYTES` shares this literal by coincidence, not by
+#: reference — one bounds a single request, the other the whole persisted
+#: file — so change either without assuming the other should follow.
 MAX_BODY = 1 << 20
 
 #: What a statement may do. Everything else — ATTACH, PRAGMA, every write and

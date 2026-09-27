@@ -719,6 +719,19 @@ def test_saved_queries_refuses_past_the_size_cap(tmp_path: Path) -> None:
     assert saved.all() == []
 
 
+def test_saved_queries_refuses_the_entry_that_crosses_the_size_cap(tmp_path: Path) -> None:
+    """A file already near the cap, not one entry alone over it — the boundary
+    `upsert` actually checks (total serialized size, not one field's length)."""
+    saved = SavedQueries(tmp_path / "explore-queries.json")
+    almost_full = "x" * (saved.MAX_TOTAL_BYTES - 200)
+    queries = saved.upsert("first", "SELECT 1", almost_full)
+    assert queries == [{"name": "first", "sql": "SELECT 1", "note": almost_full}]
+
+    with pytest.raises(ValueError, match="would exceed"):
+        saved.upsert("second", "SELECT 1", "x" * 500)
+    assert saved.all() == queries
+
+
 def test_scheduler_writes_saved_queries_to_their_own_mount_when_set(
     store: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
