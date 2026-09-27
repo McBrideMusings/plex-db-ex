@@ -168,8 +168,11 @@
     .vpctl { left: auto; right: 10px; bottom: auto; top: 10px; }
     .ovnote { left: 10px; max-width: calc(100% - 20px); }
     .searchbox input[type="search"] { width: min(20em, calc(100vw - 150px)); }
-    body.shell:has(#rightcol .tcard.pinned:not([hidden])) .ovnote,
-    body.shell:has(#rightcol aside#detail:not(:has(> p.empty))) .ovnote { display: none; }
+    /* The bottom-docked card or tag panel would sit under the count line; move it above the
+       search row instead of hiding it, so it stays reachable at any width. `.panelopen` is set
+       in JS (a `:has()` cannot select this without nesting `:has()` inside `:has()`, which the
+       selector spec disallows). */
+    body.shell.panelopen .ovnote { bottom: auto; top: 50px; }
   }
   #querywrap { display: grid; grid-template-columns: minmax(0, 1fr) 320px; align-items: start; }
   @media (max-width: 900px) { #querywrap { grid-template-columns: 1fr; } #qside { border-left: 0 !important; border-top: 1px solid var(--line); } }
@@ -397,6 +400,22 @@ function boundsOf(points) {
   const b = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
   for (const it of points) { b.x0 = Math.min(b.x0, it.x); b.y0 = Math.min(b.y0, it.y); b.x1 = Math.max(b.x1, it.x); b.y1 = Math.max(b.y1, it.y); }
   return b;
+}
+
+// `base` padding widened by whichever side `panel` (a floating panel sharing the canvas's box,
+// such as the pinned title card) actually covers, read from its real rendered box rather than a
+// constant duplicated at each call site: on a wide window the right column's width is fixed by
+// CSS regardless of content, but the bottom-docked height (CSS below 600px) is genuinely
+// content-driven, up to its own `max-height` cap — a wide-and-short panel is that dock, anything
+// else is the right column.
+function clearOfPanel(canvas, panel, base) {
+  const pad = { ...base };
+  const c = canvas.getBoundingClientRect(), p = panel.getBoundingClientRect();
+  if (p.width < 1 || p.height < 1) return pad;
+  const margin = 16;
+  if (p.width > c.width * 0.6) pad.b = Math.max(pad.b, c.bottom - p.top + margin);
+  else pad.r = Math.max(pad.r, c.right - p.left + margin);
+  return pad;
 }
 
 // ---- Viewport ----
@@ -878,6 +897,23 @@ const canPick = id => map.byId.has(id);
 const pinCard = new TitleCard(document.getElementById("rightcol"), { pinned: true, onClose: () => selectItem(null), onTag: v => { ++mapUI.token; mapUI.search = null; searchEl.value = ""; showTag(v); }, onPick: id => pickById(id), canPick,
   onDetail: (item, d) => { if (mapVP.selected === item) { mapUI.similar = d.similar.map(s => s.item_id).filter(canPick); mapVP.redraw(); } } });
 const hoverCard = new TitleCard(mapBox, { pinned: false, canPick });
+// Whether `#rightcol` is showing the pinned card or a non-empty tag detail panel, kept as a
+// body class so the narrow-width count-line rule can select it — a `:has()` chain would need
+// `:has()` nested inside `:has()` to express the same "pinned or non-empty" test, which the
+// selector spec disallows.
+const detailPanel = document.getElementById("detail");
+function syncPanelOpen() {
+  // Computed display, not the `hidden` attribute: a pinned card left open on the tag network
+  // view is force-hidden by CSS (`body:not([data-view="map"]) .tcard`) without touching
+  // `hidden`, and that must not be read as "open" there.
+  const cardOpen = getComputedStyle(pinCard.root).display !== "none";
+  const detailOpen = detailPanel.children.length !== 1 || !detailPanel.firstElementChild.classList.contains("empty");
+  document.body.classList.toggle("panelopen", cardOpen || detailOpen);
+}
+new MutationObserver(syncPanelOpen).observe(pinCard.root, { attributes: true, attributeFilter: ["hidden"] });
+new MutationObserver(syncPanelOpen).observe(detailPanel, { childList: true });
+new MutationObserver(syncPanelOpen).observe(document.body, { attributes: true, attributeFilter: ["data-view"] });
+syncPanelOpen();
 let hoverTimer = 0, hoverAt = { x: 0, y: 0 };
 // Beside the cursor, flipped or lifted so the whole card stays inside the canvas box.
 function placeHover() {
@@ -977,11 +1013,12 @@ async function chooseSuggestion(row) {
     const near = d.similar.map(s => map.byId.get(s.item_id)).filter(Boolean);
     mapUI.search = { type: "title", label: row.label, focus: row.it.id, ids: new Set([row.it.id, ...near.map(n => n.id)]) };
     selectItem(row.it);
-    // Keep the box clear of the pinned card: the right column on a wide window, the bottom half on a narrow one.
-    const narrow = window.innerWidth <= 600;
-    const rc = document.getElementById("rightcol").getBoundingClientRect();
-    mapVP.focusOn([row.it, ...near], narrow ? { l: 24, t: 70, r: 24, b: Math.round(mapVP.h * 0.5) + 16 }
-                                             : { l: 40, t: 70, r: rc.width + 40, b: 60 });
+    // The card's own async fetch (inside selectItem -> pinCard.show) would still be loading at
+    // this point; paint it now with the detail already in hand so its real, full-content height
+    // measures correctly below, rather than the shorter "Loading..." placeholder's.
+    pinCard.paint(row.it, d, null);
+    const rightcol = document.getElementById("rightcol");
+    mapVP.focusOn([row.it, ...near], clearOfPanel(mapVP.canvas, rightcol, { l: 40, t: 70, r: 24, b: 24 }));
   } else {
     let body;
     try { body = await getJSON(`/api/titles?kind=${state.kind}&tag=${encodeURIComponent(row.tag)}`); }
