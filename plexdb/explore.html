@@ -392,6 +392,13 @@ function setView(view) {
   if (view === "map" && state.data) drawMap();
 }
 
+// The world-unit bounding box of a set of points (anything with x and y).
+function boundsOf(points) {
+  const b = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+  for (const it of points) { b.x0 = Math.min(b.x0, it.x); b.y0 = Math.min(b.y0, it.y); b.x1 = Math.max(b.x1, it.x); b.y1 = Math.max(b.y1, it.y); }
+  return b;
+}
+
 // ---- Viewport ----
 // One 2D canvas that the tag network and the title map both sit on. It owns zoom, pan, the
 // reset control and hit testing; the page hands it items (anything with x and y in world
@@ -458,13 +465,14 @@ class Viewport {
   }
 
   // The view that shows `b` centred in the screen area left after `pad` (a number of px all round,
-  // or {l, t, r, b} to keep clear of panels floating over one side).
-  viewFor(b, pad) {
+  // or {l, t, r, b} to keep clear of panels floating over one side), no closer than `maxK` allows.
+  viewFor(b, pad, maxK = Infinity) {
     const p = typeof pad === "number" ? { l: pad, t: pad, r: pad, b: pad } : pad;
     const aw = this.w - p.l - p.r, ah = this.h - p.t - p.b;
     const bw = Math.max(b.x1 - b.x0, 1e-9), bh = Math.max(b.y1 - b.y0, 1e-9);
-    const k = Math.max(1e-9, Math.min(aw / bw, ah / bh));
-    return { k, tx: p.l + aw / 2 - (b.x0 + bw / 2) * k, ty: p.t + ah / 2 - (b.y0 + bh / 2) * k };
+    const k = Math.min(maxK, Math.max(1e-9, Math.min(aw / bw, ah / bh)));
+    const cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2;
+    return { k, tx: p.l + aw / 2 - cx * k, ty: p.t + ah / 2 - cy * k };
   }
   reset() {
     this.fitted = true;
@@ -477,14 +485,8 @@ class Viewport {
   // Fit the given items on screen, no closer than the zoom limit allows.
   focusOn(items, pad = 70) {
     if (!items.length || !this.w) return;
-    const b = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
-    for (const it of items) { b.x0 = Math.min(b.x0, it.x); b.y0 = Math.min(b.y0, it.y); b.x1 = Math.max(b.x1, it.x); b.y1 = Math.max(b.y1, it.y); }
-    const v = this.viewFor(b, pad);
-    const k = Math.min(v.k, this.k0 * Viewport.MAX_ZOOM);
-    // Centre on the middle of the box within the free area, at the zoom the limit allows.
-    const p = typeof pad === "number" ? { l: pad, t: pad, r: pad, b: pad } : pad;
-    const cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2;
-    Object.assign(this, { k, tx: p.l + (this.w - p.l - p.r) / 2 - cx * k, ty: p.t + (this.h - p.t - p.b) / 2 - cy * k, fitted: false });
+    const v = this.viewFor(boundsOf(items), pad, this.k0 * Viewport.MAX_ZOOM);
+    Object.assign(this, { k: v.k, tx: v.tx, ty: v.ty, fitted: false });
     this.updateHover();
     this.redraw();
   }
@@ -755,11 +757,7 @@ function syncMapItems() {
   map.byId = new Map(map.items.map(it => [it.id, it]));
   map.labels = (map.data && map.data.labels || []).map(([node, x, y, w, h, n, text, tag]) =>
     ({ node, x, y, w, h, n, text, tag, depth: Math.floor(Math.log2(node + 1)), tw: 0 }));
-  let b = { x0: 0, y0: 0, x1: 1, y1: 1 };
-  if (map.items.length) {
-    b = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
-    for (const it of map.items) { b.x0 = Math.min(b.x0, it.x); b.y0 = Math.min(b.y0, it.y); b.x1 = Math.max(b.x1, it.x); b.y1 = Math.max(b.y1, it.y); }
-  }
+  const b = map.items.length ? boundsOf(map.items) : { x0: 0, y0: 0, x1: 1, y1: 1 };
   const keep = mapVP.selected && map.byId.get(mapVP.selected.id);
   mapVP.setItems(map.items, b);
   if (keep) mapVP.selected = keep; else selectItem(null);
@@ -1067,11 +1065,7 @@ function syncNetworkItems() {
     net.nodes = shown.map(([value, df, x, y]) => ({ id: value, title: value, x, y, df }));
     net.byValue = new Map(net.nodes.map(it => [it.id, it]));
     net.edges = net.full ? net.full.edges.filter(([a, b]) => net.byValue.has(a) && net.byValue.has(b)) : [];
-    let b = { x0: 0, y0: 0, x1: 1, y1: 1 };
-    if (net.nodes.length) {
-      b = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
-      for (const it of net.nodes) { b.x0 = Math.min(b.x0, it.x); b.y0 = Math.min(b.y0, it.y); b.x1 = Math.max(b.x1, it.x); b.y1 = Math.max(b.y1, it.y); }
-    }
+    const b = net.nodes.length ? boundsOf(net.nodes) : { x0: 0, y0: 0, x1: 1, y1: 1 };
     netVP.setItems(net.nodes, b);
   }
   // Derived fresh from `state.tag` rather than kept by object identity: a
