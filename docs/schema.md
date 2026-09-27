@@ -174,7 +174,7 @@ own GUIDs derive the contested id keeps it, the other one moves off.
 the same keyword on the same item, `namespace`+`key` alone matches one row per source — a bare
 `COUNT(*)` or unfiltered `SELECT value` would count or list that keyword once per agreeing source
 instead of once per item. `plexdb/clusters.py`'s `build_keyword_profile` and every keyword rollup
-in `plexdb/explore.py` (`build_index`, `titles_tagged`, `neighbourhood`, `title_map`,
+in `plexdb/explore.py` (`build_index`, `titles_tagged`, `tag_network`, `title_map`,
 `title_keywords`) dedupe this way.
 
 ## enrichment_cursor

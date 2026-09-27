@@ -157,101 +157,6 @@ def titles_tagged(conn: sqlite3.Connection, kind: str, value: str) -> list[Title
     return [Title(item_id=r[0], title=r[1], year=r[2], keywords=r[3]) for r in rows]
 
 
-#: Tags drawn around the centre of a neighbourhood graph when the caller does
-#: not say. Forty is readable on one screen; the page offers more.
-NEIGHBOURS = 40
-
-#: Each node keeps only its strongest links. Forty tags that all co-occur
-#: somewhere would otherwise draw 780 edges and a solid disc.
-EDGES_PER_NODE = 4
-
-
-@dataclass(frozen=True)
-class Neighbourhood:
-    kind: str
-    centre: str
-    #: The centre first, then its co-occurring tags, most shared titles first.
-    #: Each is `(tag, titles carrying it, titles it shares with the centre)`.
-    nodes: tuple[tuple[str, int, int], ...]
-    #: `(a, b, shared titles)`, each pair once.
-    edges: tuple[tuple[str, str, int], ...]
-
-
-def neighbourhood(
-    conn: sqlite3.Connection,
-    kind: str,
-    centre: str,
-    size: int = NEIGHBOURS,
-    exclude: frozenset[str] = frozenset(),
-    edges_per_node: int = EDGES_PER_NODE,
-) -> Neighbourhood:
-    """The `size` tags that share the most titles with `centre`, and the
-    strongest links among them.
-
-    `exclude` drops tags before they are ranked, so a tag marked as noise frees
-    its place for the next one rather than leaving a hole.
-    """
-    _check_kind(kind)
-    # A title carrying `value` from two sources must still contribute exactly
-    # one shared-title count per co-occurring keyword, not one per source, so
-    # the count is of distinct titles. The self-join reads `enrichment`
-    # directly, which lets SQLite look each title's other keywords up by
-    # primary key; a DISTINCT subquery on either side made it materialise and
-    # re-index the whole namespace on every request (36 s on the real store).
-    shared = conn.execute(
-        "SELECT o.value, COUNT(DISTINCT o.item_id) AS n FROM enrichment c "
-        "JOIN enrichment o ON o.item_id = c.item_id AND o.namespace = c.namespace "
-        "  AND o.key = c.key AND o.value != c.value "
-        "JOIN items i ON i.item_id = c.item_id "
-        "WHERE c.namespace = ? AND c.key = ? AND c.value = ? AND i.type = ? "
-        "GROUP BY o.value ORDER BY n DESC, o.value",
-        (_NAMESPACE, _KEY, centre, kind),
-    ).fetchall()
-    ranked = [(value, count) for value, count in shared if value not in exclude][:size]
-    members = [centre, *(value for value, _ in ranked)]
-
-    marks = ",".join("?" * len(members))
-    rows = conn.execute(
-        f"SELECT k.item_id, k.value FROM "
-        f"(SELECT DISTINCT item_id, value FROM enrichment WHERE namespace = ? AND key = ?) k "
-        f"JOIN items i USING (item_id) WHERE i.type = ? AND k.value IN ({marks})",
-        (_NAMESPACE, _KEY, kind, *members),
-    ).fetchall()
-    by_title: defaultdict[str, list[str]] = defaultdict(list)
-    for item_id, value in rows:
-        by_title[item_id].append(value)
-    df = Counter(value for _, value in rows)
-    pairs: Counter[tuple[str, str]] = Counter()
-    for values in by_title.values():
-        values.sort()
-        for i, a in enumerate(values):
-            for b in values[i + 1 :]:
-                pairs[(a, b)] += 1
-
-    strongest: defaultdict[str, list[tuple[int, str, str]]] = defaultdict(list)
-    for (a, b), count in pairs.items():
-        strongest[a].append((count, a, b))
-        strongest[b].append((count, a, b))
-    kept: set[tuple[str, str, int]] = set()
-    for links in strongest.values():
-        links.sort(key=lambda link: (-link[0], link[1], link[2]))
-        kept.update((a, b, count) for count, a, b in links[:edges_per_node])
-
-    with_centre = dict(ranked)
-    nodes = tuple((value, df[value], with_centre.get(value, df[value])) for value in members)
-    edges = tuple(sorted(kept, key=lambda e: (-e[2], e[0], e[1])))
-    return Neighbourhood(kind=kind, centre=centre, nodes=nodes, edges=edges)
-
-
-def neighbourhood_json(hood: Neighbourhood) -> dict[str, object]:
-    return {
-        "kind": hood.kind,
-        "centre": hood.centre,
-        "nodes": [{"value": v, "df": df, "shared": s} for v, df, s in hood.nodes],
-        "edges": [[a, b, n] for a, b, n in hood.edges],
-    }
-
-
 #: A tag on fewer titles than this cannot place a title near any other, so it
 #: is left out of the map's vectors.
 MAP_MIN_DF = 2
@@ -302,6 +207,49 @@ class TitleMap:
     unplaced: int
 
 
+def _embed_2d(
+    rows: int,
+    cols: int,
+    cells: tuple[list[int], list[int], list[float]],
+    seed: int,
+) -> Any:
+    """Place `rows` sparse vectors of `cols` dimensions in the unit square so
+    cosine-similar rows sit close together.
+
+    Shared by `title_map` (a row is a title, weighted by the keywords it
+    carries) and `tag_network` (a row is a tag, weighted by the titles it is
+    on): both reduce the sparse matrix with truncated SVD, then UMAP with
+    cosine distance, then clip outliers and scale to `[0, 1]`.
+    """
+    import numpy as np
+    import umap
+    from scipy.sparse import csr_matrix
+    from sklearn.decomposition import TruncatedSVD
+    from sklearn.preprocessing import normalize
+
+    if rows < 5 or cols < 3:
+        # Too few vectors for a layout to mean anything; lay them on a line.
+        return np.array([[i / max(1, rows - 1), 0.5] for i in range(rows)])
+    cells_r, cells_c, cells_v = cells
+    matrix = csr_matrix((cells_v, (cells_r, cells_c)), shape=(rows, cols))
+    matrix = normalize(matrix)
+    components = min(MAP_SVD_COMPONENTS, cols - 1, rows - 1)
+    reduced = TruncatedSVD(n_components=components, random_state=seed).fit_transform(matrix)
+    reduced = normalize(reduced)
+    coords = umap.UMAP(
+        n_components=2,
+        n_neighbors=min(MAP_NEIGHBOURS, rows - 1),
+        metric="cosine",
+        min_dist=MAP_MIN_DIST,
+        spread=MAP_SPREAD,
+        random_state=seed,
+        n_jobs=1,  # a seed already forces one thread; saying so silences UMAP's warning
+    ).fit_transform(reduced)
+    low, high = np.percentile(coords, MAP_CLIP, axis=0)
+    coords = np.clip(coords, low, high)
+    return (coords - low) / np.where(high > low, high - low, 1.0)
+
+
 def title_map(
     conn: sqlite3.Connection, kind: str, exclude: frozenset[str] = frozenset(), seed: int = 0
 ) -> TitleMap:
@@ -313,15 +261,9 @@ def title_map(
     `MAP_SVD_COMPONENTS` dimensions and UMAP (cosine distance) to two. `seed`
     fixes both, so the same store and the same exclusions draw the same map.
 
-    numpy and scikit-learn are imported here rather than at the top of the
-    module, so every other `plexdb` command starts without loading them.
+    numpy and scikit-learn are imported (by `_embed_2d`) rather than at the top
+    of the module, so every other `plexdb` command starts without loading them.
     """
-    import numpy as np
-    import umap
-    from scipy.sparse import csr_matrix
-    from sklearn.decomposition import TruncatedSVD
-    from sklearn.preprocessing import normalize
-
     _check_kind(kind)
     # DISTINCT so a title's tag-frequency vector below counts each keyword it
     # carries once, not once per source that happens to also list it.
@@ -357,27 +299,7 @@ def title_map(
         cells_v.append(1.0 + math.log(n / df[value]))
 
     ids = sorted(placed, key=placed.__getitem__)
-    if len(ids) < 5 or len(vocab) < 3:
-        # Too few titles for a layout to mean anything; lay them on a line.
-        coords = np.array([[i / max(1, len(ids) - 1), 0.5] for i in range(len(ids))])
-    else:
-        matrix = csr_matrix((cells_v, (cells_r, cells_c)), shape=(len(ids), len(vocab)))
-        matrix = normalize(matrix)
-        components = min(MAP_SVD_COMPONENTS, len(vocab) - 1, len(ids) - 1)
-        reduced = TruncatedSVD(n_components=components, random_state=seed).fit_transform(matrix)
-        reduced = normalize(reduced)
-        coords = umap.UMAP(
-            n_components=2,
-            n_neighbors=min(MAP_NEIGHBOURS, len(ids) - 1),
-            metric="cosine",
-            min_dist=MAP_MIN_DIST,
-            spread=MAP_SPREAD,
-            random_state=seed,
-            n_jobs=1,  # a seed already forces one thread; saying so silences UMAP's warning
-        ).fit_transform(reduced)
-        low, high = np.percentile(coords, MAP_CLIP, axis=0)
-        coords = np.clip(coords, low, high)
-        coords = (coords - low) / np.where(high > low, high - low, 1.0)
+    coords = _embed_2d(len(ids), len(vocab), (cells_r, cells_c, cells_v), seed)
 
     points = tuple(
         MapPoint(
@@ -446,6 +368,124 @@ def title_map_json(tmap: TitleMap) -> dict[str, object]:
         # Arrays rather than objects: ten thousand points, and the keys would
         # be most of the payload.
         "points": [[p.item_id, p.title, p.year, p.x, p.y] for p in tmap.points],
+    }
+
+
+#: A tag on fewer titles than this cannot draw a meaningful edge or earn a
+#: position of its own, so the whole-network view never offers a threshold
+#: below it — the browser's slider only hides nodes computed at this floor.
+NETWORK_MIN_DF = 3
+
+#: Each node keeps only its strongest links, so a tag central to the library
+#: does not draw a line to every tag it has ever shared one title with.
+NETWORK_EDGES_PER_NODE = 6
+
+
+@dataclass(frozen=True)
+class NetworkNode:
+    value: str
+    df: int
+    x: float
+    y: float
+
+
+@dataclass(frozen=True)
+class TagNetwork:
+    kind: str
+    #: Every tag of `kind` on at least `NETWORK_MIN_DF` titles, positioned so
+    #: tags carried by the same titles sit close together — most titles first,
+    #: ties by name.
+    nodes: tuple[NetworkNode, ...]
+    #: `(a, b, shared titles)`, `a < b`, each pair once, capped at
+    #: `NETWORK_EDGES_PER_NODE` per node.
+    edges: tuple[tuple[str, str, int], ...]
+
+
+def tag_network(
+    conn: sqlite3.Connection,
+    kind: str,
+    exclude: frozenset[str] = frozenset(),
+    min_df: int = NETWORK_MIN_DF,
+    edges_per_node: int = NETWORK_EDGES_PER_NODE,
+    seed: int = 0,
+) -> TagNetwork:
+    """The whole tag network of `kind`: every tag on at least `min_df` titles,
+    positioned by title co-membership and linked to its strongest co-tags.
+
+    A tag's vector is which titles carry it — the transpose of `title_map`'s
+    title-by-tag matrix — reduced by the same truncated-SVD-then-UMAP recipe
+    (`_embed_2d`), so two tags carried by the same titles sit close together.
+    Computed once at `min_df`, the widest the page's slider allows: raising the
+    slider only hides nodes and edges client-side, so it never re-fetches or
+    re-lays-out the network.
+    """
+    _check_kind(kind)
+    # DISTINCT so a title's tag set below counts each keyword it carries once,
+    # not once per source that happens to also list it.
+    rows = conn.execute(
+        "SELECT k.item_id, k.value FROM "
+        "(SELECT DISTINCT item_id, value FROM enrichment WHERE namespace = ? AND key = ?) k "
+        "JOIN items i USING (item_id) WHERE i.type = ?",
+        (_NAMESPACE, _KEY, kind),
+    ).fetchall()
+    df = Counter(value for _, value in rows)
+    vocab = {
+        value: col
+        for col, value in enumerate(
+            sorted(v for v, c in df.items() if c >= min_df and v not in exclude)
+        )
+    }
+
+    by_title: defaultdict[str, list[str]] = defaultdict(list)
+    for item_id, value in rows:
+        if value in vocab:
+            by_title[item_id].append(value)
+    titles = {item_id: col for col, item_id in enumerate(sorted(by_title))}
+
+    cells_r: list[int] = []
+    cells_c: list[int] = []
+    cells_v: list[float] = []
+    together: defaultdict[str, Counter[str]] = defaultdict(Counter)
+    for item_id, values in by_title.items():
+        col = titles[item_id]
+        for a in values:
+            cells_r.append(vocab[a])
+            cells_c.append(col)
+            cells_v.append(1.0)
+            counts = together[a]
+            for b in values:
+                if a != b:
+                    counts[b] += 1
+
+    kept: set[tuple[str, str, int]] = set()
+    for value in vocab:
+        ranked = sorted(together[value].items(), key=lambda kv: (-kv[1], kv[0]))[:edges_per_node]
+        for other, count in ranked:
+            a, b = sorted((value, other))
+            kept.add((a, b, count))
+
+    coords = _embed_2d(len(vocab), len(titles), (cells_r, cells_c, cells_v), seed)
+    values = sorted(vocab, key=vocab.__getitem__)
+    nodes = tuple(
+        NetworkNode(
+            value=value,
+            df=df[value],
+            x=round(float(coords[i][0]), 5),
+            y=round(float(coords[i][1]), 5),
+        )
+        for i, value in enumerate(values)
+    )
+    edges = tuple(sorted(kept, key=lambda e: (-e[2], e[0], e[1])))
+    return TagNetwork(kind=kind, nodes=nodes, edges=edges)
+
+
+def tag_network_json(net: TagNetwork) -> dict[str, object]:
+    return {
+        "kind": net.kind,
+        # Arrays rather than objects: thousands of nodes, and the keys would
+        # be most of the payload.
+        "nodes": [[n.value, n.df, n.x, n.y] for n in net.nodes],
+        "edges": [[a, b, n] for a, b, n in net.edges],
     }
 
 
@@ -762,6 +802,31 @@ class _MapCache:
                 placed = [(p[0], p[3], p[4]) for p in rows]
                 payload = {**payload, "labels": region_labels(conn, kind, placed, exclude)}
             return payload
+
+        return self._cache.get((kind, exclude), (stat.st_mtime_ns, stat.st_size), compute)
+
+
+class _TagNetworkCache:
+    """Computed tag networks, keyed on kind and exclusions, per store file stamp.
+
+    Same shape as `_MapCache`: laying out the whole network costs as much as
+    the title map does, so a repeat of the same request must not pay again, and
+    a per-key lock keeps two browser tabs from computing the same network at
+    once.
+    """
+
+    KEEP = 6
+
+    def __init__(self, store_path: Path) -> None:
+        self._path = store_path
+        self._cache = _KeyedCache(self.KEEP)
+
+    def get(self, kind: str, exclude: frozenset[str]) -> dict[str, object]:
+        stat = self._path.stat()
+
+        def compute() -> dict[str, object]:
+            with open_readonly(self._path) as conn:
+                return tag_network_json(tag_network(conn, kind, exclude))
 
         return self._cache.get((kind, exclude), (stat.st_mtime_ns, stat.st_size), compute)
 
@@ -1188,6 +1253,7 @@ def make_server(
     """
     cache = _IndexCache(store_path)
     maps = _MapCache(store_path)
+    networks = _TagNetworkCache(store_path)
     saved = SavedQueries(saved_path or store_path.with_name(SAVED_FILE))
 
     class Handler(BaseHTTPRequestHandler):
@@ -1287,24 +1353,14 @@ def make_server(
                     raise ValueError("tag is required")
                 with open_readonly(store_path) as conn:
                     self._json(titles_json(kind, tag, titles_tagged(conn, kind, tag)))
-            elif url.path == "/api/graph":
-                kind = query.get("kind", "movie")
-                tag = query.get("tag")
-                if not tag:
-                    raise ValueError("tag is required")
-                size = query.get("size", str(NEIGHBOURS))
-                if not size.isdigit() or not 1 <= int(size) <= 200:
-                    raise ValueError("size must be a number from 1 to 200")
-                # Repeated `exclude=` rather than one comma list: a TMDB
-                # keyword can itself contain a comma.
-                exclude = frozenset(lists.get("exclude", []))
-                with open_readonly(store_path) as conn:
-                    hood = neighbourhood(conn, kind, tag, int(size), exclude)
-                self._json(neighbourhood_json(hood))
             elif url.path == "/api/map":
                 kind = query.get("kind", "movie")
                 _check_kind(kind)
                 self._json(maps.get(kind, frozenset(lists.get("exclude", []))))
+            elif url.path == "/api/tagnetwork":
+                kind = query.get("kind", "movie")
+                _check_kind(kind)
+                self._json(networks.get(kind, frozenset(lists.get("exclude", []))))
             elif url.path == "/api/saved":
                 self._json({"queries": saved.all()})
             elif url.path == "/api/recipes":

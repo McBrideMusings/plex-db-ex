@@ -26,9 +26,9 @@ from plexdb.explore import (
     QueryError,
     build_index,
     make_server,
-    neighbourhood,
     region_labels,
     run_query,
+    tag_network,
     title_map,
     titles_tagged,
 )
@@ -88,21 +88,31 @@ def test_counts_idf_and_co_tags_are_per_media_type(store: Path) -> None:
     assert {tag.value for tag in shows.tags} == {"superhero", "lawyer"}
 
 
-def test_neighbourhood_ranks_co_tags_and_links_them_by_shared_titles(store: Path) -> None:
+def test_tag_network_positions_by_shared_titles_and_links_co_tags(store: Path) -> None:
     with open_readonly(store) as conn:
-        hood = neighbourhood(conn, "movie", "superhero")
-        without = neighbourhood(conn, "movie", "superhero", exclude=frozenset({"stinger"}))
+        net = tag_network(conn, "movie", min_df=1)
+        without = tag_network(conn, "movie", min_df=1, exclude=frozenset({"stinger"}))
 
-    assert hood.nodes == (("superhero", 3, 3), ("stinger", 2, 2), ("based on comic", 1, 1))
-    assert hood.edges == (
+    assert {n.value: n.df for n in net.nodes} == {
+        "superhero": 3,
+        "stinger": 2,
+        "based on comic": 1,
+        "heist": 1,
+    }
+    assert net.edges == (
         ("stinger", "superhero", 2),
         ("based on comic", "stinger", 1),
         ("based on comic", "superhero", 1),
     )
-    # A show's keyword never joins a movie graph.
-    assert "lawyer" not in {value for value, _, _ in hood.nodes}
-    assert without.nodes == (("superhero", 3, 3), ("based on comic", 1, 1))
+    # A show's keyword never joins a movie network.
+    assert "lawyer" not in {n.value for n in net.nodes}
+    assert {n.value: n.df for n in without.nodes} == {
+        "superhero": 3,
+        "based on comic": 1,
+        "heist": 1,
+    }
     assert without.edges == (("based on comic", "superhero", 1),)
+    assert all(0.0 <= n.x <= 1.0 and 0.0 <= n.y <= 1.0 for n in net.nodes)
 
 
 def test_title_map_places_alike_titles_together(tmp_path: Path) -> None:
@@ -259,10 +269,14 @@ def test_server_serves_the_page_and_both_endpoints(base_url: str) -> None:
     status, body = _get(f"{base_url}/api/titles?kind=show&tag=superhero")
     assert status == 200 and [t["title"] for t in json.loads(body)["titles"]] == ["Daredevil"]
 
-    status, body = _get(f"{base_url}/api/graph?kind=movie&tag=superhero&exclude=stinger")
-    graph = json.loads(body)
-    assert status == 200 and [n["value"] for n in graph["nodes"]] == ["superhero", "based on comic"]
-    assert graph["edges"] == [["based on comic", "superhero", 1]]
+    # Only "superhero" (df 3) clears NETWORK_MIN_DF in this four-movie store.
+    status, body = _get(f"{base_url}/api/tagnetwork?kind=movie")
+    net = json.loads(body)
+    assert status == 200 and [n[0] for n in net["nodes"]] == ["superhero"]
+    assert net["edges"] == []
+
+    status, body = _get(f"{base_url}/api/tagnetwork?kind=movie&exclude=superhero")
+    assert json.loads(body)["nodes"] == []
 
     status, body = _get(f"{base_url}/api/map?kind=movie")
     tmap = json.loads(body)
@@ -506,7 +520,7 @@ def test_server_refuses_what_it_cannot_answer(base_url: str) -> None:
     status, body = _get(f"{base_url}/api/tags?kind=episode")
     assert status == 400 and "episode" in json.loads(body)["error"]
     assert _get(f"{base_url}/api/titles?kind=movie")[0] == 400
-    assert _get(f"{base_url}/api/graph?kind=movie&tag=superhero&size=0")[0] == 400
+    assert _get(f"{base_url}/api/tagnetwork?kind=episode")[0] == 400
     assert _get(f"{base_url}/api/nope")[0] == 404
 
 

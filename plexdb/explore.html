@@ -5,9 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tag explorer — plexdb</title>
 <link rel="icon" href="data:,">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.34.3/cytoscape.min.js"
-        integrity="sha512-SQebVa91Tn1DeP45Wo74monK/I9wiQg59uKc7P8vp3T7KQ9l5e8IMjZ1GJTgZehUVQt7eS61DTqldQUb1EHfnw=="
-        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <style>
   :root {
     --bg: #f7f7f5; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6b66; --line: #e3e2dd;
@@ -70,6 +67,7 @@
           background: var(--panel); padding: 16px 18px; min-height: 60vh; }
   aside h2 { font-size: 17px; margin: 0 0 4px; overflow-wrap: anywhere; }
   aside .sub { color: var(--muted); margin-bottom: 12px; font-variant-numeric: tabular-nums; }
+  aside h4 { margin: 12px 0 3px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
   aside ol { margin: 0; padding-left: 0; list-style: none; }
   aside li { padding: 5px 0; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; gap: 10px; }
   aside li .kw { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -78,8 +76,8 @@
                      font: 12px ui-monospace, Menlo, monospace; color: var(--ink); background: var(--panel);
                      border: 1px solid var(--accent); border-radius: 6px; padding: 6px 8px; }
   [hidden] { display: none !important; }
-  #map { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
-  #map.dragging { cursor: grabbing; }
+  #map, #network { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
+  #map.dragging, #network.dragging { cursor: grabbing; }
   /* The default map standing in while another computes: blurred and faded on a tinted ground,
      because its dots are already pale and opacity alone does not show. */
   #map.dim { filter: blur(2px) opacity(0.45); cursor: progress; }
@@ -133,13 +131,14 @@
   body.shell #stage { flex: 1; min-height: 0; }
   body.shell main { position: absolute; inset: 0; display: block; }
   .graphwrap { position: absolute; inset: 0; }
-  #graph, #mapbox { position: absolute; inset: 0; background: var(--panel); overflow: hidden; }
+  #graphbox, #mapbox { position: absolute; inset: 0; background: var(--panel); overflow: hidden; }
   .ov, body.shell .controls, body.shell aside#detail, .ovnote, .sugg {
     background: color-mix(in srgb, var(--panel) 90%, transparent); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
     border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,.08); }
   .ovtl { position: absolute; top: 10px; left: 10px; z-index: 8; display: flex; gap: 8px; align-items: center; max-width: calc(100% - 20px); }
   .ovtl label { display: inline-flex; gap: 6px; align-items: center; padding: 4px 8px; color: var(--muted); }
   .ovtl select { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; }
+  .ovtl output { font-variant-numeric: tabular-nums; min-width: 2em; text-align: right; }
   .ovnote { position: absolute; left: 150px; bottom: 10px; z-index: 1; max-width: min(560px, calc(100% - 170px));
             padding: 4px 9px; font-size: 12px; line-height: 1.35; color: var(--muted); pointer-events: none; }
   .ovnote:empty { display: none; }
@@ -218,7 +217,7 @@
   </div>
   <div class="seg tagsonly" role="group" aria-label="View">
     <button type="button" data-view="table" aria-pressed="true">Table</button>
-    <button type="button" data-view="graph" aria-pressed="false">Graph</button>
+    <button type="button" data-view="graph" aria-pressed="false">Tag network</button>
     <button type="button" data-view="map" aria-pressed="false">Title map</button>
   </div>
   <span class="stats tagsonly" id="stats">Loading…</span>
@@ -263,9 +262,17 @@
 </div>
 <main id="tagsmain">
   <div class="graphwrap" id="graphwrap" hidden>
-    <div id="graph"></div>
-    <div class="ovtl ov">
-      <label>Neighbours <select id="gsize"><option>20</option><option selected>40</option><option>80</option><option>150</option></select></label>
+    <div id="graphbox"><canvas id="network"></canvas></div>
+    <div class="ovtl">
+      <div class="searchbox">
+        <input type="search" id="nsearch" placeholder="Search a tag…" autocomplete="off" aria-label="Search a tag"
+               role="combobox" aria-expanded="false" aria-controls="nsugg">
+        <ul class="sugg" id="nsugg" role="listbox" hidden></ul>
+      </div>
+      <label>Minimum titles per tag
+        <input type="range" id="netmin" min="3" max="100" value="25" step="1">
+        <output id="netminval" for="netmin">25</output>
+      </label>
     </div>
     <span class="ovnote" id="gnote"></span>
   </div>
@@ -367,7 +374,8 @@ async function loadKind() {
   state.shown = PAGE;
   render();
   if (state.view === "map") drawMap();
-  if (state.tag) showTag(state.tag); else { writeHash(); if (state.view === "graph") drawGraph(); }
+  if (state.view === "graph") loadNetwork();
+  if (state.tag) showTag(state.tag); else writeHash();
 }
 
 function setView(view) {
@@ -380,7 +388,7 @@ function setView(view) {
   document.body.classList.toggle("shell", state.tab === "tags" && view !== "table");
   writeHash();
   // Before the first load, loadKind draws it once the tag list is in.
-  if (view === "graph" && state.data) drawGraph();
+  if (view === "graph" && state.data) loadNetwork();
   if (view === "map" && state.data) drawMap();
 }
 
@@ -995,53 +1003,222 @@ document.addEventListener("keydown", e => {
   if (mapVP.selected) selectItem(null); else if (mapUI.search) clearSearch();
 });
 
-let cy = null;
-const cyZoom = f => { if (cy) cy.zoom({ level: cy.zoom() * f, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } }); };
-zoomBar(document.getElementById("graphwrap"), { zoomIn: () => cyZoom(1.5), zoomOut: () => cyZoom(1 / 1.5), reset: () => { if (cy) cy.fit(undefined, 40); } });
-async function drawGraph() {
+// ---- Tag network view ----
+// `net.full` is every tag the server laid out for the current kind and noise
+// exclusions (every tag on at least NETWORK_MIN_DF titles, positioned so tags
+// on the same titles sit close together). `net.min` is the page's own
+// "minimum titles per tag" floor: raising or lowering it only re-filters
+// `net.full` into `net.nodes`/`net.edges` — the slice currently drawn — so the
+// slider never re-fetches or re-lays-out the network. An edge is kept only
+// when both tags it names are in `net.nodes`.
+const net = { key: null, full: null, min: 25, nodes: [], byValue: new Map(), edges: [], itemsOf: null };
+
+async function networkRequest(kind, exclude) {
+  const p = new URLSearchParams({ kind });
+  for (const t of exclude) p.append("exclude", t);
+  return getJSON(`/api/tagnetwork?${p}`);
+}
+
+async function loadNetwork() {
   const note = document.getElementById("gnote");
-  if (!state.tag) {
-    note.textContent = "Pick a tag in the table or a co-tag chip to centre the graph on it.";
-    if (cy) { cy.destroy(); cy = null; }
-    return;
+  const kind = state.kind;
+  const key = [kind, ...[...noise].sort()].join("\u0001");
+  if (net.key !== key) {
+    note.textContent = "Loading the whole network…";
+    net.full = null; net.key = null;
+    paintNetwork();
+    let full;
+    try { full = await networkRequest(kind, noise); }
+    catch (err) {
+      if (kind !== state.kind) return;
+      note.textContent = `Could not load: ${err.message}`;
+      return;
+    }
+    if (kind !== state.kind) return;
+    net.key = key; net.full = full;
   }
-  if (!window.cytoscape) {
-    note.textContent = "The graph library did not load — it comes from cdnjs.cloudflare.com, so this view needs internet access.";
-    return;
+  paintNetwork();
+}
+
+// A new `net.full` or a moved slider becomes new viewport items; the
+// selection follows its tag if it is still above the floor.
+function syncNetworkItems() {
+  if (!(net.itemsOf && net.itemsOf[0] === net.full && net.itemsOf[1] === net.min)) {
+    net.itemsOf = [net.full, net.min];
+    const shown = net.full ? net.full.nodes.filter(n => n[1] >= net.min) : [];
+    net.nodes = shown.map(([value, df, x, y]) => ({ id: value, title: value, x, y, df }));
+    net.byValue = new Map(net.nodes.map(it => [it.id, it]));
+    net.edges = net.full ? net.full.edges.filter(([a, b]) => net.byValue.has(a) && net.byValue.has(b)) : [];
+    let b = { x0: 0, y0: 0, x1: 1, y1: 1 };
+    if (net.nodes.length) {
+      b = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+      for (const it of net.nodes) { b.x0 = Math.min(b.x0, it.x); b.y0 = Math.min(b.y0, it.y); b.x1 = Math.max(b.x1, it.x); b.y1 = Math.max(b.y1, it.y); }
+    }
+    netVP.setItems(net.nodes, b);
   }
-  const centre = state.tag;
-  const p = new URLSearchParams({ kind: state.kind, tag: centre, size: document.getElementById("gsize").value });
-  for (const t of noise) p.append("exclude", t);
-  note.textContent = "Loading…";
-  let g;
-  try { g = await getJSON(`/api/graph?${p}`); } catch (err) { note.textContent = `Could not load: ${err.message}`; return; }
-  if (state.tag !== centre || state.view !== "graph") return;
-  note.textContent = `${fmt(g.nodes.length - 1)} tags sharing the most ${noun()} with “${centre}”; `
-    + `a line joins two tags on the same ${noun()}, thicker for more; node size is ${noun()} carrying it`
-    + (noise.size ? `; ${fmt(noise.size)} noise-marked tags left out` : "");
-  const maxDf = Math.max(...g.nodes.map(n => n.df));
-  const maxN = Math.max(1, ...g.edges.map(e => e[2]));
-  const elements = g.nodes.map(n => ({ data: {
-    id: n.value, label: n.value, size: 12 + 44 * Math.sqrt(n.df / maxDf), centre: n.value === centre ? 1 : 0 } }));
-  for (const [a, b, n] of g.edges) elements.push({ data: { id: `${a}\u0001${b}`, source: a, target: b, w: 0.6 + 7 * n / maxN } });
+  // Derived fresh from `state.tag` rather than kept by object identity: a
+  // permalink that opens on a tag before the network has loaded would
+  // otherwise latch a `null` selection that a later `net.full` arrival never
+  // revisits.
+  netVP.selected = net.byValue.get(state.tag) || null;
+}
+
+function paintNetwork() {
+  if (state.view !== "graph") return;
+  syncNetworkItems();
+  netVP.resize();
+  netVP.redraw();
+  if (!net.full) return;
+  document.getElementById("gnote").textContent =
+    `${fmt(net.nodes.length)} tags on at least ${fmt(net.min)} ${noun()} each, `
+    + `${fmt(net.edges.length)} lines joining tags on the same ${noun()}, thicker for more; node size is ${noun()} carrying it`
+    + (noise.size ? `; ${fmt(noise.size)} noise-marked tags left out` : "")
+    + ". Scroll to zoom, drag to pan, click a tag for its panel.";
+}
+
+// Node radius and the label budget both grow with df and with zoom, so the
+// whole network is legible at full zoom-out and finer tags appear as it fills
+// the screen.
+function nodeRadius(it, maxDf, zoom) { return 2 + 7 * Math.sqrt(it.df / maxDf) * Math.min(1, Math.pow(zoom, 0.15)); }
+
+function drawNetwork(ctx, vp) {
+  if (!net.nodes.length) return;
   const css = getComputedStyle(document.documentElement);
   const token = name => css.getPropertyValue(name).trim();
-  if (cy) cy.destroy();
-  cy = cytoscape({
-    container: document.getElementById("graph"),
-    elements,
-    style: [
-      { selector: "node", style: {
-        width: "data(size)", height: "data(size)", "background-color": token("--accent"),
-        label: "data(label)", "font-size": 11, color: token("--ink"), "text-valign": "bottom", "text-margin-y": 3,
-        "text-outline-color": token("--panel"), "text-outline-width": 2 } },
-      { selector: "node[centre = 1]", style: { "background-color": token("--centre"), "font-weight": "bold", "font-size": 13 } },
-      { selector: "edge", style: { width: "data(w)", "line-color": token("--edge"), "curve-style": "haystack", opacity: 0.8 } },
-    ],
-    layout: { name: "cose", animate: false, nodeRepulsion: () => 40000, idealEdgeLength: () => 120, nodeOverlap: 20, padding: 20 },
-  });
-  cy.on("tap", "node", e => showTag(e.target.id()));
+  const maxDf = Math.max(...net.nodes.map(n => n.df));
+  const r = it => nodeRadius(it, maxDf, vp.zoom);
+  const near = (x, y, pad) => x > -pad && y > -pad && x < vp.w + pad && y < vp.h + pad;
+  const neighbours = vp.selected
+    ? new Set(net.edges.filter(([a, b]) => a === vp.selected.id || b === vp.selected.id).flatMap(([a, b]) => [a, b]))
+    : null;
+  for (const [a, b] of net.edges) {
+    const na = net.byValue.get(a), nb = net.byValue.get(b);
+    const x0 = vp.sx(na.x), y0 = vp.sy(na.y), x1 = vp.sx(nb.x), y1 = vp.sy(nb.y);
+    if (!near(x0, y0, 40) && !near(x1, y1, 40)) continue;
+    ctx.strokeStyle = token("--edge");
+    ctx.globalAlpha = neighbours && !(neighbours.has(a) && neighbours.has(b)) ? 0.08 : 0.5;
+    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+  }
+  for (const it of net.nodes) {
+    const x = vp.sx(it.x), y = vp.sy(it.y);
+    if (!near(x, y, 20)) continue;
+    ctx.globalAlpha = neighbours && it !== vp.selected && !neighbours.has(it.id) ? 0.25 : 1;
+    ctx.fillStyle = token(it === vp.selected ? "--centre" : "--accent");
+    ctx.beginPath(); ctx.arc(x, y, r(it), 0, 2 * Math.PI); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  drawNetworkLabels(ctx, vp, token, neighbours, r);
+  const ring = (it, colour, width, extra) => {
+    if (!it) return;
+    ctx.strokeStyle = colour; ctx.lineWidth = width;
+    ctx.beginPath(); ctx.arc(vp.sx(it.x), vp.sy(it.y), r(it) + extra, 0, 2 * Math.PI); ctx.stroke();
+  };
+  ring(vp.hover, token("--ink"), 1.5, 3);
+  ring(vp.selected, token("--ink"), 2.5, 5);
 }
+
+// The largest tags are labelled at full zoom-out; the budget grows with zoom
+// so smaller ones appear as the view fills with them. A label that would
+// overlap one already placed (bigger tags place first) is left out; the
+// selected tag and its neighbours are never skipped for the budget.
+function drawNetworkLabels(ctx, vp, token, neighbours, r) {
+  const budget = Math.round(14 + 40 * Math.min(1, (vp.zoom - 1) / 10));
+  const ranked = net.nodes.slice().sort((a, b) => b.df - a.df);
+  ctx.save();
+  ctx.font = "600 11px system-ui, sans-serif";
+  ctx.textAlign = "center"; ctx.textBaseline = "top"; ctx.lineJoin = "round";
+  ctx.lineWidth = 3; ctx.strokeStyle = token("--panel"); ctx.fillStyle = token("--ink");
+  const placed = [];
+  let shown = 0;
+  for (const it of ranked) {
+    const special = it === vp.selected || (neighbours && neighbours.has(it.id));
+    if (!special && shown >= budget) continue;
+    const x = vp.sx(it.x), y = vp.sy(it.y) + r(it) + 3;
+    if (x < -40 || x > vp.w + 40 || y < -20 || y > vp.h + 20) continue;
+    const w = ctx.measureText(it.id).width;
+    const box = { x0: x - w / 2 - 2, x1: x + w / 2 + 2, y0: y, y1: y + 13 };
+    if (placed.some(p => box.x0 < p.x1 && box.x1 > p.x0 && box.y0 < p.y1 && box.y1 > p.y0)) continue;
+    placed.push(box);
+    if (!special) shown++;
+    ctx.globalAlpha = neighbours && !special ? 0.3 : 0.9;
+    ctx.strokeText(it.id, x, y);
+    ctx.fillText(it.id, x, y);
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+const netVP = new Viewport(document.getElementById("network"), {
+  draw: drawNetwork,
+  onHover() { netVP.redraw(); },
+  onSelect: item => showTag(item.id),
+});
+
+const nsearchEl = document.getElementById("nsearch"), nsuggEl = document.getElementById("nsugg");
+let nsuggRows = [], nsuggAt = 0;
+
+function networkSuggestions(q) {
+  q = q.trim().toLowerCase();
+  if (!q || !net.full) return [];
+  return net.full.nodes
+    .filter(([value]) => value.includes(q))
+    .sort((a, b) => (a[0].startsWith(q) ? 0 : 1) - (b[0].startsWith(q) ? 0 : 1) || b[1] - a[1])
+    .slice(0, 8)
+    .map(([value, df]) => ({ value, label: value, n: `${fmt(df)} ${noun()}` }));
+}
+function paintNetworkSuggestions() {
+  nsuggRows = networkSuggestions(nsearchEl.value);
+  nsuggAt = 0;
+  const kids = nsuggRows.map((row, i) => {
+    const li = el("li", { className: "opt" + (i === nsuggAt ? " on" : ""), role: "option" },
+      el("span", {}, row.label), el("span", { className: "n" }, row.n));
+    li.addEventListener("mousedown", e => { e.preventDefault(); chooseNetworkSuggestion(row); });
+    return li;
+  });
+  nsuggEl.replaceChildren(...kids);
+  nsuggEl.hidden = !nsuggRows.length;
+  nsearchEl.setAttribute("aria-expanded", String(nsuggRows.length > 0));
+}
+function moveNetworkSuggestion(by) {
+  if (!nsuggRows.length) return;
+  nsuggAt = (nsuggAt + by + nsuggRows.length) % nsuggRows.length;
+  nsuggEl.querySelectorAll("li.opt").forEach((li, i) => li.classList.toggle("on", i === nsuggAt));
+  nsuggEl.querySelector("li.opt.on").scrollIntoView({ block: "nearest" });
+}
+function closeNetworkSuggestions() { nsuggEl.hidden = true; nsearchEl.setAttribute("aria-expanded", "false"); }
+function chooseNetworkSuggestion(row) {
+  closeNetworkSuggestions();
+  nsearchEl.value = row.label;
+  // Below the current floor: raise it so the searched tag is actually on screen.
+  const found = net.full.nodes.find(n => n[0] === row.value);
+  if (found && found[1] < net.min) {
+    net.min = found[1];
+    document.getElementById("netmin").value = String(net.min);
+    document.getElementById("netminval").textContent = fmt(net.min);
+  }
+  syncNetworkItems();
+  const it = net.byValue.get(row.value);
+  showTag(row.value);
+  if (it) netVP.focusOn([it], 90);
+}
+nsearchEl.addEventListener("input", () => {
+  if (!nsearchEl.value.trim()) { closeNetworkSuggestions(); return; }
+  paintNetworkSuggestions();
+});
+nsearchEl.addEventListener("keydown", e => {
+  if (e.key === "ArrowDown") { e.preventDefault(); moveNetworkSuggestion(1); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); moveNetworkSuggestion(-1); }
+  else if (e.key === "Enter") { e.preventDefault(); if (nsuggRows[nsuggAt]) chooseNetworkSuggestion(nsuggRows[nsuggAt]); }
+  else if (e.key === "Escape") { e.stopPropagation(); closeNetworkSuggestions(); }
+});
+nsearchEl.addEventListener("blur", closeNetworkSuggestions);
+
+const netMinEl = document.getElementById("netmin"), netMinValEl = document.getElementById("netminval");
+netMinEl.addEventListener("input", () => {
+  net.min = Number(netMinEl.value);
+  netMinValEl.textContent = fmt(net.min);
+  paintNetwork();
+});
 
 function showError(err) {
   const box = document.getElementById("error");
@@ -1114,7 +1291,8 @@ async function showTag(value) {
   state.tag = value;
   writeHash();
   document.querySelectorAll("tbody tr").forEach(tr => tr.classList.toggle("selected", tr.dataset.tag === value));
-  if (state.view === "graph") drawGraph();
+  syncNetworkItems();
+  netVP.redraw();
   const aside = document.getElementById("detail");
   const t = state.data && state.data.tags.find(x => x.value === value);
   aside.replaceChildren(el("h2", {}, value), el("p", { className: "sub" }, "Loading…"));
@@ -1125,17 +1303,27 @@ async function showTag(value) {
   state.tagIds = new Set(body.titles.map(x => x.item_id));
   if (state.view === "map") paintMap();
   const sub = t ? `${fmt(t.df)} ${noun()} · IDF ${t.idf.toFixed(2)}` : `not on any ${noun().slice(0, -1)}`;
+  const parts = [el("h2", {}, value), el("p", { className: "sub" }, sub)];
+  if (t && t.co.length) {
+    const co = el("div", { className: "chips" });
+    for (const [coValue, count] of t.co) {
+      const chip = el("span", { className: "chip", title: `${fmt(count)} ${noun()} carry both` }, coValue, el("span", { className: "n" }, fmt(count)));
+      chip.addEventListener("click", () => showTag(coValue));
+      co.append(chip);
+    }
+    parts.push(el("h4", {}, "Appears with"), co);
+  }
   const list = el("ol");
   for (const x of body.titles) {
     list.append(el("li", {},
       el("span", {}, x.year ? `${x.title} (${x.year})` : x.title),
       el("span", { className: "kw", title: "keywords this title carries" }, `${fmt(x.keywords)} kw`)));
   }
-  aside.replaceChildren(el("h2", {}, value), el("p", { className: "sub" }, sub), list);
+  parts.push(el("h4", {}, `Titles (${fmt(body.titles.length)})`), list);
+  aside.replaceChildren(...parts);
 }
 
 document.querySelectorAll(".seg button[data-view]").forEach(b => b.addEventListener("click", () => setView(b.dataset.view)));
-document.getElementById("gsize").addEventListener("change", drawGraph);
 document.querySelectorAll(".seg button[data-kind]").forEach(b => b.addEventListener("click", () => {
   if (state.kind === b.dataset.kind) return;
   state.kind = b.dataset.kind; state.tag = null; state.tagIds = new Set();
