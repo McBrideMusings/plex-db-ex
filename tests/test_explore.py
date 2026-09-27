@@ -22,8 +22,10 @@ from plexdb import explore, schedule
 from plexdb.errors import ConfigError
 from plexdb.explore import (
     EXPLORE_PORT_VAR,
+    EXPLORE_SAVED_PATH_VAR,
     RECIPES,
     QueryError,
+    SavedQueries,
     build_index,
     make_server,
     region_labels,
@@ -699,6 +701,48 @@ def test_saved_queries_round_trip_through_the_server(base_url: str, store: Path)
     assert _send("DELETE", f"{url}?name=heat") == (200, {"queries": []})
     assert _send("DELETE", f"{url}?name=heat")[0] == 404
     assert _send("PUT", url, {"name": "", "sql": "SELECT 1"})[0] == 400
+
+
+def test_saved_queries_refuses_past_the_entry_cap(tmp_path: Path) -> None:
+    saved = SavedQueries(tmp_path / "explore-queries.json")
+    for n in range(saved.MAX_ENTRIES):
+        saved.upsert(f"q{n}", "SELECT 1", "")
+    with pytest.raises(ValueError, match="too many saved queries"):
+        saved.upsert("one too many", "SELECT 1", "")
+
+
+def test_saved_queries_refuses_past_the_size_cap(tmp_path: Path) -> None:
+    saved = SavedQueries(tmp_path / "explore-queries.json")
+    huge_note = "x" * saved.MAX_TOTAL_BYTES
+    with pytest.raises(ValueError, match="would exceed"):
+        saved.upsert("big", "SELECT 1", huge_note)
+    assert saved.all() == []
+
+
+def test_scheduler_writes_saved_queries_to_their_own_mount_when_set(
+    store: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Production sets `PLEXDB_EXPLORE_SAVED_PATH` to a mount of its own, never
+    the snapshot's directory (plex-db-ex-oyg.3)."""
+    snapshot = tmp_path / "snapshot" / "plexdb.snapshot.db"
+    saved_path = tmp_path / "explore-data" / "explore-queries.json"
+    saved_path.parent.mkdir(parents=True)
+    port = _free_port()
+    monkeypatch.setenv(schedule.SCHEDULE_VAR, "03:30")
+    monkeypatch.setenv(EXPLORE_PORT_VAR, str(port))
+    monkeypatch.setenv(EXPLORE_SAVED_PATH_VAR, str(saved_path))
+    monkeypatch.setenv("PLEXDB_PATH", str(store))
+    monkeypatch.setenv("PLEXDB_SNAPSHOT_PATH", str(snapshot))
+
+    schedule.run_scheduler(migrate=lambda: None, iterations=0)
+    publish(store, snapshot)
+
+    status, _ = _send(
+        "PUT", f"http://127.0.0.1:{port}/api/saved", {"name": "heat", "sql": "SELECT 1"}
+    )
+    assert status == 200
+    assert saved_path.exists()
+    assert not (snapshot.parent / "explore-queries.json").exists()
 
 
 def test_query_endpoint_answers_rows_and_400s_a_refusal(base_url: str) -> None:

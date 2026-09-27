@@ -8,8 +8,9 @@ keyword-cosine ranking for a reason that has nothing to do with taste.
 Nothing here writes the store. Every request opens it through `open_readonly`, so
 a handler bug meets SQLite's read-only mode rather than the one writer's file
 (ADR-0001). The one file the explorer does write is the Query tab's saved
-queries, `explore-queries.json` beside the store. The noise list the page keeps
-lives in the viewer's browser, never on disk.
+queries, `explore-queries.json`, capped in count and total size (`SavedQueries`)
+since the explorer has no login. The noise list the page keeps lives in the
+viewer's browser, never on disk.
 
 The numbers are computed the way `taste-cosine.rhai` computes them for a pool,
 with the whole library of one type standing in for the pool: `df` is how many
@@ -42,6 +43,14 @@ from .tmdb_edges import SIMILAR_EDGE_TYPE
 #: Set in the container to have `plexdb schedule` serve the explorer beside the
 #: sweep, reading the published snapshot. Unset, the scheduler serves nothing.
 EXPLORE_PORT_VAR = "PLEXDB_EXPLORE_PORT"
+
+#: Full path to the saved-queries file, set in the container to a dedicated
+#: mount (`/explore-data`, its own bind mount in `[docker_run]`) rather than
+#: etv-station's `/snapshot` directory — the explorer has no login, so anyone
+#: who reaches the port could otherwise write into a directory another
+#: consumer reads (plex-db-ex-oyg.3). Unset in dev, where `make_server` falls
+#: back to a file beside the store.
+EXPLORE_SAVED_PATH_VAR = "PLEXDB_EXPLORE_SAVED_PATH"
 
 #: The media types TMDB has keywords for. An episode never carries them
 #: (`enrich_tmdb_keywords` enriches movies and shows only).
@@ -1183,6 +1192,11 @@ class SavedQueries:
     """
 
     NAME_MAX = 200
+    #: The explorer has no login, so `upsert` bounds what an anonymous caller
+    #: can grow this file to — count and serialized size — independently of
+    #: which directory it lives in (plex-db-ex-oyg.3).
+    MAX_ENTRIES = 500
+    MAX_TOTAL_BYTES = 1 << 20
 
     def __init__(self, path: Path) -> None:
         self._path = path
@@ -1227,6 +1241,11 @@ class SavedQueries:
         with self._lock:
             queries = [q for q in self._read() if q.get("name") != entry["name"]]
             queries.append(entry)
+            if len(queries) > self.MAX_ENTRIES:
+                raise ValueError(f"too many saved queries (max {self.MAX_ENTRIES})")
+            body = json.dumps(queries, indent=2) + "\n"
+            if len(body.encode()) > self.MAX_TOTAL_BYTES:
+                raise ValueError(f"saved queries would exceed {self.MAX_TOTAL_BYTES} bytes")
             queries.sort(key=lambda q: q["name"].casefold())
             self._write(queries)
             return queries
@@ -1245,8 +1264,8 @@ def _page() -> bytes:
     return resources.files("plexdb").joinpath("explore.html").read_bytes()
 
 
-#: The saved-queries file's name, kept beside the store: `data/` locally, the
-#: snapshot's directory in the container, which is a writable mount that persists.
+#: The saved-queries file's name. In dev it sits beside the store; in the
+#: container `EXPLORE_SAVED_PATH_VAR` names its own dedicated mount instead.
 SAVED_FILE = "explore-queries.json"
 
 
@@ -1401,7 +1420,9 @@ def make_server(
     return ThreadingHTTPServer((host, port), Handler)
 
 
-def serve_in_background(store_path: Path, host: str, port: int) -> ThreadingHTTPServer:
+def serve_in_background(
+    store_path: Path, host: str, port: int, saved_path: Path | None = None
+) -> ThreadingHTTPServer:
     """Start the explorer on a daemon thread and return its server.
 
     This is how the container serves it: a thread inside `plexdb schedule`, so
@@ -1409,6 +1430,6 @@ def serve_in_background(store_path: Path, host: str, port: int) -> ThreadingHTTP
     scheduler rather than holding the container up after it, and an exception
     in one request stays in that request's own thread.
     """
-    server = make_server(store_path, host, port)
+    server = make_server(store_path, host, port, saved_path)
     threading.Thread(target=server.serve_forever, name="explore", daemon=True).start()
     return server

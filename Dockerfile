@@ -36,12 +36,17 @@ ENV PATH="/app/.venv/bin:$PATH" \
 # every URL and token they may carry a real value here: `/data` is the store's
 # own volume, `/snapshot` is the volume the station container already reads, so
 # `publish` writes where the consumer looks and nothing copies anything
-# (issue #43). Credentials arrive from the host environment and appear in no
+# (issue #43). `/explore-data` is the Query tab's saved queries' own mount,
+# never `/snapshot` — the explorer has no login, so anyone who reaches the
+# port could otherwise write into the directory the station reads
+# (plex-db-ex-oyg.3; `SavedQueries` additionally caps entry count and total
+# size). Credentials arrive from the host environment and appear in no
 # committed file.
 ENV PLEXDB_PATH=/data/plexdb.db \
-    PLEXDB_SNAPSHOT_PATH=/snapshot/plexdb.snapshot.db
+    PLEXDB_SNAPSHOT_PATH=/snapshot/plexdb.snapshot.db \
+    PLEXDB_EXPLORE_SAVED_PATH=/explore-data/explore-queries.json
 
-VOLUME ["/data", "/snapshot"]
+VOLUME ["/data", "/snapshot", "/explore-data"]
 
 # The read-only tag explorer `plexdb schedule` serves beside the sweep when
 # PLEXDB_EXPLORE_PORT is set, reading the snapshot. Documentation only: whether

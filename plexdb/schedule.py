@@ -32,6 +32,7 @@ import os
 import time
 from collections.abc import Callable
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from .errors import ConfigError
 
@@ -107,9 +108,14 @@ def _start_explorer() -> None:
     writer only ever replaces by rename, so a request cannot see it half-written.
     Bound on every interface inside the container; which host address the port
     reaches is `[[docker_run.ports]]`'s decision, not this process's.
+
+    The Query tab's saved queries go to `PLEXDB_EXPLORE_SAVED_PATH` when set —
+    the container's own dedicated mount, never the snapshot's directory
+    (plex-db-ex-oyg.3) — and fall back to a file beside the snapshot when it
+    isn't, which is the dev/test case.
     """
     from .config import Config
-    from .explore import EXPLORE_PORT_VAR, serve_in_background
+    from .explore import EXPLORE_PORT_VAR, EXPLORE_SAVED_PATH_VAR, serve_in_background
 
     raw = os.environ.get(EXPLORE_PORT_VAR, "").strip()
     if not raw:
@@ -122,8 +128,15 @@ def _start_explorer() -> None:
             f"{EXPLORE_PORT_VAR} is set but PLEXDB_SNAPSHOT_PATH is not; "
             "the explorer reads the published snapshot"
         )
-    server = serve_in_background(snapshot, "0.0.0.0", int(raw))
-    print(f"tag explorer on port {server.server_port}, reading {snapshot}", flush=True)
+    saved_raw = os.environ.get(EXPLORE_SAVED_PATH_VAR, "").strip()
+    saved_path = Path(saved_raw).expanduser() if saved_raw else None
+    server = serve_in_background(snapshot, "0.0.0.0", int(raw), saved_path)
+    where = saved_path or snapshot.with_name("explore-queries.json")
+    print(
+        f"tag explorer on port {server.server_port}, reading {snapshot}, "
+        f"saved queries at {where}",
+        flush=True,
+    )
 
 
 def run_scheduler(
