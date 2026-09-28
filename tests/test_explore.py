@@ -355,6 +355,28 @@ def test_title_endpoint_refuses_a_missing_unknown_or_oversize_id(base_url: str) 
     assert status == 404 and "imdb:nope" in json.loads(body)["error"]
 
 
+def test_title_endpoint_refuses_a_request_over_the_concurrency_cap(base_url: str) -> None:
+    held = [explore.TITLE_SLOTS.acquire(blocking=False) for _ in range(4)]
+    try:
+        status, body = _get(f"{base_url}/api/title?item_id=imdb:tt1")
+        assert status == 429 and "already running" in json.loads(body)["error"]
+    finally:
+        for _ in filter(None, held):
+            explore.TITLE_SLOTS.release()
+    assert _get(f"{base_url}/api/title?item_id=imdb:tt1")[0] == 200
+
+
+def test_titles_endpoint_refuses_a_request_over_the_concurrency_cap(base_url: str) -> None:
+    held = [explore.TITLE_SLOTS.acquire(blocking=False) for _ in range(4)]
+    try:
+        status, body = _get(f"{base_url}/api/titles?kind=movie&tag=superhero")
+        assert status == 429 and "already running" in json.loads(body)["error"]
+    finally:
+        for _ in filter(None, held):
+            explore.TITLE_SLOTS.release()
+    assert _get(f"{base_url}/api/titles?kind=movie&tag=superhero")[0] == 200
+
+
 def _add_keyword(store: Path, item_id: str, keyword: str) -> None:
     with open_store(store) as conn:
         conn.execute(

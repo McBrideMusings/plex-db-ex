@@ -661,6 +661,10 @@ class NoSuchTitle(LookupError):
     """No item has the id a card was asked for."""
 
 
+class TooManyTitleRequests(Exception):
+    """More /api/title or /api/titles requests are already running than TITLE_SLOTS allows."""
+
+
 def title_details(conn: sqlite3.Connection, item_id: str) -> dict[str, object]:
     """What a title's card shows: its facts, its keywords, and its nearest similar titles.
 
@@ -864,6 +868,18 @@ QUERY_VALUE_BYTES = 8 << 20
 #: Statements that may run at once. The server answers each request on its own
 #: thread; a third caller is told to retry rather than queued.
 QUERY_SLOTS = threading.BoundedSemaphore(2)
+
+#: Concurrent /api/title and /api/titles requests. Both open a fresh
+#: read-only connection per request with no cache layer, unlike /api/tags,
+#: /api/map and /api/tagnetwork (already single-flighted per key by
+#: `_KeyedCache`) and unlike /api/poster (`POSTER_SLOTS` guards an external
+#: Plex fetch, not the store). Every real UI path fires at most one of either
+#: at a time — `titleDetail`'s `detailCache` and a tag click both dedupe
+#: client-side — so this only needs to sit comfortably above 1: it bounds an
+#: anonymous caller hammering the route directly, not a browser page load
+#: (contrast `POSTER_SLOTS`, sized against a real page requesting 8+ posters
+#: at once).
+TITLE_SLOTS = threading.BoundedSemaphore(4)
 
 #: Largest request body the explorer reads. A pasted query is a few kilobytes.
 #: `SavedQueries.MAX_TOTAL_BYTES` shares this literal by coincidence, not by
@@ -1453,6 +1469,8 @@ def make_server(
                 )
             except NoSuchQuery as err:
                 self._json({"error": f"no saved query named {err.args[0]!r}"}, HTTPStatus.NOT_FOUND)
+            except TooManyTitleRequests as err:
+                self._json({"error": str(err)}, HTTPStatus.TOO_MANY_REQUESTS)
             except NoPoster as err:
                 self._json(
                     {"error": f"no Plex rating key on file for {err.args[0]!r}"},
@@ -1531,8 +1549,15 @@ def make_server(
                 tag = query.get("tag")
                 if not tag:
                     raise ValueError("tag is required")
-                with open_readonly(store_path) as conn:
-                    self._json(titles_json(kind, tag, titles_tagged(conn, kind, tag)))
+                if not TITLE_SLOTS.acquire(blocking=False):
+                    raise TooManyTitleRequests(
+                        "too many title requests are already running; try again in a moment"
+                    )
+                try:
+                    with open_readonly(store_path) as conn:
+                        self._json(titles_json(kind, tag, titles_tagged(conn, kind, tag)))
+                finally:
+                    TITLE_SLOTS.release()
             elif url.path == "/api/map":
                 kind = query.get("kind", "movie")
                 _check_kind(kind)
@@ -1551,8 +1576,15 @@ def make_server(
                     raise ValueError("item_id is required")
                 if len(item_id) > MAX_ITEM_ID:
                     raise ValueError(f"item_id is over {MAX_ITEM_ID} characters")
-                with open_readonly(store_path) as conn:
-                    self._json(title_details(conn, item_id))
+                if not TITLE_SLOTS.acquire(blocking=False):
+                    raise TooManyTitleRequests(
+                        "too many title requests are already running; try again in a moment"
+                    )
+                try:
+                    with open_readonly(store_path) as conn:
+                        self._json(title_details(conn, item_id))
+                finally:
+                    TITLE_SLOTS.release()
             elif url.path == "/api/poster":
                 item_id = query.get("item_id")
                 if not item_id:
