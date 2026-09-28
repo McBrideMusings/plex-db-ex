@@ -284,6 +284,7 @@ def test_migrate_still_refuses_a_v10_that_also_loses_an_unrelated_row(
         return declared
 
     monkeypatch.setattr(schema, "MIGRATIONS", schema.MIGRATIONS[:9] + (_buggy_v10,))
+    monkeypatch.setattr(schema, "SCHEMA_VERSION", 10)
 
     with pytest.raises(StoreError, match="a migration lost 1 rows"):
         store.migrate(path, tmp_path / "backups")

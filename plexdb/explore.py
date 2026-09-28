@@ -325,14 +325,13 @@ def title_map(
     return TitleMap(kind=kind, points=points, unplaced=n - len(ids))
 
 
-def keyword_fingerprint(conn: sqlite3.Connection, kind: str) -> str:
-    """A cheap digest of what the default map of `kind` is drawn from.
+def _fingerprint(conn: sqlite3.Connection, kind: str, recipe: str) -> str:
+    """A cheap digest of what a stored default view of `kind` is drawn from.
 
     The recipe, the number of keyword rows, the number of titles carrying them
     and the newest `fetched_at` among them. A re-fetch stamps a new
     `fetched_at`, a wipe or a title leaving `items` changes the counts, and a
-    change to the drawing code changes `MAP_RECIPE`. Nothing reads it except
-    the comparison in `stored_map` and `plexdb.titlemap`.
+    change to the drawing code changes its recipe string.
     """
     _check_kind(kind)
     rows, titles, newest = conn.execute(
@@ -341,7 +340,25 @@ def keyword_fingerprint(conn: sqlite3.Connection, kind: str) -> str:
         "WHERE e.namespace = ? AND e.key = ? AND i.type = ?",
         (_NAMESPACE, _KEY, kind),
     ).fetchone()
-    return f"{MAP_RECIPE}|{rows}|{titles}|{newest or ''}"
+    return f"{recipe}|{rows}|{titles}|{newest or ''}"
+
+
+def keyword_fingerprint(conn: sqlite3.Connection, kind: str) -> str:
+    """A cheap digest of what the default map of `kind` is drawn from.
+
+    Nothing reads it except the comparison in `stored_map` and
+    `plexdb.titlemap`.
+    """
+    return _fingerprint(conn, kind, MAP_RECIPE)
+
+
+def network_fingerprint(conn: sqlite3.Connection, kind: str) -> str:
+    """A cheap digest of what the default tag network of `kind` is drawn from.
+
+    Nothing reads it except the comparison in `stored_network` and
+    `plexdb.tagnetwork`.
+    """
+    return _fingerprint(conn, kind, NETWORK_RECIPE)
 
 
 def stored_map(conn: sqlite3.Connection, kind: str) -> dict[str, object] | None:
@@ -390,6 +407,16 @@ NETWORK_MIN_DF = 3
 #: Each node keeps only its strongest links, so a tag central to the library
 #: does not draw a line to every tag it has ever shared one title with.
 NETWORK_EDGES_PER_NODE = 6
+
+#: Names how a network is drawn, the same way `MAP_RECIPE` names the title
+#: map's recipe: part of a stored network's fingerprint, so changing the
+#: shared embedding recipe or either constant above makes every stored
+#: network stale and the next refresh redraws it.
+NETWORK_RECIPE = (
+    f"umap-cosine-svd{MAP_SVD_COMPONENTS}-df{NETWORK_MIN_DF}-nn{MAP_NEIGHBOURS}"
+    f"-md{MAP_MIN_DIST}-sp{MAP_SPREAD}-clip{MAP_CLIP[0]:g}-{MAP_CLIP[1]:g}"
+    f"-epn{NETWORK_EDGES_PER_NODE}"
+)
 
 
 @dataclass(frozen=True)
@@ -497,6 +524,37 @@ def tag_network_json(net: TagNetwork) -> dict[str, object]:
         # be most of the payload.
         "nodes": [[n.value, n.df, n.x, n.y] for n in net.nodes],
         "edges": [[a, b, n] for a, b, n in net.edges],
+    }
+
+
+def stored_network(conn: sqlite3.Connection, kind: str) -> dict[str, object] | None:
+    """The default tag network the writer stored, as `tag_network_json` would
+    give it, or `None` when there is none or it was drawn from different
+    keyword rows.
+
+    `None` is the caller's cue to draw it live. A store that predates the
+    `tag_network` tables has neither, and reads as having no stored network.
+    """
+    _check_kind(kind)
+    try:
+        state = conn.execute(
+            "SELECT fingerprint FROM tag_network_state WHERE kind = ?", (kind,)
+        ).fetchone()
+        if state is None or state[0] != network_fingerprint(conn, kind):
+            return None
+        nodes = conn.execute(
+            "SELECT value, df, x, y FROM tag_network WHERE kind = ? ORDER BY value", (kind,)
+        ).fetchall()
+        edges = conn.execute(
+            "SELECT a, b, shared FROM tag_network_edge WHERE kind = ? ORDER BY shared DESC, a, b",
+            (kind,),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return None
+    return {
+        "kind": kind,
+        "nodes": [[r[0], r[1], r[2], r[3]] for r in nodes],
+        "edges": [[r[0], r[1], r[2]] for r in edges],
     }
 
 
@@ -848,7 +906,10 @@ class _TagNetworkCache:
 
         def compute() -> dict[str, object]:
             with open_readonly(self._path) as conn:
-                return tag_network_json(tag_network(conn, kind, exclude))
+                payload = None if exclude else stored_network(conn, kind)
+                if payload is None:
+                    payload = tag_network_json(tag_network(conn, kind, exclude))
+            return payload
 
         return self._cache.get((kind, exclude), (stat.st_mtime_ns, stat.st_size), compute)
 

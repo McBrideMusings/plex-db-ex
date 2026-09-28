@@ -38,6 +38,7 @@ from plexdb.explore import (
     titles_tagged,
 )
 from plexdb.store import init, open_readonly, open_store, publish
+from plexdb.tagnetwork import refresh_tag_networks
 from plexdb.titlemap import refresh_title_maps
 
 FETCHED = "2026-08-09T12:00:00+00:00"
@@ -504,6 +505,63 @@ def test_map_cache_does_not_hold_one_key_behind_another(
     finally:
         release.set()
         slow.join(120)
+
+
+def test_tagnetwork_refresh_stores_both_kinds_and_skips_a_kind_whose_keywords_are_unchanged(
+    store: Path,
+) -> None:
+    with open_store(store) as conn:
+        first = refresh_tag_networks(conn)
+        counts = conn.execute("SELECT kind, COUNT(*) FROM tag_network GROUP BY kind")
+        rows = [tuple(r) for r in counts]
+        again = refresh_tag_networks(conn)
+
+    assert [(r.kind, r.redrawn) for r in first] == [("movie", True), ("show", True)]
+    # Only "superhero" (df=3) clears the default df >= 3 floor among the movie tags.
+    assert rows == [("movie", 1)]
+    assert [(r.kind, r.redrawn, r.nodes) for r in again] == [
+        ("movie", False, 1),
+        ("show", False, 0),
+    ]
+
+    _add_keyword(store, "tvdb:9", "vigilante")
+    with open_store(store) as conn:
+        changed = refresh_tag_networks(conn)
+    assert [(r.kind, r.redrawn) for r in changed] == [("movie", False), ("show", True)]
+
+
+def test_tagnetwork_endpoint_serves_the_stored_network_and_draws_live_once_it_is_stale(
+    store: Path, base_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with open_store(store) as conn:
+        refresh_tag_networks(conn)
+    drawn: list[frozenset[str]] = []
+    real = explore.tag_network
+
+    def counting(  # type: ignore[no-untyped-def]
+        conn,
+        kind,
+        exclude=frozenset(),
+        min_df=explore.NETWORK_MIN_DF,
+        edges_per_node=explore.NETWORK_EDGES_PER_NODE,
+        seed=0,
+    ):
+        drawn.append(exclude)
+        return real(conn, kind, exclude, min_df, edges_per_node, seed)
+
+    monkeypatch.setattr(explore, "tag_network", counting)
+
+    _, body = _get(f"{base_url}/api/tagnetwork?kind=movie")
+    stored = json.loads(body)
+    assert drawn == []
+    assert [n[0] for n in stored["nodes"]] == ["superhero"]
+
+    _get(f"{base_url}/api/tagnetwork?kind=movie&exclude=stinger")
+    assert drawn == [frozenset({"stinger"})]
+
+    _add_keyword(store, "imdb:tt4", "superhero")
+    _get(f"{base_url}/api/tagnetwork?kind=movie")
+    assert drawn == [frozenset({"stinger"}), frozenset()]
 
 
 def test_index_cache_recomputes_when_the_store_changes(store: Path) -> None:

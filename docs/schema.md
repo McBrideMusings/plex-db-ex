@@ -613,6 +613,41 @@ is the point. So this step reports the exact `enrichment` row count it computed 
 shrink, and the guard accepts a drop in that table only when the store lands on that exact number;
 any further loss, from this migration or a future one, still rolls the store back.
 
+## Version 11 — the tag explorer's stored tag network
+
+`tag_network`, `tag_network_edge` and `tag_network_state`, written by `plexdb
+refresh-tagnetwork`. All three are derived from `enrichment`, so a consumer that reads the
+keyword facts has no reason to read them.
+
+```
+tag_network        (kind, value) PK, df INTEGER, x REAL, y REAL
+tag_network_edge   (kind, a, b) PK, shared INTEGER
+tag_network_state  kind PK, fingerprint TEXT, computed_at TEXT
+```
+
+`tag_network` holds the default network of the tag explorer's Graph view: each tag of `kind`
+(`movie` or `show`) that clears the Graph view's document-frequency floor, with its document
+frequency and a position in the unit square. Only distances mean anything. It is the network
+with no noise tag excluded, drawn the same way `title_map` is: IDF-weighted vectors — a tag's
+vector is which titles carry it, the transpose of `title_map`'s — truncated SVD to 50
+dimensions and UMAP with cosine distance. `tag_network_edge` holds each tag's strongest
+co-tags: `a` and `b` (`a < b`, each pair once), and how many titles carry both. Neither table
+carries a foreign key: a tag or title that drops out of `enrichment` or `items` drops out of
+the next refresh's network without it.
+
+`tag_network_state` holds one row per kind, the same fingerprint shape as `title_map_state`:
+the drawing recipe, the count of the kind's keyword rows, the count of titles carrying them and
+the newest keyword `fetched_at`. `computed_at` is UTC.
+
+**Refresh rule.** `plexdb refresh-tagnetwork` recomputes each kind's fingerprint and redraws
+only a kind whose stored fingerprint differs, replacing all three tables' rows for the redrawn
+kinds in one transaction. It runs as its own step of the sweep, right after `refresh-map`, so
+the snapshot carries a current network. A reader that uses the network compares `fingerprint`
+against the same digest of the current keyword rows and treats a mismatch as no stored network;
+the explorer then draws it live, which takes tens of seconds for the movies — and only for the
+default (no tag excluded) view, since an excluded-tag combination is never precomputed. Nothing
+else interprets the fingerprint.
+
 ## Not yet built
 
 Further sources land as new `source` values rather than as schema changes:

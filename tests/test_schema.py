@@ -19,6 +19,7 @@ V6_TABLES = {"collection", "collection_membership"}
 V7_TABLES = {"enrichment_cursor"}
 V9_TABLES = {"title_map", "title_map_state"}
 V10_TABLES = {"keyword_forms"}
+V11_TABLES = {"tag_network", "tag_network_edge", "tag_network_state"}
 #: V4 adds no new table — it only alters the existing `plays` table and adds
 #: an index (issue #9).
 
@@ -177,6 +178,7 @@ def test_a_current_store_carries_every_migrations_tables_and_nothing_else(
         | V7_TABLES
         | V9_TABLES
         | V10_TABLES
+        | V11_TABLES
         | {"schema_version"}
     )
 
