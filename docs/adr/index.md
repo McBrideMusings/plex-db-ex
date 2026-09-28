@@ -21,3 +21,4 @@ ADR wins; [the PRD](../PRD) already reflects them.
 | [0014](./0014-the-sweep-is-a-command-not-a-shell-script) | The sweep is a command, not a shell script |
 | [0015](./0015-the-schedule-is-a-command-too) | The schedule is a command too |
 | [0016](./0016-keywords-are-one-source-agnostic-namespace-with-a-source-column) | Keywords are one source-agnostic namespace with a source column |
+| [0017](./0017-the-explorers-client-is-a-thin-credential-less-visualizer) | The explorer's client is a thin, credential-less visualizer |

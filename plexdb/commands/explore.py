@@ -28,7 +28,13 @@ def _cmd_explore(args: argparse.Namespace) -> int:
     if not config.store_path.exists():
         print(f"no store at {config.store_path} — run `admin pull-baseline`", file=sys.stderr)
         return 1
-    server = make_server(config.store_path, args.host, args.port)
+    server = make_server(
+        config.store_path,
+        args.host,
+        args.port,
+        plex_url=config.plex_url,
+        plex_token=config.plex_token,
+    )
     url = f"http://{args.host}:{server.server_port}/"
     print(
         f"tag explorer on {url} reading {config.store_path} (read-only); Ctrl-C to stop",

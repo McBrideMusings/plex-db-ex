@@ -14,8 +14,10 @@ import threading
 import urllib.error
 import urllib.request
 from collections.abc import Iterator
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 
+import httpx
 import pytest
 
 from plexdb import explore, schedule
@@ -765,6 +767,91 @@ def test_scheduler_writes_saved_queries_to_their_own_mount_when_set(
     assert status == 200
     assert saved_path.exists()
     assert not (snapshot.parent / "explore-queries.json").exists()
+
+
+def _mock_plex(handler: object) -> httpx.Client:
+    return httpx.Client(transport=httpx.MockTransport(handler))  # type: ignore[arg-type]
+
+
+def _poster_server(
+    store: Path,
+    *,
+    http: httpx.Client | None = None,
+    plex_url: str = "http://plex.local",
+    plex_token: str = "tok",
+) -> ThreadingHTTPServer:
+    server = make_server(
+        store, "127.0.0.1", 0, plex_url=plex_url, plex_token=plex_token, poster_http=http
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def _stop(server: ThreadingHTTPServer) -> None:
+    server.shutdown()
+    server.server_close()
+
+
+def test_poster_is_not_configured_without_plex_credentials(base_url: str) -> None:
+    status, body = _get(f"{base_url}/api/poster?item_id=imdb:tt1")
+    assert status == 503 and "not configured" in json.loads(body)["error"]
+
+
+def test_poster_404s_when_no_rating_key_is_on_file(store: Path) -> None:
+    server = _poster_server(store, http=_mock_plex(lambda r: httpx.Response(200, content=b"x")))
+    try:
+        status, body = _get(f"http://127.0.0.1:{server.server_port}/api/poster?item_id=imdb:tt1")
+        assert status == 404 and "rating key" in json.loads(body)["error"]
+    finally:
+        _stop(server)
+
+
+def test_poster_proxies_the_plex_thumb_with_the_token_kept_server_side(store: Path) -> None:
+    with open_store(store) as conn:
+        conn.execute(
+            "INSERT INTO plex_items (rating_key, item_id, section_id, last_seen) "
+            "VALUES ('42', 'imdb:tt1', '1', ?)",
+            (FETCHED,),
+        )
+        conn.commit()
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        assert request.headers["X-Plex-Token"] == "tok"
+        return httpx.Response(200, content=b"fakejpegbytes", headers={"Content-Type": "image/jpeg"})
+
+    server = _poster_server(store, http=_mock_plex(handler))
+    try:
+        url = f"http://127.0.0.1:{server.server_port}/api/poster?item_id=imdb:tt1"
+        status, body = _get(url)
+        assert status == 200 and body == b"fakejpegbytes"
+        # A second request must not reach Plex again, or leak the token into a URL.
+        status2, body2 = _get(url)
+        assert status2 == 200 and body2 == b"fakejpegbytes"
+        assert len(calls) == 1
+        assert "tok" not in calls[0]
+    finally:
+        _stop(server)
+
+
+def test_poster_refuses_an_oversize_response(store: Path) -> None:
+    with open_store(store) as conn:
+        conn.execute(
+            "INSERT INTO plex_items (rating_key, item_id, section_id, last_seen) "
+            "VALUES ('42', 'imdb:tt1', '1', ?)",
+            (FETCHED,),
+        )
+        conn.commit()
+    oversize = b"x" * (explore.POSTER_MAX_BYTES + 1)
+    server = _poster_server(
+        store, http=_mock_plex(lambda r: httpx.Response(200, content=oversize))
+    )
+    try:
+        status, body = _get(f"http://127.0.0.1:{server.server_port}/api/poster?item_id=imdb:tt1")
+        assert status == 503 and "over" in json.loads(body)["error"]
+    finally:
+        _stop(server)
 
 
 def test_query_endpoint_answers_rows_and_400s_a_refusal(base_url: str) -> None:

@@ -113,6 +113,11 @@ def _start_explorer() -> None:
     the container's own dedicated mount, never the snapshot's directory
     (plex-db-ex-oyg.3) — and fall back to a file beside the snapshot when it
     isn't, which is the dev/test case.
+
+    A title's poster is proxied from Plex, server-side, using this same
+    process's own `PLEX_URL`/`PLEX_TOKEN` (plex-db-ex-oyg.2, docs/adr/0017) —
+    empty in dev without a `.env`, in which case `/api/poster` answers 503
+    rather than failing to start.
     """
     from .config import Config
     from .explore import EXPLORE_PORT_VAR, EXPLORE_SAVED_PATH_VAR, serve_in_background
@@ -122,7 +127,8 @@ def _start_explorer() -> None:
         return
     if not raw.isdigit() or not 1 <= int(raw) <= 65535:
         raise ConfigError(f"{EXPLORE_PORT_VAR} must be a port number, got {raw!r}")
-    snapshot = Config.from_env().snapshot_path
+    cfg = Config.from_env()
+    snapshot = cfg.snapshot_path
     if snapshot is None:
         raise ConfigError(
             f"{EXPLORE_PORT_VAR} is set but PLEXDB_SNAPSHOT_PATH is not; "
@@ -130,7 +136,14 @@ def _start_explorer() -> None:
         )
     saved_raw = os.environ.get(EXPLORE_SAVED_PATH_VAR, "").strip()
     saved_path = Path(saved_raw).expanduser() if saved_raw else None
-    server = serve_in_background(snapshot, "0.0.0.0", int(raw), saved_path)
+    server = serve_in_background(
+        snapshot,
+        "0.0.0.0",
+        int(raw),
+        saved_path,
+        plex_url=cfg.plex_url,
+        plex_token=cfg.plex_token,
+    )
     where = saved_path or snapshot.with_name("explore-queries.json")
     print(
         f"tag explorer on port {server.server_port}, reading {snapshot}, "

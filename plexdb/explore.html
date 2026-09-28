@@ -104,9 +104,12 @@
                   color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
   .tcard .close:hover { border-color: var(--accent); }
   .tcard .top { display: flex; gap: 10px; }
-  .tcard .poster { flex: none; width: 68px; height: 102px; border-radius: 5px; background: var(--chip); color: var(--muted);
-                   display: flex; align-items: center; justify-content: center; font-size: 26px; font-weight: 650;
-                   border: 1px dashed var(--line); }
+  .poster { flex: none; width: 68px; height: 102px; border-radius: 5px; background: var(--chip); color: var(--muted);
+            display: flex; align-items: center; justify-content: center; font-size: 26px; font-weight: 650;
+            border: 1px dashed var(--line); position: relative; overflow: hidden; }
+  .poster img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .poster.small { width: 32px; height: 48px; font-size: 13px; border-radius: 4px; }
+  .trow, .cellrow { display: flex; align-items: center; gap: 8px; min-width: 0; }
   .tcard h3 { margin: 0 24px 2px 0; font-size: 15px; overflow-wrap: anywhere; }
   .tcard .meta { color: var(--muted); }
   .tcard .desc { margin: 8px 0; color: var(--muted); font-style: italic; }
@@ -332,6 +335,18 @@ const el = (tag, props = {}, ...kids) => {
   return node;
 };
 const fmt = n => n.toLocaleString("en-US");
+// A title's poster, proxied through /api/poster so the Plex token never
+// reaches the browser (plex-db-ex-oyg.2). The monogram box is the fallback:
+// it's already there when the image is requested, and stays visible if the
+// image never loads (no rating key on file, or Plex has no thumb for it).
+function posterThumb(itemId, title, extraClass = "") {
+  const box = el("div", { className: ("poster " + extraClass).trim() }, (title || "?").trim().charAt(0).toUpperCase());
+  if (!itemId) return box;
+  const img = el("img", { loading: "lazy", decoding: "async", alt: "", src: `/api/poster?item_id=${encodeURIComponent(itemId)}` });
+  img.addEventListener("error", () => img.remove(), { once: true });
+  box.append(img);
+  return box;
+}
 const noun = () => state.kind === "movie" ? "movies" : "shows";
 
 function readHash() {
@@ -674,7 +689,7 @@ class TitleCard {
     const facts = d ? [d.studio, d.content_rating].filter(Boolean).join(" · ") : "";
     const head = el("div", {}, el("h3", {}, year ? `${title} (${year})` : title),
       el("div", { className: "meta" }, d ? (facts || "no studio or rating on file") : err ? `Could not load: ${err.message}` : "Loading…"));
-    const parts = [el("div", { className: "top" }, el("div", { className: "poster", title: "No poster yet" }, (title || "?").trim().charAt(0).toUpperCase()), head),
+    const parts = [el("div", { className: "top" }, posterThumb(this.itemId, title), head),
       el("p", { className: "desc" }, "No description yet.")];
     if (d) {
       const chips = el("div");
@@ -1364,8 +1379,9 @@ async function showTag(value) {
   }
   const list = el("ol");
   for (const x of body.titles) {
-    list.append(el("li", {},
-      el("span", {}, x.year ? `${x.title} (${x.year})` : x.title),
+    const row = el("div", { className: "trow" }, posterThumb(x.item_id, x.title, "small"),
+      el("span", {}, x.year ? `${x.title} (${x.year})` : x.title));
+    list.append(el("li", {}, row,
       el("span", { className: "kw", title: "keywords this title carries" }, `${fmt(x.keywords)} kw`)));
   }
   parts.push(el("h4", {}, `Titles (${fmt(body.titles.length)})`), list);
@@ -1457,7 +1473,8 @@ async function runQuery() {
     body.append(el("tr", {}, ...row.map(v => {
       const label = typeof v === "string" && Object.hasOwn(out.labels, v) ? out.labels[v] : null;
       if (label !== null) {
-        const td = el("td", {}, el("div", {}, label), el("div", { className: "cellid" }, v));
+        const td = el("td", {}, el("div", { className: "cellrow" }, posterThumb(v, label, "small"), el("span", {}, label)),
+          el("div", { className: "cellid" }, v));
         td.title = `${label}\n${v}`;
         return td;
       }

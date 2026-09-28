@@ -25,7 +25,7 @@ import math
 import sqlite3
 import threading
 import time
-from collections import Counter, defaultdict
+from collections import Counter, OrderedDict, defaultdict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from http import HTTPStatus
@@ -34,6 +34,8 @@ from importlib import resources
 from pathlib import Path
 from typing import Any, NamedTuple
 from urllib.parse import parse_qs, urlparse
+
+import httpx
 
 from .errors import StoreError
 from .identity import PRIORITY
@@ -1280,6 +1282,111 @@ class SavedQueries:
             return kept
 
 
+class NoPoster(LookupError):
+    """No Plex rating key on file for this item."""
+
+
+class PosterUnavailable(Exception):
+    """Plex isn't configured, or the fetch itself failed (docs/adr/0017)."""
+
+
+#: A poster from Plex's own `/library/metadata/<rating_key>/thumb` is a few
+#: hundred KB; refuse anything wildly larger rather than buffer an unbounded
+#: response from a misbehaving upstream.
+POSTER_MAX_BYTES = 4 << 20
+
+#: A cached poster answers instantly; only a *miss* reaches Plex, so this caps
+#: concurrent fetches to the real server, not the route itself. A results
+#: table or a tag's title list can legitimately show a couple dozen distinct
+#: uncached posters at once (`loading="lazy"` still preloads a viewport's
+#: worth); measured 8 concurrent misses from a single Query tab page load
+#: tripping `BoundedSemaphore(4)` and showing false placeholders that only
+#: cleared on a reload, so this is wide enough for one browser tab's own
+#: page load, not just a lone request.
+POSTER_SLOTS = threading.BoundedSemaphore(16)
+
+#: Cached posters kept in memory, keyed by rating_key, count-capped rather
+#: than time-capped — a rating_key's image doesn't change, but the explorer
+#: has no login, so a caller cycling through many item_ids must not grow
+#: this without bound (the same shape as `SavedQueries`'s caps).
+POSTER_CACHE_ENTRIES = 2000
+
+
+class _PosterCache:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._entries: OrderedDict[str, tuple[bytes, str]] = OrderedDict()
+
+    def get(self, rating_key: str) -> tuple[bytes, str] | None:
+        with self._lock:
+            hit = self._entries.get(rating_key)
+            if hit is not None:
+                self._entries.move_to_end(rating_key)
+            return hit
+
+    def put(self, rating_key: str, data: bytes, content_type: str) -> None:
+        with self._lock:
+            self._entries[rating_key] = (data, content_type)
+            self._entries.move_to_end(rating_key)
+            while len(self._entries) > POSTER_CACHE_ENTRIES:
+                self._entries.popitem(last=False)
+
+
+class PosterProxy:
+    """One title's Plex thumbnail, proxied so `PLEX_TOKEN` never reaches the
+    browser (plex-db-ex-oyg.2). The explorer has no login, so a caller who
+    could read the token directly could spend it against Plex at will;
+    proxying keeps it server-side, and `POSTER_SLOTS`/`_PosterCache` bound how
+    much of that spending an anonymous caller can cause.
+    """
+
+    def __init__(
+        self,
+        store_path: Path,
+        plex_url: str,
+        plex_token: str,
+        http: httpx.Client | None = None,
+    ) -> None:
+        self._store_path = store_path
+        self._plex_url = plex_url.rstrip("/")
+        self._plex_token = plex_token
+        self._cache = _PosterCache()
+        self._http = http or httpx.Client(timeout=10.0)
+
+    def get(self, item_id: str) -> tuple[bytes, str]:
+        if not self._plex_url or not self._plex_token:
+            raise PosterUnavailable("PLEX_URL/PLEX_TOKEN are not configured")
+        with open_readonly(self._store_path) as conn:
+            row = conn.execute(
+                "SELECT rating_key FROM plex_items WHERE item_id = ? "
+                "ORDER BY last_seen DESC LIMIT 1",
+                (item_id,),
+            ).fetchone()
+        if row is None:
+            raise NoPoster(item_id)
+        rating_key = row[0]
+        cached = self._cache.get(rating_key)
+        if cached is not None:
+            return cached
+        if not POSTER_SLOTS.acquire(blocking=False):
+            raise PosterUnavailable("too many poster fetches in flight; try again in a moment")
+        try:
+            resp = self._http.get(
+                f"{self._plex_url}/library/metadata/{rating_key}/thumb",
+                headers={"X-Plex-Token": self._plex_token},
+            )
+            resp.raise_for_status()
+        except httpx.HTTPError as err:
+            raise PosterUnavailable(f"could not reach Plex: {err}") from err
+        finally:
+            POSTER_SLOTS.release()
+        if len(resp.content) > POSTER_MAX_BYTES:
+            raise PosterUnavailable(f"poster is over {POSTER_MAX_BYTES} bytes")
+        content_type = resp.headers.get("Content-Type", "image/jpeg")
+        self._cache.put(rating_key, resp.content, content_type)
+        return resp.content, content_type
+
+
 def _page() -> bytes:
     return resources.files("plexdb").joinpath("explore.html").read_bytes()
 
@@ -1290,17 +1397,27 @@ SAVED_FILE = "explore-queries.json"
 
 
 def make_server(
-    store_path: Path, host: str, port: int, saved_path: Path | None = None
+    store_path: Path,
+    host: str,
+    port: int,
+    saved_path: Path | None = None,
+    *,
+    plex_url: str = "",
+    plex_token: str = "",
+    poster_http: httpx.Client | None = None,
 ) -> ThreadingHTTPServer:
     """An HTTP server for the explorer, bound but not yet serving.
 
     The caller owns the loop and the shutdown: `plexdb explore` runs
     `serve_forever` in the foreground, and a test runs it on a thread.
+    `poster_http` is a test-only seam (an `httpx.Client` on a `MockTransport`)
+    for exercising `/api/poster` without a real Plex server.
     """
     cache = _IndexCache(store_path)
     maps = _MapCache(store_path)
     networks = _TagNetworkCache(store_path)
     saved = SavedQueries(saved_path or store_path.with_name(SAVED_FILE))
+    posters = PosterProxy(store_path, plex_url, plex_token, poster_http)
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802 — the stdlib's name
@@ -1326,6 +1443,13 @@ def make_server(
                 )
             except NoSuchQuery as err:
                 self._json({"error": f"no saved query named {err.args[0]!r}"}, HTTPStatus.NOT_FOUND)
+            except NoPoster as err:
+                self._json(
+                    {"error": f"no Plex rating key on file for {err.args[0]!r}"},
+                    HTTPStatus.NOT_FOUND,
+                )
+            except PosterUnavailable as err:
+                self._json({"error": str(err)}, HTTPStatus.SERVICE_UNAVAILABLE)
             except FileNotFoundError:
                 # On the host this is the normal state until the first sweep
                 # publishes a snapshot, not a crash worth a traceback.
@@ -1419,6 +1543,21 @@ def make_server(
                     raise ValueError(f"item_id is over {MAX_ITEM_ID} characters")
                 with open_readonly(store_path) as conn:
                     self._json(title_details(conn, item_id))
+            elif url.path == "/api/poster":
+                item_id = query.get("item_id")
+                if not item_id:
+                    raise ValueError("item_id is required")
+                if len(item_id) > MAX_ITEM_ID:
+                    raise ValueError(f"item_id is over {MAX_ITEM_ID} characters")
+                data, content_type = posters.get(item_id)
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(data)))
+                # A rating_key's poster doesn't change under our feet; let the
+                # browser skip the round trip entirely on a repeat view.
+                self.send_header("Cache-Control", "public, max-age=604800, immutable")
+                self.end_headers()
+                self.wfile.write(data)
             else:
                 self._json({"error": f"no route {url.path}"}, HTTPStatus.NOT_FOUND)
 
@@ -1441,7 +1580,13 @@ def make_server(
 
 
 def serve_in_background(
-    store_path: Path, host: str, port: int, saved_path: Path | None = None
+    store_path: Path,
+    host: str,
+    port: int,
+    saved_path: Path | None = None,
+    *,
+    plex_url: str = "",
+    plex_token: str = "",
 ) -> ThreadingHTTPServer:
     """Start the explorer on a daemon thread and return its server.
 
@@ -1450,6 +1595,8 @@ def serve_in_background(
     scheduler rather than holding the container up after it, and an exception
     in one request stays in that request's own thread.
     """
-    server = make_server(store_path, host, port, saved_path)
+    server = make_server(
+        store_path, host, port, saved_path, plex_url=plex_url, plex_token=plex_token
+    )
     threading.Thread(target=server.serve_forever, name="explore", daemon=True).start()
     return server
