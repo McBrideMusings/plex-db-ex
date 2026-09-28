@@ -439,25 +439,24 @@ class TagNetwork:
     edges: tuple[tuple[str, str, int], ...]
 
 
-def tag_network(
-    conn: sqlite3.Connection,
-    kind: str,
-    exclude: frozenset[str] = frozenset(),
-    min_df: int = NETWORK_MIN_DF,
-    edges_per_node: int = NETWORK_EDGES_PER_NODE,
-    seed: int = 0,
-) -> TagNetwork:
-    """The whole tag network of `kind`: every tag on at least `min_df` titles,
-    positioned by title co-membership and linked to its strongest co-tags.
-
-    A tag's vector is which titles carry it — the transpose of `title_map`'s
-    title-by-tag matrix — reduced by the same truncated-SVD-then-UMAP recipe
-    (`_embed_2d`), so two tags carried by the same titles sit close together.
-    Computed once at `min_df`, the widest the page's slider allows: raising the
-    slider only hides nodes and edges client-side, so it never re-fetches or
-    re-lays-out the network.
+@dataclass(frozen=True)
+class _NetworkVocab:
+    """The first stage of `tag_network`: which tags qualify, and which titles
+    carry them. `together` is per-tag co-occurrence counts, not yet capped to
+    `edges_per_node` — that happens in `_network_edges`.
     """
-    _check_kind(kind)
+
+    df: Counter[str]
+    vocab: dict[str, int]
+    by_title: dict[str, list[str]]
+    titles: dict[str, int]
+    cells: tuple[list[int], list[int], list[float]]
+    together: defaultdict[str, Counter[str]]
+
+
+def _network_vocab(
+    conn: sqlite3.Connection, kind: str, exclude: frozenset[str], min_df: int
+) -> _NetworkVocab:
     # DISTINCT so a title's tag set below counts each keyword it carries once,
     # not once per source that happens to also list it.
     rows = conn.execute(
@@ -495,42 +494,109 @@ def tag_network(
                 if a != b:
                     counts[b] += 1
 
+    return _NetworkVocab(
+        df=df,
+        vocab=vocab,
+        by_title=by_title,
+        titles=titles,
+        cells=(cells_r, cells_c, cells_v),
+        together=together,
+    )
+
+
+def _network_edges(
+    vocab: _NetworkVocab, edges_per_node: int
+) -> tuple[tuple[str, str, int], ...]:
     kept: set[tuple[str, str, int]] = set()
-    for value in vocab:
-        ranked = sorted(together[value].items(), key=lambda kv: (-kv[1], kv[0]))[:edges_per_node]
+    for value in vocab.vocab:
+        ranked = sorted(vocab.together[value].items(), key=lambda kv: (-kv[1], kv[0]))[
+            :edges_per_node
+        ]
         for other, count in ranked:
             a, b = sorted((value, other))
             kept.add((a, b, count))
+    return tuple(sorted(kept, key=lambda e: (-e[2], e[0], e[1])))
 
-    coords = _embed_2d(len(vocab), len(titles), (cells_r, cells_c, cells_v), seed)
-    values = sorted(vocab, key=vocab.__getitem__)
-    nodes = tuple(
+
+def _network_nodes(vocab: _NetworkVocab, seed: int) -> tuple[NetworkNode, ...]:
+    coords = _embed_2d(len(vocab.vocab), len(vocab.titles), vocab.cells, seed)
+    values = sorted(vocab.vocab, key=vocab.vocab.__getitem__)
+    return tuple(
         NetworkNode(
             value=value,
-            df=df[value],
+            df=vocab.df[value],
             x=round(float(coords[i][0]), 5),
             y=round(float(coords[i][1]), 5),
         )
         for i, value in enumerate(values)
     )
-    edges = tuple(sorted(kept, key=lambda e: (-e[2], e[0], e[1])))
+
+
+def tag_network(
+    conn: sqlite3.Connection,
+    kind: str,
+    exclude: frozenset[str] = frozenset(),
+    min_df: int = NETWORK_MIN_DF,
+    edges_per_node: int = NETWORK_EDGES_PER_NODE,
+    seed: int = 0,
+) -> TagNetwork:
+    """The whole tag network of `kind`: every tag on at least `min_df` titles,
+    positioned by title co-membership and linked to its strongest co-tags.
+
+    A tag's vector is which titles carry it — the transpose of `title_map`'s
+    title-by-tag matrix — reduced by the same truncated-SVD-then-UMAP recipe
+    (`_embed_2d`), so two tags carried by the same titles sit close together.
+    Computed once at `min_df`, the widest the page's slider allows: raising the
+    slider only hides nodes and edges client-side, so it never re-fetches or
+    re-lays-out the network.
+    """
+    _check_kind(kind)
+    vocab = _network_vocab(conn, kind, exclude, min_df)
+    edges = _network_edges(vocab, edges_per_node)
+    nodes = _network_nodes(vocab, seed)
     return TagNetwork(kind=kind, nodes=nodes, edges=edges)
 
 
-def tag_network_json(net: TagNetwork) -> dict[str, object]:
-    return {
-        "kind": net.kind,
-        # Arrays rather than objects: thousands of nodes, and the keys would
-        # be most of the payload.
-        "nodes": [[n.value, n.df, n.x, n.y] for n in net.nodes],
-        "edges": [[a, b, n] for a, b, n in net.edges],
+def tag_network_streaming(
+    conn: sqlite3.Connection,
+    kind: str,
+    exclude: frozenset[str],
+    emit: Callable[[dict[str, object]], None],
+    min_df: int = NETWORK_MIN_DF,
+    edges_per_node: int = NETWORK_EDGES_PER_NODE,
+    seed: int = 0,
+) -> dict[str, object]:
+    """Like `tag_network`, but calls `emit` with each of its three real stages
+    as it completes — filtered vocab (fast), co-occurrence edges, then the
+    laid-out nodes (the slow SVD+UMAP step) — instead of returning one result
+    after all three. Returns the same `kind`/`nodes`/`edges` payload `emit`
+    was last called with.
+    """
+    _check_kind(kind)
+    vocab = _network_vocab(conn, kind, exclude, min_df)
+    emit(
+        {
+            "stage": "vocab",
+            "nodes": [[value, vocab.df[value]] for value in sorted(vocab.vocab)],
+        }
+    )
+    edges = _network_edges(vocab, edges_per_node)
+    emit({"stage": "edges", "edges": [[a, b, n] for a, b, n in edges]})
+    nodes = _network_nodes(vocab, seed)
+    payload: dict[str, object] = {
+        "stage": "done",
+        "kind": kind,
+        "nodes": [[n.value, n.df, n.x, n.y] for n in nodes],
+        "edges": [[a, b, n] for a, b, n in edges],
     }
+    emit(payload)
+    return payload
 
 
 def stored_network(conn: sqlite3.Connection, kind: str) -> dict[str, object] | None:
-    """The default tag network the writer stored, as `tag_network_json` would
-    give it, or `None` when there is none or it was drawn from different
-    keyword rows.
+    """The default tag network the writer stored — the same `kind`/`nodes`/`edges`
+    shape `tag_network_streaming`'s final stage emits — or `None` when there is
+    none or it was drawn from different keyword rows.
 
     `None` is the caller's cue to draw it live. A store that predates the
     `tag_network` tables has neither, and reads as having no stored network.
@@ -829,6 +895,54 @@ class _KeyedCache:
                     del self._flights[(key, generation)]
                 flight.set()
 
+    def get_streaming(
+        self,
+        key: object,
+        generation: object,
+        stages: Callable[[Callable[[dict[str, object]], None]], dict[str, object]],
+        emit: Callable[[dict[str, object]], None],
+    ) -> None:
+        """Like `get`, but the winner calls `stages(emit)` rather than a plain
+        `compute()` — `stages` emits each intermediate result to `emit` as it
+        completes, and returns the final value the same way `compute` would.
+        A waiter never sees the intermediate stages; once the winner finishes
+        it is handed the finished value through `emit`, exactly as `get`
+        would have returned it. `emit` always runs outside `self._guard` —
+        it does I/O for a caller streaming to an HTTP response, and holding
+        the guard through that would stall every other key's request behind
+        one slow socket, exactly what `get` never does.
+        """
+        while True:
+            with self._guard:
+                hit = self._entries.get(key)
+                cached = hit[1] if hit is not None and hit[0] == generation else None
+                if cached is None:
+                    flight = self._flights.get((key, generation))
+                    if flight is None:
+                        flight = self._flights[(key, generation)] = threading.Event()
+                        mine = True
+                    else:
+                        mine = False
+            if cached is not None:
+                emit(cached)
+                return
+            assert flight is not None
+            if not mine:
+                flight.wait()
+                continue
+            try:
+                value = stages(emit)
+                with self._guard:
+                    self._entries.pop(key, None)
+                    self._entries[key] = (generation, value)
+                    while len(self._entries) > self._keep:
+                        del self._entries[next(iter(self._entries))]
+                return
+            finally:
+                with self._guard:
+                    del self._flights[(key, generation)]
+                flight.set()
+
 
 class _IndexCache:
     """One `TagIndex` per kind, rebuilt when the store file changes.
@@ -901,17 +1015,29 @@ class _TagNetworkCache:
         self._path = store_path
         self._cache = _KeyedCache(self.KEEP)
 
-    def get(self, kind: str, exclude: frozenset[str]) -> dict[str, object]:
+    def get_streaming(
+        self, kind: str, exclude: frozenset[str], emit: Callable[[dict[str, object]], None]
+    ) -> None:
+        """Like `get`, but a cache miss on an excluded kind streams the same
+        three stages `tag_network_streaming` computes rather than blocking
+        until the whole (slow) layout is done. A cache hit — the precomputed
+        default network, or a network this call already laid out — always
+        emits exactly one `"stage": "done"` line, so the frontend's NDJSON
+        reader has one shape to handle regardless of which path served it.
+        """
         stat = self._path.stat()
 
-        def compute() -> dict[str, object]:
+        def stages(emit_stage: Callable[[dict[str, object]], None]) -> dict[str, object]:
             with open_readonly(self._path) as conn:
-                payload = None if exclude else stored_network(conn, kind)
-                if payload is None:
-                    payload = tag_network_json(tag_network(conn, kind, exclude))
-            return payload
+                if not exclude:
+                    stored = stored_network(conn, kind)
+                    if stored is not None:
+                        payload = {"stage": "done", **stored}
+                        emit_stage(payload)
+                        return payload
+                return tag_network_streaming(conn, kind, exclude, emit_stage)
 
-        return self._cache.get((kind, exclude), (stat.st_mtime_ns, stat.st_size), compute)
+        self._cache.get_streaming((kind, exclude), (stat.st_mtime_ns, stat.st_size), stages, emit)
 
 
 #: The Query tab's limits. The explorer has no login, locally or deployed, so
@@ -1626,7 +1752,7 @@ def make_server(
             elif url.path == "/api/tagnetwork":
                 kind = query.get("kind", "movie")
                 _check_kind(kind)
-                self._json(networks.get(kind, frozenset(lists.get("exclude", []))))
+                self._stream_network(kind, frozenset(lists.get("exclude", [])))
             elif url.path == "/api/saved":
                 self._json({"queries": saved.all()})
             elif url.path == "/api/recipes":
@@ -1667,6 +1793,52 @@ def make_server(
         def _json(self, body: dict[str, object], status: HTTPStatus = HTTPStatus.OK) -> None:
             data = json.dumps(body, separators=(",", ":")).encode()
             self._send(status, "application/json", data)
+
+        def _stream_network(self, kind: str, exclude: frozenset[str]) -> None:
+            # One JSON object per line, flushed as each stage of `networks`
+            # completes — the cached (stored or already-computed) case still
+            # writes exactly one "done" line, so the frontend's NDJSON reader
+            # never special-cases it. Headers go out before the compute even
+            # starts, so a failure past this point becomes an "error" line
+            # rather than an HTTP error status — there is no way back to a
+            # fresh response once the client has already seen 200 OK.
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+
+            broken = False
+
+            def emit(chunk: dict[str, object]) -> None:
+                # A write failure here means the client is gone — a closed
+                # tab, or a kind/noise change that aborted the fetch. Swallow
+                # it rather than let it escape `networks.get_streaming`: the
+                # SVD+UMAP layout this call may already be most of the way
+                # through is expensive, and single-flight only pays for it
+                # once if the compute is allowed to run to completion and
+                # land in the cache regardless of who is still listening.
+                nonlocal broken
+                if broken:
+                    return
+                try:
+                    self.wfile.write(json.dumps(chunk, separators=(",", ":")).encode())
+                    self.wfile.write(b"\n")
+                    self.wfile.flush()
+                except OSError:
+                    broken = True
+
+            try:
+                networks.get_streaming(kind, exclude, emit)
+            except FileNotFoundError:
+                message = f"no store at {store_path} yet — the next sweep publishes one"
+            except Exception as err:
+                message = str(err)
+            else:
+                return
+            try:
+                emit({"stage": "error", "error": message})
+            except Exception:
+                pass
 
         def _send(self, status: HTTPStatus, content_type: str, data: bytes) -> None:
             self.send_response(status)

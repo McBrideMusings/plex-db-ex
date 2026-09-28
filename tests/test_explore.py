@@ -16,6 +16,7 @@ import urllib.request
 from collections.abc import Iterator
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -276,6 +277,14 @@ def _get(url: str) -> tuple[int, bytes]:
         return err.code, err.read()
 
 
+def _last_ndjson(body: bytes) -> Any:
+    """The final line of an `/api/tagnetwork` NDJSON body — the `"done"` stage,
+    whether it arrived as the only line (a cache hit) or the last of several
+    (a live compute)."""
+    lines = [line for line in body.split(b"\n") if line.strip()]
+    return json.loads(lines[-1])
+
+
 def test_server_serves_the_page_and_both_endpoints(base_url: str) -> None:
     status, page = _get(f"{base_url}/")
     assert status == 200 and b"Tag explorer" in page
@@ -295,12 +304,12 @@ def test_server_serves_the_page_and_both_endpoints(base_url: str) -> None:
 
     # Only "superhero" (df 3) clears NETWORK_MIN_DF in this four-movie store.
     status, body = _get(f"{base_url}/api/tagnetwork?kind=movie")
-    net = json.loads(body)
+    net = _last_ndjson(body)
     assert status == 200 and [n[0] for n in net["nodes"]] == ["superhero"]
     assert net["edges"] == []
 
     status, body = _get(f"{base_url}/api/tagnetwork?kind=movie&exclude=superhero")
-    assert json.loads(body)["nodes"] == []
+    assert _last_ndjson(body)["nodes"] == []
 
     status, body = _get(f"{base_url}/api/map?kind=movie")
     tmap = json.loads(body)
@@ -536,32 +545,85 @@ def test_tagnetwork_endpoint_serves_the_stored_network_and_draws_live_once_it_is
     with open_store(store) as conn:
         refresh_tag_networks(conn)
     drawn: list[frozenset[str]] = []
-    real = explore.tag_network
+    real = explore.tag_network_streaming
 
     def counting(  # type: ignore[no-untyped-def]
         conn,
         kind,
-        exclude=frozenset(),
+        exclude,
+        emit,
         min_df=explore.NETWORK_MIN_DF,
         edges_per_node=explore.NETWORK_EDGES_PER_NODE,
         seed=0,
     ):
         drawn.append(exclude)
-        return real(conn, kind, exclude, min_df, edges_per_node, seed)
+        return real(conn, kind, exclude, emit, min_df, edges_per_node, seed)
 
-    monkeypatch.setattr(explore, "tag_network", counting)
+    monkeypatch.setattr(explore, "tag_network_streaming", counting)
 
+    # The default network is precomputed, so this line is the only one on the
+    # wire — a cache hit never calls tag_network_streaming.
     _, body = _get(f"{base_url}/api/tagnetwork?kind=movie")
-    stored = json.loads(body)
+    stored = _last_ndjson(body)
     assert drawn == []
     assert [n[0] for n in stored["nodes"]] == ["superhero"]
 
-    _get(f"{base_url}/api/tagnetwork?kind=movie&exclude=stinger")
+    _, body = _get(f"{base_url}/api/tagnetwork?kind=movie&exclude=stinger")
     assert drawn == [frozenset({"stinger"})]
+    stages = [json.loads(line)["stage"] for line in body.split(b"\n") if line.strip()]
+    assert stages == ["vocab", "edges", "done"]
 
     _add_keyword(store, "imdb:tt4", "superhero")
     _get(f"{base_url}/api/tagnetwork?kind=movie")
     assert drawn == [frozenset({"stinger"}), frozenset()]
+
+
+def test_tagnetwork_cache_streams_stages_to_the_winner_and_one_line_to_the_waiter(
+    store: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two browser tabs asking for the same exclude set trigger one live draw,
+    not two: the second call waits behind the first and is handed the same
+    finished network as a single "done" line, per plex-db-ex-nm5."""
+    started = threading.Event()
+    release = threading.Event()
+    calls = 0
+    real = explore.tag_network_streaming
+
+    def slow(  # type: ignore[no-untyped-def]
+        conn,
+        kind,
+        exclude,
+        emit,
+        min_df=explore.NETWORK_MIN_DF,
+        edges_per_node=explore.NETWORK_EDGES_PER_NODE,
+        seed=0,
+    ):
+        nonlocal calls
+        calls += 1
+        started.set()
+        assert release.wait(60)
+        return real(conn, kind, exclude, emit, min_df, edges_per_node, seed)
+
+    monkeypatch.setattr(explore, "tag_network_streaming", slow)
+    networks = explore._TagNetworkCache(store)
+    key = frozenset({"stinger"})
+    stages: list[list[str]] = [[], []]
+
+    def fetch(i: int) -> None:
+        networks.get_streaming("movie", key, lambda msg: stages[i].append(str(msg["stage"])))
+
+    threads = [threading.Thread(target=fetch, args=(i,)) for i in range(2)]
+    for t in threads:
+        t.start()
+    assert started.wait(60)
+    release.set()
+    for t in threads:
+        t.join(60)
+
+    assert calls == 1
+    # One thread won the flight and streamed all three real stages; the other
+    # waited behind it and was handed only the finished "done" line.
+    assert sorted(stages) == [["done"], ["vocab", "edges", "done"]]
 
 
 def test_index_cache_recomputes_when_the_store_changes(store: Path) -> None:

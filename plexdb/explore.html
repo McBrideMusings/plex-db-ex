@@ -1079,33 +1079,130 @@ document.addEventListener("keydown", e => {
 // `net.full` into `net.nodes`/`net.edges` — the slice currently drawn — so the
 // slider never re-fetches or re-lays-out the network. An edge is kept only
 // when both tags it names are in `net.nodes`.
-const net = { key: null, full: null, min: 25, nodes: [], byValue: new Map(), edges: [], itemsOf: null };
+const net = { key: null, full: null, min: 25, nodes: [], byValue: new Map(), edges: [], itemsOf: null, tween: null, token: 0 };
 
-async function networkRequest(kind, exclude) {
+// Reads /api/tagnetwork's NDJSON body one line at a time, calling `onStage`
+// with each parsed line as it arrives rather than waiting for the response to
+// finish. A stored or already-computed network still arrives as exactly one
+// `{"stage":"done",...}` line, so a cache hit is just a stream of length one.
+// `isStale`, checked between reads, stops the loop and releases the
+// connection as soon as the caller no longer wants this response (a kind or
+// noise-filter change abandoned it) instead of reading an ignored stream to
+// completion.
+async function streamNetwork(kind, exclude, onStage, isStale) {
   const p = new URLSearchParams({ kind });
   for (const t of exclude) p.append("exclude", t);
-  return getJSON(`/api/tagnetwork?${p}`);
+  const res = await fetch(`/api/tagnetwork?${p}`);
+  if (!res.ok) {
+    let message = res.statusText;
+    try { message = (await res.json()).error || message; } catch { /* body wasn't JSON */ }
+    throw new Error(message);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  try {
+    for (;;) {
+      if (isStale()) return;
+      const { value, done } = await reader.read();
+      if (value) {
+        buf += decoder.decode(value, { stream: true });
+        let nl;
+        while ((nl = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, nl);
+          buf = buf.slice(nl + 1);
+          if (line.trim()) onStage(JSON.parse(line));
+        }
+      }
+      if (done) break;
+    }
+    if (buf.trim()) onStage(JSON.parse(buf));
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+}
+
+// A provisional position for each vocab-stage node, before the server's real
+// SVD+UMAP coordinates exist: a golden-angle spiral ranked by df, biggest tags
+// nearest the centre — the same "important tags stand out" shape the real
+// co-occurrence layout tends to produce, so settling into it later reads as
+// resolving rather than contradicting the placeholder.
+function placeholderLayout(vocabNodes) {
+  const ranked = vocabNodes.slice().sort((a, b) => b[1] - a[1]);
+  const at = new Map();
+  ranked.forEach(([value], i) => {
+    const angle = i * 2.399963229728653; // the golden angle, for even coverage with no seams
+    const radius = 0.46 * Math.sqrt((i + 0.5) / ranked.length);
+    at.set(value, [0.5 + radius * Math.cos(angle), 0.5 + radius * Math.sin(angle)]);
+  });
+  return at;
 }
 
 async function loadNetwork() {
   const note = document.getElementById("gnote");
   const kind = state.kind;
   const key = [kind, ...[...noise].sort()].join("\u0001");
-  if (net.key !== key) {
-    note.textContent = "Loading the whole network…";
-    net.full = null; net.key = null;
-    paintNetwork();
-    let full;
-    try { full = await networkRequest(kind, noise); }
-    catch (err) {
-      if (kind !== state.kind) return;
-      note.textContent = `Could not load: ${err.message}`;
-      return;
-    }
-    if (kind !== state.kind) return;
-    net.key = key; net.full = full;
-  }
+  if (net.key === key) { paintNetwork(); return; }
+  const token = ++net.token;
+  net.full = null; net.key = null; net.tween = null;
+  note.textContent = "Loading the whole network…";
   paintNetwork();
+  let placeholders = null;
+  const isStale = () => token !== net.token || kind !== state.kind;
+  try {
+    await streamNetwork(kind, noise, msg => {
+      if (isStale()) return;
+      if (msg.stage === "error") throw new Error(msg.error);
+      if (msg.stage === "vocab") {
+        placeholders = placeholderLayout(msg.nodes);
+        net.full = { kind, nodes: msg.nodes.map(([value, df]) => [value, df, ...placeholders.get(value)]), edges: [] };
+        paintNetwork();
+      } else if (msg.stage === "edges") {
+        net.full = { ...net.full, edges: msg.edges };
+        paintNetwork();
+      } else if (msg.stage === "done") {
+        if (placeholders) startNetworkTween(msg, key);
+        else { net.full = { kind: msg.kind, nodes: msg.nodes, edges: msg.edges }; net.key = key; paintNetwork(); }
+      }
+    }, isStale);
+  } catch (err) {
+    if (kind !== state.kind || token !== net.token) return;
+    note.textContent = `Could not load: ${err.message}`;
+  }
+}
+
+// The last, slow stage (SVD+UMAP layout) arrived: settle every currently
+// shown node from wherever it is now onto its real coordinate in one 400ms
+// ease-out tween, all at once, then hand off to the normal `net.full`/
+// `syncNetworkItems` path as if it had loaded that way from the start.
+// Reads `net.nodes` fresh every frame (never a captured snapshot) so a noise
+// or slider change mid-tween keeps animating whatever is shown now.
+function startNetworkTween(done, key) {
+  const from = new Map(net.nodes.map(it => [it.id, [it.x, it.y]]));
+  const to = new Map(done.nodes.map(([value, , x, y]) => [value, [x, y]]));
+  const thisTween = {};
+  net.tween = thisTween;
+  const start = performance.now(), duration = 400;
+  const easeOut = t => 1 - (1 - t) ** 3;
+  function step(now) {
+    if (net.tween !== thisTween) return;
+    const e = easeOut(Math.min(1, (now - start) / duration));
+    for (const it of net.nodes) {
+      const f = from.get(it.id), t = to.get(it.id);
+      if (f && t) { it.x = f[0] + (t[0] - f[0]) * e; it.y = f[1] + (t[1] - f[1]) * e; }
+    }
+    netVP.redraw();
+    if (now - start < duration) {
+      requestAnimationFrame(step);
+    } else {
+      net.tween = null;
+      net.full = { kind: done.kind, nodes: done.nodes, edges: done.edges };
+      net.key = key;
+      net.itemsOf = null;
+      paintNetwork();
+    }
+  }
+  requestAnimationFrame(step);
 }
 
 // A new `net.full` or a moved slider becomes new viewport items; the
