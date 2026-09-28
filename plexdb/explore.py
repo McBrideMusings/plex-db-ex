@@ -1371,20 +1371,30 @@ class PosterProxy:
         if not POSTER_SLOTS.acquire(blocking=False):
             raise PosterUnavailable("too many poster fetches in flight; try again in a moment")
         try:
-            resp = self._http.get(
-                f"{self._plex_url}/library/metadata/{rating_key}/thumb",
-                headers={"X-Plex-Token": self._plex_token},
-            )
-            resp.raise_for_status()
+            data, content_type = self._fetch(rating_key)
         except httpx.HTTPError as err:
             raise PosterUnavailable(f"could not reach Plex: {err}") from err
         finally:
             POSTER_SLOTS.release()
-        if len(resp.content) > POSTER_MAX_BYTES:
-            raise PosterUnavailable(f"poster is over {POSTER_MAX_BYTES} bytes")
-        content_type = resp.headers.get("Content-Type", "image/jpeg")
-        self._cache.put(rating_key, resp.content, content_type)
-        return resp.content, content_type
+        self._cache.put(rating_key, data, content_type)
+        return data, content_type
+
+    def _fetch(self, rating_key: str) -> tuple[bytes, str]:
+        # Streamed rather than `.get()`, so an oversize response is refused as
+        # its bytes arrive rather than after they are already fully buffered.
+        with self._http.stream(
+            "GET",
+            f"{self._plex_url}/library/metadata/{rating_key}/thumb",
+            headers={"X-Plex-Token": self._plex_token},
+        ) as resp:
+            resp.raise_for_status()
+            content_type = resp.headers.get("Content-Type", "image/jpeg")
+            chunks = bytearray()
+            for chunk in resp.iter_bytes():
+                chunks += chunk
+                if len(chunks) > POSTER_MAX_BYTES:
+                    raise PosterUnavailable(f"poster is over {POSTER_MAX_BYTES} bytes")
+        return bytes(chunks), content_type
 
 
 def _page() -> bytes:
