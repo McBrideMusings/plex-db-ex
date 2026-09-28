@@ -885,6 +885,33 @@ def test_saved_queries_refuses_the_entry_that_crosses_the_size_cap(tmp_path: Pat
     assert saved.all() == queries
 
 
+def test_saved_endpoint_400s_a_put_past_the_entry_cap(base_url: str, store: Path) -> None:
+    path = store.parent / "explore-queries.json"
+    full = [
+        {"name": f"q{n:03}", "sql": "SELECT 1", "note": ""}
+        for n in range(SavedQueries.MAX_ENTRIES)
+    ]
+    path.write_text(json.dumps(full))
+
+    status, body = _send("PUT", f"{base_url}/api/saved", {"name": "one more", "sql": "SELECT 1"})
+    assert status == 400
+    assert "too many saved queries" in str(body["error"])
+    assert json.loads(path.read_text()) == full
+
+
+def test_saved_endpoint_400s_a_put_past_the_size_cap(base_url: str, store: Path) -> None:
+    path = store.parent / "explore-queries.json"
+    note = "x" * (SavedQueries.MAX_TOTAL_BYTES - 200)
+    almost_full = [{"name": "first", "sql": "SELECT 1", "note": note}]
+    path.write_text(json.dumps(almost_full))
+
+    entry = {"name": "second", "sql": "SELECT 1", "note": "x" * 500}
+    status, body = _send("PUT", f"{base_url}/api/saved", entry)
+    assert status == 400
+    assert "would exceed" in str(body["error"])
+    assert json.loads(path.read_text()) == almost_full
+
+
 def test_scheduler_writes_saved_queries_to_their_own_mount_when_set(
     store: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
