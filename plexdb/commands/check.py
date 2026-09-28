@@ -10,14 +10,20 @@ what decides whether to deploy at all (issue #59).
 from __future__ import annotations
 
 import argparse
+import time
+from collections.abc import Callable
 
 from ..config import Config
 from ..health import STALE_DAYS, Freshness, Report, inspect
+from ..store import outside_migration
 
 NAME = "check"
 #: First. It is what you run before deciding whether to run anything else, and
 #: it declares no `SWEEP`, so it takes no part in a nightly run.
 ORDER = 1
+
+#: How often `--wait` re-reads a store that is behind.
+POLL_SECONDS = 5.0
 
 
 def _megabytes(size: int) -> str:
@@ -104,9 +110,50 @@ def render(report: Report) -> list[str]:
     return lines
 
 
-def _cmd_check(_args: argparse.Namespace) -> int:
+def _look(config: Config) -> Report | None:
+    """One report on the store, or `None` while a migration holds it — a read
+    taken then could see a version that a failed verify is about to roll back."""
+    with outside_migration(config.store_path) as clear:
+        return inspect(config.store_path, config.backup_dir) if clear else None
+
+
+def await_current(
+    look: Callable[[], Report | None],
+    wait: float,
+    *,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> Report | None:
+    """Re-read the store until no migration holds it and it is at this build's
+    schema version, or until `wait` seconds pass. Returns the last report, or
+    `None` if a migration held the store every time it looked.
+
+    This is how a deploy's last step waits out the container's startup
+    migration. A store behind the build, or one being migrated, is the only
+    state waiting can change; a store newer than the build, or a damaged one at
+    the right version, is returned at once.
+    """
+    deadline = clock() + wait
+    report = look()
+    while (report is None or report.version < report.expected_version) and clock() < deadline:
+        if report is None:
+            print("a migration is running; waiting", flush=True)
+        else:
+            print(
+                f"store is at v{report.version}; waiting for v{report.expected_version}",
+                flush=True,
+            )
+        sleep(POLL_SECONDS)
+        report = look()
+    return report
+
+
+def _cmd_check(args: argparse.Namespace) -> int:
     config = Config.from_env()
-    report = inspect(config.store_path, config.backup_dir)
+    report = await_current(lambda: _look(config), args.wait)
+    if report is None:
+        print(f"{config.store_path}: a migration is still running — not read")
+        return 1
     for line in render(report):
         print(line)
     return 0 if report.healthy else 1
@@ -116,5 +163,13 @@ def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     check_parser = sub.add_parser(
         NAME,
         help="report the store's health read-only; exits non-zero if it is behind or damaged",
+    )
+    check_parser.add_argument(
+        "--wait",
+        type=float,
+        default=0.0,
+        metavar="SECONDS",
+        help="while the store is behind this build or being migrated, re-read it "
+        "until it catches up or this many seconds pass",
     )
     check_parser.set_defaults(func=_cmd_check)

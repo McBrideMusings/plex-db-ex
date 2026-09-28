@@ -15,10 +15,10 @@ from pathlib import Path
 import pytest
 
 from plexdb import schema
-from plexdb.commands.check import _cmd_check, render
+from plexdb.commands.check import _cmd_check, await_current, render
 from plexdb.errors import StoreError
-from plexdb.health import inspect
-from plexdb.store import init, open_store
+from plexdb.health import Report, inspect
+from plexdb.store import _migrating, init, migrate, open_store, outside_migration
 
 NOW = datetime(2026, 8, 12, 12, 0, 0, tzinfo=UTC)
 
@@ -307,14 +307,110 @@ def test_the_exit_code_is_zero_when_current_and_one_when_behind(
     monkeypatch.setenv("PLEXDB_BACKUP_DIR", str(tmp_path / "backups"))
     init(path)
 
-    assert _cmd_check(argparse.Namespace()) == 0
+    assert _cmd_check(argparse.Namespace(wait=0.0)) == 0
     assert "quick_check: ok" in capsys.readouterr().out
 
     with open_store(path) as conn:
         conn.execute("UPDATE schema_version SET version = 1")
         conn.commit()
 
-    assert _cmd_check(argparse.Namespace()) == 1
+    assert _cmd_check(argparse.Namespace(wait=0.0)) == 1
+
+
+class _Clock:
+    """A clock that only moves when `sleep` is called."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+
+def test_wait_re_reads_a_behind_store_until_its_migration_lands(tmp_path: Path) -> None:
+    """A deploy's check reads the store while the container is still migrating
+    it; the report it acts on must be the one taken after the migration."""
+    path = tmp_path / "plexdb.db"
+    init(path)
+    with open_store(path) as conn:
+        conn.execute("UPDATE schema_version SET version = 9")
+        conn.commit()
+    clock = _Clock()
+    looks = 0
+
+    def look() -> Report:
+        nonlocal looks
+        looks += 1
+        if looks == 3:
+            with open_store(path) as conn:
+                conn.execute("UPDATE schema_version SET version = ?", (schema.SCHEMA_VERSION,))
+                conn.commit()
+        return inspect(path, tmp_path / "backups", now=NOW)
+
+    report = await_current(look, 600, sleep=clock.sleep, clock=clock)
+
+    assert report is not None
+    assert report.healthy
+    assert looks == 3
+
+
+def test_wait_gives_up_on_a_store_still_behind_when_it_runs_out(tmp_path: Path) -> None:
+    path = tmp_path / "plexdb.db"
+    init(path)
+    with open_store(path) as conn:
+        conn.execute("UPDATE schema_version SET version = 9")
+        conn.commit()
+    clock = _Clock()
+
+    report = await_current(
+        lambda: inspect(path, tmp_path / "backups", now=NOW), 30, sleep=clock.sleep, clock=clock
+    )
+
+    assert report is not None
+    assert report.version == 9
+    assert not report.healthy
+    assert clock.now == 30
+
+
+def test_check_reads_nothing_while_a_migration_holds_the_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The version is committed before the migration verifies it and can still
+    roll back, so a current version read mid-migration is not a pass."""
+    path = tmp_path / "plexdb.db"
+    monkeypatch.setenv("PLEXDB_PATH", str(path))
+    monkeypatch.setenv("PLEXDB_BACKUP_DIR", str(tmp_path / "backups"))
+    init(path)
+
+    with _migrating(path):
+        assert _cmd_check(argparse.Namespace(wait=0.0)) == 1
+    assert "a migration is still running" in capsys.readouterr().out
+
+    assert _cmd_check(argparse.Namespace(wait=0.0)) == 0
+
+
+def test_migrate_holds_the_lock_a_check_waits_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "plexdb.db"
+    _store_at(path, 9)
+    seen: list[bool] = []
+
+    def apply_and_look(conn: sqlite3.Connection) -> tuple[int, int, schema.DeclaredShrinks]:
+        with outside_migration(path) as clear:
+            seen.append(clear)
+        return real_apply(conn)
+
+    real_apply = schema.apply
+    monkeypatch.setattr(schema, "apply", apply_and_look)
+    migrate(path, tmp_path / "backups")
+
+    assert seen == [False]
+    with outside_migration(path) as clear:
+        assert clear
 
 
 def test_a_file_that_is_not_a_database_is_reported_not_traced(tmp_path: Path) -> None:

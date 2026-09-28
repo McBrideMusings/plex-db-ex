@@ -17,7 +17,7 @@
 #
 #   bash tools/host-exec.sh walk --section 2
 #   bash tools/host-exec.sh sweep
-#   bash tools/host-exec.sh check     # read-only; waits out a migration, never refuses
+#   bash tools/host-exec.sh check     # read-only; never refuses
 
 set -euo pipefail
 
@@ -41,18 +41,9 @@ busy() {
 
 # `check` opens the store read-only and writes nothing, so a sweep is no reason
 # to refuse it — being able to ask a busy store how it is, is the point of it.
-# It still waits out a *migration*, because a report taken halfway through one
-# describes a store that no longer exists by the time it is printed. That is
-# also what makes it usable as the last step of a deploy: the container migrates
-# as it starts, and this waits for that to finish rather than racing it.
-if [ "$1" = "check" ]; then
-    waited=0
-    while [ "$waited" -lt 180 ] && busy; do
-        echo "host-exec: the container is busy, waiting (${waited}s)"
-        sleep 5
-        waited=$((waited + 5))
-    done
-elif busy; then
+# Waiting out the container's startup migration is `plexdb check --wait`'s job:
+# it polls the store's schema version, which is what the migration commits.
+if [ "$1" != "check" ] && busy; then
     # A second writer. SQLite would serialise them, but a walk racing a
     # migration is not something to find out about afterwards, so refuse.
     echo "host-exec: the container is mid-sweep; wait for it to finish" >&2

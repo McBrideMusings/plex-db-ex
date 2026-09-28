@@ -7,6 +7,7 @@ a bug waiting for a caller.
 
 from __future__ import annotations
 
+import fcntl
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -207,7 +208,55 @@ def _verify(
     return None
 
 
+def _lock_path(path: Path) -> Path:
+    return path.with_name(path.name + ".migrate-lock")
+
+
+@contextmanager
+def _migrating(path: Path) -> Iterator[None]:
+    """Hold the migration lock exclusively for the whole of a migration.
+
+    The schema version is committed before `_verify` runs, and a failed verify
+    copies the backup over the file, so a reader that saw the new version has not
+    seen a finished migration. This lock spans all of it, rollback included; the
+    kernel drops it if the process dies, so a crash cannot leave it held.
+    """
+    _ensure_parent(path)
+    with _lock_path(path).open("a") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
+
+
+@contextmanager
+def outside_migration(path: Path) -> Iterator[bool]:
+    """Yield whether no migration is running, and keep one from starting while
+    the caller reads.
+
+    Takes the migration lock shared without blocking, and creates nothing: a
+    store no migration has locked yet has no lock file, and reads as clear.
+    """
+    try:
+        handle = _lock_path(path).open("r")
+    except FileNotFoundError:
+        yield True
+        return
+    with handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        yield True
+
+
 def migrate(path: Path, backup_dir: Path) -> Migration:
+    """Bring the store up to date, with a copy taken first and kept, holding the
+    migration lock throughout."""
+    with _migrating(path):
+        return _migrate(path, backup_dir)
+
+
+def _migrate(path: Path, backup_dir: Path) -> Migration:
     """Bring the store up to date, with a copy taken first and kept.
 
     A store that is already current is not copied: re-running `init` is the

@@ -171,7 +171,11 @@ which is the point.
    Watch for `migrated store vN -> vN+1` and the backup path.
 `admin deploy` finishes by running `plexdb check` inside the container it just recreated, so a
 startup migration that rolled itself back ends the deploy non-zero instead of being found at the
-next sweep. That step waits out the migration rather than racing it.
+next sweep. That step runs `plexdb check --wait 600`, which re-reads the store every 5 seconds
+while it is behind the build's schema version or a migration holds it, and counts it as behind
+only after 10 minutes. `plexdb migrate` holds an exclusive `flock` on `plexdb.db.migrate-lock`
+beside the store from its backup through its verify and any rollback, because it commits the new
+version before verifying it; the check reads only while it can take that lock shared.
 
 There is no automatic deploy on merge, on purpose: the host has one store, the migration is
 forward-only, and a person deciding when it happens is worth more than the minutes it saves.
