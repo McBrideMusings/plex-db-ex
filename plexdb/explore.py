@@ -959,6 +959,24 @@ def run_query(
         QUERY_SLOTS.release()
 
 
+def _configure_query_connection(conn: sqlite3.Connection) -> None:
+    """The PRAGMAs every Query tab statement runs under, before the authorizer
+    goes on — so this connection can still set them itself.
+
+    `WITH RECURSIVE ... ORDER BY` (plex-db-ex-oyg.4) can't stream: SQLite sorts
+    the whole result before yielding a row. Measured against the deploy base
+    image (`python:3.12-slim`): the default `temp_store` already spills that
+    sort to a temp file and peaks at 26 MB RSS over the full `QUERY_SECONDS`
+    window, but that's an unstated dependency on the linked SQLite's
+    compiled default — forcing MEMORY instead peaks at 864 MB in the same
+    window. Pinning `FILE` here makes the 26 MB bound a guarantee rather than
+    an accident of what this build ships.
+    """
+    conn.execute("PRAGMA query_only = ON")
+    conn.execute("PRAGMA temp_store = FILE")
+    conn.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, QUERY_VALUE_BYTES)
+
+
 def _run_query(store_path: Path, sql: str, seconds: float, rows: int) -> dict[str, object]:
     started = time.monotonic()
     deadline = started + seconds
@@ -971,8 +989,7 @@ def _run_query(store_path: Path, sql: str, seconds: float, rows: int) -> dict[st
 
     with open_readonly(store_path) as conn:
         try:
-            conn.execute("PRAGMA query_only = ON")
-            conn.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, QUERY_VALUE_BYTES)
+            _configure_query_connection(conn)
             conn.set_authorizer(_deny_all_but_reads)
             conn.set_progress_handler(past_deadline, 1000)
             cursor = conn.execute(sql)

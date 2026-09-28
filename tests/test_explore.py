@@ -658,6 +658,15 @@ def test_query_cuts_at_the_row_cap_and_says_so(store: Path) -> None:
     assert out["row_count"] == 6 and out["truncated"] is False
 
 
+def test_query_connection_pins_temp_store_to_file(store: Path) -> None:
+    """A large sort spills to a temp file rather than growing the process's own
+    memory (plex-db-ex-oyg.4) — measured at 26 MB peak RSS with this pinned
+    versus 864 MB with `temp_store = MEMORY`, against the deploy base image."""
+    with open_readonly(store) as conn:
+        explore._configure_query_connection(conn)
+        assert tuple(conn.execute("PRAGMA temp_store").fetchone()) == (1,)
+
+
 def test_query_stops_a_runaway_recursive_cte(store: Path) -> None:
     runaway = (
         "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n) SELECT COUNT(*) FROM n"
