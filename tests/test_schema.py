@@ -3,6 +3,7 @@ init changes nothing."""
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from pathlib import Path
 
@@ -377,6 +378,19 @@ def test_init_is_idempotent(tmp_path: Path) -> None:
 
     assert (was, now) == (schema.SCHEMA_VERSION, schema.SCHEMA_VERSION)
     assert store.read_bytes() == before, "a second init must not rewrite the store"
+
+
+def test_the_rust_reader_supports_exactly_the_current_schema_version() -> None:
+    """`plexdb-reader` refuses any store not at exactly its
+    `SUPPORTED_SCHEMA_VERSION`, so a migration shipped without bumping it makes
+    every reader refuse the next published snapshot."""
+    reader_schema = (
+        Path(__file__).parent.parent / "crates" / "plexdb-reader" / "src" / "schema.rs"
+    ).read_text()
+    match = re.search(r"^pub const SUPPORTED_SCHEMA_VERSION: i64 = (\d+);$", reader_schema, re.M)
+    assert match, "SUPPORTED_SCHEMA_VERSION not found in crates/plexdb-reader/src/schema.rs"
+
+    assert int(match.group(1)) == schema.SCHEMA_VERSION
 
 
 def test_a_store_from_the_future_refuses_to_open(tmp_path: Path) -> None:

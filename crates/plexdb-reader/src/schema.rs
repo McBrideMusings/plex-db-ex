@@ -18,7 +18,7 @@ use crate::error::ReaderError;
 
 /// The schema version this crate's accessors are written against.
 ///
-/// Currently version 10 — `items`, `external_ids`, `plex_items`, `enrichment`,
+/// Currently version 11 — `items`, `external_ids`, `plex_items`, `enrichment`,
 /// `enrichment_cursor`, `plays`, `plays_ingest_cursor`, `edges`, `collection`,
 /// `collection_membership`, `keyword_forms` — see `plexdb/schema.py`.
 ///
@@ -51,7 +51,14 @@ use crate::error::ReaderError;
 /// [`crate::Reader::keyword_for_surface`] and
 /// [`crate::Reader::surfaces_for_keyword`]. A v8 or v9 store, with one row per
 /// fact and no `keyword_forms`, is refused by the exact-match gate.
-pub const SUPPORTED_SCHEMA_VERSION: i64 = 10;
+///
+/// **Version 11 does not change what this crate reads.** It adds `tag_network`,
+/// `tag_network_edge` and `tag_network_state`, the tag explorer's stored
+/// keyword network; no accessor here reads them.
+///
+/// `tests/test_schema.py` fails whenever this constant differs from
+/// `plexdb/schema.py::SCHEMA_VERSION`.
+pub const SUPPORTED_SCHEMA_VERSION: i64 = 11;
 
 /// Confirm `conn` is a plexdb store at exactly [`SUPPORTED_SCHEMA_VERSION`].
 pub(crate) fn check(conn: &Connection, path: &Path) -> Result<(), ReaderError> {

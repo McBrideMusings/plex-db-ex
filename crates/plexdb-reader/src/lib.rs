@@ -673,9 +673,9 @@ mod tests {
         {
             let setup = Connection::open(file.path()).expect("open for setup");
             setup
-                .execute_batch(
+                .execute_batch(&format!(
                     "CREATE TABLE schema_version (version INTEGER NOT NULL);
-                     INSERT INTO schema_version (version) VALUES (10);
+                     INSERT INTO schema_version (version) VALUES ({SUPPORTED_SCHEMA_VERSION});
                      CREATE TABLE items (item_id TEXT PRIMARY KEY);
                      CREATE TABLE enrichment (
                          item_id    TEXT NOT NULL,
@@ -684,8 +684,8 @@ mod tests {
                          key        TEXT NOT NULL,
                          value      TEXT NOT NULL,
                          fetched_at TEXT NOT NULL
-                     );",
-                )
+                     );"
+                ))
                 .expect("build a minimal enrichment-only schema");
             for i in 0..10 {
                 setup
