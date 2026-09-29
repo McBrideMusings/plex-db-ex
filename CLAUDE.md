@@ -86,7 +86,7 @@ admin deploy     copy the live store, build the image, recreate the container on
 admin test       pytest
 admin lint       ruff check
 admin fmt        ruff format
-admin vet        lint + typecheck + test
+admin vet        lint + typecheck + test, plus the reader crate's cargo tests
 admin pull-baseline  copy the host store down into ./data
 admin host-exec <...> run one plexdb command in the deployed container, now
 admin dev check  report the store's health read-only; non-zero if it is behind or damaged
