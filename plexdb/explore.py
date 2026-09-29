@@ -566,11 +566,11 @@ def tag_network_streaming(
     edges_per_node: int = NETWORK_EDGES_PER_NODE,
     seed: int = 0,
 ) -> dict[str, object]:
-    """Like `tag_network`, but calls `emit` with each of its three real stages
-    as it completes — filtered vocab (fast), co-occurrence edges, then the
-    laid-out nodes (the slow SVD+UMAP step) — instead of returning one result
-    after all three. Returns the same `kind`/`nodes`/`edges` payload `emit`
-    was last called with.
+    """Like `tag_network`, but calls `emit` with each of its first two real
+    stages as it completes — filtered vocab (fast), then co-occurrence edges —
+    and returns the third, the laid-out nodes (the slow SVD+UMAP step), as the
+    `"stage": "done"` payload rather than emitting it: the caller's
+    `_KeyedCache.get_streaming` emits the finished value itself, on every path.
     """
     _check_kind(kind)
     vocab = _network_vocab(conn, kind, exclude, min_df)
@@ -589,13 +589,12 @@ def tag_network_streaming(
         "nodes": [[n.value, n.df, n.x, n.y] for n in nodes],
         "edges": [[a, b, n] for a, b, n in edges],
     }
-    emit(payload)
     return payload
 
 
 def stored_network(conn: sqlite3.Connection, kind: str) -> dict[str, object] | None:
     """The default tag network the writer stored — the same `kind`/`nodes`/`edges`
-    shape `tag_network_streaming`'s final stage emits — or `None` when there is
+    shape `tag_network_streaming`'s final stage returns — or `None` when there is
     none or it was drawn from different keyword rows.
 
     `None` is the caller's cue to draw it live. A store that predates the
@@ -868,32 +867,11 @@ class _KeyedCache:
     def get(
         self, key: object, generation: object, compute: Callable[[], dict[str, object]]
     ) -> dict[str, object]:
-        while True:
-            with self._guard:
-                hit = self._entries.get(key)
-                if hit is not None and hit[0] == generation:
-                    return hit[1]
-                flight = self._flights.get((key, generation))
-                if flight is None:
-                    flight = self._flights[(key, generation)] = threading.Event()
-                    mine = True
-                else:
-                    mine = False
-            if not mine:
-                flight.wait()
-                continue
-            try:
-                value = compute()
-                with self._guard:
-                    self._entries.pop(key, None)
-                    self._entries[key] = (generation, value)
-                    while len(self._entries) > self._keep:
-                        del self._entries[next(iter(self._entries))]
-                return value
-            finally:
-                with self._guard:
-                    del self._flights[(key, generation)]
-                flight.set()
+        """`get_streaming` with a single stage: `compute` emits nothing along
+        the way, and the finished value it is handed is returned."""
+        result: list[dict[str, object]] = []
+        self.get_streaming(key, generation, lambda _emit: compute(), result.append)
+        return result[0]
 
     def get_streaming(
         self,
@@ -902,15 +880,15 @@ class _KeyedCache:
         stages: Callable[[Callable[[dict[str, object]], None]], dict[str, object]],
         emit: Callable[[dict[str, object]], None],
     ) -> None:
-        """Like `get`, but the winner calls `stages(emit)` rather than a plain
-        `compute()` — `stages` emits each intermediate result to `emit` as it
-        completes, and returns the final value the same way `compute` would.
-        A waiter never sees the intermediate stages; once the winner finishes
-        it is handed the finished value through `emit`, exactly as `get`
-        would have returned it. `emit` always runs outside `self._guard` —
-        it does I/O for a caller streaming to an HTTP response, and holding
-        the guard through that would stall every other key's request behind
-        one slow socket, exactly what `get` never does.
+        """Hand `emit` the value for `key` at `generation`, exactly once, on
+        every path — a cache hit, a waiter behind another caller's compute,
+        or the winner that computes it. Only the winner calls `stages(emit)`,
+        which may emit intermediate results as they complete and returns the
+        finished value without emitting it; a waiter never sees the
+        intermediate stages. `emit` always runs outside `self._guard` — it
+        does I/O for a caller streaming to an HTTP response, and holding the
+        guard through that would stall every other key's request behind one
+        slow socket.
         """
         while True:
             with self._guard:
@@ -937,11 +915,12 @@ class _KeyedCache:
                     self._entries[key] = (generation, value)
                     while len(self._entries) > self._keep:
                         del self._entries[next(iter(self._entries))]
-                return
             finally:
                 with self._guard:
                     del self._flights[(key, generation)]
                 flight.set()
+            emit(value)
+            return
 
 
 class _IndexCache:
@@ -1018,9 +997,10 @@ class _TagNetworkCache:
     def get_streaming(
         self, kind: str, exclude: frozenset[str], emit: Callable[[dict[str, object]], None]
     ) -> None:
-        """Like `get`, but a cache miss on an excluded kind streams the same
-        three stages `tag_network_streaming` computes rather than blocking
-        until the whole (slow) layout is done. A cache hit — the precomputed
+        """Like `get`, but a cache miss on an excluded kind streams the vocab
+        and edges stages `tag_network_streaming` emits, then the "done" layout
+        `_KeyedCache.get_streaming` emits, rather than blocking until the
+        whole (slow) layout is done. A cache hit — the precomputed
         default network, or a network this call already laid out — always
         emits exactly one `"stage": "done"` line, so the frontend's NDJSON
         reader has one shape to handle regardless of which path served it.
@@ -1032,9 +1012,7 @@ class _TagNetworkCache:
                 if not exclude:
                     stored = stored_network(conn, kind)
                     if stored is not None:
-                        payload = {"stage": "done", **stored}
-                        emit_stage(payload)
-                        return payload
+                        return {"stage": "done", **stored}
                 return tag_network_streaming(conn, kind, exclude, emit_stage)
 
         self._cache.get_streaming((kind, exclude), (stat.st_mtime_ns, stat.st_size), stages, emit)
