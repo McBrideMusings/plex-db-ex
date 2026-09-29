@@ -9,16 +9,27 @@ from __future__ import annotations
 
 import argparse
 import sqlite3
+import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from plexdb import schema
+from plexdb.cli import main
 from plexdb.commands.check import _cmd_check, await_current, render
 from plexdb.errors import StoreError
 from plexdb.health import Report, inspect
-from plexdb.store import _migrating, init, migrate, open_store, outside_migration
+from plexdb.store import (
+    _migrating,
+    held_by,
+    init,
+    migrate,
+    open_store,
+    outside_migration,
+    writing,
+)
 
 NOW = datetime(2026, 8, 12, 12, 0, 0, tzinfo=UTC)
 
@@ -390,6 +401,69 @@ def test_check_reads_nothing_while_a_migration_holds_the_store(
     assert "a migration is still running" in capsys.readouterr().out
 
     assert _cmd_check(argparse.Namespace(wait=0.0)) == 0
+
+
+def test_idle_exits_zero_only_while_nothing_holds_the_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`admin host-exec` runs a writer only on exit 0. The startup migration and
+    the nightly sweep both run inside `plexdb schedule`, so only the locks show them."""
+    path = tmp_path / "plexdb.db"
+    monkeypatch.setenv("PLEXDB_PATH", str(path))
+    assert main(["idle"]) == 0
+    assert not list(tmp_path.iterdir()), "idle created a file on an untouched store"
+    init(path)
+
+    with _migrating(path):
+        assert main(["idle"]) == 1
+    assert "a migration is running" in capsys.readouterr().out
+
+    with writing(path):
+        assert main(["idle"]) == 1
+    assert "a writer has the store open" in capsys.readouterr().out
+
+    assert main(["idle"]) == 0
+    assert "idle" in capsys.readouterr().out
+
+
+def test_idle_sees_a_writer_in_another_process(tmp_path: Path) -> None:
+    """The case the lock exists for: the writer is `plexdb schedule`, the asker
+    is a separate `docker exec`."""
+    path = tmp_path / "plexdb.db"
+    init(path)
+    holder = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import sys; from pathlib import Path; from plexdb.store import open_store\n"
+            f"with open_store(Path({str(path)!r})):\n"
+            "    print('open', flush=True); sys.stdin.read()",
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert holder.stdout is not None
+        assert holder.stdout.readline().strip() == "open"
+        assert held_by(path) == "a writer has the store open"
+    finally:
+        holder.communicate("")
+    assert held_by(path) is None
+
+
+def test_idle_is_not_zero_when_it_cannot_look(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An error must not read as idle, or the guard runs a writer blind."""
+    path = tmp_path / "plexdb.db"
+    monkeypatch.setenv("PLEXDB_PATH", str(path))
+    init(path)
+    lock = tmp_path / "plexdb.db.write-lock"
+    lock.unlink()
+    lock.mkdir()
+    assert main(["idle"]) != 0
+    assert "error" in capsys.readouterr().err
 
 
 def test_migrate_holds_the_lock_a_check_waits_on(

@@ -14,8 +14,10 @@ from types import ModuleType
 
 import pytest
 
+from plexdb import sweep
 from plexdb.errors import ConfigError, PlexError, TMDbError
-from plexdb.sweep import PlannedStep, Status, Step, plan, run_sweep
+from plexdb.store import held_by
+from plexdb.sweep import PlannedStep, Status, Step, plan, run_locked_sweep, run_sweep
 
 # What a sweep does, in order. Kept here rather than derived so a renumbering
 # that silently reorders the run fails a test instead of quietly changing what
@@ -265,3 +267,24 @@ def test_a_clean_run_reports_every_step_it_ran(capsys: pytest.CaptureFixture[str
     assert "ran 2: walk, publish" in out
     assert "every step reached" in out
     assert Status.SKIPPED.value not in out
+
+
+def test_the_real_sweep_holds_the_writer_lock_between_its_steps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each step opens and closes its own connection; the gap between two steps
+    must still read as busy, or `admin host-exec` starts a walk in it."""
+    path = tmp_path / "plexdb.db"
+    monkeypatch.setenv("PLEXDB_PATH", str(path))
+    seen: list[str | None] = []
+
+    def look() -> int:
+        seen.append(held_by(path))
+        return 0
+
+    monkeypatch.setattr(sweep, "run_sweep", look)
+
+    assert run_locked_sweep() == 0
+
+    assert seen == ["a writer has the store open"]
+    assert held_by(path) is None

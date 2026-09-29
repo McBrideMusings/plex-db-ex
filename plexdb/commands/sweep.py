@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import argparse
 
-from ..sweep import run_sweep
+from ..sweep import run_locked_sweep
 
 NAME = "sweep"
 #: First in `--help`. It is the command you run; the rest are its parts.
@@ -14,7 +14,7 @@ ORDER = 5
 
 
 def _cmd_sweep(_args: argparse.Namespace) -> int:
-    return run_sweep()
+    return run_locked_sweep()
 
 
 def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:

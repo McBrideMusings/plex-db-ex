@@ -4,7 +4,7 @@
 (ADR-0014). The only thing missing between a Mac checkout and an unattended
 host is *when* it starts. That is what this module holds: a wall-clock time of
 day, the arithmetic for the next occurrence of it, and a loop that waits and
-calls `run_sweep`.
+calls `run_locked_sweep`.
 
 **Why this is Python and not three lines of shell in the entrypoint.** Issue
 #45 removed the run order from a shell script for a reason that applies here
@@ -187,9 +187,9 @@ def run_scheduler(
     out and watch it" a real check that the schedule works rather than a check
     that the entrypoint runs.
     """
-    from .sweep import run_sweep
+    from .sweep import run_locked_sweep
 
-    do_sweep = run_sweep if sweep is None else sweep
+    do_sweep = run_locked_sweep if sweep is None else sweep
     do_sleep = time.sleep if sleep is None else sleep
     now_fn = datetime.now if clock is None else clock
     do_migrate = _migrate_store if migrate is None else migrate

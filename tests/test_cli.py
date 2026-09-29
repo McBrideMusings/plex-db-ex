@@ -32,6 +32,7 @@ from plexdb.walk import walk_all
 
 EXPECTED_COMMANDS = {
     "check",
+    "idle",
     "sweep",
     "migrate",
     "walk",
@@ -58,6 +59,9 @@ EXPECTED_COMMAND_ORDER = [
     # First, and not a step of the sweep: the read-only question you ask before
     # deciding to run anything else (`plexdb/commands/check.py`).
     "check",
+    # Beside it, and read-only too: whether nothing holds the store now
+    # (`plexdb/commands/idle.py`).
+    "idle",
     "sweep",
     "migrate",
     "walk",

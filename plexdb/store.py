@@ -62,11 +62,53 @@ def open_store(path: Path, *, create: bool = False) -> Iterator[sqlite3.Connecti
     elif not path.exists():
         raise FileNotFoundError(f"no store at {path} — run `plexdb migrate` first")
 
-    conn = _connect(path)
+    with writing(path):
+        conn = _connect(path)
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+
+def _write_lock_path(path: Path) -> Path:
+    return path.with_name(path.name + ".write-lock")
+
+
+@contextmanager
+def writing(path: Path) -> Iterator[None]:
+    """Hold the writer lock shared: around every writing connection, and around
+    a whole sweep so the gaps between its steps count as writing too.
+
+    Shared, so writers never wait on each other here — SQLite serialises their
+    transactions. The lock exists so `held_by` can see a writer from outside the
+    process: the nightly sweep runs inside `plexdb schedule`, where no process
+    name gives it away.
+    """
+    _ensure_parent(path)
+    with _write_lock_path(path).open("a") as handle:
+        fcntl.flock(handle, fcntl.LOCK_SH)
+        yield
+
+
+def held_by(path: Path) -> str | None:
+    """Say what holds the store right now, or `None` when nothing does.
+
+    Creates nothing: a store no writer or migration has locked yet has no lock
+    files, and reads as idle.
+    """
+    with outside_migration(path) as clear:
+        if not clear:
+            return "a migration is running"
     try:
-        yield conn
-    finally:
-        conn.close()
+        handle = _write_lock_path(path).open("r")
+    except FileNotFoundError:
+        return None
+    with handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return "a writer has the store open"
+    return None
 
 
 def _connect(path: Path) -> sqlite3.Connection:

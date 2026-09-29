@@ -95,6 +95,16 @@ def _run_through_the_cli() -> Callable[[str], int]:
     return invoke
 
 
+def run_locked_sweep() -> int:
+    """The real sweep, holding the writer lock from its first step to its last,
+    so `plexdb idle` reads busy between steps as well as during them."""
+    from .config import Config
+    from .store import writing
+
+    with writing(Config.from_env().store_path):
+        return run_sweep()
+
+
 def run_sweep(
     *, steps: list[PlannedStep] | None = None, invoke: Callable[[str], int] | None = None
 ) -> int:
