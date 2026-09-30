@@ -15,6 +15,7 @@ import threading
 import urllib.error
 import urllib.request
 from collections.abc import Iterator
+from http import HTTPStatus
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -703,6 +704,31 @@ def test_sqlite_error_answers_503_on_a_json_route_and_on_the_stream(
     status, body = _get(f"{base_url}/api/tagnetwork?kind=movie")
     assert status == 200
     assert _last_ndjson(body) == {"stage": "error", "error": expected}
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        sqlite3.OperationalError("database is locked"),
+        sqlite3.DatabaseError("database disk image is malformed"),
+    ],
+)
+def test_store_read_errors_map_to_503(failure: sqlite3.Error) -> None:
+    assert explore._error_reply(failure, Path("store.db")) == (
+        f"could not read the store: {failure}",
+        HTTPStatus.SERVICE_UNAVAILABLE,
+    )
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        sqlite3.ProgrammingError("Cannot operate on a closed database."),
+        sqlite3.InterfaceError("bad parameter"),
+    ],
+)
+def test_sqlite_code_bugs_stay_unmapped(failure: sqlite3.Error) -> None:
+    assert explore._error_reply(failure, Path("store.db")) is None
 
 
 def test_unmapped_stream_failure_is_logged_to_stderr(

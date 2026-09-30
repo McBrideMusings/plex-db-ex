@@ -1622,7 +1622,11 @@ def _error_reply(err: Exception, store_path: Path) -> tuple[str, HTTPStatus] | N
         )
     if isinstance(err, StoreError):
         return str(err), HTTPStatus.SERVICE_UNAVAILABLE
-    if isinstance(err, sqlite3.Error):
+    if isinstance(err, sqlite3.DatabaseError) and not isinstance(err, sqlite3.ProgrammingError):
+        # ProgrammingError (a closed connection, a wrong parameter count) is a `DatabaseError`
+        # and InterfaceError is not; both are code bugs and keep their
+        # traceback. A user's own SQL never reaches here: run_query turns it
+        # into a QueryError.
         return f"could not read the store: {err}", HTTPStatus.SERVICE_UNAVAILABLE
     if isinstance(err, OSError):
         return f"saved queries: {err}", HTTPStatus.INTERNAL_SERVER_ERROR
