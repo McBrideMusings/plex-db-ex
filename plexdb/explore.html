@@ -792,6 +792,9 @@ function mapNote() {
     + ". Labels name each region and get finer as you zoom in. Scroll to zoom, drag to pan, hover a dot for its card, click to pin it.";
 }
 
+const HUE_BUCKETS = 72;
+const HUE_SPAN = 340;   // 280 across the map's width plus 60 down its height
+
 // A new `data` becomes new viewport items; the selection follows its title if it is still there.
 function syncMapItems() {
   if (map.itemsOf === map.data) return;
@@ -802,6 +805,14 @@ function syncMapItems() {
   map.labels = (map.data && map.data.labels || []).map(([node, x, y, w, h, n, text, tag]) =>
     ({ node, x, y, w, h, n, text, tag, depth: Math.floor(Math.log2(node + 1)), tw: 0 }));
   const b = map.items.length ? boundsOf(map.items) : { x0: 0, y0: 0, x1: 1, y1: 1 };
+  // Colour by position: hue sweeps left to right, y nudges it. Dots share one of HUE_BUCKETS fillStyles
+  // so a redraw sets the colour once per bucket, not once per dot.
+  map.buckets = Array.from({ length: HUE_BUCKETS }, () => []);
+  for (const it of map.items) {
+    const nx = (it.x - b.x0) / (b.x1 - b.x0 || 1), ny = (it.y - b.y0) / (b.y1 - b.y0 || 1);
+    const hue = (HUE_SPAN - 60) * nx + 60 * ny;
+    map.buckets[Math.min(HUE_BUCKETS - 1, Math.floor(hue / HUE_SPAN * HUE_BUCKETS))].push(it);
+  }
   const keep = mapVP.selected && map.byId.get(mapVP.selected.id);
   mapVP.setItems(map.items, b);
   if (keep) mapVP.selected = keep; else selectItem(null);
@@ -824,14 +835,21 @@ function drawMapItems(ctx, vp) {
   const r = Math.min(4.5, 1.2 * Math.pow(vp.zoom, 0.4));
   const S = mapUI.search ? mapUI.search.ids : null;
   const near = (x, y) => x > -10 && y > -10 && x < vp.w + 10 && y < vp.h + 10;
-  ctx.fillStyle = token("--edge");
   ctx.globalAlpha = S ? 0.14 : 1;
   const lit = [];
-  for (const it of map.items) {
-    if (S ? S.has(it.id) : state.tagIds.has(it.id)) { lit.push(it); continue; }
-    const x = vp.sx(it.x), y = vp.sy(it.y);
-    if (near(x, y)) ctx.fillRect(x - r, y - r, 2 * r, 2 * r);
-  }
+  const isLit = it => S ? S.has(it.id) : state.tagIds.has(it.id);
+  // While a tag or search highlight is active the field stays flat grey, so the highlight colours stand out.
+  const flat = !!S || state.tagIds.size > 0;
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  const groups = flat ? [map.items] : map.buckets;
+  groups.forEach((group, i) => {
+    ctx.fillStyle = flat ? token("--edge") : `hsl(${(i + 0.5) * HUE_SPAN / HUE_BUCKETS} 55% ${dark ? 62 : 46}%)`;
+    for (const it of group) {
+      if (isLit(it)) { lit.push(it); continue; }
+      const x = vp.sx(it.x), y = vp.sy(it.y);
+      if (near(x, y)) ctx.fillRect(x - r, y - r, 2 * r, 2 * r);
+    }
+  });
   ctx.globalAlpha = 1;
   ctx.fillStyle = token(S ? "--accent" : "--centre");
   for (const it of lit) {
