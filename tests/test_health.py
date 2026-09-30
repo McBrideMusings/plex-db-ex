@@ -521,8 +521,15 @@ def test_idle_runs_its_command_under_a_claim_that_locks_out_a_sweep(
             pass
         return 7
 
-    monkeypatch.setattr("plexdb.cli.main", lambda argv: command(argparse.Namespace()))
+    argvs: list[list[str]] = []
+
+    def fake_main(argv: list[str]) -> int:
+        argvs.append(list(argv))
+        return command(argparse.Namespace())
+
+    monkeypatch.setattr("plexdb.cli.main", fake_main)
     assert main(["idle", "walk", "--section", "2"]) == 7
+    assert argvs == [["walk", "--section", "2"]]
     assert seen == ["a migration is running"]
     assert held_by(path) is None
 
@@ -552,4 +559,6 @@ def test_idle_with_a_command_refuses_a_busy_store_and_runs_nothing(
     with holding(path) as holder:
         assert holder is None
         with holding(path) as again:
-            assert again is not None
+            assert again is None  # re-entry is the same claim, not a rival
+        with outside_migration(path) as clear:
+            assert clear

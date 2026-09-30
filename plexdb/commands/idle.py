@@ -28,7 +28,7 @@ ORDER = 2
 
 def _cmd_idle(args: argparse.Namespace) -> int:
     config = Config.from_env()
-    if not args.command:
+    if not args.run:
         holder = held_by(config.store_path)
         if holder is None:
             print(f"{config.store_path}: idle")
@@ -36,13 +36,14 @@ def _cmd_idle(args: argparse.Namespace) -> int:
         print(f"{config.store_path}: {holder}")
         return 1
 
+    # `cli` imports every command module, this one included.
     from ..cli import main
 
     with holding(config.store_path) as holder:
         if holder is not None:
             print(f"{config.store_path}: {holder}")
             return 1
-        return main(args.command)
+        return main(args.run)
 
 
 def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -54,7 +55,8 @@ def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
         ),
     )
     idle_parser.add_argument(
-        "command",
+        "run",
+        metavar="command",
         nargs=argparse.REMAINDER,
         help="a plexdb command and its arguments, run only if the store is idle",
     )

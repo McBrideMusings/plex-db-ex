@@ -113,8 +113,13 @@ def holding(path: Path) -> Iterator[str | None]:
     as `held_by`) and holds nothing. Checking and claiming are one act, so a
     sweep or migration cannot start between "nothing is running" and the
     caller's command; one that wakes meanwhile waits for the claim to end.
-    Inside the block `writing` and `_migrating` do not lock again.
+    Inside the block `writing`, `_migrating`, `outside_migration` and a nested
+    `holding` do not lock again. `held_by` still reports the claim, because it
+    answers what another process would see.
     """
+    if _is_held(path):
+        yield None
+        return
     _ensure_parent(path)
     with _lock_path(path).open("a") as migrate_handle:
         try:
@@ -323,8 +328,13 @@ def outside_migration(path: Path) -> Iterator[bool]:
     the caller reads.
 
     Takes the migration lock shared without blocking, and creates nothing: a
-    store no migration has locked yet has no lock file, and reads as clear.
+    store no migration has locked yet has no lock file, and reads as clear. A
+    store this process holds through `holding` reads as clear too: the exclusive
+    lock is its own, not a migration's.
     """
+    if _is_held(path):
+        yield True
+        return
     try:
         handle = _lock_path(path).open("r")
     except FileNotFoundError:
