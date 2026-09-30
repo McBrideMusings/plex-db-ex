@@ -530,7 +530,7 @@ def test_idle_runs_its_command_under_a_claim_that_locks_out_a_sweep(
     monkeypatch.setattr("plexdb.cli.main", fake_main)
     assert main(["idle", "walk", "--section", "2"]) == 7
     assert argvs == [["walk", "--section", "2"]]
-    assert seen == ["a migration is running"]
+    assert seen == ["a writer has the store open"]
     assert held_by(path) is None
 
 
