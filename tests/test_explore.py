@@ -1045,6 +1045,28 @@ def test_saved_endpoint_400s_a_put_past_the_size_cap(base_url: str, store: Path)
     assert json.loads(path.read_text()) == almost_full
 
 
+def test_saved_endpoint_labels_a_corrupt_saved_file_as_saved_queries(
+    base_url: str, store: Path
+) -> None:
+    (store.parent / "explore-queries.json").write_text("not json")
+
+    status, body = _get(f"{base_url}/api/saved")
+    assert status == 500
+    assert str(json.loads(body)["error"]).startswith("saved queries: ")
+
+
+def test_a_store_read_oserror_is_not_labelled_as_saved_queries(
+    base_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail(*args: object, **kwargs: object) -> None:
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(explore, "title_map", fail)
+
+    status, body = _get(f"{base_url}/api/map?kind=movie")
+    assert (status, json.loads(body)["error"]) == (500, "could not read the store: denied")
+
+
 def test_scheduler_writes_saved_queries_to_their_own_mount_when_set(
     store: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

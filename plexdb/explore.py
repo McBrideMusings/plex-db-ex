@@ -1418,6 +1418,10 @@ class NoSuchQuery(LookupError):
     """A delete named a saved query that is not there."""
 
 
+class SavedQueriesError(OSError):
+    """The saved-queries file could not be read, parsed or replaced."""
+
+
 class SavedQueries:
     """Named queries in one JSON file beside the store, never inside it.
 
@@ -1442,12 +1446,16 @@ class SavedQueries:
         except FileNotFoundError:
             return []
         except ValueError as err:
-            raise OSError(f"{self._path} is not valid JSON: {err}") from err
+            raise SavedQueriesError(f"{self._path} is not valid JSON: {err}") from err
+        except OSError as err:
+            raise SavedQueriesError(str(err)) from err
         if not isinstance(raw, list) or not all(
             isinstance(q, dict) and all(isinstance(q.get(k), str) for k in ("name", "sql", "note"))
             for q in raw
         ):
-            raise OSError(f"{self._path} does not hold a list of name, sql and note entries")
+            raise SavedQueriesError(
+                f"{self._path} does not hold a list of name, sql and note entries"
+            )
         return raw
 
     def _write(self, queries: list[dict[str, str]]) -> None:
@@ -1455,6 +1463,8 @@ class SavedQueries:
         try:
             tmp.write_text(json.dumps(queries, indent=2) + "\n")
             tmp.replace(self._path)
+        except OSError as err:
+            raise SavedQueriesError(str(err)) from err
         finally:
             tmp.unlink(missing_ok=True)
 
@@ -1653,8 +1663,10 @@ def _error_reply(err: Exception, store_path: Path) -> tuple[str, HTTPStatus] | N
         # traceback. A user's own SQL never reaches here: run_query turns it
         # into a QueryError.
         return f"could not read the store: {err}", HTTPStatus.SERVICE_UNAVAILABLE
-    if isinstance(err, OSError):
+    if isinstance(err, SavedQueriesError):
         return f"saved queries: {err}", HTTPStatus.INTERNAL_SERVER_ERROR
+    if isinstance(err, OSError):
+        return f"could not read the store: {err}", HTTPStatus.INTERNAL_SERVER_ERROR
     return None
 
 
