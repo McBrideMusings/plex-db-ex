@@ -22,7 +22,7 @@ import httpx
 import pytest
 
 from plexdb import explore, schedule
-from plexdb.errors import ConfigError
+from plexdb.errors import ConfigError, StoreError
 from plexdb.explore import (
     EXPLORE_PORT_VAR,
     EXPLORE_SAVED_PATH_VAR,
@@ -624,6 +624,28 @@ def test_tagnetwork_cache_streams_stages_to_the_winner_and_one_line_to_the_waite
     # One thread won the flight and streamed all three real stages; the other
     # waited behind it and was handed only the finished "done" line.
     assert sorted(stages) == [["done"], ["vocab", "edges", "done"]]
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [StoreError("store is damaged"), PermissionError("denied"), FileNotFoundError()],
+)
+def test_tagnetwork_error_line_reads_the_same_as_a_json_route_error(
+    base_url: str, monkeypatch: pytest.MonkeyPatch, failure: Exception
+) -> None:
+    def fail(*args: object, **kwargs: object) -> None:
+        raise failure
+
+    monkeypatch.setattr(explore, "title_map", fail)
+    monkeypatch.setattr(explore, "tag_network_streaming", fail)
+
+    _, body = _get(f"{base_url}/api/map?kind=movie")
+    expected = json.loads(body)["error"]
+    status, body = _get(f"{base_url}/api/tagnetwork?kind=movie")
+
+    # The stream's 200 is already sent when the draw fails; only the text carries over.
+    assert status == 200
+    assert _last_ndjson(body) == {"stage": "error", "error": expected}
 
 
 def test_index_cache_recomputes_when_the_store_changes(store: Path) -> None:

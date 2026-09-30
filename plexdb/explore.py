@@ -1587,6 +1587,40 @@ def _page() -> bytes:
 SAVED_FILE = "explore-queries.json"
 
 
+def _error_reply(err: Exception, store_path: Path) -> tuple[str, HTTPStatus] | None:
+    """The message and status an `/api/*` route answers with for `err`, or
+    None for a failure no route expects — that one stays a traceback.
+
+    One table for both reply shapes: a JSON route sends the pair as its
+    status and body, and the NDJSON tag-network stream, whose 200 is already
+    on the wire, sends the message alone as its "error" line.
+    """
+    if isinstance(err, ValueError):
+        return str(err), HTTPStatus.BAD_REQUEST
+    if isinstance(err, NoSuchTitle):
+        return f"no title with item_id {err.args[0]!r}", HTTPStatus.NOT_FOUND
+    if isinstance(err, NoSuchQuery):
+        return f"no saved query named {err.args[0]!r}", HTTPStatus.NOT_FOUND
+    if isinstance(err, TooManyTitleRequests):
+        return str(err), HTTPStatus.TOO_MANY_REQUESTS
+    if isinstance(err, NoPoster):
+        return f"no Plex rating key on file for {err.args[0]!r}", HTTPStatus.NOT_FOUND
+    if isinstance(err, PosterUnavailable):
+        return str(err), HTTPStatus.SERVICE_UNAVAILABLE
+    if isinstance(err, FileNotFoundError):
+        # On the host this is the normal state until the first sweep
+        # publishes a snapshot, not a crash worth a traceback.
+        return (
+            f"no store at {store_path} yet — the next sweep publishes one",
+            HTTPStatus.SERVICE_UNAVAILABLE,
+        )
+    if isinstance(err, StoreError):
+        return str(err), HTTPStatus.SERVICE_UNAVAILABLE
+    if isinstance(err, OSError):
+        return f"saved queries: {err}", HTTPStatus.INTERNAL_SERVER_ERROR
+    return None
+
+
 def make_server(
     store_path: Path,
     host: str,
@@ -1626,32 +1660,12 @@ def make_server(
         def _serve(self, route: Callable[[], None]) -> None:
             try:
                 route()
-            except ValueError as err:
-                self._json({"error": str(err)}, HTTPStatus.BAD_REQUEST)
-            except NoSuchTitle as err:
-                self._json(
-                    {"error": f"no title with item_id {err.args[0]!r}"}, HTTPStatus.NOT_FOUND
-                )
-            except NoSuchQuery as err:
-                self._json({"error": f"no saved query named {err.args[0]!r}"}, HTTPStatus.NOT_FOUND)
-            except TooManyTitleRequests as err:
-                self._json({"error": str(err)}, HTTPStatus.TOO_MANY_REQUESTS)
-            except NoPoster as err:
-                self._json(
-                    {"error": f"no Plex rating key on file for {err.args[0]!r}"},
-                    HTTPStatus.NOT_FOUND,
-                )
-            except PosterUnavailable as err:
-                self._json({"error": str(err)}, HTTPStatus.SERVICE_UNAVAILABLE)
-            except FileNotFoundError:
-                # On the host this is the normal state until the first sweep
-                # publishes a snapshot, not a crash worth a traceback.
-                missing = f"no store at {store_path} yet — the next sweep publishes one"
-                self._json({"error": missing}, HTTPStatus.SERVICE_UNAVAILABLE)
-            except StoreError as err:
-                self._json({"error": str(err)}, HTTPStatus.SERVICE_UNAVAILABLE)
-            except OSError as err:
-                self._json({"error": f"saved queries: {err}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            except Exception as err:
+                reply = _error_reply(err, store_path)
+                if reply is None:
+                    raise
+                message, status = reply
+                self._json({"error": message}, status)
 
         def _body(self) -> dict[str, object]:
             # A page on another site can send `text/plain` without a preflight;
@@ -1807,10 +1821,10 @@ def make_server(
 
             try:
                 networks.get_streaming(kind, exclude, emit)
-            except FileNotFoundError:
-                message = f"no store at {store_path} yet — the next sweep publishes one"
             except Exception as err:
-                message = str(err)
+                # The same text a JSON route would send; only the status is lost.
+                reply = _error_reply(err, store_path)
+                message = reply[0] if reply else str(err)
             else:
                 return
             try:
