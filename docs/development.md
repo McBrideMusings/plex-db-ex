@@ -177,13 +177,15 @@ only after 10 minutes. `plexdb migrate` holds an exclusive `flock` on `plexdb.db
 beside the store from its backup through its verify and any rollback, because it commits the new
 version before verifying it; the check reads only while it can take that lock shared.
 
-`admin host-exec` asks `plexdb idle` in the container before it runs anything but `check`, and
-runs the command only when that exits 0. It reads two locks beside the store: the migration lock
-above, and `plexdb.db.write-lock`, which every writing connection (`open_store`) and every whole
-sweep hold shared, so the gaps between a sweep's steps count as writing too. Both matter because
-the startup migration and the nightly sweep run inside `plexdb schedule`, where no process name
-gives them away. Any other exit refuses, an ssh or docker failure included: a guard that cannot
-get an answer does not run the writer.
+`admin host-exec` runs anything but `check` as `plexdb idle <command>` in one `docker exec`. That
+takes both locks exclusive without blocking and runs the command only if it got them, so a sweep
+cannot start between the check and the command; one that wakes meanwhile waits for the command to
+end. The locks are the migration lock above, and `plexdb.db.write-lock`, which every writing
+connection (`open_store`) and every whole sweep hold shared, so the gaps between a sweep's steps
+count as writing too. Both matter because the startup migration and the nightly sweep run inside
+`plexdb schedule`, where no process name gives them away. A busy store prints why and exits 1, and
+so does an ssh or docker failure: a guard that cannot get an answer does not run the writer.
+`plexdb idle` with no command is the read-only question.
 
 There is no automatic deploy on merge, on purpose: the host has one store, the migration is
 forward-only, and a person deciding when it happens is worth more than the minutes it saves.

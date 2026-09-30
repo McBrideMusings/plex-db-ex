@@ -24,6 +24,7 @@ from plexdb.health import Report, inspect
 from plexdb.store import (
     _migrating,
     held_by,
+    holding,
     init,
     migrate,
     open_store,
@@ -501,3 +502,54 @@ def test_a_path_pointing_at_a_directory_says_so_rather_than_disk_io_error(tmp_pa
     too high."""
     with pytest.raises(StoreError, match="is a directory, not a store"):
         inspect(tmp_path, tmp_path / "backups", now=NOW)
+
+
+def test_idle_runs_its_command_under_a_claim_that_locks_out_a_sweep(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The check and the command are one act: while the command runs, the store
+    reads busy to every other process, and the command itself is not shut out by
+    the claim it runs under."""
+    path = tmp_path / "plexdb.db"
+    monkeypatch.setenv("PLEXDB_PATH", str(path))
+    init(path)
+    seen: list[str | None] = []
+
+    def command(_args: argparse.Namespace) -> int:
+        seen.append(held_by(path))
+        with open_store(path):  # takes `writing`, which must not wait on the claim
+            pass
+        return 7
+
+    monkeypatch.setattr("plexdb.cli.main", lambda argv: command(argparse.Namespace()))
+    assert main(["idle", "walk", "--section", "2"]) == 7
+    assert seen == ["a migration is running"]
+    assert held_by(path) is None
+
+
+def test_idle_with_a_command_refuses_a_busy_store_and_runs_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "plexdb.db"
+    monkeypatch.setenv("PLEXDB_PATH", str(path))
+    init(path)
+    ran: list[list[str]] = []
+
+    def record(argv: list[str]) -> int:
+        ran.append(list(argv))
+        return 0
+
+    monkeypatch.setattr("plexdb.cli.main", record)
+
+    with writing(path):
+        assert main(["idle", "walk"]) == 1
+    assert "a writer has the store open" in capsys.readouterr().out
+    with _migrating(path):
+        assert main(["idle", "walk"]) == 1
+    assert "a migration is running" in capsys.readouterr().out
+    assert ran == []
+
+    with holding(path) as holder:
+        assert holder is None
+        with holding(path) as again:
+            assert again is not None

@@ -84,10 +84,55 @@ def writing(path: Path) -> Iterator[None]:
     process: the nightly sweep runs inside `plexdb schedule`, where no process
     name gives it away.
     """
+    if _is_held(path):
+        yield
+        return
     _ensure_parent(path)
     with _write_lock_path(path).open("a") as handle:
         fcntl.flock(handle, fcntl.LOCK_SH)
         yield
+
+
+#: Stores this process holds through `holding`. `writing` and `_migrating` take
+#: their own file handle, and a second handle on a file this process already
+#: holds exclusive would wait on the first forever, so they stand down for a
+#: store listed here.
+_held: set[Path] = set()
+
+
+def _is_held(path: Path) -> bool:
+    return path.resolve() in _held
+
+
+@contextmanager
+def holding(path: Path) -> Iterator[str | None]:
+    """Claim the whole store for this process, or say what stops it.
+
+    Takes the migration lock and the write lock both exclusive without
+    blocking, and yields `None` once it holds them, or a reason (the same words
+    as `held_by`) and holds nothing. Checking and claiming are one act, so a
+    sweep or migration cannot start between "nothing is running" and the
+    caller's command; one that wakes meanwhile waits for the claim to end.
+    Inside the block `writing` and `_migrating` do not lock again.
+    """
+    _ensure_parent(path)
+    with _lock_path(path).open("a") as migrate_handle:
+        try:
+            fcntl.flock(migrate_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield "a migration is running"
+            return
+        with _write_lock_path(path).open("a") as write_handle:
+            try:
+                fcntl.flock(write_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                yield "a writer has the store open"
+                return
+            _held.add(path.resolve())
+            try:
+                yield None
+            finally:
+                _held.discard(path.resolve())
 
 
 def held_by(path: Path) -> str | None:
@@ -263,6 +308,9 @@ def _migrating(path: Path) -> Iterator[None]:
     seen a finished migration. This lock spans all of it, rollback included; the
     kernel drops it if the process dies, so a crash cannot leave it held.
     """
+    if _is_held(path):
+        yield
+        return
     _ensure_parent(path)
     with _lock_path(path).open("a") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)

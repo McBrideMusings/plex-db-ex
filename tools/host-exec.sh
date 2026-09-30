@@ -35,19 +35,14 @@ fi
 # Waiting out the container's startup migration is `plexdb check --wait`'s job:
 # it polls the store's schema version, which is what the migration commits.
 #
-# Anything else runs only when `plexdb idle` says no migration or writer holds
-# the store. The startup migration and the nightly sweep both run inside
-# `plexdb schedule`, so no process name gives them away; `idle` reads the locks
-# they hold. Any non-zero exit refuses — a busy store, and equally an ssh or
-# docker failure that left the question unanswered. SQLite would serialise a
-# second writer, but a walk racing a migration is not something to find out
-# about afterwards.
-if [ "$1" != "check" ]; then
-    if ! state=$(ssh "$TARGET" "docker exec $CONTAINER plexdb idle" 2>&1); then
-        echo "host-exec: refusing — ${state:-no answer from the container}" >&2
-        exit 1
-    fi
-fi
-
+# Anything else runs as `plexdb idle <command>`, which takes the store's locks
+# and runs the command only if no migration or writer held them. The startup
+# migration and the nightly sweep both run inside `plexdb schedule`, so no
+# process name gives them away; the locks do. Checking and running happen in one
+# process under one claim, so a sweep cannot start between them. A busy store
+# prints why and exits 1, and an ssh or docker failure is non-zero too.
 echo "running 'plexdb $*' in $CONTAINER on $UNRAID_HOST"
-exec ssh "$TARGET" "docker exec $CONTAINER plexdb $*"
+if [ "$1" = "check" ]; then
+    exec ssh "$TARGET" "docker exec $CONTAINER plexdb $*"
+fi
+exec ssh "$TARGET" "docker exec $CONTAINER plexdb idle $*"
