@@ -910,8 +910,7 @@ def test_saved_queries_refuses_the_entry_that_crosses_the_size_cap(tmp_path: Pat
 def test_saved_endpoint_400s_a_put_past_the_entry_cap(base_url: str, store: Path) -> None:
     path = store.parent / "explore-queries.json"
     full = [
-        {"name": f"q{n:03}", "sql": "SELECT 1", "note": ""}
-        for n in range(SavedQueries.MAX_ENTRIES)
+        {"name": f"q{n:03}", "sql": "SELECT 1", "note": ""} for n in range(SavedQueries.MAX_ENTRIES)
     ]
     path.write_text(json.dumps(full))
 
@@ -1035,9 +1034,7 @@ def test_poster_refuses_an_oversize_response(store: Path) -> None:
         )
         conn.commit()
     oversize = b"x" * (explore.POSTER_MAX_BYTES + 1)
-    server = _poster_server(
-        store, http=_mock_plex(lambda r: httpx.Response(200, content=oversize))
-    )
+    server = _poster_server(store, http=_mock_plex(lambda r: httpx.Response(200, content=oversize)))
     try:
         status, body = _get(f"http://127.0.0.1:{server.server_port}/api/poster?item_id=imdb:tt1")
         assert status == 503 and "over" in json.loads(body)["error"]

@@ -504,9 +504,7 @@ def _network_vocab(
     )
 
 
-def _network_edges(
-    vocab: _NetworkVocab, edges_per_node: int
-) -> tuple[tuple[str, str, int], ...]:
+def _network_edges(vocab: _NetworkVocab, edges_per_node: int) -> tuple[tuple[str, str, int], ...]:
     kept: set[tuple[str, str, int]] = set()
     for value in vocab.vocab:
         ranked = sorted(vocab.together[value].items(), key=lambda kv: (-kv[1], kv[0]))[

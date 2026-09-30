@@ -63,9 +63,7 @@ def render(report: Report) -> list[str]:
     """The report as printed lines. Separate from `_cmd_check` so what the
     command says can be asserted on without capturing stdout."""
     lines = [str(report.path), _version_line(report)]
-    lines.append(
-        "quick_check: ok" if report.sound else f"quick_check FAILED: {report.quick_check}"
-    )
+    lines.append("quick_check: ok" if report.sound else f"quick_check FAILED: {report.quick_check}")
 
     lines.append("rows:")
     for table, count in report.counts.items():

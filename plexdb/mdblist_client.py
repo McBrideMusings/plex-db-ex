@@ -212,9 +212,7 @@ class LiveMDBListClient:
         try:
             return resp.json()
         except ValueError:
-            raise MDBListError(
-                f"MDBList returned a response that is not JSON for {url}"
-            ) from None
+            raise MDBListError(f"MDBList returned a response that is not JSON for {url}") from None
 
 
 def _optional_int(value: Any) -> int | None:

@@ -123,9 +123,7 @@ class Config:
         source_roots = tuple(root.strip() for root in source_roots_raw.split(",") if root.strip())
         store_path = Path(raw).expanduser()
         backup_raw = os.environ.get("PLEXDB_BACKUP_DIR", "").strip()
-        backup_dir = (
-            Path(backup_raw).expanduser() if backup_raw else store_path.parent / "backups"
-        )
+        backup_dir = Path(backup_raw).expanduser() if backup_raw else store_path.parent / "backups"
         return cls(
             store_path=store_path,
             snapshot_path=snapshot_path,

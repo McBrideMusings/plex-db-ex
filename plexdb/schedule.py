@@ -146,8 +146,7 @@ def _start_explorer() -> None:
     )
     where = saved_path or snapshot.with_name("explore-queries.json")
     print(
-        f"tag explorer on port {server.server_port}, reading {snapshot}, "
-        f"saved queries at {where}",
+        f"tag explorer on port {server.server_port}, reading {snapshot}, saved queries at {where}",
         flush=True,
     )
 
