@@ -31,9 +31,13 @@ from plexdb.explore import (
     QueryError,
     SavedQueries,
     build_index,
+    keyword_fingerprint,
     make_server,
+    network_fingerprint,
     region_labels,
     run_query,
+    stored_map,
+    stored_network,
     tag_network,
     title_keywords_json,
     title_map,
@@ -419,6 +423,40 @@ def test_refresh_stores_both_kinds_and_skips_a_kind_whose_keywords_are_unchanged
     with open_store(store) as conn:
         changed = refresh_title_maps(conn)
     assert [(r.kind, r.redrawn) for r in changed] == [("movie", False), ("show", True)]
+
+
+@pytest.mark.parametrize(
+    "rewrite",
+    [
+        # Same row count, same titles, same newest fetched_at: one row re-stamped older.
+        "UPDATE enrichment SET fetched_at = '2026-01-01T00:00:00+00:00' "
+        "WHERE item_id = 'imdb:tt2' AND value = 'stinger'",
+        # Same counts and stamps: one keyword swapped for another.
+        "UPDATE enrichment SET value = 'vigilante' WHERE item_id = 'imdb:tt3'",
+        # A one-keyword title leaves the kind while another one-keyword title joins it.
+        "DELETE FROM enrichment WHERE item_id = 'tvdb:9' AND value = 'lawyer'; "
+        "UPDATE items SET type = 'show' WHERE item_id = 'imdb:tt3'; "
+        "UPDATE items SET type = 'movie' WHERE item_id = 'tvdb:9'",
+    ],
+    ids=["older-stamp", "swapped-keyword", "type-flip"],
+)
+def test_a_same_size_rewrite_of_the_keyword_data_makes_the_stored_map_stale(
+    store: Path, rewrite: str
+) -> None:
+    with open_store(store) as conn:
+        refresh_title_maps(conn)
+        refresh_tag_networks(conn)
+        before = keyword_fingerprint(conn, "movie"), network_fingerprint(conn, "movie")
+        assert stored_map(conn, "movie") is not None
+        assert stored_network(conn, "movie") is not None
+
+        conn.executescript(rewrite)
+        conn.commit()
+
+        assert keyword_fingerprint(conn, "movie") != before[0]
+        assert network_fingerprint(conn, "movie") != before[1]
+        assert stored_map(conn, "movie") is None
+        assert stored_network(conn, "movie") is None
 
 
 def test_map_endpoint_serves_the_stored_map_and_draws_live_once_it_is_stale(

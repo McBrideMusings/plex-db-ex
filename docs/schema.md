@@ -579,18 +579,20 @@ vectors, truncated SVD to 50 dimensions and UMAP with cosine distance. `item_id`
 foreign key: a title that has left `items` drops out of the explorer's join, and the next refresh
 redraws the map without it.
 
-`title_map_state` holds one row per kind. `fingerprint` names the drawing recipe, the count of the
-kind's keyword rows, the count of titles carrying them and the newest keyword `fetched_at`.
+`title_map_state` holds one row per kind. `fingerprint` names the drawing recipe and a SHA-256
+digest of the kind's keyword rows (`item_id`, source, value, `fetched_at`, in key order), so any
+row added, removed, re-stamped or re-valued, or a title changing type, makes the stored map stale.
 `unplaced` counts titles with keywords that share no tag with another title and so are off the
 map. `computed_at` is UTC.
 
 **Refresh rule.** `plexdb refresh-map` recomputes each kind's fingerprint and redraws only a kind
 whose stored fingerprint differs, replacing both tables' rows for the redrawn kinds in one
 transaction. It runs as its own step of the sweep, after both TMDB steps and before `publish`, so
-the snapshot carries a current map. A reader that uses the
-map compares `fingerprint` against the same digest of the current keyword rows and treats a
-mismatch as no map; the explorer then draws it live, which takes tens of seconds for the movies.
-Nothing else interprets the fingerprint.
+the snapshot carries a current map. The
+digest is SHA-256 over Python's `repr` of the row tuples, so only the Python package can
+recompute it; the explorer compares it and treats a mismatch as no map, then draws it live, which
+takes tens of seconds for the movies. A reader in another language reads the stored map as the
+last sweep left it and never recomputes the fingerprint.
 
 ## Version 10 — keywords become one source-agnostic namespace
 
@@ -636,17 +638,16 @@ carries a foreign key: a tag or title that drops out of `enrichment` or `items` 
 the next refresh's network without it.
 
 `tag_network_state` holds one row per kind, the same fingerprint shape as `title_map_state`:
-the drawing recipe, the count of the kind's keyword rows, the count of titles carrying them and
-the newest keyword `fetched_at`. `computed_at` is UTC.
+the drawing recipe and a SHA-256 digest of the kind's keyword rows. `computed_at` is UTC.
 
 **Refresh rule.** `plexdb refresh-tagnetwork` recomputes each kind's fingerprint and redraws
 only a kind whose stored fingerprint differs, replacing all three tables' rows for the redrawn
 kinds in one transaction. It runs as its own step of the sweep, right after `refresh-map`, so
-the snapshot carries a current network. A reader that uses the network compares `fingerprint`
-against the same digest of the current keyword rows and treats a mismatch as no stored network;
-the explorer then draws it live, which takes tens of seconds for the movies — and only for the
-default (no tag excluded) view, since an excluded-tag combination is never precomputed. Nothing
-else interprets the fingerprint.
+the snapshot carries a current network. The digest is built as for
+`title_map_state`, so only the Python package can recompute it; the explorer compares it and
+treats a mismatch as no stored network, then draws it live, which takes tens of seconds for the movies — and only for the
+default (no tag excluded) view, since an excluded-tag combination is never precomputed. A reader
+in another language never recomputes the fingerprint.
 
 ## Not yet built
 

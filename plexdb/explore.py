@@ -20,6 +20,7 @@ any keyword at all, and IDF is `1 + ln(N / df)`.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import sqlite3
@@ -328,25 +329,30 @@ def title_map(
 
 
 def _fingerprint(conn: sqlite3.Connection, kind: str, recipe: str) -> str:
-    """A cheap digest of what a stored default view of `kind` is drawn from.
+    """A digest of what a stored default view of `kind` is drawn from.
 
-    The recipe, the number of keyword rows, the number of titles carrying them
-    and the newest `fetched_at` among them. A re-fetch stamps a new
-    `fetched_at`, a wipe or a title leaving `items` changes the counts, and a
-    change to the drawing code changes its recipe string.
+    The recipe, then a SHA-256 over every keyword row of a title of `kind` —
+    its `item_id`, source, value and `fetched_at`. Any row added, removed,
+    re-stamped or re-valued, and any title changing type, changes the digest,
+    including a rewrite that leaves the row count and the newest `fetched_at`
+    alone. A change to the drawing code changes the recipe string.
     """
     _check_kind(kind)
-    rows, titles, newest = conn.execute(
-        "SELECT COUNT(*), COUNT(DISTINCT e.item_id), MAX(e.fetched_at) "
+    rows = conn.execute(
+        "SELECT e.item_id, e.source, e.value, e.fetched_at "
         "FROM enrichment e JOIN items i USING (item_id) "
-        "WHERE e.namespace = ? AND e.key = ? AND i.type = ?",
+        "WHERE e.namespace = ? AND e.key = ? AND i.type = ? "
+        "ORDER BY e.item_id, e.source, e.value",
         (_NAMESPACE, _KEY, kind),
-    ).fetchone()
-    return f"{recipe}|{rows}|{titles}|{newest or ''}"
+    ).fetchall()
+    # repr quotes each field, so no two rows digest alike by moving text across
+    # a field boundary.
+    digest = hashlib.sha256(repr([tuple(r) for r in rows]).encode())
+    return f"{recipe}|{digest.hexdigest()}"
 
 
 def keyword_fingerprint(conn: sqlite3.Connection, kind: str) -> str:
-    """A cheap digest of what the default map of `kind` is drawn from.
+    """A digest of what the default map of `kind` is drawn from.
 
     Nothing reads it except the comparison in `stored_map` and
     `plexdb.titlemap`.
@@ -355,7 +361,7 @@ def keyword_fingerprint(conn: sqlite3.Connection, kind: str) -> str:
 
 
 def network_fingerprint(conn: sqlite3.Connection, kind: str) -> str:
-    """A cheap digest of what the default tag network of `kind` is drawn from.
+    """A digest of what the default tag network of `kind` is drawn from.
 
     Nothing reads it except the comparison in `stored_network` and
     `plexdb.tagnetwork`.
