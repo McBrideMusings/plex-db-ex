@@ -67,12 +67,14 @@ def store(tmp_path: Path) -> Path:
     path = tmp_path / "plexdb.db"
     init(path)
     with open_store(path) as conn:
-        for item_id, (kind, title, year, keywords) in TITLES.items():
+        # Rows go in descending key order, so a scan that skips the sort hands
+        # the keyword digest's aggregate the rows backwards.
+        for item_id, (kind, title, year, keywords) in reversed(TITLES.items()):
             conn.execute(
                 "INSERT INTO items (item_id, type, title, year) VALUES (?, ?, ?, ?)",
                 (item_id, kind, title, year),
             )
-            for keyword in keywords:
+            for keyword in reversed(keywords):
                 conn.execute(
                     "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) "
                     "VALUES (?, 'keywords', 'tmdb', 'keyword', ?, ?)",
