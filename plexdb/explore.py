@@ -338,17 +338,42 @@ def _fingerprint(conn: sqlite3.Connection, kind: str, recipe: str) -> str:
     alone. A change to the drawing code changes the recipe string.
     """
     _check_kind(kind)
-    rows = conn.execute(
+    # typeshed types an aggregate as one int argument returning an int.
+    conn.create_aggregate("plexdb_row_digest", 4, _RowDigest)  # type: ignore[arg-type]
+    # The subquery's ORDER BY feeds the aggregate in order: SQLite does not
+    # flatten an ordered subquery into an aggregating outer query.
+    (digest,) = conn.execute(
+        "SELECT plexdb_row_digest(item_id, source, value, fetched_at) FROM ("
         "SELECT e.item_id, e.source, e.value, e.fetched_at "
         "FROM enrichment e JOIN items i USING (item_id) "
         "WHERE e.namespace = ? AND e.key = ? AND i.type = ? "
-        "ORDER BY e.item_id, e.source, e.value",
+        "ORDER BY e.item_id, e.source, e.value)",
         (_NAMESPACE, _KEY, kind),
-    ).fetchall()
-    # repr quotes each field, so no two rows digest alike by moving text across
-    # a field boundary.
-    digest = hashlib.sha256(repr([tuple(r) for r in rows]).encode())
-    return f"{recipe}|{digest.hexdigest()}"
+    ).fetchone()
+    return f"{recipe}|{digest}"
+
+
+class _RowDigest:
+    """SQL aggregate: SHA-256 over the rows it is fed, in the order fed.
+
+    The bytes hashed are `repr` of the list of row tuples, built one row at a
+    time so the rows never all sit in memory. `repr` quotes each field, so no
+    two rows digest alike by moving text across a field boundary.
+    """
+
+    def __init__(self) -> None:
+        self._sha = hashlib.sha256(b"[")
+        self._first = True
+
+    def step(self, *row: Any) -> None:
+        if not self._first:
+            self._sha.update(b", ")
+        self._first = False
+        self._sha.update(repr(row).encode())
+
+    def finalize(self) -> str:
+        self._sha.update(b"]")
+        return self._sha.hexdigest()
 
 
 def keyword_fingerprint(conn: sqlite3.Connection, kind: str) -> str:

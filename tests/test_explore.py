@@ -6,6 +6,7 @@ talks to, against a small store whose counts can be worked out by hand.
 
 from __future__ import annotations
 
+import hashlib
 import http.client
 import json
 import math
@@ -458,6 +459,20 @@ def test_a_same_size_rewrite_of_the_keyword_data_makes_the_stored_map_stale(
         assert network_fingerprint(conn, "movie") != before[1]
         assert stored_map(conn, "movie") is None
         assert stored_network(conn, "movie") is None
+
+
+def test_keyword_fingerprint_digests_the_repr_of_the_ordered_rows(store: Path) -> None:
+    # The digest is what the writer stored on the host; changing its bytes would
+    # make every stored map read as stale.
+    with open_store(store) as conn:
+        rows = conn.execute(
+            "SELECT e.item_id, e.source, e.value, e.fetched_at "
+            "FROM enrichment e JOIN items i USING (item_id) "
+            "WHERE e.namespace = 'keywords' AND e.key = 'keyword' AND i.type = 'movie' "
+            "ORDER BY e.item_id, e.source, e.value"
+        ).fetchall()
+        expected = hashlib.sha256(repr([tuple(r) for r in rows]).encode()).hexdigest()
+        assert keyword_fingerprint(conn, "movie") == f"{explore.MAP_RECIPE}|{expected}"
 
 
 def test_map_endpoint_serves_the_stored_map_and_draws_live_once_it_is_stale(
