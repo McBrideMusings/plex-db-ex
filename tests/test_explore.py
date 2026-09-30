@@ -10,6 +10,7 @@ import http.client
 import json
 import math
 import socket
+import sqlite3
 import threading
 import urllib.error
 import urllib.request
@@ -646,6 +647,38 @@ def test_tagnetwork_error_line_reads_the_same_as_a_json_route_error(
     # The stream's 200 is already sent when the draw fails; only the text carries over.
     assert status == 200
     assert _last_ndjson(body) == {"stage": "error", "error": expected}
+
+
+def test_sqlite_error_answers_503_on_a_json_route_and_on_the_stream(
+    base_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail(*args: object, **kwargs: object) -> None:
+        raise sqlite3.DatabaseError("database disk image is malformed")
+
+    monkeypatch.setattr(explore, "title_map", fail)
+    monkeypatch.setattr(explore, "tag_network_streaming", fail)
+
+    status, body = _get(f"{base_url}/api/map?kind=movie")
+    expected = "could not read the store: database disk image is malformed"
+    assert (status, json.loads(body)["error"]) == (503, expected)
+
+    status, body = _get(f"{base_url}/api/tagnetwork?kind=movie")
+    assert status == 200
+    assert _last_ndjson(body) == {"stage": "error", "error": expected}
+
+
+def test_unmapped_stream_failure_is_logged_to_stderr(
+    base_url: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fail(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("layout exploded")
+
+    monkeypatch.setattr(explore, "tag_network_streaming", fail)
+
+    _, body = _get(f"{base_url}/api/tagnetwork?kind=movie")
+
+    assert _last_ndjson(body) == {"stage": "error", "error": "layout exploded"}
+    assert "RuntimeError: layout exploded" in capsys.readouterr().err
 
 
 def test_index_cache_recomputes_when_the_store_changes(store: Path) -> None:

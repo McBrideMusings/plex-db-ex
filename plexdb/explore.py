@@ -23,8 +23,10 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
+import sys
 import threading
 import time
+import traceback
 from collections import Counter, OrderedDict, defaultdict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -1614,6 +1616,8 @@ def _error_reply(err: Exception, store_path: Path) -> tuple[str, HTTPStatus] | N
         )
     if isinstance(err, StoreError):
         return str(err), HTTPStatus.SERVICE_UNAVAILABLE
+    if isinstance(err, sqlite3.Error):
+        return f"could not read the store: {err}", HTTPStatus.SERVICE_UNAVAILABLE
     if isinstance(err, OSError):
         return f"saved queries: {err}", HTTPStatus.INTERNAL_SERVER_ERROR
     return None
@@ -1822,6 +1826,11 @@ def make_server(
             except Exception as err:
                 # The same text a JSON route would send; only the status is lost.
                 reply = _error_reply(err, store_path)
+                if reply is None:
+                    # No route expects this failure, so the browser gets only
+                    # its bare text; the traceback goes where a JSON route's
+                    # would, to stderr.
+                    traceback.print_exception(err, file=sys.stderr)
                 message = reply[0] if reply else str(err)
             else:
                 return
