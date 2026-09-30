@@ -780,6 +780,59 @@ def test_unmapped_stream_failure_is_logged_to_stderr(
     assert "RuntimeError: layout exploded" in capsys.readouterr().err
 
 
+def test_store_damage_is_logged_on_a_json_route_and_on_the_stream(
+    base_url: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fail(*args: object, **kwargs: object) -> None:
+        raise sqlite3.DatabaseError("database disk image is malformed")
+
+    monkeypatch.setattr(explore, "title_map", fail)
+    monkeypatch.setattr(explore, "tag_network_streaming", fail)
+
+    status, _ = _get(f"{base_url}/api/map?kind=movie")
+    err = capsys.readouterr().err
+    assert status == 503
+    assert "store problem" in err and "malformed" in err
+
+    _get(f"{base_url}/api/tagnetwork?kind=movie")
+    assert "store problem" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("failure", "logged"),
+    [
+        (StoreError("damaged"), True),
+        (sqlite3.OperationalError("database is locked"), True),
+        (PermissionError("denied"), True),
+        (FileNotFoundError(), False),
+        (BrokenPipeError(), False),
+        (explore.SavedQueriesError("bad file"), False),
+        (sqlite3.ProgrammingError("closed"), False),
+        (ValueError("bad request"), False),
+    ],
+)
+def test_only_store_damage_is_logged(
+    failure: Exception, logged: bool, capsys: pytest.CaptureFixture[str]
+) -> None:
+    explore._log_store_damage(failure)
+
+    assert ("store problem" in capsys.readouterr().err) is logged
+
+
+def test_a_missing_store_is_not_logged(
+    base_url: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fail(*args: object, **kwargs: object) -> None:
+        raise FileNotFoundError()
+
+    monkeypatch.setattr(explore, "title_map", fail)
+
+    status, _ = _get(f"{base_url}/api/map?kind=movie")
+
+    assert status == 503
+    assert capsys.readouterr().err == ""
+
+
 def test_index_cache_recomputes_when_the_store_changes(store: Path) -> None:
     tags = explore._IndexCache(store)
     before = tags.get("show")

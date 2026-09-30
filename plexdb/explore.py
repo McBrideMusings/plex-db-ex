@@ -1670,6 +1670,19 @@ def _error_reply(err: Exception, store_path: Path) -> tuple[str, HTTPStatus] | N
     return None
 
 
+def _log_store_damage(err: Exception) -> None:
+    """One stderr line for a failure that means the store itself is unhealthy.
+
+    "No store yet", the saved-queries file and a client that hung up
+    mid-reply (`ConnectionError`) are normal or unrelated states, and a code
+    bug keeps its traceback, so none of them logs here.
+    """
+    if isinstance(err, (StoreError, sqlite3.DatabaseError, OSError)) and not isinstance(
+        err, (FileNotFoundError, ConnectionError, SavedQueriesError, sqlite3.ProgrammingError)
+    ):
+        print(f"explore: store problem: {type(err).__name__}: {err}", file=sys.stderr)
+
+
 def make_server(
     store_path: Path,
     host: str,
@@ -1713,6 +1726,7 @@ def make_server(
                 reply = _error_reply(err, store_path)
                 if reply is None:
                     raise
+                _log_store_damage(err)
                 message, status = reply
                 self._json({"error": message}, status)
 
@@ -1878,6 +1892,8 @@ def make_server(
                     # its bare text; the traceback goes where a JSON route's
                     # would, to stderr.
                     traceback.print_exception(err, file=sys.stderr)
+                else:
+                    _log_store_damage(err)
                 message = reply[0] if reply else str(err)
             else:
                 return
