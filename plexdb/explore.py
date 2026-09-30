@@ -1100,6 +1100,10 @@ class QueryError(ValueError):
     """A query the store refused or could not finish; the message is SQLite's own."""
 
 
+class TooManyQueries(Exception):
+    """Both QUERY_SLOTS are already running a statement."""
+
+
 def _deny_all_but_reads(action: int, *_: object) -> int:
     return sqlite3.SQLITE_OK if action in _ALLOWED_ACTIONS else sqlite3.SQLITE_DENY
 
@@ -1161,12 +1165,13 @@ def run_query(
     """Run one SELECT against a fresh read-only connection and return its rows.
 
     Raises `QueryError` for anything SQLite refuses: a syntax error, a second
-    statement, an action the authorizer denies, or a run past `seconds`.
+    statement, an action the authorizer denies, or a run past `seconds`, and
+    `TooManyQueries` when both QUERY_SLOTS are taken.
     """
     if not sql.strip():
         raise QueryError("no SQL to run")
     if not QUERY_SLOTS.acquire(blocking=False):
-        raise QueryError("two queries are already running; try again in a moment")
+        raise TooManyQueries("two queries are already running; try again in a moment")
     try:
         return _run_query(store_path, sql, seconds, rows)
     finally:
@@ -1636,6 +1641,8 @@ def _error_reply(err: Exception, store_path: Path) -> tuple[str, HTTPStatus] | N
     status and body, and the NDJSON tag-network stream, whose 200 is already
     on the wire, sends the message alone as its "error" line.
     """
+    if isinstance(err, TooManyQueries):
+        return str(err), HTTPStatus.TOO_MANY_REQUESTS
     if isinstance(err, ValueError):
         return str(err), HTTPStatus.BAD_REQUEST
     if isinstance(err, NoSuchTitle):

@@ -1034,7 +1034,7 @@ def test_query_refuses_a_value_over_the_length_limit(store: Path) -> None:
 def test_query_refuses_a_third_statement_while_two_run(store: Path) -> None:
     held = [explore.QUERY_SLOTS.acquire(blocking=False) for _ in range(2)]
     try:
-        with pytest.raises(QueryError, match="already running"):
+        with pytest.raises(explore.TooManyQueries, match="already running"):
             run_query(store, "SELECT 1")
     finally:
         for _ in filter(None, held):
@@ -1291,6 +1291,17 @@ def test_query_endpoint_answers_rows_and_400s_a_refusal(base_url: str) -> None:
     assert status == 200 and out["rows"] == [[6]]
     status, out = _send("POST", url, {"sql": "DELETE FROM items"})
     assert status == 400 and "not authorized" in str(out["error"])
+
+
+def test_query_endpoint_answers_429_while_both_slots_run(base_url: str) -> None:
+    held = [explore.QUERY_SLOTS.acquire(blocking=False) for _ in range(2)]
+    try:
+        status, out = _send("POST", f"{base_url}/api/query", {"sql": "SELECT 1"})
+        assert status == 429 and "already running" in str(out["error"])
+    finally:
+        for _ in filter(None, held):
+            explore.QUERY_SLOTS.release()
+    assert _send("POST", f"{base_url}/api/query", {"sql": "SELECT 1"})[0] == 200
 
 
 def test_query_endpoint_refuses_an_oversize_body(base_url: str) -> None:
