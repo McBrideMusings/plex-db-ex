@@ -81,6 +81,7 @@
   /* The default map standing in while another computes: blurred and faded on a tinted ground,
      because its dots are already pale and opacity alone does not show. */
   #map.dim { filter: blur(2px) opacity(0.45); cursor: progress; }
+  #map.dim.failed { cursor: default; }
   #mapbox:has(#map.dim) { background: var(--chip); }
   .vpctl { position: absolute; left: 10px; bottom: 10px; display: flex; gap: 4px; z-index: 6; }
   .vpctl button { font: inherit; min-width: 30px; height: 30px; padding: 0 8px; cursor: pointer; color: var(--ink);
@@ -720,7 +721,7 @@ class TitleCard {
 // server has stored and answers in milliseconds. `items` is `data.points` as viewport items.
 // `labels` are the region labels of `data`, `shown` is the text of the labels drawn in the last
 // frame (what a test reads to see the labels change).
-const map = { data: null, key: null, items: [], byId: new Map(), itemsOf: null, dim: false, defaults: {}, labels: [], shown: [] };
+const map = { data: null, key: null, items: [], byId: new Map(), itemsOf: null, dim: false, error: null, defaults: {}, labels: [], shown: [] };
 // `search` is null, or {type: "title"|"tag", label, ids: Set of item_ids to keep at full strength,
 // focus: the searched title's id}. Everything outside `ids` is drawn faded.
 // `similar` is the item_ids of the pinned title's similar titles that are on this map: they are
@@ -738,6 +739,7 @@ async function drawMap() {
   const key = [kind, ...[...noise].sort()].join("\u0001");
   if (map.key !== key) {
     map.key = key;
+    map.error = null;
     try {
       let base = map.defaults[kind] || null;
       map.data = base; map.dim = noise.size > 0 && base !== null;
@@ -757,8 +759,10 @@ async function drawMap() {
       }
     } catch (err) {
       if (map.key !== key) return;
-      map.data = null; map.dim = false; map.key = null; paintMap();
-      note.textContent = `Could not load: ${err.message}`;
+      const shown = map.defaults[kind] || null;
+      map.data = shown; map.dim = shown !== null; map.key = null;
+      map.error = err.message;
+      paintMap();
       return;
     }
   }
@@ -767,6 +771,12 @@ async function drawMap() {
 
 function mapNote() {
   const d = map.data;
+  if (map.error) {
+    document.getElementById("mnote").textContent = d
+      ? `Could not redraw without the noise-marked tags: ${map.error}. Showing the default map, dimmed.`
+      : `Could not load: ${map.error}`;
+    return;
+  }
   if (!d) return;
   if (map.dim) {
     document.getElementById("mnote").textContent =
@@ -801,6 +811,7 @@ function paintMap() {
   if (state.view !== "map") return;
   syncMapItems();
   document.getElementById("map").classList.toggle("dim", map.dim && !!map.data);
+  document.getElementById("map").classList.toggle("failed", !!map.error);
   mapNote();
   mapVP.resize();
   mapVP.redraw();
