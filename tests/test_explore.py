@@ -1055,6 +1055,42 @@ def test_saved_endpoint_labels_a_corrupt_saved_file_as_saved_queries(
     assert str(json.loads(body)["error"]).startswith("saved queries: ")
 
 
+def test_saved_endpoint_labels_an_unreadable_saved_file_as_saved_queries(
+    base_url: str, store: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    saved_file = store.parent / "explore-queries.json"
+    saved_file.write_text("[]")
+    real = Path.read_text
+
+    def read_text(self: Path, *args: object, **kwargs: object) -> str:
+        if self == saved_file:
+            raise PermissionError("denied")
+        return real(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+
+    status, body = _get(f"{base_url}/api/saved")
+    assert (status, json.loads(body)["error"]) == (500, "saved queries: denied")
+
+
+def test_saved_endpoint_labels_an_unwritable_saved_file_as_saved_queries(
+    base_url: str, store: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    saved_file = store.parent / "explore-queries.json"
+    real = Path.write_text
+
+    def write_text(self: Path, *args: object, **kwargs: object) -> int:
+        if self.parent == saved_file.parent and self.name.startswith(saved_file.name):
+            raise PermissionError("read-only file system")
+        return real(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "write_text", write_text)
+
+    status, body = _send("PUT", f"{base_url}/api/saved", {"name": "heat", "sql": "SELECT 1"})
+    assert (status, body["error"]) == (500, "saved queries: read-only file system")
+    assert not saved_file.exists()
+
+
 def test_a_store_read_oserror_is_not_labelled_as_saved_queries(
     base_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
