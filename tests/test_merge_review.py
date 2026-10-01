@@ -184,6 +184,30 @@ def test_a_decision_for_a_pair_the_table_never_judged_is_a_404_and_writes_nothin
     assert not (store.parent / "merge_decisions.json").exists()
 
 
+def test_a_pair_jev_refused_is_not_reviewable_and_a_decision_for_it_is_a_404(
+    base_url: str, store: Path
+) -> None:
+    with open_store(store) as conn:
+        conn.execute(
+            "INSERT INTO keyword_pairs (keyword_a, keyword_b, jev_error, judged_at, decision, "
+            "decided_at) VALUES ('odd', 'pair', 'Jev returned 400', ?, 'accepted', ?)",
+            (JUDGED, JUDGED),
+        )
+        conn.commit()
+
+    status, body = _send("GET", f"{base_url}/api/merges")
+    assert status == 200
+    assert "odd" not in json.dumps(body)
+
+    status, _ = _send(
+        "POST",
+        f"{base_url}/api/merges",
+        {"keyword_a": "odd", "keyword_b": "pair", "decision": "accepted"},
+    )
+    assert status == 404
+    assert not (store.parent / "merge_decisions.json").exists()
+
+
 def test_a_corrupt_decisions_file_is_refused_and_left_alone(base_url: str, store: Path) -> None:
     file = store.parent / "merge_decisions.json"
     file.write_text("{not json")

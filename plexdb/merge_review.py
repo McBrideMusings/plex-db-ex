@@ -167,14 +167,12 @@ class MergeDecisions:
         return entry
 
 
-def bucket(score: float | None, decision: str | None) -> str | None:
+def bucket(score: float, decision: str | None) -> str | None:
     """Where a pair sits: `merged`, `rejected`, `proposed`, or None below the proposal band."""
     if decision == "accepted":
         return "merged"
     if decision == "rejected":
         return "rejected"
-    if score is None:
-        return None
     if score >= MERGE_AT:
         return "merged"
     if score >= PROPOSE_AT:
@@ -210,9 +208,11 @@ def _row(
 
 
 def require_pair(conn: sqlite3.Connection, pair: tuple[str, str]) -> None:
-    """Raise `NoSuchPair` unless `keyword_pairs` has a row for `pair`."""
+    """Raise `NoSuchPair` unless `keyword_pairs` has a scored row for `pair`; a pair
+    Jev refused has no score to review."""
     found = conn.execute(
-        "SELECT 1 FROM keyword_pairs WHERE keyword_a = ? AND keyword_b = ?", pair
+        "SELECT 1 FROM keyword_pairs WHERE keyword_a = ? AND keyword_b = ? AND jev_error IS NULL",
+        pair,
     ).fetchone()
     if found is None:
         raise NoSuchPair(pair)
@@ -226,12 +226,13 @@ def review_rows(
 ) -> list[dict[str, object]]:
     """Every pair in a bucket, or the one `pair` (raising `NoSuchPair` if it has no row)."""
     sql = (
-        "SELECT keyword_a, keyword_b, jev_score, jev_model, decision, decided_at FROM keyword_pairs"
+        "SELECT keyword_a, keyword_b, jev_score, jev_model, decision, decided_at "
+        "FROM keyword_pairs WHERE jev_error IS NULL"
     )
     if pair is None:
-        rows = conn.execute(sql + " WHERE decision IS NOT NULL OR jev_score >= ?", (PROPOSE_AT,))
+        rows = conn.execute(sql + " AND (decision IS NOT NULL OR jev_score >= ?)", (PROPOSE_AT,))
     else:
-        rows = conn.execute(sql + " WHERE keyword_a = ? AND keyword_b = ?", pair)
+        rows = conn.execute(sql + " AND keyword_a = ? AND keyword_b = ?", pair)
     out = [_row(r, forms, overlay) for r in rows.fetchall()]
     # A decision the table has not yet folded in can sit below the band. A `cleared` entry
     # on such a pair changes nothing the page lists, so it is not looked up.
@@ -239,7 +240,7 @@ def review_rows(
         have = {(r["keyword_a"], r["keyword_b"]) for r in out}
         for key, entry in overlay.items():
             if entry["decision"] != "cleared" and key not in have:
-                found = conn.execute(sql + " WHERE keyword_a = ? AND keyword_b = ?", key)
+                found = conn.execute(sql + " AND keyword_a = ? AND keyword_b = ?", key)
                 out.extend(_row(r, forms, overlay) for r in found.fetchall())
     elif not out:
         raise NoSuchPair(pair)

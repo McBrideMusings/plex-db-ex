@@ -741,6 +741,8 @@ NULL is never true. A reader that selects `jev_score` must expect NULL. Other Je
 answered eight times, a 5xx, a rejected key, no connection — write no row and stop the run, because
 they say nothing about the pair. To ask about a refused pair again, delete its row.
 
+Plex TVX's Merges tab lists and accepts only scored pairs, so a refused pair never appears there and a decision for one is refused with a 404.
+
 `plexdb judge-keyword-pairs` reports the count as `unjudgeable`.
 
 ## Not yet built
