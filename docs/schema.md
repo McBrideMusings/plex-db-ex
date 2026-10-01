@@ -18,7 +18,7 @@ Opening a store whose version is **higher** than the running build understands i
 outright, because a newer writer may have added rows this build cannot see. A store carrying a
 `schema_version` table with no row is reported as damaged rather than treated as empty.
 
-**Versions 1, 2, 3 and 4 are live.** Everything under "Not yet built" is the target for later
+**Versions 1 through 12 are live.** Everything under "Not yet built" is the target for later
 slices.
 
 ### A migration is copied before it runs, and rolled back if it goes wrong
@@ -648,6 +648,39 @@ the snapshot carries a current network. The digest is built as for
 treats a mismatch as no stored network, then draws it live, which takes tens of seconds for the movies — and only for the
 default (no tag excluded) view, since an excluded-tag combination is never precomputed. A reader
 in another language never recomputes the fingerprint.
+
+## Version 12 — a judge's verdicts on keyword pairs
+
+`keyword_pairs`, one row per unordered pair of stored keywords a judge has been asked about.
+It is the only place the store holds an interpretation of keyword values, and it holds the
+judge's answer, not a conclusion ([ADR-0018](./adr/0018-synonym-keywords-are-a-judges-verdicts-beside-enrichment)).
+`enrichment` is never rewritten: every keyword a source wrote is still there under the spelling
+it wrote.
+
+```
+keyword_pairs  (keyword_a, keyword_b) PK, jev_score REAL, jev_model TEXT, judged_at TEXT,
+               decision TEXT, decided_at TEXT
+```
+
+`keyword_a` and `keyword_b` are values as `enrichment.value` holds them — normalized and
+stemmed — with `keyword_a < keyword_b`, so a pair is stored once whichever way round it was
+asked. `jev_score` is Jev's answer to "do these two mean the same thing", 0 to 1, stored as Jev
+gave it, with the model that gave it in `jev_model`; a pair Jev said no to is stored too, so the
+writer never asks about it twice. `judged_at` is UTC.
+
+`decision` is what a person said about the pair: `accepted`, `rejected`, or NULL while nobody
+has. `decided_at` is NULL exactly when `decision` is. A decision outranks the score.
+
+**Which pairs count as merged is the reader's call, not a column.** A reader that wants the
+same rule as the Plex TVX page treats a pair as merged when `decision = 'accepted'`, or when
+`decision IS NULL AND jev_score >= 0.9`, and as proposed when `decision IS NULL AND jev_score >=
+0.5` and below 0.9. A reader that wants 0.7 writes 0.7 over the same rows. Grouping the merged
+pairs into sets of keywords is the reader's too: Jev-confirmed pairs chain (`abusive marriage`
+reaches `family feud` in a few hops), so connected components over merged pairs is not safe.
+
+**Refresh rule.** A pair is written once and never re-judged: a writer adds rows for keywords it
+has not judged before and leaves every existing row, `decision` included, as it is. No command
+writes this table yet.
 
 ## Not yet built
 

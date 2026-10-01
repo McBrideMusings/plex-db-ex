@@ -21,6 +21,7 @@ V7_TABLES = {"enrichment_cursor"}
 V9_TABLES = {"title_map", "title_map_state"}
 V10_TABLES = {"keyword_forms"}
 V11_TABLES = {"tag_network", "tag_network_edge", "tag_network_state"}
+V12_TABLES = {"keyword_pairs"}
 #: V4 adds no new table — it only alters the existing `plays` table and adds
 #: an index (issue #9).
 
@@ -180,6 +181,7 @@ def test_a_current_store_carries_every_migrations_tables_and_nothing_else(
         | V9_TABLES
         | V10_TABLES
         | V11_TABLES
+        | V12_TABLES
         | {"schema_version"}
     )
 
@@ -723,3 +725,38 @@ def test_v10_is_reached_through_init_and_a_second_init_changes_nothing(tmp_path:
 
     assert after_rows == before_rows
     assert after_forms == before_forms
+
+
+def test_keyword_pairs_stores_one_ordered_row_per_pair_and_pairs_a_decision_with_its_time(
+    tmp_path: Path,
+) -> None:
+    """ADR-0018. A pair is stored once, smaller keyword first, so asking about
+    (b, a) cannot add a second row; and a decision is never recorded without
+    the moment it was made."""
+    store = tmp_path / "plexdb.db"
+    init(store)
+    insert = (
+        "INSERT INTO keyword_pairs "
+        "(keyword_a, keyword_b, jev_score, jev_model, judged_at, decision, decided_at) "
+        "VALUES (?, ?, 0.95, 'jev-1.13.0', '2026-10-01T00:00:00Z', ?, ?)"
+    )
+
+    with open_store(store) as conn:
+        conn.execute(insert, ("hippo", "hippopotamus", None, None))
+        conn.execute(insert, ("soviet union", "ussr", "rejected", "2026-10-01T01:00:00Z"))
+
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(insert, ("hippopotamus", "hippo", None, None))
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(insert, ("hippo", "hippopotamus", None, None))
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(insert, ("a", "b", "maybe", "2026-10-01T01:00:00Z"))
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(insert, ("a", "b", "accepted", None))
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(insert, ("a", "b", None, "2026-10-01T01:00:00Z"))
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO keyword_pairs (keyword_a, keyword_b, jev_score, jev_model, judged_at) "
+                "VALUES ('a', 'b', 1.5, 'jev-1.13.0', '2026-10-01T00:00:00Z')"
+            )

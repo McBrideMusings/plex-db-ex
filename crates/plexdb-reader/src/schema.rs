@@ -56,9 +56,13 @@ use crate::error::ReaderError;
 /// `tag_network_edge` and `tag_network_state`, the tag explorer's stored
 /// keyword network; no accessor here reads them.
 ///
+/// **Version 12 does not change what this crate reads.** It adds `keyword_pairs`,
+/// a judge's verdicts on whether two keywords mean the same thing; no accessor
+/// here reads it.
+///
 /// `tests/test_schema.py` fails whenever this constant differs from
 /// `plexdb/schema.py::SCHEMA_VERSION`.
-pub const SUPPORTED_SCHEMA_VERSION: i64 = 11;
+pub const SUPPORTED_SCHEMA_VERSION: i64 = 12;
 
 /// Confirm `conn` is a plexdb store at exactly [`SUPPORTED_SCHEMA_VERSION`].
 pub(crate) fn check(conn: &Connection, path: &Path) -> Result<(), ReaderError> {

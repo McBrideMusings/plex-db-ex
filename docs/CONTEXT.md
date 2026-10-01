@@ -48,6 +48,12 @@ A kind of enrichment fact (`keywords`, …), shared by every source that supplie
 A writer owns one source within a namespace and may wipe and rewrite only that
 source's rows.
 
+**Keyword pair**:
+Two stored keywords a judge has been asked about — today Jev, Typesafe's model — with the judge's
+score and, once a person has ruled, their decision. Whether a pair counts as merged is a reader's threshold, never a stored
+flag.
+_Avoid_: synonym row, merge
+
 **Edge**:
 A directed item-to-item relationship carrying a source rank. A snapshot of what a
 source said at one moment, not a fact.
