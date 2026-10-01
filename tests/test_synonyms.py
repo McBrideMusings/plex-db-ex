@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import numpy as np
 import pytest
 
 from plexdb import synonyms
@@ -206,6 +207,51 @@ def test_no_pending_keyword_means_no_embedding_call(tmp_path: Path) -> None:
     _run(store, FakeJudge(), embedder)
 
     assert embedder.calls == []
+
+
+def test_a_cached_vocabulary_is_never_embedded_again_only_new_keywords_are(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    cache = tmp_path / "keyword-embeddings.npz"
+    first = FakeEmbedder()
+    _run(store, FakeJudge(), first, cache_path=cache)
+    assert sorted(t for call in first.calls for t in call) == sorted(VECTORS)
+
+    # zebra has no neighbour, so it is still pending, yet nothing is embedded.
+    second = FakeEmbedder()
+    stats = _run(store, FakeJudge(), second, cache_path=cache)
+    assert (stats.keywords_pending, second.calls) == (1, [])
+
+    VECTORS["mugshot"] = [0.0, 0.9, 0.3]
+    try:
+        with open_store(store) as conn, conn:
+            value = upsert_keyword_form(conn, "mugshot")
+            conn.execute(
+                "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) "
+                "VALUES ('imdb:tt1', 'keywords', 'tmdb', 'keyword', ?, '2026-01-01T00:00:00Z')",
+                (value,),
+            )
+        third = FakeEmbedder()
+        _run(store, FakeJudge(), third, cache_path=cache)
+    finally:
+        del VECTORS["mugshot"]
+    assert third.calls == [["mugshot"]]
+
+
+def test_a_cache_made_by_another_model_is_discarded_and_rebuilt(tmp_path: Path) -> None:
+    store = _store(tmp_path, ["prison", "jail", "zebra"])
+    cache = tmp_path / "keyword-embeddings.npz"
+    _run(store, FakeJudge(), FakeEmbedder(), cache_path=cache)
+    with np.load(cache) as data:
+        other = {name: data[name] for name in data.files}
+    other["model"] = np.array("some-other-model")
+    np.savez(cache, **other)
+    embedder = FakeEmbedder()
+
+    _run(store, FakeJudge(), embedder, cache_path=cache)
+
+    assert sorted(t for call in embedder.calls for t in call) == ["jail", "prison", "zebra"]
 
 
 def _decisions_file(tmp_path: Path, entries: object) -> Path:

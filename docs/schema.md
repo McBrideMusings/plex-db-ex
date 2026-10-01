@@ -693,6 +693,11 @@ transaction, so a run killed partway leaves every finished batch behind. The ste
 keyword that has a row only as the other side of another keyword's pair is not pending on the next
 run, so an interrupted run can leave such a keyword's own neighbours unproposed.
 
+The vectors are cached in `keyword-embeddings.npz` beside the store (not in it): one unit vector
+per surface text and the model that made it. A sweep embeds only the texts the cache lacks, so a
+night with no new keyword makes no embedding request. Deleting the file, or a change of model,
+costs one re-embed of the vocabulary.
+
 ### `merge_decisions.json`
 
 A person's decision reaches `keyword_pairs.decision` only through this file, because the explorer

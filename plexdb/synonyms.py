@@ -23,6 +23,14 @@ its own remaining neighbours are not proposed by it. Nothing in the schema marks
 shortest per keyword), not the stored stem, and with no task prefix. The pair is
 stored under the stems, and Jev is asked about the surfaces.
 
+**Embeddings are cached in a file, not the store.** Every keyword with no neighbour at
+`MIN_COSINE` stays pending for good (a row exists only for a judged pair), so
+without a cache each sweep would embed the whole vocabulary again. The cache is
+`keyword-embeddings.npz` beside the store, one unit vector per surface text and
+the model that made them. It is derived and disposable: deleting it, or changing
+the model, costs one re-embed. A sweep embeds only the texts the cache lacks, so
+a night with no new keyword makes no embedding request.
+
 **Decisions.** The explorer never writes `plexdb.db` (ADR-0007, ADR-0017), so a
 person's accept or reject reaches the table only through `merge_decisions.json`,
 which `fold_merge_decisions` applies at the start of a sweep.
@@ -44,7 +52,7 @@ import numpy as np
 import numpy.typing as npt
 
 from .config import Config
-from .embed_client import Embedder
+from .embed_client import MODEL, Embedder
 from .errors import MergeDecisionsError
 from .explore import EXPLORE_SAVED_PATH_VAR, SAVED_FILE
 from .jev_client import Judge, Verdict
@@ -70,6 +78,7 @@ KEYWORD_BATCH = 200
 JUDGE_WORKERS = 8
 
 MERGE_DECISIONS_FILE = "merge_decisions.json"
+EMBEDDING_CACHE_FILE = "keyword-embeddings.npz"
 _DECISIONS = ("accepted", "rejected", "cleared")
 
 _KEY = "keyword"
@@ -196,13 +205,15 @@ def find_synonym_pairs(
     embedder: Embedder,
     judge: Judge,
     *,
+    cache_path: Path | None = None,
     limit: int | None = None,
     log: Callable[[str], None] = lambda _line: None,
 ) -> JudgeStats:
     """Judge every pair the pending keywords propose and write one row per pair.
 
     `limit` caps how many pending keywords this run examines, so a first run
-    over a whole vocabulary can be taken in pieces.
+    over a whole vocabulary can be taken in pieces. `cache_path` is the
+    embedding cache file; `None` embeds everything each call.
     """
     stats = JudgeStats()
     surfaces = _surfaces(conn)
@@ -221,8 +232,7 @@ def find_synonym_pairs(
     if not pending:
         return stats
 
-    log(f"embedding {len(keywords):,} keyword(s)")
-    vectors = _embed_all(embedder, [surfaces[keyword] for keyword in keywords])
+    vectors = _embed_all(embedder, [surfaces[keyword] for keyword in keywords], cache_path, log)
     position = {keyword: i for i, keyword in enumerate(keywords)}
 
     for start in range(0, len(pending), KEYWORD_BATCH):
@@ -267,16 +277,68 @@ def _surfaces(conn: sqlite3.Connection) -> dict[str, str]:
     }
 
 
-def _embed_all(embedder: Embedder, texts: list[str]) -> _Vectors:
-    """Unit-length vectors, one row per text, so a dot product is a cosine."""
-    rows: list[list[float]] = []
-    for start in range(0, len(texts), EMBED_BATCH):
-        rows.extend(embedder.embed(texts[start : start + EMBED_BATCH]))
-    matrix = np.asarray(rows, dtype=np.float32)
-    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
-    norms[norms == 0] = 1.0
-    unit: _Vectors = matrix / norms
+#: Texts embedded between cache saves, so a sweep killed during the first
+#: full embed keeps most of what it finished.
+_SAVE_EVERY = EMBED_BATCH * 20
+
+
+def _embed_all(
+    embedder: Embedder,
+    texts: list[str],
+    cache_path: Path | None,
+    log: Callable[[str], None],
+) -> _Vectors:
+    """Unit-length vectors, one row per text, so a dot product is a cosine.
+    Texts the cache holds are not sent to `embedder`."""
+    known = _load_cache(cache_path) if cache_path else {}
+    missing = [text for text in dict.fromkeys(texts) if text not in known]
+    log(
+        f"embedding {len(missing):,} of {len(texts):,} keyword(s); "
+        f"{len(texts) - len(missing):,} cached"
+    )
+    for start in range(0, len(missing), EMBED_BATCH):
+        chunk = missing[start : start + EMBED_BATCH]
+        for text, vector in zip(chunk, embedder.embed(chunk), strict=True):
+            known[text] = _unit(np.asarray(vector, dtype=np.float32))
+        if cache_path and (start + EMBED_BATCH) % _SAVE_EVERY == 0:
+            _save_cache(cache_path, known)
+    matrix: _Vectors = np.stack([known[text] for text in texts])
+    if cache_path and missing:
+        _save_cache(cache_path, {text: known[text] for text in texts})
+    return matrix
+
+
+def _unit(vector: _Vectors) -> _Vectors:
+    norm = float(np.linalg.norm(vector))
+    unit: _Vectors = vector / norm if norm else vector
     return unit
+
+
+def _load_cache(path: Path) -> dict[str, _Vectors]:
+    """The cached vector per text, or nothing when the file is absent, unreadable
+    or was made by another model."""
+    try:
+        with np.load(path, allow_pickle=False) as data:
+            if str(data["model"]) != MODEL:
+                return {}
+            return dict(zip((str(t) for t in data["texts"]), data["vectors"], strict=True))
+    except (OSError, ValueError, KeyError):
+        return {}
+
+
+def _save_cache(path: Path, vectors: dict[str, _Vectors]) -> None:
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        with tmp.open("wb") as handle:
+            np.savez(
+                handle,
+                model=MODEL,
+                texts=np.array(list(vectors)),
+                vectors=np.stack(list(vectors.values())) if vectors else np.empty((0, 0)),
+            )
+        tmp.replace(path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def _propose(

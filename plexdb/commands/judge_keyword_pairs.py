@@ -14,7 +14,7 @@ from ..errors import ConfigError
 from ..jev_client import LiveJev
 from ..store import open_store
 from ..sweep import Step
-from ..synonyms import JudgeStats, find_synonym_pairs
+from ..synonyms import EMBEDDING_CACHE_FILE, JudgeStats, find_synonym_pairs
 
 NAME = "judge-keyword-pairs"
 #: After every step that writes keywords, before `publish`, which snapshots the table.
@@ -60,6 +60,7 @@ def _cmd_judge_keyword_pairs(args: argparse.Namespace) -> int:
             conn,
             LlamaSwapEmbedder(base_url),
             LiveJev(api_key),
+            cache_path=config.store_path.with_name(EMBEDDING_CACHE_FILE),
             limit=args.limit,
             log=lambda line: print(line, flush=True),
         )
