@@ -55,5 +55,10 @@ class JevError(PlexdbError):
     """Jev could not be reached, kept answering 429, or returned something unusable."""
 
 
+class JevRejected(JevError):
+    """Jev answered 400 or 422 for one pair: the request itself is refused, so asking
+    again about the same pair gets the same answer."""
+
+
 class MergeDecisionsError(PlexdbError):
     """`merge_decisions.json` is not valid JSON or does not hold the documented shape."""

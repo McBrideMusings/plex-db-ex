@@ -18,9 +18,12 @@ from typing import Any, Protocol
 
 import httpx
 
-from .errors import JevError
+from .errors import JevError, JevRejected
 
 _URL = "https://api.typesafe.ai/v1/systemone"
+#: Statuses that mean this request is invalid. A bad key (401, 403) or an outage
+#: (5xx) would refuse every pair, so those stay plain `JevError`s that stop the run.
+_REJECTED_STATUSES = frozenset({400, 422})
 _MODEL = "jev-latest"
 _DEFAULT_TIMEOUT = 120.0
 _ATTEMPTS = 8
@@ -92,8 +95,9 @@ class LiveJev:
         return Verdict(score=score, model=model)
 
     def _post(self, body: dict[str, Any]) -> dict[str, Any]:
-        """POST with backoff on 429. Error messages carry the status code and
-        the exception's type only, never the request or the key."""
+        """POST with backoff on 429; 400 and 422 raise `JevRejected`. Error messages
+        carry the status code and the exception's type only, never the request or
+        the key."""
         for attempt in range(_ATTEMPTS):
             try:
                 resp = self._http.post(
@@ -104,6 +108,8 @@ class LiveJev:
             if resp.status_code == 429:
                 self._sleep(_BACKOFF_SECONDS * 2**attempt)
                 continue
+            if resp.status_code in _REJECTED_STATUSES:
+                raise JevRejected(f"Jev returned {resp.status_code} for {_URL}")
             if resp.status_code != 200:
                 raise JevError(f"Jev returned {resp.status_code} for {_URL}")
             try:

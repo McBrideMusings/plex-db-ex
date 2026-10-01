@@ -26,7 +26,7 @@ from plexdb.cli import main
 from plexdb.commands import judge_keyword_pairs as judge_cmd
 from plexdb.config import Config
 from plexdb.embed_client import LlamaSwapEmbedder
-from plexdb.errors import EmbeddingError, JevError, MergeDecisionsError
+from plexdb.errors import EmbeddingError, JevError, JevRejected, MergeDecisionsError
 from plexdb.jev_client import LiveJev, Verdict
 from plexdb.keywords import normalize_keyword, upsert_keyword_form
 from plexdb.store import init as init_store
@@ -60,11 +60,13 @@ class FakeEmbedder:
 
 
 class FakeJudge:
-    """Answers 0.8 for every pair; `fail_on_call` raises on that 1-indexed ask."""
+    """Answers 0.8 for every pair; `fail_on_call` raises on that 1-indexed ask, and
+    `reject_on_call` raises `JevRejected` on that one."""
 
-    def __init__(self, fail_on_call: int | None = None) -> None:
+    def __init__(self, fail_on_call: int | None = None, reject_on_call: int | None = None) -> None:
         self.asked: list[tuple[str, str]] = []
         self._fail_on_call = fail_on_call
+        self._reject_on_call = reject_on_call
         self._lock = threading.Lock()
 
     def judge(self, tag_a: str, tag_b: str) -> Verdict:
@@ -72,6 +74,8 @@ class FakeJudge:
             self.asked.append((tag_a, tag_b))
             if len(self.asked) == self._fail_on_call:
                 raise JevError("scripted failure")
+            if len(self.asked) == self._reject_on_call:
+                raise JevRejected("Jev returned 400 for the test")
         return Verdict(score=0.8, model=MODEL)
 
 
@@ -152,7 +156,9 @@ def test_a_pair_that_has_a_row_keeps_its_decision_and_is_not_asked_again(tmp_pat
     store = _store(tmp_path)
     with open_store(store) as conn, conn:
         conn.execute(
-            "INSERT INTO keyword_pairs VALUES (?, ?, 0.1, 'jev-old', '2026-01-01T00:00:00+00:00', "
+            "INSERT INTO keyword_pairs "
+            "(keyword_a, keyword_b, jev_score, jev_model, judged_at, decision, decided_at) "
+            "VALUES (?, ?, 0.1, 'jev-old', '2026-01-01T00:00:00+00:00', "
             "'rejected', '2026-01-02T00:00:00+00:00')",
             (HEIST, ROBBERY),
         )
@@ -185,6 +191,26 @@ def test_a_failure_partway_keeps_the_batches_already_written_and_a_rerun_finishe
     assert len(_pair_rows(store)) == 4
 
 
+def test_a_pair_jev_refuses_is_stored_with_its_error_and_the_rest_of_the_batch_lands(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+
+    stats = _run(store, FakeJudge(reject_on_call=2), FakeEmbedder())
+
+    rows = _pair_rows(store)
+    assert len(rows) == 4
+    refused = [row for row in rows if row["jev_error"] is not None]
+    assert len(refused) == 1
+    assert (refused[0]["jev_score"], refused[0]["jev_model"]) == (None, None)
+    assert "400" in refused[0]["jev_error"]
+    assert (stats.pairs_judged, stats.pairs_unjudgeable) == (3, 1)
+
+    again = FakeJudge()
+    _run(store, again, FakeEmbedder())
+    assert again.asked == []
+
+
 def test_limit_examines_that_many_pending_keywords(tmp_path: Path) -> None:
     store = _store(tmp_path)
 
@@ -198,7 +224,9 @@ def test_no_pending_keyword_means_no_embedding_call(tmp_path: Path) -> None:
     store = _store(tmp_path, ["prison", "jail"])
     with open_store(store) as conn, conn:
         conn.execute(
-            "INSERT INTO keyword_pairs VALUES (?, ?, 0.9, ?, '2026-01-01T00:00:00+00:00', "
+            "INSERT INTO keyword_pairs "
+            "(keyword_a, keyword_b, jev_score, jev_model, judged_at, decision, decided_at) "
+            "VALUES (?, ?, 0.9, ?, '2026-01-01T00:00:00+00:00', "
             "NULL, NULL)",
             (JAIL, PRISON, MODEL),
         )
@@ -420,6 +448,18 @@ def test_jev_gives_up_after_eight_429s_without_printing_the_key() -> None:
 
     assert len(sleeps) == 8
     assert "the-test-key" not in str(err.value)
+
+
+def test_jev_marks_a_400_or_422_as_rejected_and_any_other_status_as_a_plain_failure() -> None:
+    for status in (400, 422):
+        client = LiveJev("k", _jev_http(lambda r, s=status: httpx.Response(s)), lambda _s: None)
+        with pytest.raises(JevRejected):
+            client.judge("a", "b")
+    for status in (401, 403, 500, 503):
+        client = LiveJev("k", _jev_http(lambda r, s=status: httpx.Response(s)), lambda _s: None)
+        with pytest.raises(JevError) as err:
+            client.judge("a", "b")
+        assert not isinstance(err.value, JevRejected)
 
 
 def test_jev_refuses_a_score_outside_zero_to_one() -> None:

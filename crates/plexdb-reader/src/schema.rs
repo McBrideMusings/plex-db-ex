@@ -60,9 +60,12 @@ use crate::error::ReaderError;
 /// a judge's verdicts on whether two keywords mean the same thing; no accessor
 /// here reads it.
 ///
+/// **Version 13 does not change what this crate reads.** It makes `keyword_pairs.jev_score`
+/// and `jev_model` nullable and adds `jev_error`, for a pair the judge refused.
+///
 /// `tests/test_schema.py` fails whenever this constant differs from
 /// `plexdb/schema.py::SCHEMA_VERSION`.
-pub const SUPPORTED_SCHEMA_VERSION: i64 = 12;
+pub const SUPPORTED_SCHEMA_VERSION: i64 = 13;
 
 /// Confirm `conn` is a plexdb store at exactly [`SUPPORTED_SCHEMA_VERSION`].
 pub(crate) fn check(conn: &Connection, path: &Path) -> Result<(), ReaderError> {

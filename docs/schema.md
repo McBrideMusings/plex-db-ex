@@ -659,14 +659,15 @@ it wrote.
 
 ```
 keyword_pairs  (keyword_a, keyword_b) PK, jev_score REAL, jev_model TEXT, judged_at TEXT,
-               decision TEXT, decided_at TEXT
+               decision TEXT, decided_at TEXT, jev_error TEXT
 ```
 
 `keyword_a` and `keyword_b` are values as `enrichment.value` holds them — normalized and
 stemmed — with `keyword_a < keyword_b`, so a pair is stored once whichever way round it was
 asked. `jev_score` is Jev's answer to "do these two mean the same thing", 0 to 1, stored as Jev
 gave it, with the model that gave it in `jev_model`; a pair Jev said no to is stored too, so the
-writer never asks about it twice. `judged_at` is UTC.
+writer never asks about it twice. `judged_at` is UTC. A pair Jev refused with a 400 or 422 has
+`jev_score` and `jev_model` NULL and `jev_error` holding the refusal; see Version 13.
 
 `decision` is what a person said about the pair: `accepted`, `rejected`, or NULL while nobody
 has. `decided_at` is NULL exactly when `decision` is. A decision outranks the score.
@@ -726,6 +727,21 @@ Plex TVX's Merges tab writes this file (`POST /api/merges`, one pair per request
 404 for a pair `keyword_pairs` has no row for) and reads it back over the table (`GET /api/merges`),
 so a decision shows at once and is marked "applies at next sweep" until the fold writes it into the
 table. A write keeps one entry per pair, which the fold's last-entry-wins rule makes equivalent.
+
+## Version 13 — a pair the judge refused
+
+Jev answers HTTP 400 or 422 for some pairs, and asking again gets the same answer. Such a pair is
+stored like any other, with `jev_error` set to the refusal (`Jev returned 400 for …`) and
+`jev_score` and `jev_model` NULL. `jev_error IS NULL` exactly when `jev_score` and `jev_model`
+are present. The row keeps the pair from being asked again, so it no longer holds up the batch
+it was proposed in, and its keywords stop being pending.
+
+A reader that filters on `jev_score >= x` already leaves these rows out, because a comparison with
+NULL is never true. A reader that selects `jev_score` must expect NULL. Other Jev failures — 429
+answered eight times, a 5xx, a rejected key, no connection — write no row and stop the run, because
+they say nothing about the pair. To ask about a refused pair again, delete its row.
+
+`plexdb judge-keyword-pairs` reports the count as `unjudgeable`.
 
 ## Not yet built
 

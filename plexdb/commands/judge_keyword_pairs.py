@@ -47,7 +47,8 @@ def _report(stats: JudgeStats) -> list[str]:
         f"keyword pairs: {stats.keywords_stored:,} keyword(s) stored, "
         f"{stats.keywords_pending:,} pending, {stats.keywords_examined:,} examined, "
         f"{stats.pairs_proposed:,} pair(s) proposed, "
-        f"{stats.pairs_already_judged:,} already judged, {stats.pairs_judged:,} judged now"
+        f"{stats.pairs_already_judged:,} already judged, {stats.pairs_judged:,} judged now, "
+        f"{stats.pairs_unjudgeable:,} unjudgeable"
     ]
 
 

@@ -167,12 +167,14 @@ class MergeDecisions:
         return entry
 
 
-def bucket(score: float, decision: str | None) -> str | None:
+def bucket(score: float | None, decision: str | None) -> str | None:
     """Where a pair sits: `merged`, `rejected`, `proposed`, or None below the proposal band."""
     if decision == "accepted":
         return "merged"
     if decision == "rejected":
         return "rejected"
+    if score is None:
+        return None
     if score >= MERGE_AT:
         return "merged"
     if score >= PROPOSE_AT:

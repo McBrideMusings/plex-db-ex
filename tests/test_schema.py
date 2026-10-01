@@ -760,3 +760,50 @@ def test_keyword_pairs_stores_one_ordered_row_per_pair_and_pairs_a_decision_with
                 "INSERT INTO keyword_pairs (keyword_a, keyword_b, jev_score, jev_model, judged_at) "
                 "VALUES ('a', 'b', 1.5, 'jev-1.13.0', '2026-10-01T00:00:00Z')"
             )
+
+
+def test_v13_carries_every_keyword_pair_over_and_accepts_a_refused_pair(tmp_path: Path) -> None:
+    """Version 13 rebuilds `keyword_pairs` to make the score optional. A v12 store's
+    rows, decisions included, come through unchanged, and a row is either an answer
+    (score, model, no error) or a refusal (error, no score, no model)."""
+    store = tmp_path / "plexdb.db"
+    init(store)
+    with open_store(store) as conn:
+        conn.executescript("DROP TABLE keyword_pairs;" + schema._V12)
+        conn.execute("UPDATE schema_version SET version = 12")
+        conn.execute(
+            "INSERT INTO keyword_pairs VALUES "
+            "('hippo', 'hippopotamus', 0.95, 'jev-1.13.0', '2026-10-01T00:00:00Z', "
+            "'accepted', '2026-10-01T01:00:00Z')"
+        )
+        conn.commit()
+        before = conn.execute(
+            "SELECT keyword_a, keyword_b, jev_score, jev_model, judged_at, decision, decided_at "
+            "FROM keyword_pairs"
+        ).fetchall()
+
+    assert init(store) == (12, schema.SCHEMA_VERSION)
+
+    with open_store(store) as conn:
+        after = conn.execute(
+            "SELECT keyword_a, keyword_b, jev_score, jev_model, judged_at, decision, decided_at "
+            "FROM keyword_pairs"
+        ).fetchall()
+        assert [tuple(r) for r in after] == [tuple(r) for r in before]
+        assert conn.execute("PRAGMA index_list(keyword_pairs)").fetchall()
+
+        conn.execute(
+            "INSERT INTO keyword_pairs (keyword_a, keyword_b, jev_error, judged_at) "
+            "VALUES ('a', 'b', 'Jev returned 400', '2026-10-01T00:00:00Z')"
+        )
+        for bad in (
+            "('c', 'd', NULL, NULL, NULL)",  # neither an answer nor a refusal
+            "('c', 'd', 0.5, 'jev-1.13.0', 'Jev returned 400')",  # both
+            "('c', 'd', 0.5, NULL, NULL)",  # a score with no model
+        ):
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute(
+                    "INSERT INTO keyword_pairs "
+                    "(keyword_a, keyword_b, jev_score, jev_model, jev_error, judged_at) "
+                    f"VALUES {bad[:-1]}, '2026-10-01T00:00:00Z')"
+                )

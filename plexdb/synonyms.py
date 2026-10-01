@@ -6,6 +6,10 @@ nothing else the writer concludes: no cosine, no status, no "counts as merged".
 A pair is judged once. A pair that has a row is never asked again, and the
 judge step never touches its `decision`.
 
+A pair Jev refuses with a 400 or 422 gets a row with `jev_error` set and no
+score or model, so it is not asked again and does not hold up its batch. Any
+other failure (429 exhausted, 5xx, a bad key, no connection) stops the run.
+
 **Which pairs are asked about.** Every stored keyword with no `keyword_pairs`
 row on either side is *pending*. Each pending keyword proposes its 10 nearest
 neighbours in the whole stored vocabulary with cosine >= `MIN_COSINE`. The
@@ -41,7 +45,7 @@ from __future__ import annotations
 import os
 import sqlite3
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -52,7 +56,7 @@ import numpy.typing as npt
 
 from .config import Config
 from .embed_client import MODEL, Embedder
-from .errors import MergeDecisionsError
+from .errors import JevRejected, MergeDecisionsError
 from .explore import EXPLORE_SAVED_PATH_VAR, SAVED_FILE
 from .jev_client import Judge, Verdict
 from .keywords import NAMESPACE
@@ -95,6 +99,8 @@ class JudgeStats:
     #: Proposed pairs that already had a row, left alone.
     pairs_already_judged: int = 0
     pairs_judged: int = 0
+    #: Pairs Jev refused with a 400 or 422, stored with `jev_error` and no score.
+    pairs_unjudgeable: int = 0
     batches_committed: int = 0
 
 
@@ -211,6 +217,14 @@ def find_synonym_pairs(
         judged_at = datetime.now(UTC).isoformat(timespec="seconds")
         with conn:
             for (a, b), verdict in zip(todo, verdicts, strict=True):
+                if isinstance(verdict, JevRejected):
+                    stats.pairs_unjudgeable += conn.execute(
+                        "INSERT INTO keyword_pairs (keyword_a, keyword_b, jev_error, judged_at) "
+                        "VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
+                        (a, b, str(verdict), judged_at),
+                    ).rowcount
+                    log(f"unjudgeable pair {surfaces[a]!r} / {surfaces[b]!r}: {verdict}")
+                    continue
                 stats.pairs_judged += conn.execute(
                     "INSERT INTO keyword_pairs (keyword_a, keyword_b, jev_score, jev_model, "
                     "judged_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
@@ -331,15 +345,24 @@ def _has_pair(conn: sqlite3.Connection, pair: tuple[str, str]) -> bool:
     return found is not None
 
 
-def _judge_all(judge: Judge, pairs: list[tuple[str, str]]) -> list[Verdict]:
-    """Every pair's verdict, in order, or the first failure with nothing returned."""
+def _judge_all(judge: Judge, pairs: list[tuple[str, str]]) -> list[Verdict | JevRejected]:
+    """Every pair's verdict, in order. A pair Jev refuses (`JevRejected`) comes
+    back as that error in its place; any other failure ends the call with
+    nothing returned."""
     if not pairs:
         return []
     with ThreadPoolExecutor(JUDGE_WORKERS) as pool:
         futures = [pool.submit(judge.judge, a, b) for a, b in pairs]
         try:
-            return [future.result() for future in futures]
+            return [_outcome(future) for future in futures]
         except BaseException:
             for future in futures:
                 future.cancel()
             raise
+
+
+def _outcome(future: Future[Verdict]) -> Verdict | JevRejected:
+    try:
+        return future.result()
+    except JevRejected as err:
+        return err

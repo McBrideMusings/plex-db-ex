@@ -38,7 +38,9 @@ def store(tmp_path: Path) -> Path:
     with open_store(path) as conn:
         for a, b, score, decision in PAIRS:
             conn.execute(
-                "INSERT INTO keyword_pairs VALUES (?, ?, ?, 'jev-1', ?, ?, ?)",
+                "INSERT INTO keyword_pairs "
+                "(keyword_a, keyword_b, jev_score, jev_model, judged_at, decision, decided_at) "
+                "VALUES (?, ?, ?, 'jev-1', ?, ?, ?)",
                 (a, b, score, JUDGED, decision, JUDGED if decision else None),
             )
         conn.execute(
