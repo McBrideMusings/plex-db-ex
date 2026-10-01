@@ -35,13 +35,20 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, cast
 from urllib.parse import parse_qs, urlparse
 
 import httpx
 
-from .errors import StoreError
+from .errors import MergeDecisionsError, StoreError
 from .identity import PRIORITY
+from .merge_review import (
+    MERGE_DECISIONS_FILE,
+    MergeDecisions,
+    NoSuchPair,
+    require_pair,
+    review_rows,
+)
 from .store import open_readonly
 from .tmdb_edges import SIMILAR_EDGE_TYPE
 
@@ -1624,6 +1631,33 @@ class PosterProxy:
         return bytes(chunks), content_type
 
 
+#: The fields a decision POST carries, in the order `MergeDecisions.check` takes them.
+MERGE_FIELDS = ("keyword_a", "keyword_b", "decision")
+
+
+def merges_json(pairs: list[dict[str, object]]) -> dict[str, object]:
+    """The review page's two lists: the queue, best score first, and the decided or merged
+    pairs, a person's latest decision first and Jev-confirmed pairs after, best score first."""
+
+    def score(p: dict[str, object]) -> float:
+        return cast(float, p["score"])
+
+    proposed = sorted(
+        (p for p in pairs if p["bucket"] == "proposed"),
+        key=lambda p: (-score(p), str(p["keyword_a"]), str(p["keyword_b"])),
+    )
+    by_person = sorted(
+        (p for p in pairs if p["decision"] is not None),
+        key=lambda p: (str(p["decided_at"]), score(p), str(p["keyword_a"]), str(p["keyword_b"])),
+        reverse=True,
+    )
+    by_jev = sorted(
+        (p for p in pairs if p["decision"] is None and p["bucket"] == "merged"),
+        key=lambda p: (-score(p), str(p["keyword_a"]), str(p["keyword_b"])),
+    )
+    return {"proposed": proposed, "decided": by_person + by_jev}
+
+
 def _page() -> bytes:
     return resources.files("plexdb").joinpath("explore.html").read_bytes()
 
@@ -1647,6 +1681,8 @@ def _error_reply(err: Exception, store_path: Path) -> tuple[str, HTTPStatus] | N
         return str(err), HTTPStatus.BAD_REQUEST
     if isinstance(err, NoSuchTitle):
         return f"no title with item_id {err.args[0]!r}", HTTPStatus.NOT_FOUND
+    if isinstance(err, NoSuchPair):
+        return f"no keyword pair {err.args[0]!r} in the store", HTTPStatus.NOT_FOUND
     if isinstance(err, NoSuchQuery):
         return f"no saved query named {err.args[0]!r}", HTTPStatus.NOT_FOUND
     if isinstance(err, TooManyTitleRequests):
@@ -1672,6 +1708,8 @@ def _error_reply(err: Exception, store_path: Path) -> tuple[str, HTTPStatus] | N
         return f"could not read the store: {err}", HTTPStatus.SERVICE_UNAVAILABLE
     if isinstance(err, SavedQueriesError):
         return f"saved queries: {err}", HTTPStatus.INTERNAL_SERVER_ERROR
+    if isinstance(err, MergeDecisionsError):
+        return f"merge decisions: {err}", HTTPStatus.INTERNAL_SERVER_ERROR
     if isinstance(err, OSError):
         return f"could not read the store: {err}", HTTPStatus.INTERNAL_SERVER_ERROR
     return None
@@ -1685,7 +1723,14 @@ def _log_store_damage(err: Exception) -> None:
     bug keeps its traceback, so none of them logs here.
     """
     if isinstance(err, (StoreError, sqlite3.DatabaseError, OSError)) and not isinstance(
-        err, (FileNotFoundError, ConnectionError, SavedQueriesError, sqlite3.ProgrammingError)
+        err,
+        (
+            FileNotFoundError,
+            ConnectionError,
+            SavedQueriesError,
+            MergeDecisionsError,
+            sqlite3.ProgrammingError,
+        ),
     ):
         print(f"explore: store problem: {type(err).__name__}: {err}", file=sys.stderr)
 
@@ -1710,7 +1755,9 @@ def make_server(
     cache = _IndexCache(store_path)
     maps = _MapCache(store_path)
     networks = _TagNetworkCache(store_path)
-    saved = SavedQueries(saved_path or store_path.with_name(SAVED_FILE))
+    saved_file = saved_path or store_path.with_name(SAVED_FILE)
+    saved = SavedQueries(saved_file)
+    merges = MergeDecisions(saved_file.with_name(MERGE_DECISIONS_FILE))
     posters = PosterProxy(store_path, plex_url, plex_token, poster_http)
 
     class Handler(BaseHTTPRequestHandler):
@@ -1756,7 +1803,19 @@ def make_server(
             return body
 
         def _post(self) -> None:
-            if urlparse(self.path).path != "/api/query":
+            path = urlparse(self.path).path
+            if path == "/api/merges":
+                body = self._body()
+                a, b, decision = merges.check(*(body.get(k) for k in MERGE_FIELDS))
+                # Only a pair the table holds may be decided, so an anonymous caller cannot
+                # grow the file with names that were never judged.
+                with open_readonly(store_path) as conn:
+                    require_pair(conn, (a, b))
+                    entry = merges.record(a, b, decision)
+                    pair = review_rows(conn, {(a, b): entry}, readable_forms(conn), (a, b))[0]
+                self._json({"pair": pair})
+                return
+            if path != "/api/query":
                 self._json({"error": f"no route {self.path}"}, HTTPStatus.NOT_FOUND)
                 return
             sql = self._body().get("sql")
@@ -1817,6 +1876,10 @@ def make_server(
                 self._stream_network(kind, frozenset(lists.get("exclude", [])))
             elif url.path == "/api/saved":
                 self._json({"queries": saved.all()})
+            elif url.path == "/api/merges":
+                with open_readonly(store_path) as conn:
+                    pairs = review_rows(conn, merges.latest(), readable_forms(conn))
+                self._json(merges_json(pairs))
             elif url.path == "/api/recipes":
                 self._json({"recipes": list(RECIPES)})
             elif url.path == "/api/title":

@@ -209,6 +209,34 @@
   #qside li button.load:hover, #qside li button.load:focus-visible { color: var(--accent); }
   #qside li .note { display: block; color: var(--muted); font-size: 12px; }
   #qside .group { color: var(--muted); font-size: 12px; margin: 8px 0 2px; }
+  #mergewrap { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
+  @media (max-width: 900px) { #mergewrap { grid-template-columns: 1fr; } #mlist { border-left: 0 !important; border-top: 1px solid var(--line); } }
+  #mqueue { padding: 16px 20px 24px; min-width: 0; }
+  #mlist { border-left: 1px solid var(--line); background: var(--panel); padding: 16px 20px 24px; min-width: 0; min-height: 60vh; }
+  #mqueue h2, #mlist h2 { font-size: 13px; margin: 0 0 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .mnote { color: var(--muted); font-size: 12px; margin: 0 0 12px; }
+  .mcard { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; }
+  .mpair { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; font-size: 22px; font-weight: 650; overflow-wrap: anywhere; }
+  .mpair .sep { color: var(--muted); font-weight: 400; }
+  .mstored { color: var(--muted); font-size: 12px; margin-top: 4px; overflow-wrap: anywhere; }
+  .mscore { margin: 12px 0 16px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .mscore strong { color: var(--ink); font-size: 18px; }
+  .mact { display: flex; flex-wrap: wrap; gap: 8px; }
+  .mact button { padding: 7px 18px; }
+  button.reject { font: inherit; color: var(--noise); background: var(--panel); border: 1px solid var(--noise); border-radius: 6px; cursor: pointer; }
+  button.reject:hover { background: var(--noise-bg); }
+  .mkeys { color: var(--muted); font-size: 12px; margin-top: 10px; }
+  #mstatus { color: var(--muted); padding: 8px 0; min-height: 1.5em; }
+  #mstatus.bad { color: var(--noise); }
+  #mrows { list-style: none; margin: 0; padding: 0; max-height: 70vh; overflow: auto; }
+  #mrows li { display: flex; gap: 10px; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--line); }
+  #mrows .pair { min-width: 0; overflow-wrap: anywhere; }
+  #mrows .sub { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  #mrows .acts { display: flex; gap: 6px; flex: none; }
+  .badge { display: inline-block; border-radius: 5px; padding: 0 6px; margin-left: 6px; font-size: 11px; background: var(--chip); color: var(--ink); }
+  .badge.rejected { background: var(--noise-bg); color: var(--noise); }
+  .mtools { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-bottom: 10px; }
+  .mtools input[type="search"] { width: 14em; max-width: 100%; }
 </style>
 </head>
 <body>
@@ -217,6 +245,7 @@
   <div class="seg" role="group" aria-label="Section">
     <button type="button" data-tab="tags" aria-pressed="true">Tags</button>
     <button type="button" data-tab="query" aria-pressed="false">Query</button>
+    <button type="button" data-tab="merges" aria-pressed="false">Merges</button>
   </div>
   <div class="seg tagsonly" role="group" aria-label="Title type">
     <button type="button" data-kind="movie" aria-pressed="true">Movies</button>
@@ -266,6 +295,27 @@
     <h2>Recipes</h2>
     <div id="qrecipes"></div>
   </aside>
+</div>
+<div id="mergewrap" hidden>
+  <section id="mqueue">
+    <h2 id="mqhead">Proposed merges</h2>
+    <p class="mnote">Pairs Jev scored from 0.5 up to 0.9 that nobody has decided. A decision shows here at once and reaches the store at the next sweep.</p>
+    <div id="mcard"></div>
+    <div id="mstatus"></div>
+  </section>
+  <section id="mlist">
+    <h2 id="mlhead">All mappings</h2>
+    <div class="mtools">
+      <input type="search" id="mfilter" placeholder="keyword contains…" autocomplete="off" aria-label="Filter mappings">
+      <div class="seg" role="group" aria-label="Show">
+        <button type="button" data-mshow="all" aria-pressed="true">All</button>
+        <button type="button" data-mshow="accepted" aria-pressed="false">Accepted</button>
+        <button type="button" data-mshow="rejected" aria-pressed="false">Rejected</button>
+        <button type="button" data-mshow="jev" aria-pressed="false">Jev only</button>
+      </div>
+    </div>
+    <ul id="mrows"></ul>
+  </section>
 </div>
 <main id="tagsmain">
   <div class="graphwrap" id="graphwrap" hidden>
@@ -354,12 +404,12 @@ function readHash() {
   const p = new URLSearchParams(location.hash.slice(1));
   if (p.get("kind") === "show" || p.get("kind") === "movie") state.kind = p.get("kind");
   if (VIEWS.includes(p.get("view"))) state.view = p.get("view");
-  if (p.get("tab") === "query") state.tab = "query";
+  if (p.get("tab") === "query" || p.get("tab") === "merges") state.tab = p.get("tab");
   state.tag = p.get("tag");
 }
 function writeHash() {
   const p = new URLSearchParams({ kind: state.kind, view: state.view });
-  if (state.tab === "query") p.set("tab", "query");
+  if (state.tab !== "tags") p.set("tab", state.tab);
   if (state.tag) p.set("tag", state.tag);
   history.replaceState(null, "", "#" + p.toString());
 }
@@ -1569,8 +1619,9 @@ function setTab(tab) {
   document.querySelectorAll(".tagsonly").forEach(n => { n.hidden = tab !== "tags"; });
   qEl("tagsmain").hidden = tab !== "tags";
   qEl("querywrap").hidden = tab !== "query";
+  qEl("mergewrap").hidden = tab !== "merges";
   if (tab === "tags") { document.getElementById("error").hidden = !document.getElementById("error").textContent; setView(state.view); }
-  else { document.body.classList.remove("shell"); document.getElementById("error").hidden = true; writeHash(); initQuery(); }
+  else { document.body.classList.remove("shell"); document.getElementById("error").hidden = true; writeHash(); if (tab === "query") initQuery(); else initMerges(); }
 }
 
 function qStatus(text, bad = false, ...extra) {
@@ -1673,6 +1724,110 @@ qEl("qsavebtn").addEventListener("click", saveQuery);
 qEl("sql").addEventListener("keydown", e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); runQuery(); } });
 document.querySelectorAll(".seg button[data-tab]").forEach(b => b.addEventListener("click", () => setTab(b.dataset.tab)));
 
+// ---- Merges tab ----
+// The server sends both lists with the file's pending decisions already laid over the table. A
+// click POSTs the decision and the server answers with that one pair's new row, which moves
+// between the lists here without a reload.
+const m = { ready: false, proposed: [], decided: [], skipped: new Set(), show: "all", busy: false };
+const pairKey = p => p.keyword_a + "\u0000" + p.keyword_b;
+const pairName = p => p.form_a + "  ⇄  " + p.form_b;
+const mStatus = (text, bad = false) => { const n = qEl("mstatus"); n.className = bad ? "bad" : ""; n.textContent = text; };
+
+function currentPair() {
+  const open = m.proposed.filter(p => !m.skipped.has(pairKey(p)));
+  if (open.length) return open[0];
+  m.skipped.clear();
+  return m.proposed[0] || null;
+}
+
+function paintQueue() {
+  const p = currentPair();
+  qEl("mqhead").textContent = `Proposed merges · ${fmt(m.proposed.length)} left`;
+  const card = qEl("mcard");
+  if (!p) { card.replaceChildren(el("p", { className: "empty" }, "Nothing waiting for a decision.")); return; }
+  const stored = (p.form_a !== p.keyword_a || p.form_b !== p.keyword_b) ? el("div", { className: "mstored" }, `stored as ${p.keyword_a} / ${p.keyword_b}`) : "";
+  const accept = el("button", { type: "button", className: "primary", id: "maccept" }, "Accept (A)");
+  const reject = el("button", { type: "button", className: "reject", id: "mreject" }, "Reject (R)");
+  const skip = el("button", { type: "button", className: "plain", id: "mskip" }, "Skip (S)");
+  accept.addEventListener("click", () => decide(p, "accepted"));
+  reject.addEventListener("click", () => decide(p, "rejected"));
+  skip.addEventListener("click", () => { m.skipped.add(pairKey(p)); paintQueue(); });
+  card.replaceChildren(el("div", { className: "mcard" },
+    el("div", { className: "mpair" }, el("span", {}, p.form_a), el("span", { className: "sep" }, "⇄"), el("span", {}, p.form_b)),
+    stored,
+    el("div", { className: "mscore" }, "Jev says ", el("strong", {}, p.score.toFixed(2)), ` (${p.model || "unknown model"})`),
+    el("div", { className: "mact" }, accept, reject, skip),
+    el("div", { className: "mkeys" }, "Accepted pairs count as the same tag; rejected pairs never come back.")));
+}
+
+function paintList() {
+  const needle = qEl("mfilter").value.trim().toLowerCase();
+  const shown = m.decided.filter(p => {
+    if (m.show === "accepted" && p.decision !== "accepted") return false;
+    if (m.show === "rejected" && p.decision !== "rejected") return false;
+    if (m.show === "jev" && p.decision !== null) return false;
+    return !needle || (p.form_a + " " + p.form_b + " " + p.keyword_a + " " + p.keyword_b).toLowerCase().includes(needle);
+  });
+  const merged = m.decided.filter(p => p.bucket === "merged").length;
+  qEl("mlhead").textContent = `All mappings · ${fmt(merged)} merged, ${fmt(m.decided.length - merged)} rejected`;
+  if (!shown.length) { qEl("mrows").replaceChildren(el("li", { className: "empty" }, "None.")); return; }
+  const rows = shown.slice(0, 300).map(p => {
+    const label = p.decision === "accepted" ? "accepted" : p.decision === "rejected" ? "rejected" : "Jev ≥ 0.9";
+    const badges = [el("span", { className: "badge" + (p.decision === "rejected" ? " rejected" : "") }, label)];
+    if (p.pending) badges.push(el("span", { className: "badge", title: "In merge_decisions.json; the next sweep writes it into the store." }, "applies at next sweep"));
+    const when = p.decided_at ? ` · ${p.decided_at.replace("T", " ").replace("+00:00", " UTC")}` : "";
+    const act = p.decision === null
+      ? el("button", { type: "button", className: "plain", title: "Reject this pair; the decision outranks Jev's score" }, "Reject")
+      : el("button", { type: "button", className: "plain", title: "Forget the decision; the pair goes back to Jev's score" }, "Undo");
+    act.addEventListener("click", () => decide(p, p.decision === null ? "rejected" : "cleared"));
+    return el("li", {}, el("div", { className: "pair" }, pairName(p), ...badges,
+      el("div", { className: "sub" }, `${p.score.toFixed(2)}${when}`)), el("div", { className: "acts" }, act));
+  });
+  if (shown.length > rows.length) rows.push(el("li", { className: "empty" }, `${fmt(shown.length - rows.length)} more — filter to find them.`));
+  qEl("mrows").replaceChildren(...rows);
+}
+
+async function decide(p, decision) {
+  if (m.busy) return;
+  m.busy = true;
+  try {
+    const out = (await sendJSON("POST", "/api/merges", { keyword_a: p.keyword_a, keyword_b: p.keyword_b, decision })).pair;
+    const key = pairKey(out);
+    m.proposed = m.proposed.filter(x => pairKey(x) !== key);
+    m.decided = m.decided.filter(x => pairKey(x) !== key);
+    m.skipped.delete(key);
+    if (out.bucket === "proposed") { m.proposed.push(out); m.proposed.sort((x, y) => y.score - x.score); }
+    else if (out.bucket) { m.decided.unshift(out); }
+    mStatus(`${pairName(out)}: ${decision}.`);
+  } catch (err) { mStatus(err.message, true); }
+  finally { m.busy = false; }
+  paintQueue(); paintList();
+}
+
+async function initMerges() {
+  if (m.ready) return;
+  m.ready = true;
+  mStatus("Loading…");
+  try {
+    const out = await getJSON("/api/merges");
+    m.proposed = out.proposed; m.decided = out.decided;
+    mStatus("");
+    paintQueue(); paintList();
+  } catch (err) { m.ready = false; mStatus(`Could not load: ${err.message}`, true); }
+}
+
+qEl("mfilter").addEventListener("input", paintList);
+document.querySelectorAll("button[data-mshow]").forEach(b => b.addEventListener("click", () => {
+  m.show = b.dataset.mshow;
+  document.querySelectorAll("button[data-mshow]").forEach(x => x.setAttribute("aria-pressed", String(x === b)));
+  paintList();
+}));
+document.addEventListener("keydown", e => {
+  if (state.tab !== "merges" || e.metaKey || e.ctrlKey || e.altKey || /^(INPUT|TEXTAREA)$/.test(document.activeElement?.tagName)) return;
+  const id = { a: "maccept", r: "mreject", s: "mskip" }[e.key.toLowerCase()];
+  if (id) qEl(id)?.click();
+});
+
 document.getElementById("noisecount").textContent = noise.size;
 document.getElementById("ctlnoise").textContent = noise.size;
 document.getElementById("ctltoggle").addEventListener("click", () => {
@@ -1683,7 +1838,7 @@ document.getElementById("ctltoggle").addEventListener("click", () => {
 readHash();
 setView(state.view);
 loadKind();
-if (state.tab === "query") setTab("query");
+if (state.tab !== "tags") setTab(state.tab);
 </script>
 </body>
 </html>

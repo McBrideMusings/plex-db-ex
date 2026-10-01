@@ -38,7 +38,6 @@ which `fold_merge_decisions` applies at the start of a sweep.
 
 from __future__ import annotations
 
-import json
 import os
 import sqlite3
 from collections.abc import Callable
@@ -57,6 +56,7 @@ from .errors import MergeDecisionsError
 from .explore import EXPLORE_SAVED_PATH_VAR, SAVED_FILE
 from .jev_client import Judge, Verdict
 from .keywords import NAMESPACE
+from .merge_review import MERGE_DECISIONS_FILE, parse_decisions
 
 __all__ = [
     "FoldStats",
@@ -77,9 +77,7 @@ KEYWORD_BATCH = 200
 #: Jev requests in flight at once.
 JUDGE_WORKERS = 8
 
-MERGE_DECISIONS_FILE = "merge_decisions.json"
 EMBEDDING_CACHE_FILE = "keyword-embeddings.npz"
-_DECISIONS = ("accepted", "rejected", "cleared")
 
 _KEY = "keyword"
 
@@ -145,7 +143,7 @@ def fold_merge_decisions(conn: sqlite3.Connection, path: Path) -> FoldStats:
     except OSError as err:
         raise MergeDecisionsError(f"cannot read {path}: {err}") from None
     stats.file_found = True
-    entries = _parse_decisions(path, text)
+    entries = parse_decisions(path, text)
     stats.entries = len(entries)
     with conn:
         for entry in entries:
@@ -165,39 +163,6 @@ def fold_merge_decisions(conn: sqlite3.Connection, path: Path) -> FoldStats:
             else:
                 stats.unmatched += 1
     return stats
-
-
-def _parse_decisions(path: Path, text: str) -> list[dict[str, str]]:
-    try:
-        raw = json.loads(text)
-    except ValueError as err:
-        raise MergeDecisionsError(f"{path} is not valid JSON: {err}") from None
-    if not isinstance(raw, list):
-        raise MergeDecisionsError(f"{path} does not hold a list of decisions")
-    for index, entry in enumerate(raw):
-        where = f"{path} entry {index}"
-        if not isinstance(entry, dict) or not all(
-            isinstance(entry.get(field), str)
-            for field in ("keyword_a", "keyword_b", "decision", "decided_at")
-        ):
-            raise MergeDecisionsError(
-                f"{where} needs text keyword_a, keyword_b, decision and decided_at"
-            )
-        if entry["decision"] not in _DECISIONS:
-            raise MergeDecisionsError(
-                f"{where} has decision {entry['decision']!r}, expected one of {_DECISIONS}"
-            )
-        if not entry["keyword_a"] < entry["keyword_b"]:
-            raise MergeDecisionsError(f"{where} must have keyword_a < keyword_b")
-        if entry["decision"] != "cleared":
-            try:
-                datetime.fromisoformat(entry["decided_at"])
-            except ValueError:
-                raise MergeDecisionsError(
-                    f"{where} has decided_at {entry['decided_at']!r}, expected an ISO 8601 time"
-                ) from None
-    entries: list[dict[str, str]] = raw
-    return entries
 
 
 def find_synonym_pairs(

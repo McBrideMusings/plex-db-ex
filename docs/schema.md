@@ -722,6 +722,11 @@ A missing file means no decisions. A file that is not valid JSON or breaks this 
 whole, and no row changes. The file is not deleted, so it stays the record of the latest
 decision per pair.
 
+The explorer's Merges tab writes this file (`POST /api/merges`, one pair per request, refused with a
+404 for a pair `keyword_pairs` has no row for) and reads it back over the table (`GET /api/merges`),
+so a decision shows at once and is marked "applies at next sweep" until the fold writes it into the
+table. A write keeps one entry per pair, which the fold's last-entry-wins rule makes equivalent.
+
 ## Not yet built
 
 Further sources land as new `source` values rather than as schema changes:
