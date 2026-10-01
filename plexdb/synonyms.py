@@ -10,26 +10,27 @@ A pair Jev refuses with a 400 or 422 gets a row with `jev_error` set and no
 score or model, so it is not asked again and does not hold up its batch. Any
 other failure (429 exhausted, 5xx, a bad key, no connection) stops the run.
 
-**Which pairs are asked about.** Every stored keyword with no `keyword_pairs`
-row on either side is *pending*. Each pending keyword proposes its 10 nearest
-neighbours in the whole stored vocabulary with cosine >= `MIN_COSINE`. The
-pending set is read once at the start of a run, so two pending keywords that are
-each other's neighbours both still propose all their pairs.
+**Which pairs are asked about.** Every run examines every stored keyword: each
+proposes its 10 nearest neighbours in the whole stored vocabulary with cosine >=
+`MIN_COSINE`, and a proposed pair that has a row is left alone. Nothing records
+that a keyword was examined, so there is no state a killed run can leave wrong,
+and a keyword that gains a new neighbour proposes it on the next run. Examining
+is a matrix product over cached vectors and sends no request.
 
 A kill partway leaves valid rows behind, because keywords are processed in
 batches of `KEYWORD_BATCH` and each batch is judged completely before its rows
-are written in one transaction. The cost: a keyword that received a row only as
-the other side of someone else's pair is no longer pending on the next run, so
-its own remaining neighbours are not proposed by it. Nothing in the schema marks
-"examined" without storing a status, which ADR-0018 forbids.
+are written in one transaction. The next run proposes the same pairs again and
+asks Jev only about those with no row.
+
+`limit` caps how many pairs one run asks Jev about, so a first run over a whole
+vocabulary can be taken in pieces.
 
 **What is embedded.** The readable surface form (`keyword_forms.surface`, the
 shortest per keyword), not the stored stem, and with no task prefix. The pair is
 stored under the stems, and Jev is asked about the surfaces.
 
-**Embeddings are cached in a file, not the store.** Every keyword with no neighbour at
-`MIN_COSINE` stays pending for good (a row exists only for a judged pair), so
-without a cache each sweep would embed the whole vocabulary again. The cache is
+**Embeddings are cached in a file, not the store.** Every run examines the whole
+vocabulary, so without a cache each sweep would embed all of it again. The cache is
 `keyword-embeddings.npz` beside the store, one unit vector per surface text and
 the model that made them. It is derived and disposable: deleting it, or changing
 the model, costs one re-embed. A sweep embeds only the texts the cache lacks, so
@@ -70,13 +71,13 @@ __all__ = [
     "merge_decisions_path",
 ]
 
-#: How many nearest neighbours each pending keyword proposes.
+#: How many nearest neighbours each keyword proposes.
 NEIGHBOURS = 10
 #: The lowest cosine a neighbour may have and still be proposed.
 MIN_COSINE = 0.75
 #: Texts per embeddings request.
 EMBED_BATCH = 128
-#: Pending keywords per committed batch — about 330 pairs, about 10 seconds of Jev.
+#: Keywords examined per committed batch — about 330 pairs, about 10 seconds of Jev.
 KEYWORD_BATCH = 200
 #: Jev requests in flight at once.
 JUDGE_WORKERS = 8
@@ -91,9 +92,7 @@ _Vectors = npt.NDArray[np.float32]
 @dataclass
 class JudgeStats:
     keywords_stored: int = 0
-    #: Stored keywords with no `keyword_pairs` row on either side when the run began.
-    keywords_pending: int = 0
-    #: Pending keywords this run proposed neighbours for (fewer than pending under `limit`).
+    #: Keywords this run proposed neighbours for (fewer than stored when `limit` ends it early).
     keywords_examined: int = 0
     pairs_proposed: int = 0
     #: Proposed pairs that already had a row, left alone.
@@ -180,9 +179,9 @@ def find_synonym_pairs(
     limit: int | None = None,
     log: Callable[[str], None] = lambda _line: None,
 ) -> JudgeStats:
-    """Judge every pair the pending keywords propose and write one row per pair.
+    """Judge every pair the stored keywords propose and write one row per pair.
 
-    `limit` caps how many pending keywords this run examines, so a first run
+    `limit` caps how many pairs this run asks the judge about, so a first run
     over a whole vocabulary can be taken in pieces. `cache_path` is the
     embedding cache file; `None` embeds everything each call.
     """
@@ -190,29 +189,27 @@ def find_synonym_pairs(
     surfaces = _surfaces(conn)
     keywords = sorted(surfaces)
     stats.keywords_stored = len(keywords)
-
-    has_row = {
-        keyword
-        for row in conn.execute("SELECT keyword_a, keyword_b FROM keyword_pairs")
-        for keyword in (row[0], row[1])
-    }
-    pending = [keyword for keyword in keywords if keyword not in has_row]
-    stats.keywords_pending = len(pending)
-    if limit is not None:
-        pending = pending[:limit]
-    if not pending:
+    if not keywords:
         return stats
 
     vectors = _embed_all(embedder, [surfaces[keyword] for keyword in keywords], cache_path, log)
     position = {keyword: i for i, keyword in enumerate(keywords)}
+    remaining = limit
 
-    for start in range(0, len(pending), KEYWORD_BATCH):
-        batch = pending[start : start + KEYWORD_BATCH]
+    for start in range(0, len(keywords), KEYWORD_BATCH):
+        if remaining == 0:
+            break
+        batch = keywords[start : start + KEYWORD_BATCH]
         proposed = _propose(batch, keywords, position, vectors)
         stats.keywords_examined += len(batch)
         stats.pairs_proposed += len(proposed)
         todo = [pair for pair in proposed if not _has_pair(conn, pair)]
         stats.pairs_already_judged += len(proposed) - len(todo)
+        if remaining is not None:
+            todo = todo[:remaining]
+            remaining -= len(todo)
+        if not todo:
+            continue
         verdicts = _judge_all(judge, [(surfaces[a], surfaces[b]) for a, b in todo])
         judged_at = datetime.now(UTC).isoformat(timespec="seconds")
         with conn:
@@ -232,7 +229,7 @@ def find_synonym_pairs(
                 ).rowcount
         stats.batches_committed += 1
         log(
-            f"{stats.keywords_examined:,}/{len(pending):,} keyword(s) examined, "
+            f"{stats.keywords_examined:,}/{len(keywords):,} keyword(s) examined, "
             f"{stats.pairs_judged:,} pair(s) judged"
         )
     return stats

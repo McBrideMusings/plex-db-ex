@@ -682,17 +682,19 @@ reaches `family feud` in a few hops), so connected components over merged pairs 
 **Refresh rule.** A pair is written once and never re-judged: a writer adds rows for keywords it
 has not judged before and leaves every existing row, `decision` included, as it is.
 
-`plexdb judge-keyword-pairs` adds the rows. A stored keyword with no row on either side is
-*pending*. Each pending keyword proposes its 10 nearest neighbours in the whole stored vocabulary
+`plexdb judge-keyword-pairs` adds the rows. Every run examines every stored keyword, and each
+proposes its 10 nearest neighbours in the whole stored vocabulary
 with cosine >= 0.75 between `nomic-embed-text` vectors of their shortest readable surface forms
 (`keyword_forms.surface`, no task prefix). Jev is asked about the two surface forms, with a
 `score` question and a `noul` question ("Do the two tags mean the same thing?") in one request;
 `jev_score` is the `noul` answer and `jev_model` is the model id in the response (for example
-`jev-1.13.0`). Rows are written in batches of 200 pending keywords, each batch in one
-transaction, so a run killed partway leaves every finished batch behind. The step needs
-`LLAMA_SWAP_BASE_URL` and `TYPESAFE_API_KEY`; with either unset the sweep reports it skipped. A
-keyword that has a row only as the other side of another keyword's pair is not pending on the next
-run, so an interrupted run can leave such a keyword's own neighbours unproposed.
+`jev-1.13.0`). A proposed pair that already has a row is not asked again. Rows are written in
+batches of 200 keywords, each batch in one transaction, so a run killed partway leaves every
+finished batch behind and the next run asks only about the pairs still without a row. `--limit N`
+stops a run after N pairs have been asked about. The step needs
+`LLAMA_SWAP_BASE_URL` and `TYPESAFE_API_KEY`; with either unset the sweep reports it skipped.
+Nothing records that a keyword was examined, so a keyword that gains a new neighbour proposes the
+pair on the next run.
 
 The vectors are cached in `keyword-embeddings.npz` beside the store (not in it): one unit vector
 per surface text and the model that made it. A sweep embeds only the texts the cache lacks, so a
@@ -734,7 +736,7 @@ Jev answers HTTP 400 or 422 for some pairs, and asking again gets the same answe
 stored like any other, with `jev_error` set to the refusal (`Jev returned 400 for …`) and
 `jev_score` and `jev_model` NULL. `jev_error IS NULL` exactly when `jev_score` and `jev_model`
 are present. The row keeps the pair from being asked again, so it no longer holds up the batch
-it was proposed in, and its keywords stop being pending.
+it was proposed in.
 
 A reader that filters on `jev_score >= x` already leaves these rows out, because a comparison with
 NULL is never true. A reader that selects `jev_score` must expect NULL. Other Jev failures — 429

@@ -119,7 +119,7 @@ def test_six_keywords_yield_four_pairs_stored_as_jev_answered_and_a_rerun_adds_n
 
     expected = sorted([_p(HEIST, BANK), _p(HEIST, ROBBERY), _p(BANK, ROBBERY), _p(JAIL, PRISON)])
     assert _pair_keys(store) == expected
-    assert (stats.keywords_pending, stats.pairs_proposed, stats.pairs_judged) == (6, 4, 4)
+    assert (stats.keywords_examined, stats.pairs_proposed, stats.pairs_judged) == (6, 4, 4)
     rows = _pair_rows(store)
     assert {(r["jev_score"], r["jev_model"]) for r in rows} == {(0.8, MODEL)}
     assert all(r["keyword_a"] < r["keyword_b"] and r["judged_at"] for r in rows)
@@ -136,7 +136,7 @@ def test_six_keywords_yield_four_pairs_stored_as_jev_answered_and_a_rerun_adds_n
     stats = _run(store, again, FakeEmbedder())
 
     assert again.asked == []
-    assert (stats.keywords_pending, stats.pairs_judged) == (1, 0)
+    assert (stats.keywords_examined, stats.pairs_proposed, stats.pairs_judged) == (6, 4, 0)
     assert len(_pair_rows(store)) == 4
 
 
@@ -211,16 +211,39 @@ def test_a_pair_jev_refuses_is_stored_with_its_error_and_the_rest_of_the_batch_l
     assert again.asked == []
 
 
-def test_limit_examines_that_many_pending_keywords(tmp_path: Path) -> None:
+def test_limit_caps_the_pairs_asked_and_a_rerun_finishes_the_rest(tmp_path: Path) -> None:
     store = _store(tmp_path)
+    judge = FakeJudge()
 
-    stats = _run(store, FakeJudge(), FakeEmbedder(), limit=1)
+    stats = _run(store, judge, FakeEmbedder(), limit=3)
 
-    assert (stats.keywords_pending, stats.keywords_examined) == (6, 1)
-    assert _pair_keys(store) == sorted([_p(HEIST, BANK), _p(BANK, ROBBERY)])
+    assert (stats.pairs_judged, len(judge.asked)) == (3, 3)
+    assert len(_pair_rows(store)) == 3
+
+    _run(store, FakeJudge(), FakeEmbedder(), limit=3)
+
+    assert len(_pair_rows(store)) == 4
 
 
-def test_no_pending_keyword_means_no_embedding_call(tmp_path: Path) -> None:
+def test_a_keyword_whose_only_row_is_another_keywords_pair_still_proposes_its_own(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    with open_store(store) as conn, conn:
+        conn.execute(
+            "INSERT INTO keyword_pairs (keyword_a, keyword_b, jev_score, jev_model, judged_at) "
+            "VALUES (?, ?, 0.9, ?, '2026-01-01T00:00:00+00:00')",
+            (_p(HEIST, BANK)[0], _p(HEIST, BANK)[1], MODEL),
+        )
+    judge = FakeJudge()
+
+    _run(store, judge, FakeEmbedder())
+
+    assert len(_pair_rows(store)) == 4
+    assert len(judge.asked) == 3
+
+
+def test_a_fully_judged_store_asks_nothing(tmp_path: Path) -> None:
     store = _store(tmp_path, ["prison", "jail"])
     with open_store(store) as conn, conn:
         conn.execute(
@@ -230,11 +253,11 @@ def test_no_pending_keyword_means_no_embedding_call(tmp_path: Path) -> None:
             "NULL, NULL)",
             (JAIL, PRISON, MODEL),
         )
-    embedder = FakeEmbedder()
+    judge = FakeJudge()
 
-    _run(store, FakeJudge(), embedder)
+    _run(store, judge, FakeEmbedder())
 
-    assert embedder.calls == []
+    assert judge.asked == []
 
 
 def test_a_cached_vocabulary_is_never_embedded_again_only_new_keywords_are(
@@ -246,10 +269,9 @@ def test_a_cached_vocabulary_is_never_embedded_again_only_new_keywords_are(
     _run(store, FakeJudge(), first, cache_path=cache)
     assert sorted(t for call in first.calls for t in call) == sorted(VECTORS)
 
-    # zebra has no neighbour, so it is still pending, yet nothing is embedded.
     second = FakeEmbedder()
-    stats = _run(store, FakeJudge(), second, cache_path=cache)
-    assert (stats.keywords_pending, second.calls) == (1, [])
+    _run(store, FakeJudge(), second, cache_path=cache)
+    assert second.calls == []
 
     VECTORS["mugshot"] = [0.0, 0.9, 0.3]
     try:

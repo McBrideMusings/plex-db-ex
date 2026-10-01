@@ -1,7 +1,7 @@
-"""`plexdb judge-keyword-pairs` — find synonym keywords: embed the stored keywords
-that have no `keyword_pairs` row, propose each one's nearest neighbours, ask Jev
-whether the two mean the same thing, and write one row per judged pair
-(ADR-0018)."""
+"""`plexdb judge-keyword-pairs` — find synonym keywords: embed the stored keywords,
+propose each one's nearest neighbours, ask Jev whether the two mean the same
+thing about every pair with no `keyword_pairs` row, and write one row per judged
+pair (ADR-0018)."""
 
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ def _positive(raw: str) -> int:
 def _report(stats: JudgeStats) -> list[str]:
     return [
         f"keyword pairs: {stats.keywords_stored:,} keyword(s) stored, "
-        f"{stats.keywords_pending:,} pending, {stats.keywords_examined:,} examined, "
+        f"{stats.keywords_examined:,} examined, "
         f"{stats.pairs_proposed:,} pair(s) proposed, "
         f"{stats.pairs_already_judged:,} already judged, {stats.pairs_judged:,} judged now, "
         f"{stats.pairs_unjudgeable:,} unjudgeable"
@@ -80,6 +80,6 @@ def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
         type=_positive,
         default=None,
         metavar="N",
-        help="examine at most N pending keywords this run; default: all of them",
+        help="ask Jev about at most N pairs this run; default: every unjudged pair",
     )
     parser.set_defaults(func=_cmd_judge_keyword_pairs)
