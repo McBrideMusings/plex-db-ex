@@ -679,7 +679,7 @@ same rule as the Plex TVX page treats a pair as merged when `decision = 'accepte
 pairs into sets of keywords is the reader's too: Jev-confirmed pairs chain (`abusive marriage`
 reaches `family feud` in a few hops), so connected components over merged pairs is not safe.
 
-**Refresh rule.** A pair is written once and never re-judged: a writer adds rows for keywords it
+**Refresh rule.** A pair is written once and never re-judged: a writer adds rows for pairs it
 has not judged before and leaves every existing row, `decision` included, as it is.
 
 `plexdb judge-keyword-pairs` adds the rows. Every run examines every stored keyword, and each
