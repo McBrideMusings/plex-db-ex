@@ -562,7 +562,7 @@ that just missed a single fetch — a rate limit, a timeout, a partial index. Tw
 that on their own: an id whose `last_seen` predates the current walk was not in the most recent
 report.
 
-## Version 9 — the tag explorer's stored title map
+## Version 9 — Plex TVX's stored title map
 
 `title_map` and `title_map_state`, written by `plexdb refresh-map`. Both are derived from
 `enrichment`, so a consumer that reads the keyword facts has no reason to read them.
@@ -572,11 +572,11 @@ title_map        (kind, item_id) PK, x REAL, y REAL
 title_map_state  kind PK, fingerprint TEXT, unplaced INTEGER, computed_at TEXT
 ```
 
-`title_map` holds the default map of the tag explorer's Map view: each title of `kind`
+`title_map` holds the default map of Plex TVX's Map view: each title of `kind`
 (`movie` or `show`) with a position in the unit square. Only distances mean anything. It is the
 map with no noise tag excluded, drawn from the `tmdb_keywords` rows by IDF-weighted keyword
 vectors, truncated SVD to 50 dimensions and UMAP with cosine distance. `item_id` carries no
-foreign key: a title that has left `items` drops out of the explorer's join, and the next refresh
+foreign key: a title that has left `items` drops out of Plex TVX's join, and the next refresh
 redraws the map without it.
 
 `title_map_state` holds one row per kind. `fingerprint` names the drawing recipe and a SHA-256
@@ -590,7 +590,7 @@ whose stored fingerprint differs, replacing both tables' rows for the redrawn ki
 transaction. It runs as its own step of the sweep, after both TMDB steps and before `publish`, so
 the snapshot carries a current map. The
 digest is SHA-256 over Python's `repr` of the row tuples, so only the Python package can
-recompute it; the explorer compares it and treats a mismatch as no map, then draws it live, which
+recompute it; Plex TVX compares it and treats a mismatch as no map, then draws it live, which
 takes tens of seconds for the movies. A reader in another language reads the stored map as the
 last sweep left it and never recomputes the fingerprint.
 
@@ -615,7 +615,7 @@ is the point. So this step reports the exact `enrichment` row count it computed 
 shrink, and the guard accepts a drop in that table only when the store lands on that exact number;
 any further loss, from this migration or a future one, still rolls the store back.
 
-## Version 11 — the tag explorer's stored tag network
+## Version 11 — Plex TVX's stored tag network
 
 `tag_network`, `tag_network_edge` and `tag_network_state`, written by `plexdb
 refresh-tagnetwork`. All three are derived from `enrichment`, so a consumer that reads the
@@ -627,7 +627,7 @@ tag_network_edge   (kind, a, b) PK, shared INTEGER
 tag_network_state  kind PK, fingerprint TEXT, computed_at TEXT
 ```
 
-`tag_network` holds the default network of the tag explorer's Graph view: each tag of `kind`
+`tag_network` holds the default network of Plex TVX's Graph view: each tag of `kind`
 (`movie` or `show`) that clears the Graph view's document-frequency floor, with its document
 frequency and a position in the unit square. Only distances mean anything. It is the network
 with no noise tag excluded, drawn the same way `title_map` is: IDF-weighted vectors — a tag's
@@ -644,7 +644,7 @@ the drawing recipe and a SHA-256 digest of the kind's keyword rows. `computed_at
 only a kind whose stored fingerprint differs, replacing all three tables' rows for the redrawn
 kinds in one transaction. It runs as its own step of the sweep, right after `refresh-map`, so
 the snapshot carries a current network. The digest is built as for
-`title_map_state`, so only the Python package can recompute it; the explorer compares it and
+`title_map_state`, so only the Python package can recompute it; Plex TVX compares it and
 treats a mismatch as no stored network, then draws it live, which takes tens of seconds for the movies — and only for the
 default (no tag excluded) view, since an excluded-tag combination is never precomputed. A reader
 in another language never recomputes the fingerprint.
@@ -700,8 +700,8 @@ costs one re-embed of the vocabulary.
 
 ### `merge_decisions.json`
 
-A person's decision reaches `keyword_pairs.decision` only through this file, because the explorer
-never writes `plexdb.db` (ADR-0007, ADR-0017). It sits beside the explorer's saved-queries file:
+A person's decision reaches `keyword_pairs.decision` only through this file, because Plex TVX
+never writes `plexdb.db` (ADR-0007, ADR-0017). It sits beside Plex TVX's saved-queries file:
 in the directory of `PLEXDB_EXPLORE_SAVED_PATH` when that is set, else beside the published
 snapshot when `PLEXDB_SNAPSHOT_PATH` is set, else beside the store. It is a JSON list; every
 entry has four text fields:
@@ -722,7 +722,7 @@ A missing file means no decisions. A file that is not valid JSON or breaks this 
 whole, and no row changes. The file is not deleted, so it stays the record of the latest
 decision per pair.
 
-The explorer's Merges tab writes this file (`POST /api/merges`, one pair per request, refused with a
+Plex TVX's Merges tab writes this file (`POST /api/merges`, one pair per request, refused with a
 404 for a pair `keyword_pairs` has no row for) and reads it back over the table (`GET /api/merges`),
 so a decision shows at once and is marked "applies at next sweep" until the fold writes it into the
 table. A write keeps one entry per pair, which the fold's last-entry-wins rule makes equivalent.

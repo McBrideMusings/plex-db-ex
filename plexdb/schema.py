@@ -362,18 +362,18 @@ ALTER TABLE external_ids_v8 RENAME TO external_ids;
 CREATE INDEX idx_external_ids_item ON external_ids(item_id);
 """
 
-#: Version 9 — the tag explorer's default title map, drawn by the writer and
-#: stored, so the explorer serves it without drawing anything.
+#: Version 9 — Plex TVX's default title map, drawn by the writer and
+#: stored, so Plex TVX serves it without drawing anything.
 #:
 #: `title_map` holds one row per placed title and kind: a position in the unit
 #: square, where only distances mean anything. `title_map_state` holds one row
 #: per kind: the fingerprint of the keyword rows the map was drawn from, how
 #: many keyword-carrying titles it left off, and when. Nothing interprets the
-#: fingerprint except the explorer's freshness check, which recomputes it from
+#: fingerprint except Plex TVX's freshness check, which recomputes it from
 #: the current keyword rows and serves the stored map only when the two match.
 #:
 #: Both tables are derived, so they carry no history and no foreign key: a
-#: title that leaves `items` drops out of the explorer's join, and the next
+#: title that leaves `items` drops out of Plex TVX's join, and the next
 #: `plexdb refresh-map` redraws the map without it. Purely additive — no rows
 #: in an existing table move, so there is nothing to lose.
 _V9 = """
@@ -537,7 +537,7 @@ def _V10(conn: sqlite3.Connection) -> DeclaredShrinks:
     return {"enrichment": len(merged)}
 
 
-#: Version 11 — the tag explorer's stored tag network, the Graph view's
+#: Version 11 — Plex TVX's stored tag network, the Graph view's
 #: counterpart to version 9's stored title map.
 #:
 #: `tag_network` holds one row per node: a tag of `kind` with its document

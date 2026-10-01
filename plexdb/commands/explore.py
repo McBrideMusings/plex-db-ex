@@ -1,4 +1,4 @@
-"""`plexdb explore` — serve the tag explorer over the store, read-only.
+"""`plexdb explore` — serve Plex TVX over the store, read-only.
 
 A browser view of every `tmdb_keywords` value: how many titles carry it, its
 IDF, what it travels with, and which titles those are. See `plexdb.explore`.
@@ -37,7 +37,7 @@ def _cmd_explore(args: argparse.Namespace) -> int:
     )
     url = f"http://{args.host}:{server.server_port}/"
     print(
-        f"tag explorer on {url} reading {config.store_path} (read-only); Ctrl-C to stop",
+        f"Plex TVX on {url} reading {config.store_path} (read-only); Ctrl-C to stop",
         flush=True,
     )
     if args.open:
@@ -52,7 +52,7 @@ def _cmd_explore(args: argparse.Namespace) -> int:
 
 
 def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    parser = sub.add_parser(NAME, help="serve the read-only tag explorer in a browser")
+    parser = sub.add_parser(NAME, help="serve the read-only Plex TVX page in a browser")
     parser.add_argument("--host", default=DEFAULT_HOST, help=f"default {DEFAULT_HOST}")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"default {DEFAULT_PORT}")
     parser.add_argument("--open", action="store_true", help="open the page in a browser")

@@ -1,4 +1,4 @@
-"""`plexdb refresh-map` — redraw the tag explorer's stored title maps.
+"""`plexdb refresh-map` — redraw Plex TVX's stored title maps.
 
 Draws the default map (no noise excluded) of movies and of shows from the
 keyword rows and stores it, skipping a kind whose stored map was drawn from the
@@ -19,7 +19,7 @@ from ..titlemap import Refreshed, refresh_title_maps
 NAME = "refresh-map"
 #: After both TMDB steps and before `publish`, which snapshots what this writes.
 ORDER = 57
-#: The explorer draws a missing or stale map live, so a failed refresh costs
+#: Plex TVX draws a missing or stale map live, so a failed refresh costs
 #: load time and nothing else.
 SWEEP = Step.BEST_EFFORT
 
@@ -46,6 +46,6 @@ def _cmd_refresh_map(_args: argparse.Namespace) -> int:
 def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parser = sub.add_parser(
         NAME,
-        help="redraw the explorer's stored title maps; a kind whose keywords are unchanged is kept",
+        help="redraw Plex TVX's stored title maps; a kind whose keywords are unchanged is kept",
     )
     parser.set_defaults(func=_cmd_refresh_map)

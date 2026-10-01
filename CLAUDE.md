@@ -93,7 +93,7 @@ admin dev check  report the store's health read-only; non-zero if it is behind o
 admin logs live  tail the container on the host
 admin diff       show run-config drift between the container and the last deploy
 admin docs       serve the docs site
-admin dev explore  serve the read-only tag explorer on http://localhost:5194
+admin dev explore  serve the read-only Plex TVX page on http://localhost:5194
 admin dev judge-keyword-pairs [--limit N]  ask Jev about synonym keyword pairs; needs LLAMA_SWAP_BASE_URL and TYPESAFE_API_KEY
 admin dev fold-merge-decisions  apply merge_decisions.json to keyword_pairs.decision
 ```
@@ -104,7 +104,7 @@ from the `[docker_run]` table — nothing pulls from a registry — and finishes
 `plexdb check` inside it, so a startup migration that rolled itself back ends the deploy. **The migration runs as the
 container starts** (`plexdb/schedule.py`), so the store matches the code that was just deployed
 rather than waiting for the next sweep; it takes its own pre-migration copy and rolls itself back
-on any row loss. After it, the container serves the read-only tag explorer over the snapshot on
+on any row loss. After it, the container serves the read-only Plex TVX page over the snapshot on
 port 5194, published only on the host address `PLEXDB_EXPLORE_BIND` names — it has no login.
 The container's mounts and credentials are read from
 `/boot/config/plexdb.env` **on the host**, never from a checkout's `.env`: those mount paths

@@ -31,7 +31,7 @@ the model that made them. It is derived and disposable: deleting it, or changing
 the model, costs one re-embed. A sweep embeds only the texts the cache lacks, so
 a night with no new keyword makes no embedding request.
 
-**Decisions.** The explorer never writes `plexdb.db` (ADR-0007, ADR-0017), so a
+**Decisions.** Plex TVX never writes `plexdb.db` (ADR-0007, ADR-0017), so a
 person's accept or reject reaches the table only through `merge_decisions.json`,
 which `fold_merge_decisions` applies at the start of a sweep.
 """
@@ -110,11 +110,11 @@ class FoldStats:
 
 
 def merge_decisions_path(config: Config) -> Path:
-    """`merge_decisions.json`, beside the explorer's saved-queries file.
+    """`merge_decisions.json`, beside Plex TVX's saved-queries file.
 
     That file is `PLEXDB_EXPLORE_SAVED_PATH` when set (the container's own mount);
     otherwise it sits beside the published snapshot when one is configured, as the
-    scheduler's explorer puts it, and beside the store otherwise, as `plexdb
+    scheduler's Plex TVX puts it, and beside the store otherwise, as `plexdb
     explore` does.
     """
     raw = os.environ.get(EXPLORE_SAVED_PATH_VAR, "").strip()

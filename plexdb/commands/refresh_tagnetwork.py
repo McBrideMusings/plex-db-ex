@@ -1,4 +1,4 @@
-"""`plexdb refresh-tagnetwork` — redraw the tag explorer's stored tag networks.
+"""`plexdb refresh-tagnetwork` — redraw Plex TVX's stored tag networks.
 
 Draws the default network (no noise excluded) of movies and of shows from the
 keyword rows and stores it, skipping a kind whose stored network was drawn
@@ -19,7 +19,7 @@ from ..tagnetwork import Refreshed, refresh_tag_networks
 NAME = "refresh-tagnetwork"
 #: Right after `refresh-map` and before `publish`, which snapshots what this writes.
 ORDER = 58
-#: The explorer draws a missing or stale network live, so a failed refresh
+#: Plex TVX draws a missing or stale network live, so a failed refresh
 #: costs load time and nothing else.
 SWEEP = Step.BEST_EFFORT
 
@@ -46,6 +46,6 @@ def _cmd_refresh_tagnetwork(_args: argparse.Namespace) -> int:
 def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parser = sub.add_parser(
         NAME,
-        help="redraw the explorer's stored tag networks; an unchanged kind is kept",
+        help="redraw Plex TVX's stored tag networks; an unchanged kind is kept",
     )
     parser.set_defaults(func=_cmd_refresh_tagnetwork)

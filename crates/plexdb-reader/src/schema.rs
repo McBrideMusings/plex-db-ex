@@ -41,7 +41,7 @@ use crate::error::ReaderError;
 /// still refused rather than silently read as if it had it.
 ///
 /// **Version 9 does not change what this crate reads.** It adds `title_map` and
-/// `title_map_state`, the tag explorer's stored map; no accessor here reads
+/// `title_map_state`, Plex TVX's stored map; no accessor here reads
 /// them.
 ///
 /// **Version 10 changes what this crate reads** (ADR-0016). `enrichment` and
@@ -53,7 +53,7 @@ use crate::error::ReaderError;
 /// fact and no `keyword_forms`, is refused by the exact-match gate.
 ///
 /// **Version 11 does not change what this crate reads.** It adds `tag_network`,
-/// `tag_network_edge` and `tag_network_state`, the tag explorer's stored
+/// `tag_network_edge` and `tag_network_state`, Plex TVX's stored
 /// keyword network; no accessor here reads them.
 ///
 /// **Version 12 does not change what this crate reads.** It adds `keyword_pairs`,

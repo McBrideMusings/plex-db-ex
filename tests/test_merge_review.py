@@ -112,7 +112,7 @@ def test_an_accept_writes_one_entry_and_moves_the_pair_out_of_the_queue(
     _, listing = _send("GET", f"{base_url}/api/merges")
     assert _names(listing["proposed"]) == ["cop/polic", "alien/space"]
     assert "bank/vault" in _names(listing["decided"])
-    # The explorer never wrote the store.
+    # Plex TVX never wrote the store.
     with open_store(store) as conn:
         row = conn.execute("SELECT decision FROM keyword_pairs WHERE keyword_a = 'bank'").fetchone()
         assert row[0] is None

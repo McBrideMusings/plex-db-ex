@@ -1,10 +1,10 @@
-"""The writer's half of the tag explorer's default tag network.
+"""The writer's half of Plex TVX's default tag network.
 
 `plexdb.explore` draws the Graph view's network of every tag by title
 co-membership, which takes seconds to minutes. With no noise excluded that
 network is a pure function of the keyword rows, so this module draws it once
 and stores it in `tag_network`, `tag_network_edge` and `tag_network_state`;
-the explorer serves the stored copy while its fingerprint still matches the
+Plex TVX serves the stored copy while its fingerprint still matches the
 keyword rows and draws live when it does not. This is the only code that
 writes those tables (ADR-0001).
 """

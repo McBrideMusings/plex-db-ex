@@ -1,4 +1,4 @@
-"""The tag explorer reports keyword counts the way a keyword-cosine scorer sees them.
+"""Plex TVX reports keyword counts the way a keyword-cosine scorer sees them.
 
 Driven through `build_index`, `titles_tagged` and the HTTP server a browser
 talks to, against a small store whose counts can be worked out by hand.
@@ -52,7 +52,7 @@ from plexdb.titlemap import refresh_title_maps
 FETCHED = "2026-08-09T12:00:00+00:00"
 
 # Four movies and a show. `stinger` rides along with `superhero` on two of the
-# three superhero films, which is the shape the explorer exists to expose.
+# three superhero films, which is the shape Plex TVX exists to expose.
 TITLES = {
     "imdb:tt1": ("movie", "Iron Man", 2008, ["superhero", "stinger", "based on comic"]),
     "imdb:tt2": ("movie", "Thor", 2011, ["superhero", "stinger"]),
@@ -314,7 +314,7 @@ def _last_ndjson(body: bytes) -> Any:
 
 def test_server_serves_the_page_and_both_endpoints(base_url: str) -> None:
     status, page = _get(f"{base_url}/")
-    assert status == 200 and b"Tag explorer" in page
+    assert status == 200 and b"Plex TVX" in page
 
     status, body = _get(f"{base_url}/api/tags?kind=movie")
     tags = json.loads(body)
@@ -909,7 +909,7 @@ def _free_port() -> int:
 def test_scheduler_serves_the_snapshot_once_one_is_published(
     store: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """On the host the explorer runs inside `plexdb schedule` and reads the
+    """On the host Plex TVX runs inside `plexdb schedule` and reads the
     snapshot. Before the first sweep publishes one it answers 503, not a
     traceback; after, it serves the snapshot's numbers without a restart."""
     snapshot = tmp_path / "snapshot" / "plexdb.snapshot.db"

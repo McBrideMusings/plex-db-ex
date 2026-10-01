@@ -37,7 +37,7 @@ ENV PATH="/app/.venv/bin:$PATH" \
 # own volume, `/snapshot` is the volume the station container already reads, so
 # `publish` writes where the consumer looks and nothing copies anything
 # (issue #43). `/explore-data` is the Query tab's saved queries' own mount,
-# never `/snapshot` — the explorer has no login, so anyone who reaches the
+# never `/snapshot` — Plex TVX has no login, so anyone who reaches the
 # port could otherwise write into the directory the station reads
 # (plex-db-ex-oyg.3; `SavedQueries` additionally caps entry count and total
 # size). Credentials arrive from the host environment and appear in no
@@ -48,7 +48,7 @@ ENV PLEXDB_PATH=/data/plexdb.db \
 
 VOLUME ["/data", "/snapshot", "/explore-data"]
 
-# The read-only tag explorer `plexdb schedule` serves beside the sweep when
+# The read-only Plex TVX page `plexdb schedule` serves beside the sweep when
 # PLEXDB_EXPLORE_PORT is set, reading the snapshot. Documentation only: whether
 # the port is published, and on which host address, is `[docker_run]`'s call.
 EXPOSE 5194

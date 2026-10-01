@@ -1,7 +1,7 @@
 """What the Plex TVX review page shows and records about synonym keyword pairs.
 
 `keyword_pairs` holds a judge's score for each pair (ADR-0018). A person's accept or
-reject never touches the store, because the explorer never writes `plexdb.db`
+reject never touches the store, because Plex TVX never writes `plexdb.db`
 (ADR-0007, ADR-0017): it goes into `merge_decisions.json`, which `plexdb
 fold-merge-decisions` applies at the next sweep. Until then this module lays the
 file's decisions over the table, so the page shows a click at once.
@@ -86,7 +86,7 @@ class MergeDecisions:
     """`merge_decisions.json`, written the way `SavedQueries` writes its file.
 
     Replaced by rename so a reader never sees half of it, under a lock, and bounded
-    because the explorer has no login. Only the last entry per pair counts (the fold
+    because Plex TVX has no login. Only the last entry per pair counts (the fold
     applies entries in order), so a write keeps one entry per pair and the file's
     size is bounded by the number of pairs the table holds.
     """

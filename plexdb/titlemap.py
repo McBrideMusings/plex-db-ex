@@ -1,9 +1,9 @@
-"""The writer's half of the tag explorer's default title map.
+"""The writer's half of Plex TVX's default title map.
 
 `plexdb.explore` draws a map of every title by keyword similarity, which takes
 seconds to minutes. With no noise excluded that map is a pure function of the
 keyword rows, so this module draws it once and stores it in `title_map` and
-`title_map_state`; the explorer serves the stored copy while its fingerprint
+`title_map_state`; Plex TVX serves the stored copy while its fingerprint
 still matches the keyword rows and draws live when it does not. This is the only
 code that writes those tables (ADR-0001).
 """
