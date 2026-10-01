@@ -679,8 +679,43 @@ pairs into sets of keywords is the reader's too: Jev-confirmed pairs chain (`abu
 reaches `family feud` in a few hops), so connected components over merged pairs is not safe.
 
 **Refresh rule.** A pair is written once and never re-judged: a writer adds rows for keywords it
-has not judged before and leaves every existing row, `decision` included, as it is. No command
-writes this table yet.
+has not judged before and leaves every existing row, `decision` included, as it is.
+
+`plexdb judge-keyword-pairs` adds the rows. A stored keyword with no row on either side is
+*pending*. Each pending keyword proposes its 10 nearest neighbours in the whole stored vocabulary
+with cosine >= 0.75 between `nomic-embed-text` vectors of their shortest readable surface forms
+(`keyword_forms.surface`, no task prefix). Jev is asked about the two surface forms, with a
+`score` question and a `noul` question ("Do the two tags mean the same thing?") in one request;
+`jev_score` is the `noul` answer and `jev_model` is the model id in the response (for example
+`jev-1.13.0`). Rows are written in batches of 200 pending keywords, each batch in one
+transaction, so a run killed partway leaves every finished batch behind. The step needs
+`LLAMA_SWAP_BASE_URL` and `TYPESAFE_API_KEY`; with either unset the sweep reports it skipped. A
+keyword that has a row only as the other side of another keyword's pair is not pending on the next
+run, so an interrupted run can leave such a keyword's own neighbours unproposed.
+
+### `merge_decisions.json`
+
+A person's decision reaches `keyword_pairs.decision` only through this file, because the explorer
+never writes `plexdb.db` (ADR-0007, ADR-0017). It sits beside the explorer's saved-queries file:
+in the directory of `PLEXDB_EXPLORE_SAVED_PATH` when that is set, else beside the published
+snapshot when `PLEXDB_SNAPSHOT_PATH` is set, else beside the store. It is a JSON list; every
+entry has four text fields:
+
+```json
+[
+  {"keyword_a": "bank robberi", "keyword_b": "heist", "decision": "accepted",
+   "decided_at": "2026-10-01T12:00:00+00:00"}
+]
+```
+
+`keyword_a` and `keyword_b` are stored values with `keyword_a < keyword_b`. `decision` is
+`accepted`, `rejected` or `cleared`; `cleared` sets `decision` and `decided_at` back to NULL.
+`decided_at` is a UTC time, required for `accepted` and `rejected`. `plexdb fold-merge-decisions`
+applies the file, as the first sweep step after `migrate`, every run: entries apply in list order,
+so the last entry for a pair wins, and an entry naming a pair with no row is counted and ignored.
+A missing file means no decisions. A file that is not valid JSON or breaks this shape is refused
+whole, and no row changes. The file is not deleted, so it stays the record of the latest
+decision per pair.
 
 ## Not yet built
 

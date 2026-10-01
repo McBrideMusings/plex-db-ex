@@ -94,6 +94,8 @@ admin logs live  tail the container on the host
 admin diff       show run-config drift between the container and the last deploy
 admin docs       serve the docs site
 admin dev explore  serve the read-only tag explorer on http://localhost:5194
+admin dev judge-keyword-pairs [--limit N]  ask Jev about synonym keyword pairs; needs LLAMA_SWAP_BASE_URL and TYPESAFE_API_KEY
+admin dev fold-merge-decisions  apply merge_decisions.json to keyword_pairs.decision
 ```
 
 `admin deploy` takes a copy of the live store on the host first, then builds for `linux/amd64`

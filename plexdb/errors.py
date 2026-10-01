@@ -45,3 +45,15 @@ class MDBListError(PlexdbError):
     harvest counts it as unresolved and drops it, so a list that mostly sits
     outside the library is an ordinary result rather than a failure.
     """
+
+
+class EmbeddingError(PlexdbError):
+    """The embedding server could not be reached, or returned something unusable."""
+
+
+class JevError(PlexdbError):
+    """Jev could not be reached, kept answering 429, or returned something unusable."""
+
+
+class MergeDecisionsError(PlexdbError):
+    """`merge_decisions.json` is not valid JSON or does not hold the documented shape."""

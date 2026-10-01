@@ -42,6 +42,8 @@ EXPECTED_COMMANDS = {
     "refresh-map",
     "refresh-tagnetwork",
     "harvest-mdblist",
+    "fold-merge-decisions",
+    "judge-keyword-pairs",
     "ingest-plays",
     "enrich-tautulli-plays",
     "latent-users",
@@ -64,6 +66,7 @@ EXPECTED_COMMAND_ORDER = [
     "idle",
     "sweep",
     "migrate",
+    "fold-merge-decisions",
     "walk",
     "repair-identities",
     "repair-fs-identities",
@@ -74,6 +77,7 @@ EXPECTED_COMMAND_ORDER = [
     "refresh-map",
     "refresh-tagnetwork",
     "harvest-mdblist",
+    "judge-keyword-pairs",
     "latent-users",
     # Not a step of the sweep: a read-only browser view of what the steps above
     # wrote (`plexdb/commands/explore.py`).

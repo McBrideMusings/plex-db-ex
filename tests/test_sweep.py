@@ -24,6 +24,7 @@ from plexdb.sweep import PlannedStep, Status, Step, plan, run_locked_sweep, run_
 # runs at 3am.
 EXPECTED_SWEEP = [
     ("migrate", Step.REQUIRED),
+    ("fold-merge-decisions", Step.BEST_EFFORT),
     ("walk", Step.REQUIRED),
     ("ingest-plays", Step.REQUIRED),
     ("enrich-tautulli-plays", Step.BEST_EFFORT),
@@ -32,6 +33,7 @@ EXPECTED_SWEEP = [
     ("refresh-map", Step.BEST_EFFORT),
     ("refresh-tagnetwork", Step.BEST_EFFORT),
     ("harvest-mdblist", Step.BEST_EFFORT),
+    ("judge-keyword-pairs", Step.BEST_EFFORT),
     ("publish", Step.REQUIRED),
 ]
 

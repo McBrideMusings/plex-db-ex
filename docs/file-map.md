@@ -20,9 +20,11 @@ plex-db-ex/
 │   │   ├── enrich_tmdb_edges.py
 │   │   ├── enrich_tmdb_keywords.py
 │   │   ├── explore.py
+│   │   ├── fold_merge_decisions.py  applies `merge_decisions.json` to `keyword_pairs.decision`; sweep step 11, right after `migrate`, needs no service
 │   │   ├── harvest_mdblist.py
 │   │   ├── idle.py            exit 0 only when no migration and no writer holds the store; read-only. Given a command, it claims both store locks and runs that command under them, which is how `tools/host-exec.sh` runs anything
 │   │   ├── ingest_plays.py
+│   │   ├── judge_keyword_pairs.py  embeds stored keywords with no `keyword_pairs` row, asks Jev about each one's nearest neighbours, writes one row per judged pair; sweep step 65, skipped when `LLAMA_SWAP_BASE_URL` or `TYPESAFE_API_KEY` is unset
 │   │   ├── migrate.py
 │   │   ├── latent_users.py
 │   │   ├── publish.py
@@ -46,6 +48,9 @@ plex-db-ex/
 │   ├── explore.html       the explorer's one page — table, drill-down, a canvas "Tag network" of every tag above a minimum-titles threshold on a shared `Viewport` (wheel zoom toward the cursor, drag and pinch pan, grid-indexed hover, reset), a slider that filters the already-fetched network client-side rather than re-fetching it, size-and-zoom-scaled labels, and a tag search — `streamNetwork` reads `/api/tagnetwork`'s NDJSON body one line at a time rather than waiting for the whole network, so a chosen exclude set draws tag nodes at a `placeholderLayout` golden-angle-spiral position (ranked by document frequency) as soon as the vocab stage arrives, adds edges when that stage arrives, and `startNetworkTween` eases every node from its placeholder onto its real SVD+UMAP coordinate over 400ms once the layout stage completes, instead of leaving the tab blank until the whole (tens-of-seconds) computation finishes, a canvas map of every title on the same `Viewport` with a hover card and a pinned card per title, region labels that refine as the view zooms in (the "Title map" view), a title-or-tag search that focuses or fades, and the selected tag's titles and co-tags in the shared detail panel, a noise list kept in the browser's localStorage, never on disk, and the Query tab (SQL box, result table, saved queries, recipes); `posterThumb` renders a title's poster (lazy-loaded `<img>` against `/api/poster`, monogram fallback on error) in the pinned card, the Tags tab's title list and the Query tab's labeled results (plex-db-ex-oyg.2)
 │   ├── tautulli_client.py read-only Tautulli client (get_history, get_users) behind TautulliSource/TautulliUserSource protocols
 │   ├── plex_client.py     read-only Plex HTTP client behind PlexSource/PlexAccountSource protocols
+│   ├── synonyms.py        synonym keywords: embeds the surface forms, proposes each pending keyword's 10 nearest neighbours at cosine >= 0.75, has Jev judge each pair, writes `keyword_pairs` in committed batches of 200 keywords; `fold_merge_decisions` applies a person's `merge_decisions.json`; `merge_decisions_path` places that file beside the saved-queries file
+│   ├── embed_client.py    llama-swap embeddings client (`nomic-embed-text`) behind an `Embedder` protocol
+│   ├── jev_client.py      Jev pair judge (`score` and `noul` questions in one request, 429 backoff) behind a `Judge` protocol
 │   ├── tmdb_client.py     read-only TMDB client (keywords, recommendations, similar) behind a TMDbSource protocol
 │   ├── tmdb_common.py     media_type_for / MAX_CONSECUTIVE_FAILURES shared by enrich_tmdb.py and tmdb_edges.py
 │   ├── staleness.py       is_stale / DEFAULT_STALE_DAYS — the one "is this row due a re-fetch" rule, shared by both TMDB sweeps and the crowd-list harvest
