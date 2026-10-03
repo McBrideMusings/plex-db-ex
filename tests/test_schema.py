@@ -11,7 +11,7 @@ import pytest
 
 from plexdb import health, schema
 from plexdb.errors import StoreError
-from plexdb.store import init, open_readonly, open_store
+from plexdb.store import init, migrate, open_readonly, open_store
 
 V1_TABLES = {"items", "external_ids", "plex_items", "enrichment"}
 V2_TABLES = {"plays", "plays_ingest_cursor"}
@@ -22,6 +22,7 @@ V9_TABLES = {"title_map", "title_map_state"}
 V10_TABLES = {"keyword_forms"}
 V11_TABLES = {"tag_network", "tag_network_edge", "tag_network_state"}
 V12_TABLES = {"keyword_pairs"}
+V14_TABLES = {"keyword_roles", "keyword_role_decisions"}
 #: V4 adds no new table — it only alters the existing `plays` table and adds
 #: an index (issue #9).
 
@@ -182,6 +183,7 @@ def test_a_current_store_carries_every_migrations_tables_and_nothing_else(
         | V10_TABLES
         | V11_TABLES
         | V12_TABLES
+        | V14_TABLES
         | {"schema_version"}
     )
 
@@ -767,10 +769,8 @@ def test_v13_carries_every_keyword_pair_over_and_accepts_a_refused_pair(tmp_path
     rows, decisions included, come through unchanged, and a row is either an answer
     (score, model, no error) or a refusal (error, no score, no model)."""
     store = tmp_path / "plexdb.db"
-    init(store)
+    _store_at(store, 12)
     with open_store(store) as conn:
-        conn.executescript("DROP TABLE keyword_pairs;" + schema._V12)
-        conn.execute("UPDATE schema_version SET version = 12")
         conn.execute(
             "INSERT INTO keyword_pairs VALUES "
             "('hippo', 'hippopotamus', 0.95, 'jev-1.13.0', '2026-10-01T00:00:00Z', "
@@ -807,3 +807,178 @@ def test_v13_carries_every_keyword_pair_over_and_accepts_a_refused_pair(tmp_path
                     "(keyword_a, keyword_b, jev_score, jev_model, jev_error, judged_at) "
                     f"VALUES {bad[:-1]}, '2026-10-01T00:00:00Z')"
                 )
+
+
+def _store_at(path: Path, version: int) -> None:
+    """A store built by the first `version` migrations alone, stamped at that
+    version, so a later step runs against the shape it actually shipped over."""
+    conn = sqlite3.connect(path)
+    try:
+        for migration in schema.MIGRATIONS[:version]:
+            if isinstance(migration, str):
+                conn.executescript(migration)
+            else:
+                migration(conn)
+        conn.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
+        conn.execute("INSERT INTO schema_version (version) VALUES (?)", (version,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _v13_store_with_enrichment(path: Path) -> None:
+    """A v13 store holding one title, one play and two keyword rows — what a
+    deployed store looked like before v14."""
+    _store_at(path, 13)
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute(
+            "INSERT INTO items (item_id, type, title) VALUES ('imdb:tt1', 'movie', 'Heat')"
+        )
+        conn.execute(
+            "INSERT INTO plays (history_key, item_id, plex_account_id, viewed_at) "
+            "VALUES ('h1', 'imdb:tt1', 1, 1700000000)"
+        )
+        conn.executemany(
+            "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) "
+            "VALUES ('imdb:tt1', 'keywords', 'tmdb', 'keyword', ?, '2026-10-01T00:00:00Z')",
+            [("heist",), ("los angel",)],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_v14_adds_a_null_rank_to_every_existing_enrichment_row(tmp_path: Path) -> None:
+    """Version 14 runs through `init`, so the pre-migration copy and the row-count
+    guard on items, plays and enrichment both apply, with no declared shrink."""
+    store = tmp_path / "plexdb.db"
+    _v13_store_with_enrichment(store)
+
+    result = migrate(store, tmp_path / "backups")
+
+    assert (result.was, result.now) == (13, schema.SCHEMA_VERSION)
+    assert result.counts_after == result.counts_before
+
+    with open_readonly(store) as conn:
+        assert [
+            tuple(r) for r in conn.execute("SELECT value, rank FROM enrichment ORDER BY value")
+        ] == [
+            ("heist", None),
+            ("los angel", None),
+        ]
+        assert conn.execute("SELECT count(*) FROM items").fetchone()[0] == 1
+        assert conn.execute("SELECT count(*) FROM plays").fetchone()[0] == 1
+    assert result.backup == tmp_path / "backups" / "plexdb.pre-v14.db"
+    assert result.backup.exists()
+
+
+def test_keyword_roles_holds_a_stated_role_a_score_or_a_refusal_for_the_closed_role_set(
+    tmp_path: Path,
+) -> None:
+    store = tmp_path / "plexdb.db"
+    init(store)
+    insert = (
+        "INSERT INTO keyword_roles (keyword, role, source, score, model, error, stated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, '2026-10-03T00:00:00Z')"
+    )
+    with open_store(store) as conn:
+        conn.execute(insert, ("los angel", "region", "wikidata", None, None, None))
+        conn.execute(insert, ("los angel", "region", "jev", 0.97, "jev-1.13.0", None))
+        conn.execute(insert, ("noir", "tone", "jev", None, None, "Jev returned 422"))
+        for bad in (
+            ("heist", "mood", "jev", 0.5, "jev-1.13.0", None),  # not a role
+            ("heist", "theme", "jev", 1.5, "jev-1.13.0", None),  # score out of range
+            ("heist", "theme", "jev", 0.5, "jev-1.13.0", "Jev returned 400"),  # both
+            ("los angel", "region", "jev", 0.1, "jev-1.13.0", None),  # same source twice
+            ("heist", "theme", "jev", 0.5, None, None),  # a score with no model
+        ):
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute(insert, bad)
+
+
+def test_a_role_decision_is_one_row_per_keyword_and_role_never_per_source(
+    tmp_path: Path,
+) -> None:
+    store = tmp_path / "plexdb.db"
+    init(store)
+    insert = (
+        "INSERT INTO keyword_role_decisions (keyword, role, decision, decided_at) "
+        "VALUES (?, ?, ?, '2026-10-03T00:00:00Z')"
+    )
+    with open_store(store) as conn:
+        conn.execute(insert, ("los angel", "region", "accepted"))
+        conn.execute(insert, ("los angel", "era", "rejected"))
+        for bad in (
+            ("los angel", "region", "rejected"),  # a second decision on the same pair
+            ("los angel", "tone", "maybe"),  # not a decision
+            ("los angel", "mood", "accepted"),  # not a role
+        ):
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute(insert, bad)
+
+
+def _collection_queries() -> list[str]:
+    """The SQL blocks under schema.md's "Reading the store to build collections",
+    in the order the page lists them."""
+    page = (Path(__file__).parent.parent / "docs" / "schema.md").read_text()
+    section = page.split("## Reading the store to build collections", 1)[1].split("\n## ", 1)[0]
+    return re.findall(r"```sql\n(.*?)```", section, re.S)
+
+
+def test_every_collection_query_in_schema_md_returns_what_it_says(tmp_path: Path) -> None:
+    """schema.md publishes these queries to consumers, so each one runs here over
+    a store seeded to give it a known answer."""
+    store = tmp_path / "plexdb.db"
+    init(store)
+    with open_store(store) as conn:
+        conn.executemany(
+            "INSERT INTO items (item_id, type, title) VALUES (?, 'movie', ?)",
+            [("imdb:tt0113277", "Heat"), ("imdb:tt0072890", "Dog Day Afternoon")],
+        )
+        conn.executemany(
+            "INSERT INTO plex_items (rating_key, item_id, section_id, last_seen) "
+            "VALUES (?, ?, '1', '2026-10-03T00:00:00Z')",
+            [("85450", "imdb:tt0113277"), ("85451", "imdb:tt0113277")],
+        )
+        conn.executemany(
+            "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) "
+            "VALUES (?, ?, ?, ?, ?, '2026-10-03T00:00:00Z')",
+            [
+                ("imdb:tt0113277", "keywords", "tmdb", "keyword", "heist"),
+                ("imdb:tt0113277", "keywords", "tmdb", "keyword", "bank robberi"),
+                ("imdb:tt0113277", "keywords", "wikidata", "keyword", "bank robberi"),
+                ("imdb:tt0072890", "keywords", "tmdb", "keyword", "heist"),
+                ("imdb:tt0072890", "keywords", "tmdb", "keyword", "hostag"),
+                ("imdb:tt0113277", "ratings", "mdblist", "imdb", "8.3"),
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO keyword_roles (keyword, role, source, score, model, error, stated_at) "
+            "VALUES (?, 'region', ?, ?, ?, ?, '2026-10-03T00:00:00Z')",
+            [
+                ("los angel", "wikidata", None, None, None),  # stated
+                ("tokyo", "jev", 0.95, "jev-1.13.0", None),  # over the threshold
+                ("paris", "jev", 0.3, "jev-1.13.0", None),  # under it
+                ("heist", "jev", 0.9, "jev-1.13.0", None),  # over it, but rejected
+                ("noir", "jev", None, None, "Jev returned 422"),  # refused
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO keyword_role_decisions (keyword, role, decision, decided_at) "
+            "VALUES (?, 'region', ?, '2026-10-03T00:00:00Z')",
+            [("heist", "rejected"), ("paris", "accepted")],
+        )
+        conn.commit()
+
+        queries = _collection_queries()
+        assert len(queries) == 5
+        combo, cooccur, rating_keys, roles, ratings = (
+            [tuple(r) for r in conn.execute(q)] for q in queries
+        )
+
+    assert combo == [("imdb:tt0113277", "Heat", None)]
+    assert cooccur == [("bank robberi", 1), ("hostag", 1)]
+    assert sorted(rating_keys) == [("85450", "1"), ("85451", "1")]
+    assert roles == [("los angel",), ("paris",), ("tokyo",)]
+    assert ratings == [("imdb", "8.3", "mdblist")]

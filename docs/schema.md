@@ -18,7 +18,7 @@ Opening a store whose version is **higher** than the running build understands i
 outright, because a newer writer may have added rows this build cannot see. A store carrying a
 `schema_version` table with no row is reported as damaged rather than treated as empty.
 
-**Versions 1 through 12 are live.** Everything under "Not yet built" is the target for later
+**Versions 1 through 14 are live.** Everything under "Not yet built" is the target for later
 slices.
 
 ### A migration is copied before it runs, and rolled back if it goes wrong
@@ -95,6 +95,7 @@ CREATE TABLE enrichment (
     key        TEXT NOT NULL,
     value      TEXT NOT NULL,
     fetched_at TEXT NOT NULL,
+    rank       INTEGER,
     PRIMARY KEY (item_id, namespace, source, key, value)
 );
 
@@ -746,6 +747,125 @@ they say nothing about the pair. To ask about a refused pair again, delete its r
 Plex TVX's Merges tab lists and accepts only scored pairs, so a refused pair never appears there and a decision for one is refused with a 404.
 
 `plexdb judge-keyword-pairs` reports the count as `unjudgeable`.
+
+## Version 14 — a source's tag rank, and keyword roles
+
+`enrichment.rank` is the rank a source gave that row, stored verbatim — AniList's 0–100 vote share
+for a tag, for example. It is NULL wherever the source gives none, which is every row written before
+v14 and every TMDB keyword. NULL means "this source does not rank", never rank 0.
+
+`keyword_roles` and `keyword_role_decisions` say what role a stored keyword plays. Like
+`keyword_pairs`, they hold verdicts beside `enrichment`, never a conclusion
+([ADR-0019](./adr/0019-keyword-roles-are-verdicts-beside-enrichment)).
+
+```
+keyword_roles           (keyword, role, source) PK, score REAL, model TEXT, error TEXT,
+                        stated_at TEXT
+keyword_role_decisions  (keyword, role) PK, decision TEXT, decided_at TEXT
+```
+
+`role` is one of a closed set, enforced by a `CHECK` in both tables:
+
+| Role | Means |
+|---|---|
+| `tone` | how a title feels — `bleak`, `whimsic` |
+| `era` | when it is set — `1970s`, `victorian era` |
+| `region` | where it is set — `los angel`, `tokyo` |
+| `theme` | what it is about — `grief`, `reveng` |
+| `character_trait` | what its people are like — `antihero`, `genius` |
+
+`keyword` is a value as `enrichment.value` holds it, normalized and stemmed. A row in
+`keyword_roles` is one of three things:
+
+- **A role a source states** — Wikidata's narrative location is a `region`. `score`, `model` and
+  `error` are NULL.
+- **A judge's answer** — `score` is the judge's own 0–1 answer, stored as it gave it, with the
+  model id in `model`. A row with a `score` always has a `model`.
+- **A judge's refusal** — `error` holds the refusal and `score` is NULL, so the keyword is not
+  asked again. `error` and `score` are never both set.
+
+`stated_at` is UTC. `keyword_role_decisions` holds what a person said about one keyword in one
+role: `accepted` or `rejected`, with `decided_at`. A decision is per (keyword, role), never per
+source, and a keyword nobody has ruled on has no row.
+
+**Whether a keyword has a role is the reader's call, not a column.** A decision outranks every
+score: `accepted` means it has the role, `rejected` means it does not. With no decision, a reader
+picks its own rule — the query under [Reading the store to build collections](#reading-the-store-to-build-collections)
+counts a source-stated row, or a judge's score at or above a threshold.
+
+**Refresh rule.** No writer fills either table yet; the source and judge writers that do state
+their own rule beside their namespace.
+
+## Reading the store to build collections
+
+Each query below was run against a migrated copy of the real store. Parameters are written as
+literals; swap in your own. Keyword values are the stored, stemmed ones — look a spelling up in
+`keyword_forms` first (`SELECT keyword FROM keyword_forms WHERE surface = 'Los Angeles'`).
+
+**Titles carrying every keyword in a set.** The `HAVING` count is the set's size.
+
+```sql
+SELECT i.item_id, i.title, i.year
+FROM items i
+JOIN enrichment e ON e.item_id = i.item_id
+WHERE e.namespace = 'keywords' AND e.key = 'keyword'
+  AND e.value IN ('heist', 'bank robberi')
+GROUP BY i.item_id
+HAVING count(DISTINCT e.value) = 2
+ORDER BY i.title;
+```
+
+**Keywords that co-occur with one keyword**, counted in titles, not rows, so a keyword two sources
+both list counts once. `tag_network_edge` holds a precomputed subset: only each tag's strongest
+co-tags.
+
+```sql
+SELECT b.value AS co_keyword, count(DISTINCT a.item_id) AS shared
+FROM enrichment a
+JOIN enrichment b ON b.item_id = a.item_id
+                 AND b.namespace = 'keywords' AND b.key = 'keyword'
+                 AND b.value <> a.value
+WHERE a.namespace = 'keywords' AND a.key = 'keyword' AND a.value = 'heist'
+GROUP BY b.value
+ORDER BY shared DESC, co_keyword;
+```
+
+**An `item_id`'s Plex rating keys.** One title can sit in two sections, so expect more than one
+row.
+
+```sql
+SELECT rating_key, section_id
+FROM plex_items
+WHERE item_id = 'imdb:tt0113277';
+```
+
+**Keywords in one role at a threshold, with decisions applied.** A source-stated row or a judge's
+score at or above 0.8 counts unless a person rejected it; a person's `accepted` counts whatever the
+score. Keep `r.error IS NULL`: a refusal has `score` NULL too, and without the filter it reads as a
+source-stated role.
+
+```sql
+SELECT r.keyword
+FROM keyword_roles r
+LEFT JOIN keyword_role_decisions d ON d.keyword = r.keyword AND d.role = r.role
+WHERE r.role = 'region'
+  AND r.error IS NULL
+  AND d.decision IS NULL
+  AND (r.score IS NULL OR r.score >= 0.8)
+UNION
+SELECT keyword FROM keyword_role_decisions WHERE role = 'region' AND decision = 'accepted'
+ORDER BY keyword;
+```
+
+**A title's ratings**, one row per upstream site, as the source reported them. Returns nothing until
+a ratings writer has filled the `ratings` namespace.
+
+```sql
+SELECT key, value, source
+FROM enrichment
+WHERE item_id = 'imdb:tt0113277' AND namespace = 'ratings'
+ORDER BY key;
+```
 
 ## Not yet built
 

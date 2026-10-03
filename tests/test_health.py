@@ -73,6 +73,10 @@ def _populate(path: Path) -> None:
             "'2026-08-09T12:00:00+00:00')"
         )
         conn.execute("INSERT INTO keyword_forms (surface, keyword) VALUES ('heist', 'heist')")
+        conn.execute(
+            "INSERT INTO keyword_roles (keyword, role, source, score, model, stated_at) "
+            "VALUES ('heist', 'theme', 'jev', 0.9, 'jev-1.13.0', '2026-08-09T12:00:00+00:00')"
+        )
         conn.commit()
 
 
@@ -89,6 +93,7 @@ def test_a_current_populated_store_is_healthy_and_reports_what_is_in_it(tmp_path
     assert report.counts["items"] == 2
     assert report.counts["plays"] == 1
     assert report.counts["enrichment"] == 1
+    assert report.counts["keyword_roles"] == 1
     assert report.fs_identities == 1
     assert report.keyword_counts == {"tmdb": 1}
     assert report.keyword_forms_count == 1

@@ -1,0 +1,3 @@
+# ADR-0019: Keyword roles are verdicts beside `enrichment`
+
+`keyword_roles` holds one row per keyword, role and source, where the role is one of `tone`, `era`, `region`, `theme` or `character_trait`. A row is either a role a source states, with `score` NULL, or a judge's answer, with its own 0–1 `score` and `model`. `keyword_role_decisions` holds a person's `accepted` or `rejected` for each keyword and role, never for each source. No column says whether a keyword has a role: a reader applies its own threshold to the scores, as ADR-0012 requires, and a decision outranks every score. Roles never rewrite `enrichment`, the same arrangement ADR-0018 sets for keyword pairs.

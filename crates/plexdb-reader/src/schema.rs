@@ -65,7 +65,7 @@ use crate::error::ReaderError;
 ///
 /// `tests/test_schema.py` fails whenever this constant differs from
 /// `plexdb/schema.py::SCHEMA_VERSION`.
-pub const SUPPORTED_SCHEMA_VERSION: i64 = 13;
+pub const SUPPORTED_SCHEMA_VERSION: i64 = 14;
 
 /// Confirm `conn` is a plexdb store at exactly [`SUPPORTED_SCHEMA_VERSION`].
 pub(crate) fn check(conn: &Connection, path: &Path) -> Result<(), ReaderError> {

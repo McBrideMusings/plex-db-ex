@@ -54,6 +54,10 @@ score and, once a person has ruled, their decision. Whether a pair counts as mer
 flag.
 _Avoid_: synonym row, merge
 
+**Keyword role**:
+What a stored keyword names — a tone, era, region, theme or character trait — as a source stated it or a judge scored it, plus a person's decision once they have ruled. Whether a keyword has a role is a reader's threshold, never a stored flag.
+_Avoid_: keyword category, tag type
+
 **Edge**:
 A directed item-to-item relationship carrying a source rank. A snapshot of what a
 source said at one moment, not a fact.

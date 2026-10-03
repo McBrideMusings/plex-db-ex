@@ -33,6 +33,7 @@ COUNTED_TABLES = (
     "plex_items",
     "edges",
     "collection_membership",
+    "keyword_roles",
 )
 
 
