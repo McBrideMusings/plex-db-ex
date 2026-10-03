@@ -169,6 +169,8 @@ own GUIDs derive the contested id keeps it, the other one moves off.
 | Namespace | Source | Writer | Keys |
 |---|---|---|---|
 | `keywords` | `tmdb` | `plexdb enrich-tmdb-keywords` | `keyword`, one row per normalized-and-stemmed keyword, `value` is the stored keyword text (see `keyword_forms` above for the raw spelling). Nothing else. Only `items.type` `movie` and `show` are enriched — TMDB has no keywords endpoint for an episode. |
+| `keywords` | `wikidata` | `plexdb enrich-wikidata` | `keyword`, stored the same way: the English labels of the title's Wikidata narrative location (P840), set in period (P2408), main subject (P921) and genre (P136). Movies and shows with an `imdb` external id only. A P840 keyword also gets a `region` row in `keyword_roles`, a P2408 keyword an `era` row. |
+| `awards` | `wikidata` | `plexdb enrich-wikidata` | `award`, one row per English label of the title's award received (P166), stored verbatim — not normalized or stemmed, and not a keyword. |
 
 **A reader rolling up keyword rows into a count or a set reads `enrichment` through
 `SELECT DISTINCT item_id, value`, never a bare row count or row list.** Once a second source can list
@@ -197,6 +199,7 @@ enrichment_cursor(
 | Namespace | Source | Key | Written by |
 |---|---|---|---|
 | `keywords` | `tmdb` | `fetched` | `enrich-tmdb-keywords`, one per title |
+| `keywords` | `wikidata` | `fetched` | `enrich-wikidata`, one per title it asked about, covering both its `keywords` and its `awards` rows, written even when Wikidata had nothing |
 | `tmdb_edges` | `tmdb` | `fetched_recommendations`, `fetched_similar` | `enrich-tmdb-edges`, one per title per edge type |
 
 **`source` joined this table's primary key in the same schema v10 that added it to `enrichment`**
@@ -229,6 +232,11 @@ makes an expected thing to do. A writer needing bookkeeping puts it here; nothin
 `enrich-tmdb-keywords` re-fetches a title only once its row is older than `TMDB_KEYWORDS_STALE_DAYS`
 (default 45 days). `--rewipe` deletes every `source = 'tmdb'` row under `keywords` before a sweep,
 forcing a full re-fetch, without touching another source's keywords or any other namespace.
+
+`enrich-wikidata` asks again about a title only once its cursor is older than `WIKIDATA_STALE_DAYS`
+(default 45 days), and replaces that title's `wikidata` rows in both namespaces when it does.
+`--rewipe` deletes every `source = 'wikidata'` row in `keywords`, `awards`, `keyword_roles` and
+`enrichment_cursor`, and nothing else.
 
 Foreign keys are enforced (`PRAGMA foreign_keys = ON`) and the live store runs in WAL mode for
 the writer's own benefit. Consumers never open that file. `plexdb publish` writes a consistent,
@@ -793,8 +801,10 @@ score: `accepted` means it has the role, `rejected` means it does not. With no d
 picks its own rule — the query under [Reading the store to build collections](#reading-the-store-to-build-collections)
 counts a source-stated row, or a judge's score at or above a threshold.
 
-**Refresh rule.** No writer fills either table yet; the source and judge writers that do state
-their own rule beside their namespace.
+**Refresh rule.** `enrich-wikidata` writes `region` and `era` rows with `source = 'wikidata'`. A row
+is per keyword, not per title, so a title's re-fetch only moves its `stated_at`; a keyword Wikidata
+stops calling a place keeps its row until `enrich-wikidata --rewipe`. Nothing writes
+`keyword_role_decisions` yet.
 
 ## Reading the store to build collections
 

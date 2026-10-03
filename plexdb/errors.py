@@ -34,6 +34,15 @@ class TMDbError(PlexdbError):
     """
 
 
+class WikidataError(PlexdbError):
+    """Wikidata's query service could not be reached, refused the query, or returned
+    something unusable.
+
+    An IMDb id Wikidata has no item for is not this — the query simply returns no
+    rows for it, and the sweep caches that as an empty result.
+    """
+
+
 class TautulliError(PlexdbError):
     """Tautulli could not be reached, or returned something unusable."""
 

@@ -2,9 +2,9 @@
 
 A Gated Source is an external source whose units carry a `fetched_at` and are
 re-fetched only once stale — the rule CLAUDE.md states as "enrich once, keyed
-by external id, with `fetched_at`". Three commands implement it today
-(`enrich-tmdb-keywords`, `enrich-tmdb-edges`, `harvest-mdblist`) and #35, #37
-and #38 add more.
+by external id, with `fetched_at`". Four commands implement it today
+(`enrich-tmdb-keywords`, `enrich-tmdb-edges`, `harvest-mdblist`,
+`enrich-wikidata`).
 
 The unit is not always a title: keywords and edges gate per title, MDBList per
 list. `enrich-tautulli-plays` reads an external thing and is **not** a Gated Source
@@ -43,9 +43,9 @@ class GatedSource:
     """One external source that caches what it fetched and skips what is fresh.
 
     Everything here is what actually varies between sources. The order the
-    steps run in, the credential check, the staleness resolution, the store
-    handle and the two flags are the same for all of them and live in `run`
-    and `register` below.
+    steps run in, the credential check (for a source that has one), the
+    staleness resolution, the store handle and the two flags are the same for
+    all of them and live in `run` and `register` below.
     """
 
     #: Stem of this source's staleness variable and the name a person sees in
@@ -54,15 +54,12 @@ class GatedSource:
     #: What one gated unit is, for the `--stale-days` help: a title for TMDB,
     #: a list for MDBList.
     unit: str
-    #: The environment variable carrying this source's credential.
-    credential: str
-    #: What the credential is for, completing "…must be set in .env to <this>".
-    credential_purpose: str
-    #: Builds the live client from the credential. Written as a lambda in each
-    #: source rather than the client class itself, so the name resolves from
-    #: that module's globals on every call and a test can substitute a
+    #: Builds the live client: from the credential when the source declares
+    #: one, from nothing when it does not. Written as a lambda in each source
+    #: rather than the client class itself, so the name resolves from that
+    #: module's globals on every call and a test can substitute a
     #: fixture-backed client with `monkeypatch.setattr(module, "LiveXClient", …)`.
-    make_client: Callable[[str], Any]
+    make_client: Callable[..., Any]
     #: `(conn, client, stale_days=…) -> stats`. Every source already has this
     #: shape, which is why this contract is small.
     #:
@@ -80,6 +77,17 @@ class GatedSource:
     #: Turns this source's own stats object into its summary lines. Nothing is
     #: forced into a shared result shape — a sweep only needs pass or fail.
     report: Callable[[Any], Iterable[str]]
+    #: The environment variable carrying this source's credential, or `None`
+    #: for a source that needs none (Wikidata answers anyone who sends a
+    #: User-Agent). A keyless source's `make_client` takes no argument.
+    credential: str | None = None
+    #: What the credential is for, completing "…must be set in .env to <this>".
+    #: Set exactly when `credential` is.
+    credential_purpose: str | None = None
+
+    def __post_init__(self) -> None:
+        if (self.credential is None) != (self.credential_purpose is None):
+            raise ValueError(f"{self.name}: credential and credential_purpose go together")
 
     @property
     def stale_days_var(self) -> str:
@@ -107,11 +115,16 @@ class GatedSource:
     def run(self, args: argparse.Namespace) -> int:
         """The nine steps every Gated Source command used to write out itself."""
         config = Config.from_env()
-        credential = os.environ.get(self.credential, "").strip()
-        if not credential:
-            raise ConfigError(f"{self.credential} must be set in .env to {self.credential_purpose}")
+        if self.credential is None:
+            client = self.make_client()
+        else:
+            credential = os.environ.get(self.credential, "").strip()
+            if not credential:
+                raise ConfigError(
+                    f"{self.credential} must be set in .env to {self.credential_purpose}"
+                )
+            client = self.make_client(credential)
         stale_days = self.resolve_stale_days(args.stale_days)
-        client = self.make_client(credential)
         with open_store(config.store_path) as conn:
             if args.rewipe:
                 for line in self.wipe(conn):

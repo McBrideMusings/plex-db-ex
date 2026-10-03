@@ -27,6 +27,12 @@ import snowballstemmer
 #: The source-agnostic namespace every keyword source writes to (ADR-0016).
 NAMESPACE = "keywords"
 
+#: Every role a `keyword_roles` or `keyword_role_decisions` row may carry
+#: (ADR-0019). The v14 migration CHECKs the same set in SQL, and that migration
+#: is frozen, so this is the copy writers import; `test_keywords.py` holds the
+#: two to each other.
+ROLES: tuple[str, ...] = ("tone", "era", "region", "theme", "character_trait")
+
 _stemmer = snowballstemmer.stemmer("english")
 _WHITESPACE_RUN = re.compile(r"\s+")
 
@@ -65,3 +71,23 @@ def upsert_keyword_form(conn: sqlite3.Connection, surface: str) -> str:
         (surface, keyword),
     )
     return keyword
+
+
+def state_role(
+    conn: sqlite3.Connection, keyword: str, role: str, source: str, stated_at: str
+) -> None:
+    """Record that `source` itself states `keyword` plays `role`.
+
+    A source-stated role carries no score, model or error — those belong to a
+    judge's row — so all three stay NULL. `keyword` is the stored form, as
+    `upsert_keyword_form` returned it. Stating a role again only moves
+    `stated_at`: the row is per keyword, not per title, so every title that
+    names the keyword under the role-bearing property restates the same row.
+    """
+    if role not in ROLES:
+        raise ValueError(f"unknown keyword role {role!r}; roles are {', '.join(ROLES)}")
+    conn.execute(
+        "INSERT INTO keyword_roles (keyword, role, source, stated_at) VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(keyword, role, source) DO UPDATE SET stated_at = excluded.stated_at",
+        (keyword, role, source, stated_at),
+    )

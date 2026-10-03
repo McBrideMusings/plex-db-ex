@@ -1,0 +1,673 @@
+{
+ "head": {
+  "vars": [
+   "imdb",
+   "prop",
+   "label"
+  ]
+ },
+ "results": {
+  "bindings": [
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt1375666"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P840"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "Los Angeles"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt1375666"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P840"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "Paris"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt0120815"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P921"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "World War II"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt0120815"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P2408"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "World War II"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt1375666"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P840"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "Australia"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt0120815"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P2408"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "1944"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt0120815"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P2408"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "20th century"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt0120815"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P921"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "Invasion of Normandy"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt0120815"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P2408"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "1940s"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt1375666"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P136"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "drama film"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt0120815"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P136"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "drama film"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt1375666"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P166"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "Academy Award for Best Cinematography"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt0120815"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P166"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "Academy Award for Best Cinematography"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt0120815"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P166"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "Academy Award for Best Director"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt0120815"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P166"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "Academy Award for Best Film Editing"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt1375666"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P136"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "action film"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt0120815"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P136"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "action film"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt1375666"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P166"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "Academy Award for Best Visual Effects"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt1375666"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P136"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "adventure film"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt0120815"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P136"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "war film"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt1375666"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P136"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "science fiction film"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt1375666"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P166"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "Academy Award for Best Sound"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt0120815"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P166"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "Academy Award for Best Sound"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt0120815"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P840"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "Omaha Beach"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt1375666"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P166"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "National Board of Review: Top Ten Films"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt0120815"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P166"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "National Board of Review: Top Ten Films"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt1375666"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P136"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "thriller film"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt0120815"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P166"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "Golden Globe Award for Best Motion Picture \u2013 Drama"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt1375666"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P166"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "Hugo Award for Best Dramatic Presentation, Long Form"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt1375666"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P166"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "Saturn Award for Best Science Fiction Film"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt1375666"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P166"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "Academy Award for Best Sound Editing"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt0120815"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P166"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "Academy Award for Best Sound Editing"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt1375666"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P136"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "mystery film"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt0120815"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P921"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "Sole Survivor Policy"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt0120815"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P921"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "comradeship"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt1375666"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P136"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "heist film"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt1375666"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P921"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "telepresence"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt1375666"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P136"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "science fiction action film"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt1375666"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P921"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "dream world"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt0120815"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P921"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "altruistic suicide"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt0120815"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P166"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "Dallas-Fort Worth Film Critics Association Award for Best Film"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt0120815"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P921"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "Operation Overlord"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt0120815"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P921"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "rescue operation"
+    }
+   },
+   {
+    "imdb": {
+     "type": "literal",
+     "value": "tt0120815"
+    },
+    "prop": {
+     "type": "uri",
+     "value": "http://www.wikidata.org/prop/direct/P840"
+    },
+    "label": {
+     "xml:lang": "en",
+     "type": "literal",
+     "value": "Normandy"
+    }
+   }
+  ]
+ }
+}

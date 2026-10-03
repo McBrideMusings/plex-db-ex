@@ -10,6 +10,7 @@ import pytest
 
 from plexdb.commands import enrich_tmdb_edges as enrich_tmdb_edges_cmd
 from plexdb.commands import enrich_tmdb_keywords as enrich_tmdb_keywords_cmd
+from plexdb.commands import enrich_wikidata as enrich_wikidata_cmd
 from plexdb.commands import harvest_mdblist as harvest_mdblist_cmd
 from plexdb.errors import ConfigError
 from plexdb.sources import GatedSource
@@ -20,6 +21,7 @@ SOURCES = [
     (enrich_tmdb_keywords_cmd.SOURCE, "TMDB_KEYWORDS_STALE_DAYS"),
     (enrich_tmdb_edges_cmd.SOURCE, "TMDB_EDGES_STALE_DAYS"),
     (harvest_mdblist_cmd.SOURCE, "MDBLIST_STALE_DAYS"),
+    (enrich_wikidata_cmd.SOURCE, "WIKIDATA_STALE_DAYS"),
 ]
 
 
@@ -151,3 +153,35 @@ def test_rewipe_off_does_not_wipe(tmp_path: Any, monkeypatch: pytest.MonkeyPatch
 
     source.run(_args(rewipe=True))
     assert wiped == [True]
+
+
+def test_a_source_declared_without_a_credential_runs_with_none_set(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Wikidata needs no key. A keyless source builds its client from nothing
+    and never looks for a credential variable."""
+    store = tmp_path / "plexdb.db"
+    monkeypatch.setenv("PLEXDB_PATH", str(store))
+    monkeypatch.setenv("EXAMPLE_API_KEY", "")
+    from plexdb.store import init as init_store
+
+    init_store(store)
+    seen: dict[str, Any] = {}
+
+    def refresh(conn: sqlite3.Connection, client: Any, *, stale_days: int) -> None:
+        seen["client"] = client
+
+    source = _a_source(
+        credential=None,
+        credential_purpose=None,
+        make_client=lambda: "keyless",
+        refresh=refresh,
+    )
+
+    assert source.run(_args()) == 0
+    assert seen == {"client": "keyless"}
+
+
+def test_a_credential_without_its_purpose_is_a_declaration_error() -> None:
+    with pytest.raises(ValueError, match="go together"):
+        _a_source(credential_purpose=None)
