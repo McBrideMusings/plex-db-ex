@@ -71,6 +71,11 @@ backup/
 *.db-shm
 db.sqlite
 bd.db
+
+# JSONL export and git hooks (issue state travels over the Dolt remote only)
+issues.jsonl
+interactions.jsonl
+hooks/
 # NOTE: Do NOT add negation patterns here.
 # They would override fork protection in .git/info/exclude.
 # Config files (metadata.json, config.yaml) are tracked by git by default
