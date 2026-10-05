@@ -173,6 +173,7 @@ own GUIDs derive the contested id keeps it, the other one moves off.
 | `keywords` | `anilist` | `plexdb enrich-anilist` | `keyword`, stored the same way: the title's AniList tags, with AniList's 0–100 rank (the share of voters who agree the tag applies) in `rank`, verbatim. `spoiler_keyword`, the same for a tag AniList flags `isMediaSpoiler` or `isGeneralSpoiler`, so a reader of key `keyword` never sees a spoiler. Anime movies and shows only, found through Fribb's mapping (see [AniList](#anilist-tags-and-roles) below). |
 | `keywords` | `letterboxd` | `plexdb enrich-letterboxd` | `keyword`, stored the same way: every theme and mini-theme label in the Themes section of the film's Letterboxd page (up to about seven — the page shows a subset), with `rank` NULL, because Letterboxd ranks nothing. No `keyword_roles` row. Movies with a `tmdb` external id only (see [Letterboxd themes](#letterboxd-themes) below). |
 | `awards` | `wikidata` | `plexdb enrich-wikidata` | `award`, one row per English label of the title's award received (P166), stored verbatim — not normalized or stemmed, and not a keyword. |
+| `ratings` | `mdblist` | `plexdb enrich-mdblist-ratings` | One key per site MDBList relays — `imdb`, `tmdb`, `trakt`, `letterboxd`, `tomatoes` (Rotten Tomatoes critics), `popcorn` (Rotten Tomatoes audience), `metacritic`, `metacriticuser`, `rogerebert`, `myanimelist` — whose `value` is the site's own number on the site's own scale, as MDBList's JSON carried it (`7.9` from IMDb, `84` from Metacritic, `4.0` from RogerEbert). `<site>_votes` beside it holds the vote count where one is given. A site with a null value writes no row, its votes included. Nothing is converted to one scale or combined (ADR-0012); MDBList's own 0–100 `score` is not stored. `rank` NULL. Movies and shows with an `imdb` external id only (see [MDBList ratings](#mdblist-ratings) below). |
 
 **A reader rolling up keyword rows into a count or a set reads `enrichment` through
 `SELECT DISTINCT item_id, value`, never a bare row count or row list.** Once a second source can list
@@ -205,6 +206,8 @@ enrichment_cursor(
 | `keywords` | `anilist` | `fetched` | `enrich-anilist`, one per anime title it asked about, written even when AniList had no tags; a title that is not anime gets none |
 | `keywords` | `letterboxd` | `fetched` | `enrich-letterboxd`, one per movie whose film page parsed, written even when it showed no themes, and one per movie Letterboxd does not list; a film page without the film marker gets none |
 | `keywords` | `letterboxd` | `attempted` | `enrich-letterboxd`, when a movie's film page had no film marker or its request failed: scheduling only, never freshness. The next run asks never-attempted movies first, then these, oldest attempt first, so a movie that keeps failing never holds the per-run cap. A successful fetch deletes it |
+| `ratings` | `mdblist` | `fetched` | `enrich-mdblist-ratings`, one per title in a batch that answered, written even when MDBList left the title out of its answer or had no non-null rating |
+| `ratings` | `mdblist` | `attempted` | `enrich-mdblist-ratings`, for every title in a batch whose request failed: scheduling only, never freshness, ordered and cleared the same way as Letterboxd's |
 | `tmdb_edges` | `tmdb` | `fetched_recommendations`, `fetched_similar` | `enrich-tmdb-edges`, one per title per edge type |
 
 **`source` joined this table's primary key in the same schema v10 that added it to `enrichment`**
@@ -255,6 +258,37 @@ One run fetches at most `LETTERBOXD_MAX_TITLES` movies (default 1,000; `--limit 
 never-attempted movies first in `item_id` order, then those with an `attempted` cursor, oldest
 first. The first pass over the library therefore spreads across several sweeps. `--rewipe`
 deletes every `source = 'letterboxd'` row in `keywords` and `enrichment_cursor`, and nothing else.
+
+`enrich-mdblist-ratings` asks again about a title only once its cursor is older than
+`MDBLIST_RATINGS_STALE_DAYS` (default 45 days), and replaces that title's `ratings` rows when it
+does. One run sends at most `MDBLIST_RATINGS_MAX_REQUESTS` requests (default 100; `--limit N`
+overrides), because the daily quota counts requests and `harvest-mdblist` draws on the same one.
+Titles are ordered as Letterboxd's are, then cut into batches per media type. `--rewipe` deletes
+every `source = 'mdblist'` row in `ratings` and `enrichment_cursor`, and nothing else —
+`harvest-mdblist`'s collections are untouched.
+
+### MDBList ratings
+
+`enrich-mdblist-ratings` sends `POST /imdb/movie/` or `/imdb/show/` with up to 200 IMDb ids, and
+one request costs one against the daily quota whatever its size (1,000 a day on MDBList's free
+tier). MDBList leaves an id it does not know out of the answer, and that title is cached with no
+rows. On a pulled copy (2026-10-05) 13,312 of the 14,429 movies and shows had an IMDb id; 68
+requests covered all of them in about 30 seconds, writing 94,844 ratings and 87,652 vote counts.
+A failed request writes nothing for its batch, and three in a row abort the run.
+
+```sql
+-- Every rating one title has, on each site's own scale
+SELECT key, value FROM enrichment
+WHERE item_id = ? AND namespace = 'ratings' AND source = 'mdblist';
+
+-- Titles IMDb rates 8 or higher on at least 10,000 votes
+SELECT r.item_id, CAST(r.value AS REAL) AS imdb
+FROM enrichment r
+JOIN enrichment v ON v.item_id = r.item_id AND v.namespace = 'ratings'
+                 AND v.source = 'mdblist' AND v.key = 'imdb_votes'
+WHERE r.namespace = 'ratings' AND r.source = 'mdblist' AND r.key = 'imdb'
+  AND CAST(r.value AS REAL) >= 8 AND CAST(v.value AS INTEGER) >= 10000;
+```
 
 ### Letterboxd themes
 

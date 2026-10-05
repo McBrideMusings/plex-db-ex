@@ -9,6 +9,8 @@ misreading of that shape.
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 from mdblist_fixtures import load
@@ -154,3 +156,37 @@ def test_a_200_with_a_non_json_body_raises_mdblist_error_not_a_json_traceback() 
 
     with pytest.raises(MDBListError, match="not JSON"):
         _client(handler).top_lists()
+
+
+def test_a_ratings_batch_posts_the_ids_and_reads_each_site_verbatim() -> None:
+    """Against the live recording of 2026-10-05: four ids asked, three known."""
+    asked = ["tt21301418", "tt0099180", "tt0089603", "tt9999999999"]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/imdb/movie/"
+        assert request.url.params["apikey"] == KEY
+        assert json.loads(request.content) == {"ids": asked}
+        return httpx.Response(200, json=load("batch_imdb_movie.json"))
+
+    found = {t.imdb_id: t for t in _client(handler).ratings("movie", asked)}
+
+    assert sorted(found) == ["tt0089603", "tt0099180", "tt21301418"]
+    mishima = {r.site: (r.value, r.votes) for r in found["tt0089603"].ratings}
+    assert mishima["imdb"] == (7.9, 17303)
+    assert mishima["metacriticuser"] == (8.0, 33)
+    assert mishima["rogerebert"] == (4.0, None)  # MDBList's own score is null here
+    assert mishima["myanimelist"] == (None, None)
+
+
+def test_a_ratings_batch_answering_an_object_is_an_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"error": "nope"})
+
+    with pytest.raises(MDBListError, match="expected a list of titles"):
+        _client(handler).ratings("movie", ["tt0089603"])
+
+
+def test_a_ratings_batch_refuses_more_ids_than_one_request_carries() -> None:
+    with pytest.raises(ValueError, match="at most 200"):
+        _client(lambda request: httpx.Response(200, json=[])).ratings("movie", ["tt1"] * 201)

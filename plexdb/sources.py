@@ -2,9 +2,10 @@
 
 A Gated Source is an external source whose units carry a `fetched_at` and are
 re-fetched only once stale — the rule CLAUDE.md states as "enrich once, keyed
-by external id, with `fetched_at`". Six commands implement it today
+by external id, with `fetched_at`". Seven commands implement it today
 (`enrich-tmdb-keywords`, `enrich-tmdb-edges`, `harvest-mdblist`,
-`enrich-wikidata`, `enrich-anilist`, `enrich-letterboxd`).
+`enrich-wikidata`, `enrich-anilist`, `enrich-letterboxd`,
+`enrich-mdblist-ratings`).
 
 The unit is not always a title: keywords and edges gate per title, MDBList per
 list. `enrich-tautulli-plays` reads an external thing and is **not** a Gated Source
@@ -21,7 +22,8 @@ setting to `config.py`, which is what lets that module stay a leaf importing no
 feature module (issue #20) while the default lives in exactly one place.
 
 A source that declares `default_limit` is capped: it gains `--limit N`, reads
-`<NAME>_MAX_<UNIT>S` the same way, and its refresh receives `limit=`.
+`<NAME>_MAX_<UNIT>S` the same way (`limit_unit` where the cap counts something
+other than the gated unit), and its refresh receives `limit=`.
 """
 
 from __future__ import annotations
@@ -91,6 +93,10 @@ class GatedSource:
     #: pass across several sweeps; `None` means uncapped. A capped source gains
     #: `--limit`, reads `<NAME>_MAX_<UNIT>S`, and its refresh takes `limit=`.
     default_limit: int | None = None
+    #: What the cap counts, for `--limit` and `<NAME>_MAX_<UNIT>S`, when it is
+    #: not `unit` — MDBList ratings gate per title but are capped per request,
+    #: because the quota counts requests. `None` means `unit`.
+    limit_unit: str | None = None
     #: Turns the stats into the process exit code, after the report has
     #: printed — for a source whose run can finish and still be wrong (a
     #: scraper whose pages stopped parsing). `None` means a finished run is 0.
@@ -105,8 +111,12 @@ class GatedSource:
         return f"{self.name.upper()}_STALE_DAYS"
 
     @property
+    def capped_unit(self) -> str:
+        return self.limit_unit or self.unit
+
+    @property
     def limit_var(self) -> str:
-        return f"{self.name.upper()}_MAX_{self.unit.upper()}S"
+        return f"{self.name.upper()}_MAX_{self.capped_unit.upper()}S"
 
     def resolve_stale_days(self, override: int | None) -> int:
         """The flag wins, then `<NAME>_STALE_DAYS`, then the shared default.
@@ -127,7 +137,9 @@ class GatedSource:
         limit = (
             override
             if override is not None
-            else _env_int(self.limit_var, self.default_limit, f"a whole number of {self.unit}s")
+            else _env_int(
+                self.limit_var, self.default_limit, f"a whole number of {self.capped_unit}s"
+            )
         )
         if limit < 0:
             raise ConfigError(f"the {self.name} limit cannot be negative, got {limit}")
@@ -183,7 +195,7 @@ class GatedSource:
                 type=int,
                 default=None,
                 metavar="N",
-                help=f"fetch at most this many {self.unit}s this run; the rest wait for the "
+                help=f"the most {self.capped_unit}s this run takes; the rest wait for the "
                 f"next; default: {self.limit_var}, or {self.default_limit} if that is unset",
             )
         parser.add_argument("--rewipe", action="store_true", help=rewipe_help)

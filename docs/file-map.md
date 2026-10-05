@@ -18,6 +18,7 @@ plex-db-ex/
 │   │   ├── check.py
 │   │   ├── enrich_anilist.py  the keyless Gated Source for AniList; sweep step 56, sharing the number with `enrich-wikidata` and sorting ahead of it by module name
 │   │   ├── enrich_letterboxd.py  the keyless, capped Gated Source for Letterboxd themes; sweep step 56, sorting between `enrich-anilist` and `enrich-wikidata`; exits non-zero when parse failures pass 10%
+│   │   ├── enrich_mdblist_ratings.py  the Gated Source for MDBList ratings, gated per title and capped per request (`MDBLIST_RATINGS_MAX_REQUESTS`); sweep step 60, sorting just ahead of `harvest-mdblist`, which shares its quota
 │   │   ├── enrich_tautulli.py
 │   │   ├── enrich_tmdb_edges.py
 │   │   ├── enrich_tmdb_keywords.py
@@ -46,6 +47,7 @@ plex-db-ex/
 │   ├── enrich_anilist.py  AniList sweep: maps walked movies/shows to AniList ids through Fribb's mapping (TMDB by kind, then IMDb, then TVDB for a show), merges the tags of every entry a title maps to, writes them as `source='anilist'` keywords with AniList's rank in `enrichment.rank` (spoilers under key `spoiler_keyword`), and states roles from tag categories through `CATEGORY_ROLES`; one cursor per anime title, a failed batch writes nothing (aborts after 3 in a row)
 │   ├── anilist_client.py  read-only AniList GraphQL client behind an AniListSource protocol: fetches Fribb's `anime-list-full.json`, asks `Page { media(id_in: …) }` 50 ids per request with a pause under the 30 requests/minute limit, and honours `Retry-After` on a 429 a bounded number of times
 │   ├── enrich_letterboxd.py  Letterboxd sweep: walked movies with a TMDB id, at most `limit` per run, never-attempted first in `item_id` order, their film page's theme and mini-theme labels written as unranked `source='letterboxd'` keywords; one `fetched` cursor per parsed or not-listed movie, only an `attempted` cursor for a parse failure or a failed request, which moves it behind the untried titles (aborts after 3 failed requests in a row)
+│   ├── enrich_mdblist_ratings.py  MDBList ratings sweep: walked movies and shows with an IMDb id, batched 200 per request per media type, at most `limit` requests per run, each site's non-null rating written verbatim into the `ratings` namespace with a `<site>_votes` row beside it; one `fetched` cursor per title in an answered batch, only an `attempted` cursor for each title of a failed one (aborts after 3 failed requests in a row)
 │   ├── letterboxd_client.py  read-only Letterboxd scraper behind a LetterboxdSource protocol: `/tmdb/<id>/` → 302 → `/film/<slug>/`, the `data-tmdb-id` film marker and the Themes section parsed with the stdlib HTML parser, every path checked against robots.txt's `User-agent: *` rules, a pause after every request and bounded `Retry-After` handling
 │   ├── wikidata_client.py read-only SPARQL client behind a WikidataSource protocol: one query per batch of IMDb ids, a descriptive User-Agent, one query in flight, a pause between queries and bounded `Retry-After` handling for 429s
 │   ├── keywords.py        `normalize_keyword` — lowercase, `-`/`_` as word breaks, whitespace-collapsed, Snowball-stemmed — and `upsert_keyword_form`, which every keyword writer calls so `keyword_forms(surface, keyword)` can still show a reader the raw spelling a source used (ADR-0016); `ROLES`, the role set writers use in place of the frozen v14 `CHECK`, and `state_role` for a role a source states
@@ -64,7 +66,7 @@ plex-db-ex/
 │   ├── tmdb_client.py     read-only TMDB client (keywords, recommendations, similar) behind a TMDbSource protocol
 │   ├── tmdb_common.py     media_type_for / MAX_CONSECUTIVE_FAILURES shared by enrich_tmdb.py and tmdb_edges.py
 │   ├── staleness.py       is_stale / DEFAULT_STALE_DAYS — the one "is this row due a re-fetch" rule, shared by both TMDB sweeps and the crowd-list harvest
-│   ├── mdblist_client.py  read-only MDBList client (top lists, list entries) behind an MDBListSource protocol; pages until has_more clears and sends an explicit User-Agent, without which the service 403s a valid key
+│   ├── mdblist_client.py  read-only MDBList client (top lists, list entries) behind an MDBListSource protocol, and the batch title endpoint's ratings (`POST /imdb/{movie|show}/`, 200 ids) behind MDBListRatingsSource; pages until has_more clears and sends an explicit User-Agent, without which the service 403s a valid key
 │   ├── collections.py     crowd-list harvest into collection/collection_membership: rank is array position, replace-wholesale per collection_id, no computed weight (ADR-0012), an entry outside the library dropped rather than invented
 │   ├── tmdb_edges.py      TMDB recommendations/similar sweep: two edge types, replace-wholesale per (from_id, edge_type), cached via enrichment_cursor rows under the tmdb_edges namespace
 │   ├── repair.py          splits identities that fused two unrelated titles sharing a TMDB/TVDB number (issue #23): deletes them, re-walks Plex, rewinds the play cursor over what went with them
@@ -85,7 +87,7 @@ plex-db-ex/
 │       ├── item_id.json   the published specification of the item_id rule (ADR-0006), run by test_identity.py
 │       ├── anilist/       an excerpt of Fribb's `anime-list-full.json` and one recorded AniList `Page { media }` batch, with spoiler tags and tag categories
 │       ├── letterboxd/    Inception's film page, the "TMDB Import Result" page an unknown id answers, and robots.txt, all recorded verbatim
-│       ├── mdblist/       trimmed recordings of MDBList's live responses, including a two-page list that proves paging
+│       ├── mdblist/       trimmed recordings of MDBList's live responses, including a two-page list that proves paging, and two batch title responses recorded verbatim on 2026-10-05
 │       └── wikidata/      one recorded SPARQL answer: Inception, Saving Private Ryan and an IMDb id Wikidata has no item for
 ├── data/                  plexdb.db lives here (gitignored)
 └── docs/

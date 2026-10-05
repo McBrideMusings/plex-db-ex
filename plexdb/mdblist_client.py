@@ -39,6 +39,22 @@ been got wrong in the client this module replaces
   module ignores it and the caller uses array position, which is the ordering
   the list actually presents.
 
+`POST /imdb/{movie|show}/` with `{"ids": [...]}` is the batch title endpoint
+(verified 2026-10-05, recorded in `tests/fixtures/mdblist/batch_imdb_*.json`).
+It answers a JSON array with one object per id it knows. An id it does not
+know is simply absent, and the order is not the request's, so a caller
+matches answers on `ids.imdb`. One POST costs one request against the daily
+quota whatever its size; MDBList's documentation caps a batch at 200 ids. Each
+title's `ratings` array holds one object per site, always the same sites:
+
+    {"source": "imdb", "value": 7.9, "score": 79, "votes": 17303, "url": 5000}
+
+`value` is the number on the site's own scale and is what this store keeps.
+`score` is MDBList's 0–100 conversion of it, computed by MDBList, and is not
+read (ADR-0012). Either can be null independently: rogerebert answers
+`value: 4.0, score: null`, and a Metacritic entry can carry `votes: 1` with
+`value: null`.
+
 **A `User-Agent` header is required.** Without one, every endpoint answers
 `403 Forbidden` with the body `error code: 1010` — including endpoints a valid
 key is plainly entitled to. That reads as a dead credential and is not one, so
@@ -48,6 +64,8 @@ defaults to.
 
 from __future__ import annotations
 
+import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -71,6 +89,30 @@ _PAGE_LIMIT = 1000
 #: else broke. At the observed limit this allows a list of 100,000 entries,
 #: which is far past anything real.
 _MAX_PAGES = 100
+
+#: The most ids one batch title request carries — MDBList's documented cap.
+BATCH_SIZE = 200
+
+
+@dataclass(frozen=True)
+class MDBListRating:
+    """One site's rating of one title, as MDBList relayed it.
+
+    `value` is the site's own number on the site's own scale, as the JSON
+    carried it; `votes` its vote count. Either may be `None`.
+    """
+
+    site: str
+    value: float | int | None
+    votes: int | None
+
+
+@dataclass(frozen=True)
+class MDBListTitleRatings:
+    """Every rating MDBList returned for one title, keyed back by IMDb id."""
+
+    imdb_id: str
+    ratings: tuple[MDBListRating, ...]
 
 
 @dataclass(frozen=True)
@@ -115,6 +157,16 @@ class MDBListSource(Protocol):
         Order is load-bearing: the caller turns array position into the stored
         `rank`. Paging is resolved here, so a caller never sees a partial list.
         """
+        ...
+
+
+class MDBListRatingsSource(Protocol):
+    """The read surface the ratings sweep needs from MDBList — real or recorded."""
+
+    def ratings(self, media_type: str, imdb_ids: Sequence[str]) -> list[MDBListTitleRatings]:
+        """One batch request: the ratings of every id MDBList knows, in no
+        particular order. `media_type` is `"movie"` or `"show"`; at most
+        `BATCH_SIZE` ids. Raises `MDBListError` when the request fails."""
         ...
 
 
@@ -180,8 +232,37 @@ class LiveMDBListClient:
             "refusing to page further"
         )
 
+    def ratings(self, media_type: str, imdb_ids: Sequence[str]) -> list[MDBListTitleRatings]:
+        if len(imdb_ids) > BATCH_SIZE:
+            raise ValueError(f"a batch carries at most {BATCH_SIZE} ids, got {len(imdb_ids)}")
+        path = f"/imdb/{media_type}/"
+        started = time.monotonic()
+        body = self._request("POST", path, body={"ids": list(imdb_ids)})
+        if not isinstance(body, list):
+            raise MDBListError(
+                f"MDBList {path} returned {type(body).__name__}, expected a list of titles"
+            )
+        found = [title for title in map(_title_ratings, body) if title is not None]
+        print(
+            f"mdblist: POST {path} {len(imdb_ids)} id(s) -> {len(found)} title(s), "
+            f"{sum(len(t.ratings) for t in found)} rating(s) in "
+            f"{time.monotonic() - started:.1f} s",
+            flush=True,
+        )
+        return found
+
     def _get(self, path: str, *, extra: dict[str, str] | None = None) -> Any:
-        """GET one MDBList path, key in `params`, returning the parsed JSON body.
+        return self._request("GET", path, extra=extra)
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        extra: dict[str, str] | None = None,
+        body: dict[str, Any] | None = None,
+    ) -> Any:
+        """Send one MDBList request, key in `params`, returning the parsed JSON body.
 
         The key rides in `params`, never in `url`, and every message below is
         built from `url` and `resp.status_code` rather than from the exception
@@ -196,7 +277,7 @@ class LiveMDBListClient:
         if extra:
             params.update(extra)
         try:
-            resp = self._http.get(url, params=params)
+            resp = self._http.request(method, url, params=params, json=body)
         except httpx.HTTPError as err:
             raise MDBListError(f"cannot reach MDBList at {url}: {type(err).__name__}") from None
         if resp.status_code == 403:
@@ -229,6 +310,29 @@ def _optional_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _title_ratings(title: Any) -> MDBListTitleRatings | None:
+    """One batch answer's IMDb id and ratings, or `None` for an answer with no
+    IMDb id to match it back by."""
+    if not isinstance(title, dict):
+        return None
+    imdb_id = (title.get("ids") or {}).get("imdb")
+    if not imdb_id:
+        return None
+    ratings: list[MDBListRating] = []
+    for rating in title.get("ratings") or []:
+        if not isinstance(rating, dict) or not rating.get("source"):
+            continue
+        value = rating.get("value")
+        ratings.append(
+            MDBListRating(
+                site=str(rating["source"]),
+                value=value if isinstance(value, int | float) else None,
+                votes=_optional_int(rating.get("votes")),
+            )
+        )
+    return MDBListTitleRatings(imdb_id=str(imdb_id), ratings=tuple(ratings))
 
 
 def _external_ids(item: dict[str, Any]) -> tuple[tuple[str, str], ...]:

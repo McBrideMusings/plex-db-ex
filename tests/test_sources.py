@@ -10,6 +10,7 @@ import pytest
 
 from plexdb.commands import enrich_anilist as enrich_anilist_cmd
 from plexdb.commands import enrich_letterboxd as enrich_letterboxd_cmd
+from plexdb.commands import enrich_mdblist_ratings as enrich_mdblist_ratings_cmd
 from plexdb.commands import enrich_tmdb_edges as enrich_tmdb_edges_cmd
 from plexdb.commands import enrich_tmdb_keywords as enrich_tmdb_keywords_cmd
 from plexdb.commands import enrich_wikidata as enrich_wikidata_cmd
@@ -26,6 +27,7 @@ SOURCES = [
     (enrich_wikidata_cmd.SOURCE, "WIKIDATA_STALE_DAYS"),
     (enrich_anilist_cmd.SOURCE, "ANILIST_STALE_DAYS"),
     (enrich_letterboxd_cmd.SOURCE, "LETTERBOXD_STALE_DAYS"),
+    (enrich_mdblist_ratings_cmd.SOURCE, "MDBLIST_RATINGS_STALE_DAYS"),
 ]
 
 
@@ -199,6 +201,12 @@ def test_a_capped_source_resolves_its_limit_flag_then_variable_then_default(
     assert source.resolve_limit(5) == 5
     with pytest.raises(ConfigError, match="cannot be negative"):
         source.resolve_limit(-1)
+
+
+def test_a_cap_on_another_unit_names_its_variable_after_that_unit() -> None:
+    """MDBList ratings gate per title but the quota counts requests."""
+    assert enrich_mdblist_ratings_cmd.SOURCE.limit_var == "MDBLIST_RATINGS_MAX_REQUESTS"
+    assert enrich_mdblist_ratings_cmd.SOURCE.stale_days_var == "MDBLIST_RATINGS_STALE_DAYS"
 
 
 def test_a_capped_source_passes_the_limit_and_its_exit_code_decides(

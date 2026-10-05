@@ -35,6 +35,7 @@ EXPECTED_SWEEP = [
     ("enrich-wikidata", Step.BEST_EFFORT),
     ("refresh-map", Step.BEST_EFFORT),
     ("refresh-tagnetwork", Step.BEST_EFFORT),
+    ("enrich-mdblist-ratings", Step.BEST_EFFORT),
     ("harvest-mdblist", Step.BEST_EFFORT),
     ("judge-keyword-pairs", Step.BEST_EFFORT),
     ("publish", Step.REQUIRED),
