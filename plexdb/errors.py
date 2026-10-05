@@ -43,6 +43,15 @@ class WikidataError(PlexdbError):
     """
 
 
+class AniListError(PlexdbError):
+    """AniList's GraphQL API or the Fribb anime mapping could not be reached,
+    refused the request, or returned something unusable.
+
+    An AniList id AniList has no entry for is not this — the page simply omits it,
+    and the sweep caches that title as an empty result.
+    """
+
+
 class TautulliError(PlexdbError):
     """Tautulli could not be reached, or returned something unusable."""
 

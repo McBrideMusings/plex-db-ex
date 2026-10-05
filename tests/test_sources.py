@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from plexdb.commands import enrich_anilist as enrich_anilist_cmd
 from plexdb.commands import enrich_tmdb_edges as enrich_tmdb_edges_cmd
 from plexdb.commands import enrich_tmdb_keywords as enrich_tmdb_keywords_cmd
 from plexdb.commands import enrich_wikidata as enrich_wikidata_cmd
@@ -22,6 +23,7 @@ SOURCES = [
     (enrich_tmdb_edges_cmd.SOURCE, "TMDB_EDGES_STALE_DAYS"),
     (harvest_mdblist_cmd.SOURCE, "MDBLIST_STALE_DAYS"),
     (enrich_wikidata_cmd.SOURCE, "WIKIDATA_STALE_DAYS"),
+    (enrich_anilist_cmd.SOURCE, "ANILIST_STALE_DAYS"),
 ]
 
 

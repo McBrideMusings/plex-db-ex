@@ -2,9 +2,9 @@
 
 A Gated Source is an external source whose units carry a `fetched_at` and are
 re-fetched only once stale — the rule CLAUDE.md states as "enrich once, keyed
-by external id, with `fetched_at`". Four commands implement it today
+by external id, with `fetched_at`". Five commands implement it today
 (`enrich-tmdb-keywords`, `enrich-tmdb-edges`, `harvest-mdblist`,
-`enrich-wikidata`).
+`enrich-wikidata`, `enrich-anilist`).
 
 The unit is not always a title: keywords and edges gate per title, MDBList per
 list. `enrich-tautulli-plays` reads an external thing and is **not** a Gated Source

@@ -170,6 +170,7 @@ own GUIDs derive the contested id keeps it, the other one moves off.
 |---|---|---|---|
 | `keywords` | `tmdb` | `plexdb enrich-tmdb-keywords` | `keyword`, one row per normalized-and-stemmed keyword, `value` is the stored keyword text (see `keyword_forms` above for the raw spelling). Nothing else. Only `items.type` `movie` and `show` are enriched — TMDB has no keywords endpoint for an episode. |
 | `keywords` | `wikidata` | `plexdb enrich-wikidata` | `keyword`, stored the same way: the English labels of the title's Wikidata narrative location (P840), set in period (P2408), main subject (P921) and genre (P136). Movies and shows with an `imdb` external id only. A P840 keyword also gets a `region` row in `keyword_roles`, a P2408 keyword an `era` row. |
+| `keywords` | `anilist` | `plexdb enrich-anilist` | `keyword`, stored the same way: the title's AniList tags, with AniList's 0–100 rank (the share of voters who agree the tag applies) in `rank`, verbatim. `spoiler_keyword`, the same for a tag AniList flags `isMediaSpoiler` or `isGeneralSpoiler`, so a reader of key `keyword` never sees a spoiler. Anime movies and shows only, found through Fribb's mapping (see [AniList](#anilist-tags-and-roles) below). |
 | `awards` | `wikidata` | `plexdb enrich-wikidata` | `award`, one row per English label of the title's award received (P166), stored verbatim — not normalized or stemmed, and not a keyword. |
 
 **A reader rolling up keyword rows into a count or a set reads `enrichment` through
@@ -200,6 +201,7 @@ enrichment_cursor(
 |---|---|---|---|
 | `keywords` | `tmdb` | `fetched` | `enrich-tmdb-keywords`, one per title |
 | `keywords` | `wikidata` | `fetched` | `enrich-wikidata`, one per title it asked about, covering both its `keywords` and its `awards` rows, written even when Wikidata had nothing |
+| `keywords` | `anilist` | `fetched` | `enrich-anilist`, one per anime title it asked about, written even when AniList had no tags; a title that is not anime gets none |
 | `tmdb_edges` | `tmdb` | `fetched_recommendations`, `fetched_similar` | `enrich-tmdb-edges`, one per title per edge type |
 
 **`source` joined this table's primary key in the same schema v10 that added it to `enrichment`**
@@ -237,6 +239,36 @@ forcing a full re-fetch, without touching another source's keywords or any other
 (default 45 days), and replaces that title's `wikidata` rows in both namespaces when it does.
 `--rewipe` deletes every `source = 'wikidata'` row in `keywords`, `awards`, `keyword_roles` and
 `enrichment_cursor`, and nothing else.
+
+`enrich-anilist` asks again about an anime title only once its cursor is older than
+`ANILIST_STALE_DAYS` (default 45 days), and replaces that title's `anilist` rows when it does. A
+title that drops out of the mapping keeps its rows, and a mapping with no AniList ids at all fails
+the run. `--rewipe` deletes every `source = 'anilist'` row in `keywords`, `keyword_roles` and
+`enrichment_cursor`, and nothing else.
+
+### AniList tags and roles
+
+AniList carries no TMDB, IMDb or TVDB id. `enrich-anilist` reaches it through Fribb's
+[`anime-list-full.json`](https://github.com/Fribb/anime-lists), fetched whole on each run: a title
+maps to every AniList id its TMDB id names (matched on movie vs. show), else its IMDb id, else — for
+a show — its TVDB id. AniList lists each season as its own entry, so a show often maps to several;
+their tags merge into the one title. A tag keeps its **highest** rank across those entries, and it
+is stored under `spoiler_keyword` if **any** entry flags it as a spoiler, so a spoiler for one
+season never reaches key `keyword`.
+
+A tag's AniList category states a role, written to `keyword_roles` with `source = 'anilist'` and
+score, model and error NULL. A category matches its own row or, failing that, its nearest
+`-`-separated parent — `Theme-Other-Organisations` falls back to `Theme-Other`, then `Theme`:
+
+| AniList category | Role |
+|---|---|
+| `Theme` and every `Theme-*` | `theme` |
+| `Setting-Time` | `era` |
+| `Cast-Traits` | `character_trait` |
+
+Every other category — `Cast-Main Cast`, `Setting-Scene`, `Setting-Universe`, `Demographic`,
+`Technical`, `Sexual Content` — states no role. A spoiler tag states its role like any other: the
+role describes the keyword, not the title.
 
 Foreign keys are enforced (`PRAGMA foreign_keys = ON`) and the live store runs in WAL mode for
 the writer's own benefit. Consumers never open that file. `plexdb publish` writes a consistent,
@@ -803,7 +835,9 @@ counts a source-stated row, or a judge's score at or above a threshold.
 
 **Refresh rule.** `enrich-wikidata` writes `region` and `era` rows with `source = 'wikidata'`. A row
 is per keyword, not per title, so a title's re-fetch only moves its `stated_at`; a keyword Wikidata
-stops calling a place keeps its row until `enrich-wikidata --rewipe`. Nothing writes
+stops calling a place keeps its row until `enrich-wikidata --rewipe`. `enrich-anilist` writes
+`theme`, `era` and `character_trait` rows with `source = 'anilist'` from tag categories
+([AniList tags and roles](#anilist-tags-and-roles)), under the same per-keyword rule. Nothing writes
 `keyword_role_decisions` yet.
 
 ## Reading the store to build collections

@@ -16,6 +16,7 @@ plex-db-ex/
 │   ├── cli.py             the `plexdb` command line; discovers and registers each module under commands/, holds no command itself
 │   ├── commands/          one module per subcommand, each declaring NAME, ORDER, and optionally SWEEP (and SOURCE, for a Gated Source); a new command is one new file here, no edit to cli.py, sweep.py or config.py
 │   │   ├── check.py
+│   │   ├── enrich_anilist.py  the keyless Gated Source for AniList; sweep step 56, sharing the number with `enrich-wikidata` and sorting ahead of it by module name
 │   │   ├── enrich_tautulli.py
 │   │   ├── enrich_tmdb_edges.py
 │   │   ├── enrich_tmdb_keywords.py
@@ -41,6 +42,8 @@ plex-db-ex/
 │   ├── identity.py        item_id derivation — first-hit-wins over external GUIDs, path hash as the floor; specified by tests/fixtures/item_id.json
 │   ├── enrich_tmdb.py     TMDB keyword sweep: writes `source='tmdb'` rows into the shared `keywords` namespace (ADR-0016), cached, staleness-gated, tolerant of a failing title (aborts after 3 in a row)
 │   ├── enrich_wikidata.py Wikidata sweep: batches walked titles by IMDb id, writes P840/P2408/P921/P136 labels as `source='wikidata'` keywords, `region`/`era` rows in `keyword_roles` for P840/P2408, and P166 labels verbatim into the `awards` namespace; one cursor per title, a failed batch writes nothing (aborts after 3 in a row)
+│   ├── enrich_anilist.py  AniList sweep: maps walked movies/shows to AniList ids through Fribb's mapping (TMDB by kind, then IMDb, then TVDB for a show), merges the tags of every entry a title maps to, writes them as `source='anilist'` keywords with AniList's rank in `enrichment.rank` (spoilers under key `spoiler_keyword`), and states roles from tag categories through `CATEGORY_ROLES`; one cursor per anime title, a failed batch writes nothing (aborts after 3 in a row)
+│   ├── anilist_client.py  read-only AniList GraphQL client behind an AniListSource protocol: fetches Fribb's `anime-list-full.json`, asks `Page { media(id_in: …) }` 50 ids per request with a pause under the 30 requests/minute limit, and honours `Retry-After` on a 429 a bounded number of times
 │   ├── wikidata_client.py read-only SPARQL client behind a WikidataSource protocol: one query per batch of IMDb ids, a descriptive User-Agent, one query in flight, a pause between queries and bounded `Retry-After` handling for 429s
 │   ├── keywords.py        `normalize_keyword` — lowercase, `-`/`_` as word breaks, whitespace-collapsed, Snowball-stemmed — and `upsert_keyword_form`, which every keyword writer calls so `keyword_forms(surface, keyword)` can still show a reader the raw spelling a source used (ADR-0016); `ROLES`, the role set writers use in place of the frozen v14 `CHECK`, and `state_role` for a role a source states
 │   ├── plays.py           watch-history ingest: Plex history into plays, incrementally, plus the Tautulli match that enriches them
@@ -77,6 +80,7 @@ plex-db-ex/
 ├── tests/                 pytest; no test reaches the network
 │   └── fixtures/
 │       ├── item_id.json   the published specification of the item_id rule (ADR-0006), run by test_identity.py
+│       ├── anilist/       an excerpt of Fribb's `anime-list-full.json` and one recorded AniList `Page { media }` batch, with spoiler tags and tag categories
 │       ├── mdblist/       trimmed recordings of MDBList's live responses, including a two-page list that proves paging
 │       └── wikidata/      one recorded SPARQL answer: Inception, Saving Private Ryan and an IMDb id Wikidata has no item for
 ├── data/                  plexdb.db lives here (gitignored)
