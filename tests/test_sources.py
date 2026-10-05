@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from plexdb.commands import enrich_anilist as enrich_anilist_cmd
+from plexdb.commands import enrich_letterboxd as enrich_letterboxd_cmd
 from plexdb.commands import enrich_tmdb_edges as enrich_tmdb_edges_cmd
 from plexdb.commands import enrich_tmdb_keywords as enrich_tmdb_keywords_cmd
 from plexdb.commands import enrich_wikidata as enrich_wikidata_cmd
@@ -24,6 +25,7 @@ SOURCES = [
     (harvest_mdblist_cmd.SOURCE, "MDBLIST_STALE_DAYS"),
     (enrich_wikidata_cmd.SOURCE, "WIKIDATA_STALE_DAYS"),
     (enrich_anilist_cmd.SOURCE, "ANILIST_STALE_DAYS"),
+    (enrich_letterboxd_cmd.SOURCE, "LETTERBOXD_STALE_DAYS"),
 ]
 
 
@@ -182,6 +184,51 @@ def test_a_source_declared_without_a_credential_runs_with_none_set(
 
     assert source.run(_args()) == 0
     assert seen == {"client": "keyless"}
+
+
+def test_a_capped_source_resolves_its_limit_flag_then_variable_then_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _a_source(default_limit=100)
+    assert source.limit_var == "EXAMPLE_MAX_TITLES"
+
+    monkeypatch.setenv("EXAMPLE_MAX_TITLES", "")
+    assert source.resolve_limit(None) == 100
+    monkeypatch.setenv("EXAMPLE_MAX_TITLES", "20")
+    assert source.resolve_limit(None) == 20
+    assert source.resolve_limit(5) == 5
+    with pytest.raises(ConfigError, match="cannot be negative"):
+        source.resolve_limit(-1)
+
+
+def test_a_capped_source_passes_the_limit_and_its_exit_code_decides(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = tmp_path / "plexdb.db"
+    monkeypatch.setenv("PLEXDB_PATH", str(store))
+    monkeypatch.setenv("EXAMPLE_MAX_TITLES", "")
+    from plexdb.store import init as init_store
+
+    init_store(store)
+    seen: dict[str, Any] = {}
+
+    def refresh(conn: sqlite3.Connection, client: Any, *, stale_days: int, limit: int) -> int:
+        seen["limit"] = limit
+        return limit
+
+    source = _a_source(
+        credential=None,
+        credential_purpose=None,
+        make_client=lambda: None,
+        refresh=refresh,
+        default_limit=100,
+        exit_code=lambda stats: 3 if stats == 7 else 0,
+    )
+    args = _args()
+    args.limit = 7
+
+    assert source.run(args) == 3
+    assert seen == {"limit": 7}
 
 
 def test_a_credential_without_its_purpose_is_a_declaration_error() -> None:

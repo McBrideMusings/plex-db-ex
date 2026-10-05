@@ -2,9 +2,9 @@
 
 A Gated Source is an external source whose units carry a `fetched_at` and are
 re-fetched only once stale — the rule CLAUDE.md states as "enrich once, keyed
-by external id, with `fetched_at`". Five commands implement it today
+by external id, with `fetched_at`". Six commands implement it today
 (`enrich-tmdb-keywords`, `enrich-tmdb-edges`, `harvest-mdblist`,
-`enrich-wikidata`, `enrich-anilist`).
+`enrich-wikidata`, `enrich-anilist`, `enrich-letterboxd`).
 
 The unit is not always a title: keywords and edges gate per title, MDBList per
 list. `enrich-tautulli-plays` reads an external thing and is **not** a Gated Source
@@ -19,6 +19,9 @@ Each source reads `<NAME>_STALE_DAYS` — derived from its own `name`, so
 `DEFAULT_STALE_DAYS` in `staleness.py`. Adding a source therefore adds no
 setting to `config.py`, which is what lets that module stay a leaf importing no
 feature module (issue #20) while the default lives in exactly one place.
+
+A source that declares `default_limit` is capped: it gains `--limit N`, reads
+`<NAME>_MAX_<UNIT>S` the same way, and its refresh receives `limit=`.
 """
 
 from __future__ import annotations
@@ -84,6 +87,14 @@ class GatedSource:
     #: What the credential is for, completing "…must be set in .env to <this>".
     #: Set exactly when `credential` is.
     credential_purpose: str | None = None
+    #: Units one run fetches at most, for a source that must spread its first
+    #: pass across several sweeps; `None` means uncapped. A capped source gains
+    #: `--limit`, reads `<NAME>_MAX_<UNIT>S`, and its refresh takes `limit=`.
+    default_limit: int | None = None
+    #: Turns the stats into the process exit code, after the report has
+    #: printed — for a source whose run can finish and still be wrong (a
+    #: scraper whose pages stopped parsing). `None` means a finished run is 0.
+    exit_code: Callable[[Any], int] | None = None
 
     def __post_init__(self) -> None:
         if (self.credential is None) != (self.credential_purpose is None):
@@ -92,6 +103,10 @@ class GatedSource:
     @property
     def stale_days_var(self) -> str:
         return f"{self.name.upper()}_STALE_DAYS"
+
+    @property
+    def limit_var(self) -> str:
+        return f"{self.name.upper()}_MAX_{self.unit.upper()}S"
 
     def resolve_stale_days(self, override: int | None) -> int:
         """The flag wins, then `<NAME>_STALE_DAYS`, then the shared default.
@@ -102,15 +117,21 @@ class GatedSource:
         """
         if override is not None:
             return override
-        raw = os.environ.get(self.stale_days_var, "").strip()
-        if not raw:
-            return DEFAULT_STALE_DAYS
-        try:
-            return int(raw)
-        except ValueError as err:
-            raise ConfigError(
-                f"{self.stale_days_var} must be a whole number of days, got {raw!r}"
-            ) from err
+        return _env_int(self.stale_days_var, DEFAULT_STALE_DAYS, "a whole number of days")
+
+    def resolve_limit(self, override: int | None) -> int:
+        """The flag wins, then `<NAME>_MAX_<UNIT>S`, then `default_limit`; an
+        empty variable means the default, as for staleness."""
+        if self.default_limit is None:
+            raise ValueError(f"{self.name}: not a capped source")
+        limit = (
+            override
+            if override is not None
+            else _env_int(self.limit_var, self.default_limit, f"a whole number of {self.unit}s")
+        )
+        if limit < 0:
+            raise ConfigError(f"the {self.name} limit cannot be negative, got {limit}")
+        return limit
 
     def run(self, args: argparse.Namespace) -> int:
         """The nine steps every Gated Source command used to write out itself."""
@@ -125,14 +146,17 @@ class GatedSource:
                 )
             client = self.make_client(credential)
         stale_days = self.resolve_stale_days(args.stale_days)
+        extra: dict[str, int] = {}
+        if self.default_limit is not None:
+            extra["limit"] = self.resolve_limit(args.limit)
         with open_store(config.store_path) as conn:
             if args.rewipe:
                 for line in self.wipe(conn):
                     print(line)
-            stats = self.refresh(conn, client, stale_days=stale_days)
+            stats = self.refresh(conn, client, stale_days=stale_days, **extra)
         for line in self.report(stats):
             print(line)
-        return 0
+        return 0 if self.exit_code is None else self.exit_code(stats)
 
     def register(
         self,
@@ -153,5 +177,24 @@ class GatedSource:
             help=f"re-fetch a {self.unit} whose stored {self.name} data is older than this "
             f"many days; default: {self.stale_days_var}, or {DEFAULT_STALE_DAYS} if that is unset",
         )
+        if self.default_limit is not None:
+            parser.add_argument(
+                "--limit",
+                type=int,
+                default=None,
+                metavar="N",
+                help=f"fetch at most this many {self.unit}s this run; the rest wait for the "
+                f"next; default: {self.limit_var}, or {self.default_limit} if that is unset",
+            )
         parser.add_argument("--rewipe", action="store_true", help=rewipe_help)
         parser.set_defaults(func=self.run)
+
+
+def _env_int(var: str, default: int, what: str) -> int:
+    raw = os.environ.get(var, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError as err:
+        raise ConfigError(f"{var} must be {what}, got {raw!r}") from err

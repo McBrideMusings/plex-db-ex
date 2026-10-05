@@ -171,6 +171,7 @@ own GUIDs derive the contested id keeps it, the other one moves off.
 | `keywords` | `tmdb` | `plexdb enrich-tmdb-keywords` | `keyword`, one row per normalized-and-stemmed keyword, `value` is the stored keyword text (see `keyword_forms` above for the raw spelling). Nothing else. Only `items.type` `movie` and `show` are enriched — TMDB has no keywords endpoint for an episode. |
 | `keywords` | `wikidata` | `plexdb enrich-wikidata` | `keyword`, stored the same way: the English labels of the title's Wikidata narrative location (P840), set in period (P2408), main subject (P921) and genre (P136). Movies and shows with an `imdb` external id only. A P840 keyword also gets a `region` row in `keyword_roles`, a P2408 keyword an `era` row. |
 | `keywords` | `anilist` | `plexdb enrich-anilist` | `keyword`, stored the same way: the title's AniList tags, with AniList's 0–100 rank (the share of voters who agree the tag applies) in `rank`, verbatim. `spoiler_keyword`, the same for a tag AniList flags `isMediaSpoiler` or `isGeneralSpoiler`, so a reader of key `keyword` never sees a spoiler. Anime movies and shows only, found through Fribb's mapping (see [AniList](#anilist-tags-and-roles) below). |
+| `keywords` | `letterboxd` | `plexdb enrich-letterboxd` | `keyword`, stored the same way: every theme and mini-theme label in the Themes section of the film's Letterboxd page (up to about seven — the page shows a subset), with `rank` NULL, because Letterboxd ranks nothing. No `keyword_roles` row. Movies with a `tmdb` external id only (see [Letterboxd themes](#letterboxd-themes) below). |
 | `awards` | `wikidata` | `plexdb enrich-wikidata` | `award`, one row per English label of the title's award received (P166), stored verbatim — not normalized or stemmed, and not a keyword. |
 
 **A reader rolling up keyword rows into a count or a set reads `enrichment` through
@@ -202,6 +203,8 @@ enrichment_cursor(
 | `keywords` | `tmdb` | `fetched` | `enrich-tmdb-keywords`, one per title |
 | `keywords` | `wikidata` | `fetched` | `enrich-wikidata`, one per title it asked about, covering both its `keywords` and its `awards` rows, written even when Wikidata had nothing |
 | `keywords` | `anilist` | `fetched` | `enrich-anilist`, one per anime title it asked about, written even when AniList had no tags; a title that is not anime gets none |
+| `keywords` | `letterboxd` | `fetched` | `enrich-letterboxd`, one per movie whose film page parsed, written even when it showed no themes, and one per movie Letterboxd does not list; a film page without the film marker gets none |
+| `keywords` | `letterboxd` | `attempted` | `enrich-letterboxd`, when a movie's film page had no film marker or its request failed: scheduling only, never freshness. The next run asks never-attempted movies first, then these, oldest attempt first, so a movie that keeps failing never holds the per-run cap. A successful fetch deletes it |
 | `tmdb_edges` | `tmdb` | `fetched_recommendations`, `fetched_similar` | `enrich-tmdb-edges`, one per title per edge type |
 
 **`source` joined this table's primary key in the same schema v10 that added it to `enrichment`**
@@ -245,6 +248,26 @@ forcing a full re-fetch, without touching another source's keywords or any other
 title that drops out of the mapping keeps its rows, and a mapping with no AniList ids at all fails
 the run. `--rewipe` deletes every `source = 'anilist'` row in `keywords`, `keyword_roles` and
 `enrichment_cursor`, and nothing else.
+
+`enrich-letterboxd` asks again about a movie only once its cursor is older than
+`LETTERBOXD_STALE_DAYS` (default 45 days), and replaces that movie's `letterboxd` rows when it does.
+One run fetches at most `LETTERBOXD_MAX_TITLES` movies (default 1,000; `--limit N` overrides):
+never-attempted movies first in `item_id` order, then those with an `attempted` cursor, oldest
+first. The first pass over the library therefore spreads across several sweeps. `--rewipe`
+deletes every `source = 'letterboxd'` row in `keywords` and `enrichment_cursor`, and nothing else.
+
+### Letterboxd themes
+
+Letterboxd has no public API for individuals, so `enrich-letterboxd` reads the film page.
+`letterboxd.com/tmdb/<tmdb id>/` redirects to the film's page (`/tmdb/27205/` → `/film/inception/`);
+an id Letterboxd has no film for answers a 200 "TMDB Import Result" page instead, and that movie
+is cached as not listed, with no keywords. The film page's `<body>` carries `data-tmdb-id`. A page
+where it is missing or names another id is a **parse failure**: no keyword and no `fetched`
+cursor is written, only an `attempted` one, so the next run asks again, and a run whose parse failures exceed 10% of the film pages
+it loaded exits non-zero after printing the count. The Themes section mixes Letterboxd's broad
+themes (`/films/theme/…`) and its narrower mini-themes (`/films/mini-theme/…`); both are stored.
+The full list behind "Show All…" sits behind a Cloudflare challenge, so it is not read. Every
+request is checked against the `User-agent: *` rules in robots.txt, fetched once per run.
 
 ### AniList tags and roles
 

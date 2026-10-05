@@ -52,6 +52,16 @@ class AniListError(PlexdbError):
     """
 
 
+class LetterboxdError(PlexdbError):
+    """Letterboxd could not be reached, refused the request (a Cloudflare challenge
+    answers 403), or sent the client somewhere robots.txt disallows.
+
+    A TMDB id Letterboxd has no film for is not this — the sweep caches it as not
+    listed — and neither is a film page without the film marker, which the sweep
+    counts as a parse failure.
+    """
+
+
 class TautulliError(PlexdbError):
     """Tautulli could not be reached, or returned something unusable."""
 
