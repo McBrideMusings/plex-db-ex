@@ -75,6 +75,11 @@ class MDBListError(PlexdbError):
     """
 
 
+class MDBListQuotaError(MDBListError):
+    """MDBList answered 429: the account's request quota is spent. Every later
+    request would get the same answer, so a run stops rather than retrying."""
+
+
 class EmbeddingError(PlexdbError):
     """The embedding server could not be reached, or returned something unusable."""
 

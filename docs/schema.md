@@ -274,7 +274,8 @@ one request costs one against the daily quota whatever its size (1,000 a day on 
 tier). MDBList leaves an id it does not know out of the answer, and that title is cached with no
 rows. On a pulled copy (2026-10-05) 13,312 of the 14,429 movies and shows had an IMDb id; 68
 requests covered all of them in about 30 seconds, writing 94,844 ratings and 87,652 vote counts.
-A failed request writes nothing for its batch, and three in a row abort the run.
+A failed request writes nothing for its batch, and three in a row abort the run. A 429 means the
+day's quota is spent: the run stops at once, marks nothing, prints why, and exits non-zero.
 
 ```sql
 -- Every rating one title has, on each site's own scale

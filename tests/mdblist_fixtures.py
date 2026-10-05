@@ -61,10 +61,12 @@ class RecordedRatingsSource:
     Each POST answers with the recorded titles whose IMDb id it asked for, so
     an id outside the recordings is absent exactly as the live service leaves
     an unknown id out. `calls` is every request's `(media_type, ids)`;
-    `fail_calls` holds the 1-based request numbers that answer 503.
+    `fail_calls` holds the 1-based request numbers that answer 503, and
+    `quota_calls` those that answer 429.
     """
 
     fail_calls: set[int] = field(default_factory=set)
+    quota_calls: set[int] = field(default_factory=set)
     calls: list[tuple[str, list[str]]] = field(default_factory=list)
 
     def ratings(self, media_type: str, imdb_ids: Sequence[str]) -> list[MDBListTitleRatings]:
@@ -75,6 +77,8 @@ class RecordedRatingsSource:
             self.calls.append((media_type, asked))
             if len(self.calls) in self.fail_calls:
                 return httpx.Response(503)
+            if len(self.calls) in self.quota_calls:
+                return httpx.Response(429, headers={"x-ratelimit-remaining": "0"})
             return httpx.Response(
                 200,
                 json=[t for t in recorded if t["ids"]["imdb"] in asked and t["type"] == media_type],

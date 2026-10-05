@@ -45,7 +45,13 @@ def _report(stats: RatingsStats) -> list[str]:
         lines.append(
             f"{stats.titles_failed} title(s) failed and were not cached — re-run to retry them"
         )
+    if stats.quota_spent:
+        lines.append(f"mdblist ratings: stopped early — {stats.quota_spent}")
     return lines
+
+
+def _exit_code(stats: RatingsStats) -> int:
+    return 1 if stats.quota_spent else 0
 
 
 SOURCE = GatedSource(
@@ -62,6 +68,7 @@ SOURCE = GatedSource(
     wipe=_wipe,
     report=_report,
     default_limit=DEFAULT_MAX_REQUESTS,
+    exit_code=_exit_code,
 )
 
 

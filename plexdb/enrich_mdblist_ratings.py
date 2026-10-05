@@ -22,7 +22,9 @@ stale (ADR-0013).
 A failed request writes nothing for any title in its batch and records only an
 `attempted` cursor for each, which is scheduling, not a fact: it never makes a
 title fresh, and a later successful fetch deletes it. Three failed requests in
-a row abort the run.
+a row abort the run. A 429 is different: the day's quota is spent and every
+later request would get the same answer, so the run stops at once, marks
+nothing, and leaves every remaining title in its place for the next run.
 
 A run sends at most `limit` requests (`DEFAULT_MAX_REQUESTS` unless
 `MDBLIST_RATINGS_MAX_REQUESTS` or `--limit` says otherwise), because the daily
@@ -42,7 +44,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from .errors import MDBListError
+from .errors import MDBListError, MDBListQuotaError
 from .mdblist_client import BATCH_SIZE, MDBListRatingsSource, MDBListTitleRatings
 from .staleness import DEFAULT_STALE_DAYS, is_stale
 
@@ -88,6 +90,9 @@ class RatingsStats:
     titles_failed: int = 0
     ratings_written: int = 0
     votes_written: int = 0
+    #: MDBList's message when it refused a request for a spent quota, which ends
+    #: the run with nothing marked; `None` when it never did.
+    quota_spent: str | None = None
 
 
 @dataclass(frozen=True)
@@ -162,10 +167,14 @@ def enrich_mdblist_ratings(
     stats.titles_capped = sum(len(batch) for batch in batches[limit:])
 
     consecutive_failures = 0
-    for batch in batches[:limit]:
+    for index, batch in enumerate(batches[:limit]):
         stats.requests_sent += 1
         try:
             found = source.ratings(batch[0].media_type, [t.imdb_id for t in batch])
+        except MDBListQuotaError as err:
+            stats.quota_spent = str(err)
+            stats.titles_capped += sum(len(b) for b in batches[index:limit])
+            break
         except MDBListError as err:
             stats.requests_failed += 1
             stats.titles_failed += len(batch)

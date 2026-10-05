@@ -71,7 +71,7 @@ from typing import Any, Protocol
 
 import httpx
 
-from .errors import MDBListError
+from .errors import MDBListError, MDBListQuotaError
 
 _BASE = "https://api.mdblist.com"
 _DEFAULT_TIMEOUT = 30.0
@@ -286,6 +286,13 @@ class LiveMDBListClient:
                 "request carried no User-Agent — the service answers 403 with body "
                 "'error code: 1010' to an agentless request holding a perfectly good key."
             )
+        if resp.status_code == 429:
+            raise MDBListQuotaError(
+                f"MDBList returned 429 for {url}: the daily request quota is spent "
+                f"(x-ratelimit-remaining {resp.headers.get('x-ratelimit-remaining', 'not sent')}, "
+                f"resets at epoch {resp.headers.get('x-ratelimit-reset', 'not sent')}); "
+                "harvest-mdblist and enrich-mdblist-ratings share it"
+            )
         try:
             resp.raise_for_status()
         except httpx.HTTPError:
@@ -317,7 +324,8 @@ def _title_ratings(title: Any) -> MDBListTitleRatings | None:
     IMDb id to match it back by."""
     if not isinstance(title, dict):
         return None
-    imdb_id = (title.get("ids") or {}).get("imdb")
+    ids = title.get("ids")
+    imdb_id = ids.get("imdb") if isinstance(ids, dict) else None
     if not imdb_id:
         return None
     ratings: list[MDBListRating] = []

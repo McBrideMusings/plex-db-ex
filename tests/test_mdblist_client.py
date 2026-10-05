@@ -15,7 +15,7 @@ import httpx
 import pytest
 from mdblist_fixtures import load
 
-from plexdb.errors import MDBListError
+from plexdb.errors import MDBListError, MDBListQuotaError
 from plexdb.mdblist_client import LiveMDBListClient
 
 KEY = "test-key"
@@ -190,3 +190,20 @@ def test_a_ratings_batch_answering_an_object_is_an_error() -> None:
 def test_a_ratings_batch_refuses_more_ids_than_one_request_carries() -> None:
     with pytest.raises(ValueError, match="at most 200"):
         _client(lambda request: httpx.Response(200, json=[])).ratings("movie", ["tt1"] * 201)
+
+
+def test_a_429_is_a_quota_error_naming_the_quota() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, headers={"x-ratelimit-remaining": "0"})
+
+    with pytest.raises(MDBListQuotaError, match="quota is spent") as err:
+        _client(handler).ratings("movie", ["tt0089603"])
+
+    assert KEY not in str(err.value)
+
+
+def test_an_answer_whose_ids_is_not_an_object_is_skipped_not_a_crash() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[{"ids": ["tt0089603"], "ratings": []}])
+
+    assert _client(handler).ratings("movie", ["tt0089603"]) == []

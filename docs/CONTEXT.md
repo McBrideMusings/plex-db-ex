@@ -130,7 +130,9 @@ neither is not in the Sweep at all.
 
 **Gated Source**:
 An external source whose units carry a `fetched_at` and are re-fetched only once stale. The
-unit is not always a title: TMDB keywords and edges gate per title, MDBList per list.
+unit is not always a title: TMDB keywords and edges gate per title, MDBList collections per list.
+The cap can count a different unit than the gate: MDBList ratings gate per title and cap per
+request, because the daily quota counts requests.
 `enrich-tautulli-plays` reads an external thing and is *not* this — it
 gates on staleness.
 _Avoid_: cache, provider

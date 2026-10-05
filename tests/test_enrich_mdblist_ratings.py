@@ -212,6 +212,20 @@ def test_three_failed_requests_in_a_row_abort(conn: Any) -> None:
         enrich_mdblist_ratings(conn, RecordedRatingsSource(fail_calls={1, 2, 3}))
 
 
+@pytest.mark.usefixtures("one_per_batch")
+def test_a_spent_quota_stops_the_run_and_marks_nothing(conn: Any) -> None:
+    stats = enrich_mdblist_ratings(conn, RecordedRatingsSource(quota_calls={2}))
+
+    assert stats.quota_spent is not None and "quota is spent" in stats.quota_spent
+    assert stats.requests_sent == 2 and stats.requests_failed == 0
+    assert stats.titles_fetched == 1 and stats.titles_capped == 3
+    assert _cursors(conn) == {MISHIMA}
+    assert _cursors(conn, "attempted") == set()
+    again = RecordedRatingsSource()
+    enrich_mdblist_ratings(conn, again)
+    assert _asked(again) == ["tt0141842", "tt21301418", "tt9999999999"]
+
+
 def test_rewipe_removes_only_mdblist_ratings(conn: Any) -> None:
     enrich_mdblist_ratings(conn, RecordedRatingsSource())
     conn.execute(
@@ -256,3 +270,19 @@ def test_the_limit_variable_reaches_the_run_and_the_report_prints(
     assert len(source.calls) == 1
     assert "3 left for the next run" in out
     assert "1 request(s) sent, 0 failed; 9 rating(s) and 8 vote count(s) written" in out
+
+
+def test_a_spent_quota_prints_why_and_exits_non_zero(
+    store: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("PLEXDB_PATH", str(store))
+    monkeypatch.setenv("MDBLIST_API_KEY", "test-key")
+    monkeypatch.setenv("MDBLIST_RATINGS_MAX_REQUESTS", "")
+    source = RecordedRatingsSource(quota_calls={1})
+    monkeypatch.setattr(enrich_mdblist_ratings_cmd, "LiveMDBListClient", lambda key: source)
+    from plexdb.cli import build_parser
+
+    args = build_parser().parse_args(["enrich-mdblist-ratings"])
+
+    assert args.func(args) == 1
+    assert "stopped early — MDBList returned 429" in capsys.readouterr().out
