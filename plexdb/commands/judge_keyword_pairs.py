@@ -28,14 +28,14 @@ EMBED_URL_VAR = "LLAMA_SWAP_BASE_URL"
 JEV_KEY_VAR = "TYPESAFE_API_KEY"
 
 
-def _require(name: str, purpose: str) -> str:
+def require_env(name: str, purpose: str) -> str:
     value = os.environ.get(name, "").strip()
     if not value:
         raise ConfigError(f"{name} must be set in .env to {purpose}")
     return value
 
 
-def _positive(raw: str) -> int:
+def positive_int(raw: str) -> int:
     value = int(raw)
     if value < 1:
         raise argparse.ArgumentTypeError(f"must be at least 1, got {value}")
@@ -54,8 +54,8 @@ def _report(stats: JudgeStats) -> list[str]:
 
 def _cmd_judge_keyword_pairs(args: argparse.Namespace) -> int:
     config = Config.from_env()
-    base_url = _require(EMBED_URL_VAR, "embed keywords")
-    api_key = _require(JEV_KEY_VAR, "judge keyword pairs")
+    base_url = require_env(EMBED_URL_VAR, "embed keywords")
+    api_key = require_env(JEV_KEY_VAR, "judge keyword pairs")
     with open_store(config.store_path) as conn:
         stats = find_synonym_pairs(
             conn,
@@ -77,7 +77,7 @@ def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     )
     parser.add_argument(
         "--limit",
-        type=_positive,
+        type=positive_int,
         default=None,
         metavar="N",
         help="ask Jev about at most N pairs this run; default: every unjudged pair",

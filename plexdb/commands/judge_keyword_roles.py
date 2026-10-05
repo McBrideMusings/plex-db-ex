@@ -11,7 +11,7 @@ from ..jev_client import LiveJev
 from ..roles import RoleStats, judge_keyword_roles
 from ..store import open_store
 from ..sweep import Step
-from .judge_keyword_pairs import JEV_KEY_VAR, _positive, _require
+from .judge_keyword_pairs import JEV_KEY_VAR, positive_int, require_env
 
 NAME = "judge-keyword-roles"
 #: After `judge-keyword-pairs` and every step that writes keywords, before
@@ -33,7 +33,7 @@ def _report(stats: RoleStats) -> list[str]:
 
 def _cmd_judge_keyword_roles(args: argparse.Namespace) -> int:
     config = Config.from_env()
-    api_key = _require(JEV_KEY_VAR, "judge keyword roles")
+    api_key = require_env(JEV_KEY_VAR, "judge keyword roles")
     with open_store(config.store_path) as conn:
         stats = judge_keyword_roles(
             conn,
@@ -53,7 +53,7 @@ def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     )
     parser.add_argument(
         "--limit",
-        type=_positive,
+        type=positive_int,
         default=None,
         metavar="N",
         help="ask Jev about at most N keywords this run; default: every unjudged keyword",

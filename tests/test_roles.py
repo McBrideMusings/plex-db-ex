@@ -98,6 +98,22 @@ def test_each_unjudged_keyword_gets_five_rows_from_one_request_about_its_shortes
     assert all(row["error"] is None and row["stated_at"] for row in rows)
 
 
+def test_a_keyword_with_no_surface_form_is_asked_about_as_stored(tmp_path: Path) -> None:
+    store = _store(tmp_path, ["heist"])
+    with open_store(store) as conn:
+        conn.execute(
+            "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) "
+            "VALUES ('imdb:tt1', 'keywords', 'tmdb', 'keyword', 'bank robberi', "
+            "'2026-01-01T00:00:00Z')"
+        )
+        conn.commit()
+    judge = FakeRoleJudge()
+
+    _run(store, judge)
+
+    assert sorted(judge.asked) == ["bank robberi", "heist"]
+
+
 def test_a_second_run_with_no_new_keyword_sends_nothing(tmp_path: Path) -> None:
     store = _store(tmp_path, ["heist", "grief"])
     _run(store, FakeRoleJudge())
