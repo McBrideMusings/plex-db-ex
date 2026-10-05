@@ -184,6 +184,7 @@ def test_a_current_store_carries_every_migrations_tables_and_nothing_else(
         | V11_TABLES
         | V12_TABLES
         | V14_TABLES
+        | {"reader_shape"}
         | {"schema_version"}
     )
 
@@ -384,17 +385,25 @@ def test_init_is_idempotent(tmp_path: Path) -> None:
     assert store.read_bytes() == before, "a second init must not rewrite the store"
 
 
-def test_the_rust_reader_supports_exactly_the_current_schema_version() -> None:
-    """`plexdb-reader` refuses any store not at exactly its
-    `SUPPORTED_SCHEMA_VERSION`, so a migration shipped without bumping it makes
-    every reader refuse the next published snapshot."""
+def test_the_rust_reader_supports_exactly_the_current_reader_shape() -> None:
+    """`plexdb-reader` refuses any store whose `reader_shape` is not its
+    `SUPPORTED_READER_SHAPE`, so the two constants must agree."""
     reader_schema = (
         Path(__file__).parent.parent / "crates" / "plexdb-reader" / "src" / "schema.rs"
     ).read_text()
-    match = re.search(r"^pub const SUPPORTED_SCHEMA_VERSION: i64 = (\d+);$", reader_schema, re.M)
-    assert match, "SUPPORTED_SCHEMA_VERSION not found in crates/plexdb-reader/src/schema.rs"
+    match = re.search(r"^pub const SUPPORTED_READER_SHAPE: i64 = (\d+);$", reader_schema, re.M)
+    assert match, "SUPPORTED_READER_SHAPE not found in crates/plexdb-reader/src/schema.rs"
 
-    assert int(match.group(1)) == schema.SCHEMA_VERSION
+    assert int(match.group(1)) == schema.READER_SHAPE
+
+
+def test_a_migrated_store_carries_the_current_reader_shape(tmp_path: Path) -> None:
+    store = tmp_path / "plexdb.db"
+    init(store)
+    with open_store(store) as conn:
+        rows = [tuple(r) for r in conn.execute("SELECT version FROM reader_shape")]
+
+    assert rows == [(schema.READER_SHAPE,)]
 
 
 def test_a_store_from_the_future_refuses_to_open(tmp_path: Path) -> None:
@@ -869,7 +878,7 @@ def test_v14_adds_a_null_rank_to_every_existing_enrichment_row(tmp_path: Path) -
         ]
         assert conn.execute("SELECT count(*) FROM items").fetchone()[0] == 1
         assert conn.execute("SELECT count(*) FROM plays").fetchone()[0] == 1
-    assert result.backup == tmp_path / "backups" / "plexdb.pre-v14.db"
+    assert result.backup == tmp_path / "backups" / f"plexdb.pre-v{schema.SCHEMA_VERSION}.db"
     assert result.backup.exists()
 
 

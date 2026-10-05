@@ -5,8 +5,9 @@ outline: deep
 # Schema
 
 The SQLite schema **is** the public API of this project. One process writes it; every consumer
-opens the same file read-only. There is no version negotiation, so a schema change is a
-breaking change for every consumer at once ([ADR-0001](./adr/0001-one-writer-many-readers-sqlite-file-is-the-interface)).
+opens the same file read-only ([ADR-0001](./adr/0001-one-writer-many-readers-sqlite-file-is-the-interface)).
+A migration that changes what a reader reads breaks every reader at once; one that only adds
+breaks none of them (see [Reader shape](#reader-shape)).
 
 ## Versioning
 
@@ -18,7 +19,21 @@ Opening a store whose version is **higher** than the running build understands i
 outright, because a newer writer may have added rows this build cannot see. A store carrying a
 `schema_version` table with no row is reported as damaged rather than treated as empty.
 
-**Versions 1 through 14 are live.** Everything under "Not yet built" is the target for later
+### Reader shape
+
+The store also carries a `reader_shape` table (version 15 on): one row naming the last schema
+version that changed what a reader reads. It is 10 today. `plexdb-reader` opens a store only when
+`reader_shape` equals its `SUPPORTED_READER_SHAPE`, whatever `schema_version` says, so a deployed
+reader keeps reading a snapshot from a newer writer that has only added tables or columns.
+
+A migration that renames or drops something a reader selects, moves rows between namespaces, or
+changes what a row means ends with `UPDATE reader_shape SET version = <its version>;` and sets
+`READER_SHAPE` in `plexdb/schema.py` to match, in the same change that updates `plexdb-reader`.
+Every reader built before it then refuses the store instead of misreading it. A migration that
+only adds leaves both alone. `tests/test_schema.py` fails when `READER_SHAPE` and the reader's
+constant disagree.
+
+**Versions 1 through 15 are live.** Everything under "Not yet built" is the target for later
 slices.
 
 ### A migration is copied before it runs, and rolled back if it goes wrong

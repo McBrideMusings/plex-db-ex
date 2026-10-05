@@ -630,23 +630,59 @@ fn the_pooled_vectors_shows_without_seasons_names_a_show_once_not_once_per_accou
 }
 
 #[test]
-fn opening_a_store_of_an_unknown_schema_version_fails_naming_both_versions() {
+fn opening_a_store_of_an_unknown_reader_shape_fails_naming_both_shapes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("plexdb.db");
+    let conn = common::build_fixture(&path);
+    conn.execute("UPDATE reader_shape SET version = 99", [])
+        .expect("force the store to an unknown shape");
+    drop(conn);
+
+    let err = Reader::open(&path).expect_err("a shape this build does not understand must fail");
+    let message = err.to_string();
+    assert!(
+        message.contains("99"),
+        "error must name the store's actual shape: {message}"
+    );
+    assert!(
+        message.contains(&plexdb_reader::SUPPORTED_READER_SHAPE.to_string()),
+        "error must name the shape this build understands: {message}"
+    );
+}
+
+/// The gate is on read shape, not schema version: a store a newer writer has
+/// migrated past this build's schema still opens while its shape matches.
+#[test]
+fn opening_a_store_of_a_newer_schema_version_with_the_same_reader_shape_succeeds() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("plexdb.db");
     let conn = common::build_fixture(&path);
     conn.execute("UPDATE schema_version SET version = 99", [])
-        .expect("force the store to an unknown version");
+        .expect("force the store to a newer schema version");
     drop(conn);
 
-    let err = Reader::open(&path).expect_err("a version this build does not understand must fail");
-    let message = err.to_string();
+    Reader::open(&path).expect("a newer schema with the same reader shape must open");
+}
+
+#[test]
+fn opening_a_store_without_a_reader_shape_table_names_its_schema_version() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("plexdb.db");
+    let conn = common::build_fixture(&path);
+    conn.execute_batch("DROP TABLE reader_shape; UPDATE schema_version SET version = 14;")
+        .expect("make the store look like a v14 one");
+    drop(conn);
+
+    let err = Reader::open(&path).expect_err("a store predating reader_shape must not open");
     assert!(
-        message.contains("99"),
-        "error must name the store's actual version: {message}"
-    );
-    assert!(
-        message.contains(&plexdb_reader::SUPPORTED_SCHEMA_VERSION.to_string()),
-        "error must name the version this build understands: {message}"
+        matches!(
+            err,
+            ReaderError::NoReaderShape {
+                store_version: 14,
+                ..
+            }
+        ),
+        "expected ReaderError::NoReaderShape at v14, got {err:?}"
     );
 }
 

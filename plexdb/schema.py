@@ -694,6 +694,17 @@ CREATE TABLE keyword_role_decisions (
 """
 
 
+#: Version 15 — the store names the read shape it carries (`READER_SHAPE`).
+#:
+#: A reader gates on `reader_shape`, not `schema_version`, so a migration that
+#: only adds tables or columns no reader depends on leaves every deployed reader
+#: working. Version 10 is the last migration that changed what a reader reads.
+_V15 = """
+CREATE TABLE reader_shape (version INTEGER NOT NULL);
+INSERT INTO reader_shape (version) VALUES (10);
+"""
+
+
 #: Append-only. Index i takes the store from version i to version i+1.
 MIGRATIONS: tuple[Migration, ...] = (
     _V1,
@@ -710,10 +721,21 @@ MIGRATIONS: tuple[Migration, ...] = (
     _V12,
     _V13,
     _V14,
+    _V15,
 )
 
 #: The version a store is at once every migration has been applied.
 SCHEMA_VERSION = len(MIGRATIONS)
+
+#: The read shape a fully migrated store carries in its `reader_shape` row —
+#: what `plexdb-reader`'s `SUPPORTED_READER_SHAPE` must equal.
+#:
+#: A migration that changes something a reader reads — renames or drops a
+#: column it selects, moves rows between namespaces, changes what a row means —
+#: sets this to its own version and ends with
+#: `UPDATE reader_shape SET version = <its version>;`, in the same change that
+#: updates `plexdb-reader`. A migration that only adds leaves it alone.
+READER_SHAPE = 10
 
 
 def current_version(conn: sqlite3.Connection) -> int:
