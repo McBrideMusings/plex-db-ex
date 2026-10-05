@@ -137,13 +137,12 @@ def enrich_wikidata(
     }
     candidates = conn.execute(
         """
-        SELECT
-            i.item_id AS item_id,
-            (SELECT e.value FROM external_ids e
-             WHERE e.item_id = i.item_id AND e.ns = 'imdb'
-             ORDER BY e.value LIMIT 1) AS imdb_id
+        SELECT i.item_id AS item_id, MIN(e.value) AS imdb_id
         FROM items i
+        LEFT JOIN external_ids e ON e.item_id = i.item_id AND e.ns = 'imdb'
         WHERE i.type IN ('movie', 'show')
+        GROUP BY i.item_id
+        ORDER BY i.item_id
         """
     ).fetchall()
 
