@@ -97,6 +97,7 @@ admin dev explore  serve the read-only Plex TVX page on http://localhost:5194
 admin dev judge-keyword-pairs [--limit N]  ask Jev about synonym keyword pairs; needs LLAMA_SWAP_BASE_URL and TYPESAFE_API_KEY
 admin dev judge-keyword-roles [--limit N]  ask Jev what roles each keyword plays; needs TYPESAFE_API_KEY
 admin dev fold-merge-decisions  apply merge_decisions.json to keyword_pairs.decision
+admin dev fold-role-decisions   apply role_decisions.json to keyword_role_decisions
 ```
 
 `admin deploy` takes a copy of the live store on the host first, then builds for `linux/amd64`

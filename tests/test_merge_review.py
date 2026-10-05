@@ -241,14 +241,14 @@ def test_the_file_refuses_a_decision_past_the_entry_cap_and_past_the_size_cap(
 ) -> None:
     decisions = MergeDecisions(tmp_path / "merge_decisions.json")
     decisions.MAX_ENTRIES = 2
-    decisions.record("a", "b", "accepted")
-    decisions.record("c", "d", "accepted")
+    decisions.record(("a", "b"), "accepted")
+    decisions.record(("c", "d"), "accepted")
     with pytest.raises(ValueError, match="too many merge decisions"):
-        decisions.record("e", "f", "accepted")
+        decisions.record(("e", "f"), "accepted")
     assert len(decisions.latest()) == 2
 
     small = MergeDecisions(tmp_path / "small.json")
     small.MAX_TOTAL_BYTES = 100
     with pytest.raises(ValueError, match="exceed"):
-        small.record("a", "b", "accepted")
+        small.record(("a", "b"), "accepted")
     assert small.latest() == {}

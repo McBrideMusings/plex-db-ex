@@ -237,6 +237,30 @@
   .badge.rejected { background: var(--noise-bg); color: var(--noise); }
   .mtools { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-bottom: 10px; }
   .mtools input[type="search"] { width: 14em; max-width: 100%; }
+  #rolewrap { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); align-items: start; }
+  @media (max-width: 900px) { #rolewrap { grid-template-columns: 1fr; } #rlist { border-left: 0 !important; border-top: 1px solid var(--line); } }
+  #rqueue { padding: 16px 20px 24px; min-width: 0; }
+  #rlist { border-left: 1px solid var(--line); background: var(--panel); padding: 16px 20px 24px; min-width: 0; min-height: 60vh; }
+  #rqueue h2, #rlist h2 { font-size: 13px; margin: 0 0 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  #rstatus { color: var(--muted); padding: 8px 0; min-height: 1.5em; }
+  #rstatus.bad { color: var(--noise); }
+  #rtable { max-height: 70vh; overflow: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+  #rtable table { min-width: 44em; }
+  #rtable th { background: var(--panel); }
+  #rtable td.kw { font-weight: 550; overflow-wrap: anywhere; min-width: 8em; }
+  #rtable td.kw .cellid { font-weight: 400; }
+  #rtable td.none { color: var(--muted); }
+  .rsrc { font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .rsrc strong { color: var(--ink); font-weight: 600; }
+  .ract { display: flex; gap: 4px; margin-top: 4px; }
+  .ract button { font-size: 12px; padding: 1px 7px; border-radius: 6px; }
+  .ract button.reject[aria-pressed="false"] { color: var(--ink); border-color: var(--line); }
+  .ract button.reject[aria-pressed="true"] { background: var(--noise-bg); }
+  .rbadges .badge { margin: 4px 4px 0 0; }
+  #rrows { list-style: none; margin: 0; padding: 0; max-height: 70vh; overflow: auto; }
+  #rrows li { display: flex; gap: 10px; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--line); }
+  #rrows .pair { min-width: 0; overflow-wrap: anywhere; }
+  #rrows .sub { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 </style>
 </head>
 <body>
@@ -246,6 +270,7 @@
     <button type="button" data-tab="tags" aria-pressed="true">Tags</button>
     <button type="button" data-tab="query" aria-pressed="false">Query</button>
     <button type="button" data-tab="merges" aria-pressed="false">Merges</button>
+    <button type="button" data-tab="roles" aria-pressed="false">Roles</button>
   </div>
   <div class="seg tagsonly" role="group" aria-label="Title type">
     <button type="button" data-kind="movie" aria-pressed="true">Movies</button>
@@ -315,6 +340,28 @@
       </div>
     </div>
     <ul id="mrows"></ul>
+  </section>
+</div>
+<div id="rolewrap" hidden>
+  <section id="rqueue">
+    <h2 id="rqhead">Keyword roles</h2>
+    <p class="mnote">Each source's verdict per role: a source that states the role outright shows no number, Jev shows its 0–1 score. A decision shows here at once and reaches the store at the next sweep.</p>
+    <div class="mtools">
+      <input type="search" id="rfilter" placeholder="keyword contains…" autocomplete="off" aria-label="Filter keywords">
+    </div>
+    <div id="rstatus"></div>
+    <div id="rtable" hidden></div>
+  </section>
+  <section id="rlist">
+    <h2 id="rlhead">All decisions</h2>
+    <div class="mtools">
+      <div class="seg" role="group" aria-label="Show">
+        <button type="button" data-rshow="all" aria-pressed="true">All</button>
+        <button type="button" data-rshow="accepted" aria-pressed="false">Accepted</button>
+        <button type="button" data-rshow="rejected" aria-pressed="false">Rejected</button>
+      </div>
+    </div>
+    <ul id="rrows"></ul>
   </section>
 </div>
 <main id="tagsmain">
@@ -404,7 +451,7 @@ function readHash() {
   const p = new URLSearchParams(location.hash.slice(1));
   if (p.get("kind") === "show" || p.get("kind") === "movie") state.kind = p.get("kind");
   if (VIEWS.includes(p.get("view"))) state.view = p.get("view");
-  if (p.get("tab") === "query" || p.get("tab") === "merges") state.tab = p.get("tab");
+  if (["query", "merges", "roles"].includes(p.get("tab"))) state.tab = p.get("tab");
   state.tag = p.get("tag");
 }
 function writeHash() {
@@ -1620,8 +1667,9 @@ function setTab(tab) {
   qEl("tagsmain").hidden = tab !== "tags";
   qEl("querywrap").hidden = tab !== "query";
   qEl("mergewrap").hidden = tab !== "merges";
+  qEl("rolewrap").hidden = tab !== "roles";
   if (tab === "tags") { document.getElementById("error").hidden = !document.getElementById("error").textContent; setView(state.view); }
-  else { document.body.classList.remove("shell"); document.getElementById("error").hidden = true; writeHash(); if (tab === "query") initQuery(); else initMerges(); }
+  else { document.body.classList.remove("shell"); document.getElementById("error").hidden = true; writeHash(); if (tab === "query") initQuery(); else if (tab === "merges") initMerges(); else initRoles(); }
 }
 
 function qStatus(text, bad = false, ...extra) {
@@ -1827,6 +1875,101 @@ document.addEventListener("keydown", e => {
   const id = { a: "maccept", r: "mreject", s: "mskip" }[e.key.toLowerCase()];
   if (id) qEl(id)?.click();
 });
+
+// ---- Roles tab ----
+// The server sends one page of keywords (the filter runs there: the whole vocabulary is too big
+// to ship) and every decision, with the file's pending ones already laid over the table. A click
+// POSTs the decision; the cell changes only once the server answers, so a failed write leaves it
+// as it was.
+const r = { ready: false, roles: [], keywords: [], decided: [], last: null, show: "all", busy: false, seq: 0, timer: 0 };
+const rStatus = (text, bad = false) => { const n = qEl("rstatus"); n.className = bad ? "bad" : ""; n.textContent = text; };
+const roleName = role => role.replace("_", " ");
+const pendingBadge = () => el("span", { className: "badge", title: "In role_decisions.json; the next sweep writes it into the store." }, "applies at next sweep");
+const decisionBadge = d => el("span", { className: "badge" + (d === "rejected" ? " rejected" : "") }, d);
+const fmtWhen = at => at ? at.replace("T", " ").replace("+00:00", " UTC") : "";
+const pressed = (node, on) => { node.setAttribute("aria-pressed", String(on)); return node; };
+
+function roleCell(k, role) {
+  const c = k.cells[role];
+  if (!c) return el("td", { className: "none" }, "—");
+  const srcs = c.sources.map(s => s.score === null
+    ? el("div", { className: "rsrc", title: `${s.source} states this role` }, el("strong", {}, s.source), " stated")
+    : el("div", { className: "rsrc", title: s.model || "" }, s.source, " ", el("strong", {}, s.score.toFixed(2))));
+  const accept = pressed(el("button", { type: "button", className: c.decision === "accepted" ? "primary" : "plain" }, "Accept"), c.decision === "accepted");
+  const reject = pressed(el("button", { type: "button", className: "reject" }, "Reject"), c.decision === "rejected");
+  accept.addEventListener("click", () => decideRole(k.keyword, role, c.decision === "accepted" ? "cleared" : "accepted"));
+  reject.addEventListener("click", () => decideRole(k.keyword, role, c.decision === "rejected" ? "cleared" : "rejected"));
+  const badges = [];
+  if (c.decision) badges.push(decisionBadge(c.decision));
+  if (c.pending) badges.push(pendingBadge());
+  return el("td", {}, ...srcs, el("div", { className: "ract" }, accept, reject), el("div", { className: "rbadges" }, ...badges));
+}
+
+function paintRoleTable() {
+  const out = r.last, box = qEl("rtable");
+  qEl("rqhead").textContent = `Keyword roles · ${fmt(out.stored)} keywords`;
+  if (!out.stored) { box.hidden = true; return "No keyword roles yet"; }
+  if (!r.keywords.length) { box.hidden = true; return "None."; }
+  const head = el("tr", {}, el("th", {}, "keyword"), ...r.roles.map(role => el("th", {}, roleName(role))));
+  const body = el("tbody", {}, ...r.keywords.map(k => el("tr", {},
+    el("td", { className: "kw" }, k.form, ...(k.form !== k.keyword ? [el("div", { className: "cellid" }, k.keyword)] : [])),
+    ...r.roles.map(role => roleCell(k, role)))));
+  box.replaceChildren(el("table", {}, el("thead", {}, head), body));
+  box.hidden = false;
+  return out.total > r.keywords.length ? `${fmt(out.total - r.keywords.length)} more — filter to find them.` : "";
+}
+
+function paintRoleList() {
+  const shown = r.decided.filter(d => r.show === "all" || d.decision === r.show);
+  const accepted = r.decided.filter(d => d.decision === "accepted").length;
+  qEl("rlhead").textContent = `All decisions · ${fmt(accepted)} accepted, ${fmt(r.decided.length - accepted)} rejected`;
+  if (!shown.length) { qEl("rrows").replaceChildren(el("li", { className: "empty" }, "None.")); return; }
+  qEl("rrows").replaceChildren(...shown.slice(0, 300).map(d => {
+    const undo = el("button", { type: "button", className: "plain", title: "Forget the decision; the role goes back to the sources' verdicts" }, "Undo");
+    undo.addEventListener("click", () => decideRole(d.keyword, d.role, "cleared"));
+    return el("li", {}, el("div", { className: "pair" }, `${d.form} · ${roleName(d.role)}`, decisionBadge(d.decision),
+      ...(d.pending ? [pendingBadge()] : []), el("div", { className: "sub" }, fmtWhen(d.decided_at))), el("div", { className: "acts" }, undo));
+  }));
+}
+
+async function decideRole(keyword, role, decision) {
+  if (r.busy) { rStatus("Still saving the last decision…"); return; }
+  r.busy = true;
+  try {
+    const c = (await sendJSON("POST", "/api/roles", { keyword, role, decision })).cell;
+    const k = r.keywords.find(x => x.keyword === keyword);
+    if (k) k.cells[role] = { sources: c.sources, decision: c.decision, decided_at: c.decided_at, pending: c.pending };
+    r.decided = r.decided.filter(d => !(d.keyword === keyword && d.role === role));
+    if (c.decision) r.decided.unshift({ keyword, role, form: c.form, decision: c.decision, decided_at: c.decided_at, pending: c.pending });
+    const more = paintRoleTable(); paintRoleList();
+    rStatus(`${c.form} · ${roleName(role)}: ${decision}.` + (more ? ` ${more}` : ""));
+  } catch (err) { rStatus(err.message, true); }
+  finally { r.busy = false; }
+}
+
+async function loadRoles() {
+  const seq = ++r.seq;
+  rStatus("Loading…");
+  try {
+    const out = await getJSON(`/api/roles?q=${encodeURIComponent(qEl("rfilter").value.trim())}`);
+    if (seq !== r.seq) return;
+    r.roles = out.roles; r.keywords = out.keywords; r.decided = out.decided; r.last = out;
+    rStatus(paintRoleTable()); paintRoleList();
+  } catch (err) { if (seq === r.seq) { r.ready = false; rStatus(`Could not load: ${err.message}`, true); } }
+}
+
+function initRoles() {
+  if (r.ready) return;
+  r.ready = true;
+  loadRoles();
+}
+
+qEl("rfilter").addEventListener("input", () => { clearTimeout(r.timer); r.timer = setTimeout(loadRoles, 250); });
+document.querySelectorAll("button[data-rshow]").forEach(b => b.addEventListener("click", () => {
+  r.show = b.dataset.rshow;
+  document.querySelectorAll("button[data-rshow]").forEach(x => x.setAttribute("aria-pressed", String(x === b)));
+  paintRoleList();
+}));
 
 document.getElementById("noisecount").textContent = noise.size;
 document.getElementById("ctlnoise").textContent = noise.size;

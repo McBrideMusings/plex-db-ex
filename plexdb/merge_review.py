@@ -13,30 +13,24 @@ decision and `PROPOSE_AT <= jev_score < MERGE_AT`. A decision outranks the score
 
 from __future__ import annotations
 
-import json
 import sqlite3
-import threading
-from datetime import UTC, datetime
-from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
+from .decisions import DecisionsFile
 from .errors import MergeDecisionsError
 
 __all__ = [
-    "DECISIONS",
     "MERGE_AT",
     "MERGE_DECISIONS_FILE",
     "PROPOSE_AT",
     "MergeDecisions",
     "NoSuchPair",
     "bucket",
-    "parse_decisions",
     "require_pair",
     "review_rows",
 ]
 
 MERGE_DECISIONS_FILE = "merge_decisions.json"
-DECISIONS = ("accepted", "rejected", "cleared")
 
 #: A pair Jev scored at least this, with no decision, counts as merged.
 MERGE_AT = 0.9
@@ -48,123 +42,23 @@ class NoSuchPair(LookupError):
     """A decision named a pair `keyword_pairs` has no row for."""
 
 
-def parse_decisions(path: Path, text: str) -> list[dict[str, str]]:
-    """The file's entries, or `MergeDecisionsError` if any breaks the documented shape."""
-    try:
-        raw = json.loads(text)
-    except ValueError as err:
-        raise MergeDecisionsError(f"{path} is not valid JSON: {err}") from None
-    if not isinstance(raw, list):
-        raise MergeDecisionsError(f"{path} does not hold a list of decisions")
-    for index, entry in enumerate(raw):
-        where = f"{path} entry {index}"
-        if not isinstance(entry, dict) or not all(
-            isinstance(entry.get(field), str)
-            for field in ("keyword_a", "keyword_b", "decision", "decided_at")
-        ):
-            raise MergeDecisionsError(
-                f"{where} needs text keyword_a, keyword_b, decision and decided_at"
-            )
-        if entry["decision"] not in DECISIONS:
-            raise MergeDecisionsError(
-                f"{where} has decision {entry['decision']!r}, expected one of {DECISIONS}"
-            )
-        if not entry["keyword_a"] < entry["keyword_b"]:
-            raise MergeDecisionsError(f"{where} must have keyword_a < keyword_b")
-        if entry["decision"] != "cleared":
-            try:
-                datetime.fromisoformat(entry["decided_at"])
-            except ValueError:
-                raise MergeDecisionsError(
-                    f"{where} has decided_at {entry['decided_at']!r}, expected an ISO 8601 time"
-                ) from None
-    entries: list[dict[str, str]] = raw
-    return entries
+class MergeDecisions(DecisionsFile):
+    """`merge_decisions.json`: one entry per pair, keyed `(keyword_a, keyword_b)`."""
 
+    KEY: ClassVar[tuple[str, ...]] = ("keyword_a", "keyword_b")
+    ERROR = MergeDecisionsError
+    NOUN = "merge decisions"
 
-class MergeDecisions:
-    """`merge_decisions.json`, written the way `SavedQueries` writes its file.
-
-    Replaced by rename so a reader never sees half of it, under a lock, and bounded
-    because Plex TVX has no login. Only the last entry per pair counts (the fold
-    applies entries in order), so a write keeps one entry per pair and the file's
-    size is bounded by the number of pairs the table holds.
-    """
-
-    MAX_ENTRIES = 50_000
-    MAX_TOTAL_BYTES = 8 << 20
-    #: A keyword longer than this cannot be a stored value, so the write refuses it
-    #: before looking the pair up.
-    KEYWORD_MAX = 200
-
-    def __init__(self, path: Path) -> None:
-        self._path = path
-        self._lock = threading.Lock()
-
-    def _read(self) -> list[dict[str, str]]:
-        try:
-            text = self._path.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            return []
-        except OSError as err:
-            raise MergeDecisionsError(f"cannot read {self._path}: {err}") from None
-        return parse_decisions(self._path, text)
-
-    def _write(self, body: str) -> None:
-        tmp = self._path.with_name(self._path.name + ".tmp")
-        try:
-            tmp.write_text(body, encoding="utf-8")
-            tmp.replace(self._path)
-        except OSError as err:
-            raise MergeDecisionsError(f"cannot write {self._path}: {err}") from None
-        finally:
-            tmp.unlink(missing_ok=True)
-
-    def latest(self) -> dict[tuple[str, str], dict[str, str]]:
-        """The last entry for each pair."""
-        with self._lock:
-            return {(e["keyword_a"], e["keyword_b"]): e for e in self._read()}
+    @classmethod
+    def key_problem(cls, key: tuple[str, ...]) -> str | None:
+        return None if key[0] < key[1] else "must have keyword_a < keyword_b"
 
     def check(self, keyword_a: object, keyword_b: object, decision: object) -> tuple[str, str, str]:
         """The three fields as text, or `ValueError` saying which is wrong."""
-
-        def keyword(name: str, value: object) -> str:
-            if not isinstance(value, str) or not value or len(value) > self.KEYWORD_MAX:
-                raise ValueError(f"{name} must be text of 1 to {self.KEYWORD_MAX} characters")
-            return value
-
-        first, second = keyword("keyword_a", keyword_a), keyword("keyword_b", keyword_b)
+        first, second = self.keyword("keyword_a", keyword_a), self.keyword("keyword_b", keyword_b)
         if not first < second:
             raise ValueError("keyword_a must sort before keyword_b")
-        if not isinstance(decision, str) or decision not in DECISIONS:
-            raise ValueError(f"decision must be one of {', '.join(DECISIONS)}")
-        return first, second, decision
-
-    def record(self, keyword_a: str, keyword_b: str, decision: str) -> dict[str, str]:
-        """Append one decision, dropping the pair's earlier entries; return the entry.
-
-        The caller has checked the fields (`check`) and that the pair has a row.
-        """
-        entry = {
-            "keyword_a": keyword_a,
-            "keyword_b": keyword_b,
-            "decision": decision,
-            "decided_at": datetime.now(UTC).isoformat(timespec="seconds"),
-        }
-        with self._lock:
-            kept = [
-                e
-                for e in self._read()
-                if (e["keyword_a"], e["keyword_b"]) != (keyword_a, keyword_b)
-            ]
-            kept.append(entry)
-            if len(kept) > self.MAX_ENTRIES:
-                raise ValueError(f"too many merge decisions (max {self.MAX_ENTRIES})")
-            body = json.dumps(kept, indent=2) + "\n"
-            if len(body.encode()) > self.MAX_TOTAL_BYTES:
-                raise ValueError(f"merge decisions would exceed {self.MAX_TOTAL_BYTES} bytes")
-            self._write(body)
-        return entry
+        return first, second, self.decision(decision)
 
 
 def bucket(score: float, decision: str | None) -> str | None:
@@ -183,7 +77,7 @@ def bucket(score: float, decision: str | None) -> str | None:
 def _row(
     row: tuple[Any, ...],
     forms: dict[str, str],
-    overlay: dict[tuple[str, str], dict[str, str]],
+    overlay: dict[tuple[str, ...], dict[str, str]],
 ) -> dict[str, object]:
     keyword_a, keyword_b, score, model, decision, decided_at = row
     entry = overlay.get((keyword_a, keyword_b))
@@ -220,7 +114,7 @@ def require_pair(conn: sqlite3.Connection, pair: tuple[str, str]) -> None:
 
 def review_rows(
     conn: sqlite3.Connection,
-    overlay: dict[tuple[str, str], dict[str, str]],
+    overlay: dict[tuple[str, ...], dict[str, str]],
     forms: dict[str, str],
     pair: tuple[str, str] | None = None,
 ) -> list[dict[str, object]]:

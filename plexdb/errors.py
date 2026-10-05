@@ -93,5 +93,14 @@ class JevRejected(JevError):
     so asking again about the same one gets the same answer."""
 
 
-class MergeDecisionsError(PlexdbError):
+class DecisionsFileError(PlexdbError):
+    """A Plex TVX decisions file cannot be read or written, is not valid JSON, or does
+    not hold the documented shape."""
+
+
+class MergeDecisionsError(DecisionsFileError):
     """`merge_decisions.json` is not valid JSON or does not hold the documented shape."""
+
+
+class RoleDecisionsError(DecisionsFileError):
+    """`role_decisions.json` is not valid JSON or does not hold the documented shape."""

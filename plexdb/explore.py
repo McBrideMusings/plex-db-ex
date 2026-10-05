@@ -7,9 +7,10 @@ keyword-cosine ranking for a reason that has nothing to do with taste.
 
 Nothing here writes the store. Every request opens it through `open_readonly`, so
 a handler bug meets SQLite's read-only mode rather than the one writer's file
-(ADR-0001). The one file Plex TVX does write is the Query tab's saved
-queries, `explore-queries.json`, capped in count and total size (`SavedQueries`)
-since Plex TVX has no login. The noise list the page keeps lives in the
+(ADR-0001). The files Plex TVX does write sit beside each other: the Query
+tab's saved queries, `explore-queries.json` (`SavedQueries`), and the Merges and
+Roles tabs' decisions files (`decisions.DecisionsFile`), each capped in count and
+total size since Plex TVX has no login. The noise list the page keeps lives in the
 viewer's browser, never on disk.
 
 The numbers are computed the way `taste-cosine.rhai` computes them for a pool,
@@ -23,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import sqlite3
 import sys
 import threading
@@ -40,7 +42,8 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 
-from .errors import MergeDecisionsError, StoreError
+from .config import Config
+from .errors import DecisionsFileError, StoreError
 from .identity import PRIORITY
 from .merge_review import (
     MERGE_DECISIONS_FILE,
@@ -48,6 +51,14 @@ from .merge_review import (
     NoSuchPair,
     require_pair,
     review_rows,
+)
+from .role_review import (
+    ROLE_DECISIONS_FILE,
+    NoSuchRole,
+    RoleDecisions,
+    require_role,
+    role_cell,
+    roles_json,
 )
 from .store import open_readonly
 from .tmdb_edges import SIMILAR_EDGE_TYPE
@@ -1633,6 +1644,8 @@ class PosterProxy:
 
 #: The fields a decision POST carries, in the order `MergeDecisions.check` takes them.
 MERGE_FIELDS = ("keyword_a", "keyword_b", "decision")
+#: The same for `/api/roles` and `RoleDecisions.check`.
+ROLE_FIELDS = ("keyword", "role", "decision")
 
 
 def merges_json(pairs: list[dict[str, object]]) -> dict[str, object]:
@@ -1667,6 +1680,21 @@ def _page() -> bytes:
 SAVED_FILE = "explore-queries.json"
 
 
+def decisions_dir(config: Config) -> Path:
+    """Where Plex TVX's files sit: the saved queries, `merge_decisions.json` and
+    `role_decisions.json`.
+
+    The directory of `PLEXDB_EXPLORE_SAVED_PATH` when set (the container's own
+    mount); otherwise beside the published snapshot when one is configured, as the
+    scheduler's Plex TVX puts it, and beside the store otherwise, as `plexdb
+    explore` does.
+    """
+    raw = os.environ.get(EXPLORE_SAVED_PATH_VAR, "").strip()
+    if raw:
+        return Path(raw).expanduser().parent
+    return (config.snapshot_path or config.store_path).parent
+
+
 def _error_reply(err: Exception, store_path: Path) -> tuple[str, HTTPStatus] | None:
     """The message and status an `/api/*` route answers with for `err`, or
     None for a failure no route expects — that one stays a traceback.
@@ -1683,6 +1711,8 @@ def _error_reply(err: Exception, store_path: Path) -> tuple[str, HTTPStatus] | N
         return f"no title with item_id {err.args[0]!r}", HTTPStatus.NOT_FOUND
     if isinstance(err, NoSuchPair):
         return f"no keyword pair {err.args[0]!r} in the store", HTTPStatus.NOT_FOUND
+    if isinstance(err, NoSuchRole):
+        return f"no keyword role {err.args[0]!r} in the store", HTTPStatus.NOT_FOUND
     if isinstance(err, NoSuchQuery):
         return f"no saved query named {err.args[0]!r}", HTTPStatus.NOT_FOUND
     if isinstance(err, TooManyTitleRequests):
@@ -1708,8 +1738,8 @@ def _error_reply(err: Exception, store_path: Path) -> tuple[str, HTTPStatus] | N
         return f"could not read the store: {err}", HTTPStatus.SERVICE_UNAVAILABLE
     if isinstance(err, SavedQueriesError):
         return f"saved queries: {err}", HTTPStatus.INTERNAL_SERVER_ERROR
-    if isinstance(err, MergeDecisionsError):
-        return f"merge decisions: {err}", HTTPStatus.INTERNAL_SERVER_ERROR
+    if isinstance(err, DecisionsFileError):
+        return f"decisions file: {err}", HTTPStatus.INTERNAL_SERVER_ERROR
     if isinstance(err, OSError):
         return f"could not read the store: {err}", HTTPStatus.INTERNAL_SERVER_ERROR
     return None
@@ -1728,7 +1758,7 @@ def _log_store_damage(err: Exception) -> None:
             FileNotFoundError,
             ConnectionError,
             SavedQueriesError,
-            MergeDecisionsError,
+            DecisionsFileError,
             sqlite3.ProgrammingError,
         ),
     ):
@@ -1758,6 +1788,7 @@ def make_server(
     saved_file = saved_path or store_path.with_name(SAVED_FILE)
     saved = SavedQueries(saved_file)
     merges = MergeDecisions(saved_file.with_name(MERGE_DECISIONS_FILE))
+    roles = RoleDecisions(saved_file.with_name(ROLE_DECISIONS_FILE))
     posters = PosterProxy(store_path, plex_url, plex_token, poster_http)
 
     class Handler(BaseHTTPRequestHandler):
@@ -1811,9 +1842,23 @@ def make_server(
                 # grow the file with names that were never judged.
                 with open_readonly(store_path) as conn:
                     require_pair(conn, (a, b))
-                    entry = merges.record(a, b, decision)
+                    entry = merges.record((a, b), decision)
                     pair = review_rows(conn, {(a, b): entry}, readable_forms(conn), (a, b))[0]
                 self._json({"pair": pair})
+                return
+            if path == "/api/roles":
+                body = self._body()
+                keyword, role, decision = roles.check(*(body.get(k) for k in ROLE_FIELDS))
+                # As for a pair: only a (keyword, role) the table holds may be decided.
+                with open_readonly(store_path) as conn:
+                    require_role(conn, keyword, role)
+                    entry = roles.record((keyword, role), decision)
+                    cell = role_cell(conn, roles.latest(), readable_forms(conn), keyword, role)
+                print(
+                    f"explore: role decision {keyword!r} {role} {decision} -> {roles.path}",
+                    file=sys.stderr,
+                )
+                self._json({"cell": cell, "entry": entry})
                 return
             if path != "/api/query":
                 self._json({"error": f"no route {self.path}"}, HTTPStatus.NOT_FOUND)
@@ -1880,6 +1925,11 @@ def make_server(
                 with open_readonly(store_path) as conn:
                     pairs = review_rows(conn, merges.latest(), readable_forms(conn))
                 self._json(merges_json(pairs))
+            elif url.path == "/api/roles":
+                with open_readonly(store_path) as conn:
+                    self._json(
+                        roles_json(conn, roles.latest(), readable_forms(conn), query.get("q", ""))
+                    )
             elif url.path == "/api/recipes":
                 self._json({"recipes": list(RECIPES)})
             elif url.path == "/api/title":

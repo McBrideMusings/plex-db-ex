@@ -843,6 +843,8 @@ Plex TVX's Merges tab writes this file (`POST /api/merges`, one pair per request
 404 for a pair `keyword_pairs` has no row for) and reads it back over the table (`GET /api/merges`),
 so a decision shows at once and is marked "applies at next sweep" until the fold writes it into the
 table. A write keeps one entry per pair, which the fold's last-entry-wins rule makes equivalent.
+The Roles tab's [`role_decisions.json`](#role-decisions-json) has the same shape, keyed by
+(keyword, role).
 
 ## Version 13 — a pair the judge refused
 
@@ -910,8 +912,8 @@ counts a source-stated row, or a judge's score at or above a threshold.
 is per keyword, not per title, so a title's re-fetch only moves its `stated_at`; a keyword Wikidata
 stops calling a place keeps its row until `enrich-wikidata --rewipe`. `enrich-anilist` writes
 `theme`, `era` and `character_trait` rows with `source = 'anilist'` from tag categories
-([AniList tags and roles](#anilist-tags-and-roles)), under the same per-keyword rule. Nothing writes
-`keyword_role_decisions` yet.
+([AniList tags and roles](#anilist-tags-and-roles)), under the same per-keyword rule. Only
+`plexdb fold-role-decisions` writes `keyword_role_decisions`, from [`role_decisions.json`](#role-decisions-json).
 
 `plexdb judge-keyword-roles` writes judge rows with `source = 'jev'`. It asks Jev about every
 distinct stored keyword that has no `jev` row: one request per keyword, about its shortest readable
@@ -925,6 +927,33 @@ again. Other Jev failures write nothing for the batch and stop the run. Rows are
 of 200 keywords, each in one transaction, so a killed run keeps every finished batch. `--limit N`
 asks about at most N keywords. The step needs `TYPESAFE_API_KEY`; with it unset the sweep reports it
 skipped.
+
+### `role_decisions.json`
+
+A person's decision reaches `keyword_role_decisions` only through this file, for the same reason as
+[`merge_decisions.json`](#merge-decisions-json), and it sits in the same directory. It is a JSON
+list; every entry has four text fields:
+
+```json
+[
+  {"keyword": "los angel", "role": "region", "decision": "accepted",
+   "decided_at": "2026-10-05T12:00:00+00:00"}
+]
+```
+
+`keyword` is a stored value and `role` one of the five roles. `decision` is `accepted`, `rejected`
+or `cleared`; `decided_at` is a UTC time, required for `accepted` and `rejected`. `plexdb
+fold-role-decisions` applies the file as the sweep step right after `fold-merge-decisions`, every
+run: entries apply in list order, so the last entry for a (keyword, role) wins. `accepted` and
+`rejected` set the row's `decision` and `decided_at`; `cleared` deletes the row, so both read NULL.
+An entry naming a (keyword, role) with no verdict in `keyword_roles` (a refusal does not count) is
+counted and ignored. A missing file means no decisions. A file that is not valid JSON or breaks this
+shape is refused whole, and no row changes. The file is not deleted.
+
+Plex TVX's Roles tab writes this file (`POST /api/roles`, one (keyword, role) per request,
+refused with a 404 when `keyword_roles` has no verdict for it) and reads it back over the table
+(`GET /api/roles`), so a decision shows at once and is marked "applies at next sweep" until the
+fold writes it. A write keeps one entry per (keyword, role).
 
 ## Reading the store to build collections
 

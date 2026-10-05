@@ -10,9 +10,10 @@ from __future__ import annotations
 import argparse
 
 from ..config import Config
+from ..decisions import FoldStats
 from ..store import open_store
 from ..sweep import Step
-from ..synonyms import FoldStats, fold_merge_decisions, merge_decisions_path
+from ..synonyms import fold_merge_decisions, merge_decisions_path
 
 NAME = "fold-merge-decisions"
 #: Right after `migrate`, so a sweep starts by applying what a person decided

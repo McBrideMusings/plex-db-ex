@@ -17,6 +17,10 @@ before its rows are written in one transaction, so a run killed partway keeps
 every finished batch and the next run asks only about keywords still without a
 row. Nothing here decides whether a keyword *has* a role: that threshold is the
 reader's.
+
+**Decisions.** Plex TVX never writes `plexdb.db` (ADR-0007, ADR-0017), so a
+person's accept or reject reaches `keyword_role_decisions` only through
+`role_decisions.json`, which `fold_role_decisions` applies early in a sweep.
 """
 
 from __future__ import annotations
@@ -26,12 +30,17 @@ from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 
+from .config import Config
+from .decisions import FoldStats
 from .errors import JevRejected
+from .explore import decisions_dir
 from .jev_client import RoleJudge, RoleVerdict
 from .keywords import ROLES, readable_surfaces
+from .role_review import ROLE_DECISIONS_FILE, RoleDecisions, has_verdict
 
-__all__ = ["RoleStats", "judge_keyword_roles"]
+__all__ = ["RoleStats", "fold_role_decisions", "judge_keyword_roles", "role_decisions_path"]
 
 #: This judge's source name in `keyword_roles`.
 SOURCE = "jev"
@@ -150,3 +159,47 @@ def _outcome(future: Future[RoleVerdict]) -> RoleVerdict | JevRejected:
         return future.result()
     except JevRejected as err:
         return err
+
+
+def role_decisions_path(config: Config) -> Path:
+    """`role_decisions.json`, beside Plex TVX's saved-queries file and `merge_decisions.json`."""
+    return decisions_dir(config) / ROLE_DECISIONS_FILE
+
+
+def fold_role_decisions(conn: sqlite3.Connection, path: Path) -> FoldStats:
+    """Apply `path` to `keyword_role_decisions`; a missing file is no decisions.
+
+    The file is a list of `{keyword, role, decision, decided_at}`, where `decision`
+    is `accepted`, `rejected` or `cleared`. Entries apply in list order, so the last
+    entry for a (keyword, role) wins. `accepted` and `rejected` set the row's
+    `decision` and `decided_at`; `cleared` deletes the row, so both read NULL. An
+    entry naming a (keyword, role) with no verdict in `keyword_roles` is counted and
+    ignored. The whole file is validated before the first row changes, and applied
+    in one transaction. It is applied every run, so the file stays the record of the
+    latest decision per (keyword, role).
+    """
+    stats = FoldStats()
+    entries = RoleDecisions.load(path)
+    if entries is None:
+        return stats
+    stats.file_found = True
+    stats.entries = len(entries)
+    with conn:
+        for entry in entries:
+            key = (entry["keyword"], entry["role"])
+            if not has_verdict(conn, *key):
+                stats.unmatched += 1
+                continue
+            stats.matched += 1
+            if entry["decision"] == "cleared":
+                conn.execute(
+                    "DELETE FROM keyword_role_decisions WHERE keyword = ? AND role = ?", key
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO keyword_role_decisions (keyword, role, decision, decided_at) "
+                    "VALUES (?, ?, ?, ?) ON CONFLICT (keyword, role) DO UPDATE SET "
+                    "decision = excluded.decision, decided_at = excluded.decided_at",
+                    (*key, entry["decision"], entry["decided_at"]),
+                )
+    return stats

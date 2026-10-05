@@ -25,6 +25,7 @@ from plexdb.sweep import PlannedStep, Status, Step, plan, run_locked_sweep, run_
 EXPECTED_SWEEP = [
     ("migrate", Step.REQUIRED),
     ("fold-merge-decisions", Step.BEST_EFFORT),
+    ("fold-role-decisions", Step.BEST_EFFORT),
     ("walk", Step.REQUIRED),
     ("ingest-plays", Step.REQUIRED),
     ("enrich-tautulli-plays", Step.BEST_EFFORT),

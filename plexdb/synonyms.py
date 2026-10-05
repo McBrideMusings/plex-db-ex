@@ -43,7 +43,6 @@ which `fold_merge_decisions` applies at the start of a sweep.
 
 from __future__ import annotations
 
-import os
 import sqlite3
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -56,15 +55,15 @@ import numpy as np
 import numpy.typing as npt
 
 from .config import Config
+from .decisions import FoldStats
 from .embed_client import MODEL, Embedder
-from .errors import JevRejected, MergeDecisionsError
-from .explore import EXPLORE_SAVED_PATH_VAR, SAVED_FILE
+from .errors import JevRejected
+from .explore import decisions_dir
 from .jev_client import Judge, Verdict
 from .keywords import readable_surfaces
-from .merge_review import MERGE_DECISIONS_FILE, parse_decisions
+from .merge_review import MERGE_DECISIONS_FILE, MergeDecisions
 
 __all__ = [
-    "FoldStats",
     "JudgeStats",
     "find_synonym_pairs",
     "fold_merge_decisions",
@@ -101,31 +100,9 @@ class JudgeStats:
     batches_committed: int = 0
 
 
-@dataclass
-class FoldStats:
-    file_found: bool = False
-    entries: int = 0
-    #: Entries naming a pair that has a row, whether or not its decision changed.
-    matched: int = 0
-    #: Entries naming a pair with no row. Not an error: the file may name a pair a
-    #: restored older store never judged.
-    unmatched: int = 0
-
-
 def merge_decisions_path(config: Config) -> Path:
-    """`merge_decisions.json`, beside Plex TVX's saved-queries file.
-
-    That file is `PLEXDB_EXPLORE_SAVED_PATH` when set (the container's own mount);
-    otherwise it sits beside the published snapshot when one is configured, as the
-    scheduler's Plex TVX puts it, and beside the store otherwise, as `plexdb
-    explore` does.
-    """
-    raw = os.environ.get(EXPLORE_SAVED_PATH_VAR, "").strip()
-    if raw:
-        saved = Path(raw).expanduser()
-    else:
-        saved = (config.snapshot_path or config.store_path).with_name(SAVED_FILE)
-    return saved.with_name(MERGE_DECISIONS_FILE)
+    """`merge_decisions.json`, beside Plex TVX's saved-queries file."""
+    return decisions_dir(config) / MERGE_DECISIONS_FILE
 
 
 def fold_merge_decisions(conn: sqlite3.Connection, path: Path) -> FoldStats:
@@ -139,14 +116,10 @@ def fold_merge_decisions(conn: sqlite3.Connection, path: Path) -> FoldStats:
     file stays the record of the latest decision per pair.
     """
     stats = FoldStats()
-    try:
-        text = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
+    entries = MergeDecisions.load(path)
+    if entries is None:
         return stats
-    except OSError as err:
-        raise MergeDecisionsError(f"cannot read {path}: {err}") from None
     stats.file_found = True
-    entries = parse_decisions(path, text)
     stats.entries = len(entries)
     with conn:
         for entry in entries:
