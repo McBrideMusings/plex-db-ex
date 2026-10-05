@@ -913,6 +913,19 @@ stops calling a place keeps its row until `enrich-wikidata --rewipe`. `enrich-an
 ([AniList tags and roles](#anilist-tags-and-roles)), under the same per-keyword rule. Nothing writes
 `keyword_role_decisions` yet.
 
+`plexdb judge-keyword-roles` writes judge rows with `source = 'jev'`. It asks Jev about every
+distinct stored keyword that has no `jev` row: one request per keyword, about its shortest readable
+surface form (`keyword_forms.surface`), carrying one `noul` question per role ("The tag names a
+place a title is set in, such as …"). Each answer becomes one row, five per keyword, with `score`
+exactly as Jev gave it and `model` the model id in the response (for example `jev-1.13.0`). A
+keyword with a `jev` row is never asked again, so a run with no new keyword sends nothing; another
+source's row does not count. A keyword Jev refuses with a 400 or 422 gets five rows with `error`
+holding the refusal and `score` and `model` NULL, and is not asked again; delete its rows to ask
+again. Other Jev failures write nothing for the batch and stop the run. Rows are written in batches
+of 200 keywords, each in one transaction, so a killed run keeps every finished batch. `--limit N`
+asks about at most N keywords. The step needs `TYPESAFE_API_KEY`; with it unset the sweep reports it
+skipped.
+
 ## Reading the store to build collections
 
 Each query below was run against a migrated copy of the real store. Parameters are written as

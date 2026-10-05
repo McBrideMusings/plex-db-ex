@@ -73,6 +73,24 @@ def upsert_keyword_form(conn: sqlite3.Connection, surface: str) -> str:
     return keyword
 
 
+def readable_surfaces(conn: sqlite3.Connection) -> dict[str, str]:
+    """Each stored keyword and the text a person or a judge reads for it: its
+    shortest surface form, shortest first then alphabetical so the choice is
+    stable. A keyword no `keyword_forms` row maps back to is its own text."""
+    chosen: dict[str, str] = {}
+    for surface, keyword in conn.execute("SELECT surface, keyword FROM keyword_forms"):
+        best = chosen.get(keyword)
+        if best is None or (len(surface), surface) < (len(best), best):
+            chosen[keyword] = surface
+    return {
+        row[0]: chosen.get(row[0], row[0])
+        for row in conn.execute(
+            "SELECT DISTINCT value FROM enrichment WHERE namespace = ? AND key = 'keyword'",
+            (NAMESPACE,),
+        )
+    }
+
+
 def state_role(
     conn: sqlite3.Connection, keyword: str, role: str, source: str, stated_at: str
 ) -> None:

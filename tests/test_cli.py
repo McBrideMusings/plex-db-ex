@@ -48,6 +48,7 @@ EXPECTED_COMMANDS = {
     "harvest-mdblist",
     "fold-merge-decisions",
     "judge-keyword-pairs",
+    "judge-keyword-roles",
     "ingest-plays",
     "enrich-tautulli-plays",
     "latent-users",
@@ -86,6 +87,7 @@ EXPECTED_COMMAND_ORDER = [
     "enrich-mdblist-ratings",
     "harvest-mdblist",
     "judge-keyword-pairs",
+    "judge-keyword-roles",
     "latent-users",
     # Not a step of the sweep: a read-only browser view of what the steps above
     # wrote (`plexdb/commands/explore.py`).

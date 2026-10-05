@@ -89,8 +89,8 @@ class JevError(PlexdbError):
 
 
 class JevRejected(JevError):
-    """Jev answered 400 or 422 for one pair: the request itself is refused, so asking
-    again about the same pair gets the same answer."""
+    """Jev answered 400 or 422 for one pair or keyword: the request itself is refused,
+    so asking again about the same one gets the same answer."""
 
 
 class MergeDecisionsError(PlexdbError):

@@ -60,7 +60,7 @@ from .embed_client import MODEL, Embedder
 from .errors import JevRejected, MergeDecisionsError
 from .explore import EXPLORE_SAVED_PATH_VAR, SAVED_FILE
 from .jev_client import Judge, Verdict
-from .keywords import NAMESPACE
+from .keywords import readable_surfaces
 from .merge_review import MERGE_DECISIONS_FILE, parse_decisions
 
 __all__ = [
@@ -83,8 +83,6 @@ KEYWORD_BATCH = 200
 JUDGE_WORKERS = 8
 
 EMBEDDING_CACHE_FILE = "keyword-embeddings.npz"
-
-_KEY = "keyword"
 
 _Vectors = npt.NDArray[np.float32]
 
@@ -186,7 +184,7 @@ def find_synonym_pairs(
     embedding cache file; `None` embeds everything each call.
     """
     stats = JudgeStats()
-    surfaces = _surfaces(conn)
+    surfaces = readable_surfaces(conn)
     keywords = sorted(surfaces)
     stats.keywords_stored = len(keywords)
     if not keywords:
@@ -233,24 +231,6 @@ def find_synonym_pairs(
             f"{stats.pairs_judged:,} pair(s) judged"
         )
     return stats
-
-
-def _surfaces(conn: sqlite3.Connection) -> dict[str, str]:
-    """Each stored keyword and the text to embed and show Jev: its shortest
-    surface form, shortest first then alphabetical so the choice is stable. A
-    keyword no `keyword_forms` row maps back to is its own text."""
-    chosen: dict[str, str] = {}
-    for surface, keyword in conn.execute("SELECT surface, keyword FROM keyword_forms"):
-        best = chosen.get(keyword)
-        if best is None or (len(surface), surface) < (len(best), best):
-            chosen[keyword] = surface
-    return {
-        row[0]: chosen.get(row[0], row[0])
-        for row in conn.execute(
-            "SELECT DISTINCT value FROM enrichment WHERE namespace = ? AND key = ?",
-            (NAMESPACE, _KEY),
-        )
-    }
 
 
 #: Texts embedded between cache saves, so a sweep killed during the first

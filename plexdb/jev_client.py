@@ -1,12 +1,15 @@
-"""Asking Jev whether two keywords mean the same thing.
+"""Asking Jev whether two keywords mean the same thing, and what roles one
+keyword plays.
 
-`synonyms.py` depends on `Judge`, not on `LiveJev`, so a test can substitute a
-fake without a socket — the same split as `tmdb_client.py`.
+`synonyms.py` depends on `Judge` and `roles.py` on `RoleJudge`, not on
+`LiveJev`, so a test can substitute a fake without a socket — the same split as
+`tmdb_client.py`.
 
 Jev's `noul` answer is a probability between 0 and 1 that the statement is true.
-The same request also carries a `score` question; Jev answers both from one
+The pair request also carries a `score` question; Jev answers both from one
 state, and only the `noul` answer is kept (ADR-0018 stores the judge's own
-answer, not a conclusion drawn from it).
+answer, not a conclusion drawn from it). The role request carries one `noul`
+question per role in `keywords.ROLES`, all about the same keyword.
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ from typing import Any, Protocol
 import httpx
 
 from .errors import JevError, JevRejected
+from .keywords import ROLES
 
 _URL = "https://api.typesafe.ai/v1/systemone"
 #: Statuses that mean this request is invalid. A bad key (401, 403) or an outage
@@ -40,6 +44,18 @@ _SCORE_CRITERIA = [
 ]
 _NOUL_INSTRUCTIONS = "Do the two tags mean the same thing?"
 
+_ROLE_CONTEXT = "A tag attached to movies and TV shows in a keyword database."
+#: One `noul` question per role, keyed by the role name `keyword_roles.role` stores.
+_ROLE_INSTRUCTIONS = {
+    "tone": "The tag names a tone or mood a title has, such as bleak, whimsical or tense.",
+    "era": "The tag names a time period a title is set in, such as the 1970s or the Victorian era.",
+    "region": "The tag names a place a title is set in, such as Los Angeles, Tokyo or Scotland.",
+    "theme": "The tag names a theme a title is about, such as grief, revenge or redemption.",
+    "character_trait": (
+        "The tag names a trait of a title's characters, such as antihero, genius or loner."
+    ),
+}
+
 
 @dataclass(frozen=True)
 class Verdict:
@@ -49,9 +65,26 @@ class Verdict:
     model: str
 
 
+@dataclass(frozen=True)
+class RoleVerdict:
+    #: Jev's `noul` answer per role in `keywords.ROLES`, 0 to 1, exactly as given.
+    scores: dict[str, float]
+    #: The model that answered, e.g. `jev-1.13.0`.
+    model: str
+
+
 class Judge(Protocol):
     def judge(self, tag_a: str, tag_b: str) -> Verdict:
         """Whether two readable keyword spellings mean the same thing.
+
+        Safe to call from several threads at once.
+        """
+        ...
+
+
+class RoleJudge(Protocol):
+    def judge_roles(self, tag: str) -> RoleVerdict:
+        """How likely one readable keyword spelling is to play each role.
 
         Safe to call from several threads at once.
         """
@@ -93,6 +126,27 @@ class LiveJev:
         if not 0.0 <= score <= 1.0 or not model:
             raise JevError(f"Jev returned a noul score of {score} from model {model!r}")
         return Verdict(score=score, model=model)
+
+    def judge_roles(self, tag: str) -> RoleVerdict:
+        body = {
+            "state": {"tag": tag, "context": _ROLE_CONTEXT},
+            "model": _MODEL,
+            "questions": {
+                role: {"type": "noul", "instructions": instructions}
+                for role, instructions in _ROLE_INSTRUCTIONS.items()
+            },
+        }
+        answer = self._post(body)
+        try:
+            scores = {role: float(answer["answers"][role]["noul"]) for role in ROLES}
+            model = str(answer["model"])
+        except (KeyError, TypeError, ValueError):
+            raise JevError(
+                "Jev returned an answer without a noul score per role and a model"
+            ) from None
+        if not model or any(not 0.0 <= score <= 1.0 for score in scores.values()):
+            raise JevError(f"Jev returned role scores {scores} from model {model!r}")
+        return RoleVerdict(scores=scores, model=model)
 
     def _post(self, body: dict[str, Any]) -> dict[str, Any]:
         """POST with backoff on 429; 400 and 422 raise `JevRejected`. Error messages
