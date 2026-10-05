@@ -25,6 +25,7 @@ blocks clients without a descriptive User-Agent
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable, Sequence
 from typing import Any, Protocol
@@ -180,6 +181,8 @@ def _retry_after(resp: httpx.Response) -> float:
     try:
         wait = float(raw)
     except ValueError:
+        wait = 60.0
+    if math.isnan(wait):
         wait = 60.0
     if wait > _MAX_RETRY_AFTER:
         raise WikidataError(f"Wikidata asked for a {wait:.0f} s wait; giving up on this batch")

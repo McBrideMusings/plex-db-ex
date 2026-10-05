@@ -52,6 +52,18 @@ def test_a_429_is_retried_after_the_wait_it_asks_for() -> None:
     assert statements
 
 
+def test_a_retry_after_that_is_not_a_number_waits_a_minute() -> None:
+    answers = [
+        httpx.Response(429, headers={"Retry-After": "nan"}),
+        httpx.Response(200, json=load()),
+    ]
+    waits: list[float] = []
+
+    _client(httpx.MockTransport(lambda r: answers.pop(0)), waits).statements(["tt1375666"])
+
+    assert waits[0] == 60.0
+
+
 def test_a_server_error_raises_without_retrying() -> None:
     calls: list[int] = []
 

@@ -20,6 +20,7 @@ bounded number of times (https://docs.anilist.co/guide/rate-limiting).
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable, Sequence
 from typing import Any, NamedTuple, Protocol
@@ -195,6 +196,8 @@ def _retry_after(resp: httpx.Response) -> float:
     try:
         wait = float(raw)
     except ValueError:
+        wait = 60.0
+    if math.isnan(wait):
         wait = 60.0
     if wait > _MAX_RETRY_AFTER:
         raise AniListError(f"AniList asked for a {wait:.0f} s wait; giving up on this batch")

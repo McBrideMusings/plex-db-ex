@@ -88,9 +88,10 @@ def test_a_retry_after_past_the_cap_fails_without_waiting() -> None:
     assert waits == []
 
 
-def test_an_unparseable_retry_after_waits_a_minute() -> None:
+@pytest.mark.parametrize("header", ["soon", "nan"])
+def test_an_unparseable_retry_after_waits_a_minute(header: str) -> None:
     answers = [
-        httpx.Response(429, headers={"Retry-After": "soon"}),
+        httpx.Response(429, headers={"Retry-After": header}),
         httpx.Response(200, json=load("page_batch.json")),
     ]
     waits: list[float] = []
