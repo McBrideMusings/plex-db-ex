@@ -652,8 +652,8 @@ source said; the consumer weighs it
 **A reviewer refuses a proposed score, confidence, strength, relevance or normalised 0–1 column
 whose value cannot be traced back to a single thing a source said.** A value like that is computed
 from inputs, and either the inputs are in the store or they are not. If they are, the reader
-computes the value at read time, and a stored copy goes stale the moment the formula changes. The
-`weight` column above fails this way, because `rank`, `likes` and `mentions` are all stored. If the
+computes the value at read time, and a stored copy goes stale the moment the formula changes. A
+`weight` column would fail this way, because `rank`, `likes` and `mentions` are all stored. If the
 inputs are not in the store, storing the output hides that they are missing: the reader sees a
 number and cannot tell which facts produced it, or that the store holds none of them. A score the
 source publishes passes, because it is one thing the source said. MDBList's `imdb` rating of `7.9`
