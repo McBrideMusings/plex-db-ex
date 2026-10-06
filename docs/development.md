@@ -112,9 +112,9 @@ take, because nothing about it looks wrong.
 
 Every copy in this project therefore goes through `VACUUM INTO`, which reads through a normal
 connection, sees the sidecar, and writes one self-contained file with no sidecars of its own. That
-is what `plexdb publish` already used for snapshots ([`store.py`](../plexdb/store.py)), what
-[`tools/baseline.sh`](../tools/baseline.sh) uses for pulls and manual backups, and what
-[`plexdb/backup.py`](../plexdb/backup.py) uses before a migration.
+is what `plexdb publish` already used for snapshots ([`store.py`](https://github.com/McBrideMusings/plex-db-ex/blob/main/plexdb/store.py)), what
+[`tools/baseline.sh`](https://github.com/McBrideMusings/plex-db-ex/blob/main/tools/baseline.sh) uses for pulls and manual backups, and what
+[`plexdb/backup.py`](https://github.com/McBrideMusings/plex-db-ex/blob/main/plexdb/backup.py) uses before a migration.
 
 ```
 admin pull-baseline      # consistent copy, host -> ./data/plexdb.db
@@ -130,7 +130,7 @@ migration that is simply **wrong** — bad SQL commits perfectly happily, and mi
 forward-only, so there is no down-migration to run.
 
 So `plexdb migrate` — the first step of every sweep — does this instead, in
-[`store.migrate`](../plexdb/store.py):
+[`store.migrate`](https://github.com/McBrideMusings/plex-db-ex/blob/main/plexdb/store.py):
 
 1. If the store is already current, stop. Nothing is copied; a copy per sweep would fill the disk.
 2. Otherwise copy the store to `backups/plexdb.pre-v<target>.db` beside it, and record the row
