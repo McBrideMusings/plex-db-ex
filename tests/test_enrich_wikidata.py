@@ -171,6 +171,48 @@ def test_a_stale_title_is_asked_again_and_its_rows_replaced(conn: Any) -> None:
     assert _values(conn, INCEPTION, "awards") == {"Hugo Award"}
 
 
+def test_a_role_no_title_states_any_more_is_pruned_and_another_sources_kept(conn: Any) -> None:
+    enrich_wikidata(conn, RecordedWikidataSource())
+    conn.execute(
+        "INSERT INTO keyword_roles (keyword, role, source, score, model, stated_at) "
+        "VALUES ('los angel', 'region', 'jev', 0.9, 'jev-1', '2026-01-01T00:00:00+00:00')"
+    )
+    conn.execute(
+        "UPDATE enrichment_cursor SET fetched_at = '2020-01-01T00:00:00+00:00' WHERE item_id = ?",
+        (INCEPTION,),
+    )
+    conn.commit()
+    # Australia moves to a genre; Los Angeles leaves Wikidata's statements.
+    moved = RecordedWikidataSource(
+        statements_recorded=[("tt1375666", "P840", "Paris"), ("tt1375666", "P136", "Australia")]
+    )
+    before = sum(len(k) for k in _roles(conn).values())
+
+    stats = enrich_wikidata(conn, moved)
+
+    regions = _roles(conn)["region"]
+    assert "pari" in regions
+    assert "los angel" not in regions
+    # Still carried under this source, so its role stays until --rewipe.
+    assert "australia" in regions
+    assert stats.roles_pruned == before - sum(len(k) for k in _roles(conn).values()) > 0
+    jev = conn.execute("SELECT keyword FROM keyword_roles WHERE source = 'jev'").fetchall()
+    assert [r[0] for r in jev] == ["los angel"]
+
+
+def test_an_aborted_run_still_prunes(conn: Any) -> None:
+    conn.execute(
+        "INSERT INTO keyword_roles (keyword, role, source, stated_at) "
+        "VALUES ('nowher', 'region', 'wikidata', '2026-01-01T00:00:00+00:00')"
+    )
+    conn.commit()
+
+    with pytest.raises(WikidataError, match="consecutive"):
+        enrich_wikidata(conn, RecordedWikidataSource(fail_calls={1, 2, 3}), batch_size=1)
+
+    assert _roles(conn) == {}
+
+
 def test_a_malformed_imdb_id_is_skipped_without_failing_its_batch(conn: Any) -> None:
     conn.execute("INSERT INTO items (item_id, type, title) VALUES ('plex:x', 'movie', 'x')")
     conn.execute(

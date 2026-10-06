@@ -33,7 +33,8 @@ def _report(stats: WikidataStats) -> list[str]:
         f"{stats.titles_skipped_no_imdb_id} skipped (no imdb id), "
         f"{stats.titles_failed} failed",
         f"wikidata: {stats.keywords_written} keyword(s), "
-        f"{stats.roles_stated} role row(s), {stats.awards_written} award(s) written",
+        f"{stats.roles_stated} role row(s), {stats.awards_written} award(s) written, "
+        f"{stats.roles_pruned} role row(s) deleted, their keyword on no title",
     ]
     if stats.titles_failed:
         lines.append(
