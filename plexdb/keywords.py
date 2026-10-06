@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import sqlite3
 import unicodedata
+from dataclasses import dataclass, field
 
 import snowballstemmer
 
@@ -163,3 +164,60 @@ def state_role(
         "ON CONFLICT(keyword, role, source) DO UPDATE SET stated_at = excluded.stated_at",
         (keyword, role, source, stated_at),
     )
+
+
+#: Every keyword value some title carries, as a subquery. AniList stores a tag it
+#: flags as a spoiler under `spoiler_keyword`, and still states a role for it.
+_CARRIED = (
+    f"SELECT value FROM enrichment WHERE namespace = '{NAMESPACE}' "
+    "AND key IN ('keyword', 'spoiler_keyword')"
+)
+
+
+@dataclass
+class PruneStats:
+    #: Distinct stored keyword values some title carries.
+    keywords_stored: int = 0
+    pairs_deleted: int = 0
+    roles_deleted: int = 0
+    decisions_deleted: int = 0
+    #: The keyword values whose rows were deleted, sorted.
+    keywords_pruned: list[str] = field(default_factory=list)
+
+
+def prune_keyword_verdicts(conn: sqlite3.Connection) -> PruneStats:
+    """Delete every `keyword_pairs`, `keyword_roles` and `keyword_role_decisions`
+    row keyed on a keyword value no `enrichment` row carries.
+
+    A value leaves `enrichment` when a source stops listing it or a change to
+    `normalize_keyword` rewrites it on a title's next fetch; the rows keyed on
+    it then describe nothing. Jev's scores for a value that returns are asked
+    for again. A person's decision goes with its rows: the decisions file it
+    came from keeps it, and the fold restores it once the value, or the pair,
+    has a verdict again. One transaction.
+    """
+    stats = PruneStats()
+    with conn:
+        stats.keywords_stored = conn.execute(
+            f"SELECT COUNT(*) FROM (SELECT DISTINCT * FROM ({_CARRIED}))"
+        ).fetchone()[0]
+        stats.keywords_pruned = [
+            row[0]
+            for row in conn.execute(
+                "SELECT keyword_a FROM keyword_pairs UNION SELECT keyword_b FROM keyword_pairs "
+                "UNION SELECT keyword FROM keyword_roles "
+                "UNION SELECT keyword FROM keyword_role_decisions "
+                f"EXCEPT {_CARRIED} ORDER BY 1"
+            )
+        ]
+        stats.pairs_deleted = conn.execute(
+            f"DELETE FROM keyword_pairs "
+            f"WHERE keyword_a NOT IN ({_CARRIED}) OR keyword_b NOT IN ({_CARRIED})"
+        ).rowcount
+        stats.roles_deleted = conn.execute(
+            f"DELETE FROM keyword_roles WHERE keyword NOT IN ({_CARRIED})"
+        ).rowcount
+        stats.decisions_deleted = conn.execute(
+            f"DELETE FROM keyword_role_decisions WHERE keyword NOT IN ({_CARRIED})"
+        ).rowcount
+    return stats

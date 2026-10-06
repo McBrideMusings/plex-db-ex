@@ -154,8 +154,16 @@ A change to this rule reaches the store one title at a time: a source rewrites a
 rows, and the `keyword_forms` rows for the surfaces it saw, only when that title is next fetched
 (45 days after its last fetch). Until then a title fetched under the earlier rule keeps that rule's
 value, so a reader can see both values for one surface across titles. `keyword_pairs`,
-`keyword_roles` and `keyword_role_decisions` rows are keyed on the stored value, so a row keyed on a
-value no title carries any more matches nothing, and the new value is judged on the next sweep.
+`keyword_roles` and `keyword_role_decisions` rows are keyed on the stored value. `plexdb
+prune-keyword-verdicts` deletes every such row keyed on a value no `enrichment` row in namespace
+`keywords` carries under key `keyword` or `spoiler_keyword`, after the keyword writers and before the judges in each sweep, so a value a
+re-fetch moved loses its rows the same night and the new value is judged in the steps that follow.
+A pair goes when either of its keywords is gone. A value absent only for a while — a `--rewipe`
+whose re-fetch has not finished — loses its rows too, and Jev is asked about it again once it
+returns. A person's decision is deleted with its rows and stays in its decisions file
+([`merge_decisions.json`](#merge-decisions-json), [`role_decisions.json`](#role-decisions-json)),
+which the fold re-applies on every sweep: a role decision comes back once the value is judged
+again, a pair decision once `judge-keyword-pairs` proposes and judges that pair again.
 
 `external_ids` is what lets an enrichment fetcher that needs a TMDb id find one without
 assuming the primary key is one. It is also where a Trakt slug, a Letterboxd URL, and a
@@ -813,7 +821,9 @@ pairs into sets of keywords is the reader's too: Jev-confirmed pairs chain (`abu
 reaches `family feud` in a few hops), so connected components over merged pairs is not safe.
 
 **Refresh rule.** A pair is written once and never re-judged: a writer adds rows for pairs it
-has not judged before and leaves every existing row, `decision` included, as it is.
+has not judged before and leaves every existing row, `decision` included, as it is. `plexdb
+prune-keyword-verdicts` deletes a pair, `decision` included, once either keyword is a value no
+title carries (the normalization rule under Version 1 says when that happens).
 
 `plexdb judge-keyword-pairs` adds the rows. Every run examines every stored keyword, and each
 proposes its 10 nearest neighbours in the whole stored vocabulary
@@ -856,7 +866,9 @@ applies the file, as the first sweep step after `migrate`, every run: entries ap
 so the last entry for a pair wins, and an entry naming a pair with no row is counted and ignored.
 A missing file means no decisions. A file that is not valid JSON or breaks this shape is refused
 whole, and no row changes. The file is not deleted, so it stays the record of the latest
-decision per pair.
+decision per pair: a decision whose row `prune-keyword-verdicts` deleted comes back on the first
+fold after the pair is judged again, which happens only if one of its keywords proposes the other
+among its nearest neighbours.
 
 Plex TVX's Merges tab writes this file (`POST /api/merges`, one pair per request, refused with a
 404 for a pair `keyword_pairs` has no row for) and reads it back over the table (`GET /api/merges`),
@@ -929,10 +941,12 @@ counts a source-stated row, or a judge's score at or above a threshold.
 
 **Refresh rule.** `enrich-wikidata` writes `region` and `era` rows with `source = 'wikidata'`. A row
 is per keyword, not per title, so a title's re-fetch only moves its `stated_at`; a keyword Wikidata
-stops calling a place keeps its row until `enrich-wikidata --rewipe`. `enrich-anilist` writes
-`theme`, `era` and `character_trait` rows with `source = 'anilist'` from tag categories
-([AniList tags and roles](#anilist-tags-and-roles)), under the same per-keyword rule. Only
-`plexdb fold-role-decisions` writes `keyword_role_decisions`, from [`role_decisions.json`](#role-decisions-json).
+stops calling a place, while some title still carries it, keeps its row until `enrich-wikidata
+--rewipe`. `enrich-anilist` writes `theme`, `era` and `character_trait` rows with `source =
+'anilist'` from tag categories ([AniList tags and roles](#anilist-tags-and-roles)), under the same
+per-keyword rule. Only `plexdb fold-role-decisions` writes `keyword_role_decisions`, from
+[`role_decisions.json`](#role-decisions-json). `plexdb prune-keyword-verdicts` deletes every row in
+both tables, whatever its source, keyed on a value no title carries.
 
 `plexdb judge-keyword-roles` writes judge rows with `source = 'jev'`. It asks Jev about every
 distinct stored keyword that has no `jev` row: one request per keyword, about its shortest readable
@@ -967,7 +981,8 @@ run: entries apply in list order, so the last entry for a (keyword, role) wins. 
 `rejected` set the row's `decision` and `decided_at`; `cleared` deletes the row, so both read NULL.
 An entry naming a (keyword, role) with no verdict in `keyword_roles` (a refusal does not count) is
 counted and ignored. A missing file means no decisions. A file that is not valid JSON or breaks this
-shape is refused whole, and no row changes. The file is not deleted.
+shape is refused whole, and no row changes. The file is not deleted, so a decision whose row
+`prune-keyword-verdicts` deleted comes back on the first fold after the keyword is judged again.
 
 Plex TVX's Roles tab writes this file (`POST /api/roles`, one (keyword, role) per request,
 refused with a 404 when `keyword_roles` has no verdict for it) and reads it back over the table

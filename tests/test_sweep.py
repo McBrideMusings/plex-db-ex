@@ -38,6 +38,7 @@ EXPECTED_SWEEP = [
     ("refresh-tagnetwork", Step.BEST_EFFORT),
     ("enrich-mdblist-ratings", Step.BEST_EFFORT),
     ("harvest-mdblist", Step.BEST_EFFORT),
+    ("prune-keyword-verdicts", Step.BEST_EFFORT),
     ("judge-keyword-pairs", Step.BEST_EFFORT),
     ("judge-keyword-roles", Step.BEST_EFFORT),
     ("publish", Step.REQUIRED),

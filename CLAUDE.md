@@ -98,6 +98,7 @@ admin dev judge-keyword-pairs [--limit N]  ask Jev about synonym keyword pairs; 
 admin dev judge-keyword-roles [--limit N]  ask Jev what roles each keyword plays; needs TYPESAFE_API_KEY
 admin dev fold-merge-decisions  apply merge_decisions.json to keyword_pairs.decision
 admin dev fold-role-decisions   apply role_decisions.json to keyword_role_decisions
+admin dev prune-keyword-verdicts  delete judge-table rows for keyword values no title carries
 ```
 
 `admin deploy` takes a copy of the live store on the host first, then builds for `linux/amd64`

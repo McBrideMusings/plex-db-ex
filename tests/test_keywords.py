@@ -3,12 +3,20 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
 import pytest
 
-from plexdb.keywords import ROLES, normalize_keyword, state_role, upsert_keyword_form
+from plexdb.keywords import (
+    ROLES,
+    normalize_keyword,
+    prune_keyword_verdicts,
+    state_role,
+    upsert_keyword_form,
+)
+from plexdb.roles import fold_role_decisions
 from plexdb.store import init as init_store
 from plexdb.store import open_store
 
@@ -90,3 +98,105 @@ def test_a_rewrite_moves_a_surface_to_the_current_rule(tmp_path: Path) -> None:
             "SELECT keyword FROM keyword_forms WHERE surface = 'Miami, Florida'"
         ).fetchone()
     assert tuple(stored) == ("miami florida",)
+
+
+AT = "2026-01-01T00:00:00+00:00"
+OLD = "\u200bhidden world"
+
+
+def _carry(conn: sqlite3.Connection, keyword: str) -> None:
+    conn.execute(
+        "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) "
+        "VALUES ('imdb:tt1', 'keywords', 'tmdb', 'keyword', ?, ?)",
+        (keyword, AT),
+    )
+
+
+def _judge(conn: sqlite3.Connection, keyword: str) -> None:
+    conn.execute(
+        "INSERT INTO keyword_roles (keyword, role, source, score, model, stated_at) "
+        "VALUES (?, 'theme', 'jev', 0.9, 'jev-test', ?)",
+        (keyword, AT),
+    )
+
+
+def _judged_store(tmp_path: Path) -> Path:
+    """A title carrying `OLD` and `heist`, each judged and decided, and a decided pair."""
+    store = tmp_path / "plexdb.db"
+    init_store(store)
+    with open_store(store) as conn:
+        conn.execute("INSERT INTO items (item_id, type, title) VALUES ('imdb:tt1', 'movie', 'T')")
+        for keyword in (OLD, "heist"):
+            _carry(conn, keyword)
+            _judge(conn, keyword)
+            conn.execute(
+                "INSERT INTO keyword_role_decisions VALUES (?, 'theme', 'accepted', ?)",
+                (keyword, AT),
+            )
+        conn.execute(
+            "INSERT INTO keyword_pairs (keyword_a, keyword_b, jev_score, jev_model, judged_at, "
+            "decision, decided_at) VALUES ('heist', ?, 0.8, 'jev-test', ?, 'rejected', ?)",
+            (OLD, AT, AT),
+        )
+        conn.commit()
+    return store
+
+
+def test_a_value_a_refetch_moved_loses_its_rows_and_a_carried_value_keeps_its(
+    tmp_path: Path,
+) -> None:
+    store = _judged_store(tmp_path)
+    with open_store(store) as conn:
+        conn.execute("DELETE FROM enrichment WHERE value = ?", (OLD,))
+        _carry(conn, "hidden world")
+        conn.commit()
+        stats = prune_keyword_verdicts(conn)
+        keyed = {
+            table: [r[0] for r in conn.execute(f"SELECT {column} FROM {table} ORDER BY 1")]
+            for table, column in (
+                ("keyword_pairs", "keyword_a"),
+                ("keyword_roles", "keyword"),
+                ("keyword_role_decisions", "keyword"),
+            )
+        }
+    assert keyed == {
+        "keyword_pairs": [],
+        "keyword_roles": ["heist"],
+        "keyword_role_decisions": ["heist"],
+    }
+    assert (stats.keywords_pruned, stats.keywords_stored) == ([OLD], 2)
+    assert (stats.pairs_deleted, stats.roles_deleted, stats.decisions_deleted) == (1, 1, 1)
+
+
+def test_a_pruned_decision_comes_back_from_its_file_once_the_value_is_judged_again(
+    tmp_path: Path,
+) -> None:
+    store = _judged_store(tmp_path)
+    decisions = tmp_path / "role_decisions.json"
+    decisions.write_text(
+        json.dumps([{"keyword": OLD, "role": "theme", "decision": "accepted", "decided_at": AT}])
+    )
+    with open_store(store) as conn:
+        conn.execute("DELETE FROM enrichment WHERE value = ?", (OLD,))
+        conn.commit()
+        prune_keyword_verdicts(conn)
+        assert fold_role_decisions(conn, decisions).unmatched == 1
+        _carry(conn, OLD)
+        _judge(conn, OLD)
+        conn.commit()
+        fold_role_decisions(conn, decisions)
+        restored = conn.execute(
+            "SELECT decision FROM keyword_role_decisions WHERE keyword = ?", (OLD,)
+        ).fetchone()
+    assert tuple(restored) == ("accepted",)
+
+
+def test_a_value_carried_only_as_a_spoiler_keyword_keeps_its_rows(tmp_path: Path) -> None:
+    store = _judged_store(tmp_path)
+    with open_store(store) as conn:
+        conn.execute("UPDATE enrichment SET key = 'spoiler_keyword' WHERE value = 'heist'")
+        conn.commit()
+        stats = prune_keyword_verdicts(conn)
+        kept = conn.execute("SELECT COUNT(*) FROM keyword_roles WHERE keyword = 'heist'").fetchone()
+    assert kept[0] == 1
+    assert stats.keywords_pruned == []
