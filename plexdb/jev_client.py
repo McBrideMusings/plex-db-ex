@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -55,6 +56,29 @@ _ROLE_INSTRUCTIONS = {
         "The tag names a trait of a title's characters, such as antihero, genius or loner."
     ),
 }
+
+
+def judge_all[I, T](ask: Callable[[I], T], inputs: list[I], workers: int) -> list[T | JevRejected]:
+    """`ask(item)` for every item on `workers` threads, results in order. An item
+    Jev refuses (`JevRejected`) comes back as that error in its place; any other
+    failure cancels the calls not yet started and ends the call with nothing
+    returned."""
+    if not inputs:
+        return []
+    with ThreadPoolExecutor(workers) as pool:
+        futures = [pool.submit(ask, item) for item in inputs]
+        try:
+            outcomes: list[T | JevRejected] = []
+            for future in futures:
+                try:
+                    outcomes.append(future.result())
+                except JevRejected as err:
+                    outcomes.append(err)
+            return outcomes
+        except BaseException:
+            for future in futures:
+                future.cancel()
+            raise
 
 
 @dataclass(frozen=True)

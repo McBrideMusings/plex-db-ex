@@ -45,7 +45,6 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Callable
-from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -58,7 +57,7 @@ from .config import Config
 from .decisions import FoldStats, decisions_dir
 from .embed_client import MODEL, Embedder
 from .errors import JevRejected
-from .jev_client import Judge, Verdict
+from .jev_client import Judge, Verdict, judge_all
 from .keywords import readable_surfaces
 from .merge_review import MERGE_DECISIONS_FILE, MergeDecisions
 
@@ -295,23 +294,5 @@ def _has_pair(conn: sqlite3.Connection, pair: tuple[str, str]) -> bool:
 
 
 def _judge_all(judge: Judge, pairs: list[tuple[str, str]]) -> list[Verdict | JevRejected]:
-    """Every pair's verdict, in order. A pair Jev refuses (`JevRejected`) comes
-    back as that error in its place; any other failure ends the call with
-    nothing returned."""
-    if not pairs:
-        return []
-    with ThreadPoolExecutor(JUDGE_WORKERS) as pool:
-        futures = [pool.submit(judge.judge, a, b) for a, b in pairs]
-        try:
-            return [_outcome(future) for future in futures]
-        except BaseException:
-            for future in futures:
-                future.cancel()
-            raise
-
-
-def _outcome(future: Future[Verdict]) -> Verdict | JevRejected:
-    try:
-        return future.result()
-    except JevRejected as err:
-        return err
+    """Every pair's verdict, in order; see `jev_client.judge_all`."""
+    return judge_all(lambda pair: judge.judge(*pair), pairs, JUDGE_WORKERS)

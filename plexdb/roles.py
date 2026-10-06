@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Callable
-from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -35,7 +34,7 @@ from pathlib import Path
 from .config import Config
 from .decisions import FoldStats, decisions_dir
 from .errors import JevRejected
-from .jev_client import RoleJudge, RoleVerdict
+from .jev_client import RoleJudge, RoleVerdict, judge_all
 from .keywords import ROLES, readable_surfaces
 from .role_review import ROLE_DECISIONS_FILE, RoleDecisions, has_verdict
 
@@ -140,24 +139,8 @@ def _write(
 
 
 def _judge_all(judge: RoleJudge, tags: list[str]) -> list[RoleVerdict | JevRejected]:
-    """Every tag's verdict, in order. A tag Jev refuses (`JevRejected`) comes back
-    as that error in its place; any other failure ends the call with nothing
-    returned."""
-    with ThreadPoolExecutor(JUDGE_WORKERS) as pool:
-        futures = [pool.submit(judge.judge_roles, tag) for tag in tags]
-        try:
-            return [_outcome(future) for future in futures]
-        except BaseException:
-            for future in futures:
-                future.cancel()
-            raise
-
-
-def _outcome(future: Future[RoleVerdict]) -> RoleVerdict | JevRejected:
-    try:
-        return future.result()
-    except JevRejected as err:
-        return err
+    """Every tag's verdict, in order; see `jev_client.judge_all`."""
+    return judge_all(judge.judge_roles, tags, JUDGE_WORKERS)
 
 
 def role_decisions_path(config: Config) -> Path:
