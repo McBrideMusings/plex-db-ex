@@ -649,6 +649,18 @@ document already raises against a stored `counts_as_signal` above. The store rec
 source said; the consumer weighs it
 ([ADR-0012](./adr/0012-the-store-records-what-a-source-said-never-a-score-it-computed)).
 
+**A reviewer refuses a proposed score, confidence, strength, relevance or normalised 0–1 column
+whose value cannot be traced back to a single thing a source said.** A value like that is computed
+from inputs, and either the inputs are in the store or they are not. If they are, the reader
+computes the value at read time, and a stored copy goes stale the moment the formula changes. The
+`weight` column above fails this way, because `rank`, `likes` and `mentions` are all stored. If the
+inputs are not in the store, storing the output hides that they are missing: the reader sees a
+number and cannot tell which facts produced it, or that the store holds none of them. A score the
+source publishes passes, because it is one thing the source said. MDBList's `imdb` rating of `7.9`
+is IMDb's own number. This test asks only where a value came from. It does not decide whether a
+judge such as Jev counts as a source, and so whether `keyword_pairs.jev_score` and
+`keyword_roles.score` pass it. That question is open as plex-db-ex-2we.
+
 **Every column past the keys is nullable on purpose.** A source fills what it genuinely has and
 leaves the rest empty rather than inventing a value to fill a slot, so a missing `rank` stays
 distinguishable from rank 1 and a missing `likes` from zero likes. A reader that defaults these to
