@@ -79,7 +79,8 @@ class Outcome(Enum):
     LISTED = "listed"
     #: `/tmdb/<id>/` did not redirect to a film page: Letterboxd has no such film.
     NOT_LISTED = "not_listed"
-    #: The film page loaded without a `data-tmdb-id` matching the id asked.
+    #: The film page loaded without a `data-tmdb-id` matching the id asked, or
+    #: with theme links the `Themes` heading does not lead to.
     UNPARSED = "unparsed"
 
 
@@ -153,6 +154,8 @@ class _FilmPageParser(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.tmdb_id: str | None = None
         self.themes: list[str] = []
+        #: Theme links anywhere on the page, under the `Themes` heading or not.
+        self.theme_links = 0
         self._h3_text: list[str] | None = None
         self._after_themes_heading = False
         self._in_sluglist = False
@@ -172,8 +175,10 @@ class _FilmPageParser(HTMLParser):
             elif self._after_themes_heading and "text-sluglist" in (attr.get("class") or ""):
                 self._in_sluglist = True
                 self._div_depth = 1
-        elif tag == "a" and self._in_sluglist and _THEME_HREF.match(attr.get("href") or ""):
-            self._link_text = []
+        elif tag == "a" and _THEME_HREF.match(attr.get("href") or ""):
+            self.theme_links += 1
+            if self._in_sluglist:
+                self._link_text = []
 
     def handle_endtag(self, tag: str) -> None:
         if tag == "h3" and self._h3_text is not None:
@@ -199,11 +204,13 @@ class _FilmPageParser(HTMLParser):
 
 def parse_film_page(html: str, tmdb_id: str, path: str | None = None) -> Lookup:
     """A film page → its themes, or `UNPARSED` when the marker is missing or
-    names another id."""
+    names another id, or when theme links sit on the page but none under the
+    `Themes` heading — a renamed heading or list, which would otherwise cache
+    an empty theme set. A film with no themes has no theme links at all."""
     parser = _FilmPageParser()
     parser.feed(html)
     parser.close()
-    if parser.tmdb_id != tmdb_id:
+    if parser.tmdb_id != tmdb_id or (parser.theme_links and not parser.themes):
         return Lookup(Outcome.UNPARSED, path=path)
     return Lookup(Outcome.LISTED, path=path, themes=tuple(dict.fromkeys(parser.themes)))
 

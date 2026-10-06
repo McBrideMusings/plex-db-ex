@@ -113,6 +113,27 @@ def test_a_film_page_without_the_marker_is_unparsed() -> None:
     assert found.outcome is Outcome.UNPARSED and found.themes == ()
 
 
+def test_a_renamed_themes_heading_is_unparsed_rather_than_an_empty_theme_set() -> None:
+    html = load("film_inception.html").replace("<span>Themes</span>", "<span>Moods</span>")
+    page = httpx.Response(200, text=html)
+    client = _client(_site(pages={"/film/inception/": page}))
+
+    found = client.lookup(INCEPTION_TMDB)
+
+    assert found.outcome is Outcome.UNPARSED and found.themes == ()
+
+
+def test_a_film_page_with_no_theme_links_is_listed_with_no_themes() -> None:
+    html = load("film_inception.html").replace("<span>Themes</span>", "<span>Moods</span>")
+    html = html.replace("/films/theme/", "/x/").replace("/films/mini-theme/", "/x/")
+    page = httpx.Response(200, text=html)
+    client = _client(_site(pages={"/film/inception/": page}))
+
+    found = client.lookup(INCEPTION_TMDB)
+
+    assert found.outcome is Outcome.LISTED and found.themes == ()
+
+
 def test_a_marker_naming_another_film_is_unparsed() -> None:
     client = _client(_site(redirects={"/tmdb/1396/": "/film/inception/"}))
 
