@@ -12,8 +12,12 @@ Two of those properties also say what the keyword *is*: a narrative location is
 a place, and a period is a time. Those become `keyword_roles` rows with role
 `region` and `era`, `source = 'wikidata'`, and score, model and error NULL —
 stated by the source, not judged (ADR-0019). Main subject and genre carry no
-role. A role row is per keyword, not per title, so a title's refresh leaves it
-alone; `--rewipe` is what clears them.
+role. A role row is per keyword, not per title, so a title's refresh restates it
+rather than replacing it. Each run ends by deleting every wikidata role row whose
+keyword no title carries under this source any more — read from the whole stored
+snapshot, cached titles included, so a partial or failed run prunes correctly.
+A keyword some title still carries only as a subject or genre keeps its role
+until `--rewipe`, since the stored rows do not say which property stated them.
 
 Award received (P166) is not a keyword. Its labels go verbatim into their own
 `awards` namespace, key `award` — stemming "Academy Award for Best Sound" would
@@ -36,6 +40,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from .cursors import load_fetched, upsert_fetched
 from .errors import WikidataError
 from .keywords import NAMESPACE, state_role, upsert_keyword_form
 from .staleness import DEFAULT_STALE_DAYS, is_stale
@@ -55,7 +60,6 @@ SOURCE = "wikidata"
 AWARDS_NAMESPACE = "awards"
 _KEYWORD_KEY = "keyword"
 _AWARD_KEY = "award"
-_CURSOR_KEY = "fetched"
 
 #: Properties whose labels become keywords, and the role each one states, if any.
 KEYWORD_PROPERTIES: dict[str, str | None] = {
@@ -94,6 +98,8 @@ class WikidataStats:
     keywords_written: int = 0
     #: Distinct (keyword, role) rows this run stated or restated.
     roles_stated: int = 0
+    #: Role rows deleted because no title carries their keyword under this source.
+    roles_pruned: int = 0
     awards_written: int = 0
 
 
@@ -139,14 +145,7 @@ def enrich_wikidata(
     cutoff = now - timedelta(days=stale_days)
     stats = WikidataStats()
 
-    cached_fetched_at: dict[str, str] = {
-        row["item_id"]: row["fetched_at"]
-        for row in conn.execute(
-            "SELECT item_id, fetched_at FROM enrichment_cursor "
-            "WHERE namespace = ? AND source = ? AND key = ?",
-            (NAMESPACE, SOURCE, _CURSOR_KEY),
-        )
-    }
+    cached_fetched_at = load_fetched(conn, NAMESPACE, SOURCE)
     candidates = conn.execute(CANDIDATES_SQL).fetchall()
 
     due: list[tuple[str, str]] = []
@@ -163,32 +162,48 @@ def enrich_wikidata(
 
     stated: set[tuple[str, str]] = set()
     consecutive_failures = 0
-    for start in range(0, len(due), batch_size):
-        batch = due[start : start + batch_size]
-        imdb_ids = list(dict.fromkeys(imdb_id for _, imdb_id in batch))
-        stats.queries_sent += 1
-        try:
-            statements = source.statements(imdb_ids)
-        except WikidataError as err:
-            stats.titles_failed += len(batch)
-            consecutive_failures += 1
-            print(f"wikidata: batch of {len(batch)} failed: {err}", flush=True)
-            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-                raise WikidataError(
-                    f"aborting after {MAX_CONSECUTIVE_FAILURES} consecutive failed queries: "
-                    f"{stats.titles_fetched} title(s) fetched, {stats.titles_failed} failed; "
-                    f"tripping error: {err}"
-                ) from err
-            continue
-        consecutive_failures = 0
+    try:
+        for start in range(0, len(due), batch_size):
+            batch = due[start : start + batch_size]
+            imdb_ids = list(dict.fromkeys(imdb_id for _, imdb_id in batch))
+            stats.queries_sent += 1
+            try:
+                statements = source.statements(imdb_ids)
+            except WikidataError as err:
+                stats.titles_failed += len(batch)
+                consecutive_failures += 1
+                print(f"wikidata: batch of {len(batch)} failed: {err}", flush=True)
+                if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                    raise WikidataError(
+                        f"aborting after {MAX_CONSECUTIVE_FAILURES} consecutive failed queries: "
+                        f"{stats.titles_fetched} title(s) fetched, {stats.titles_failed} failed; "
+                        f"tripping error: {err}"
+                    ) from err
+                continue
+            consecutive_failures = 0
 
-        by_imdb: dict[str, list[tuple[str, str]]] = defaultdict(list)
-        for imdb_id, prop, label in statements:
-            by_imdb[imdb_id].append((prop, label))
-        _write_batch(conn, batch, by_imdb, datetime.now(UTC), stats, stated)
+            by_imdb: dict[str, list[tuple[str, str]]] = defaultdict(list)
+            for imdb_id, prop, label in statements:
+                by_imdb[imdb_id].append((prop, label))
+            _write_batch(conn, batch, by_imdb, datetime.now(UTC), stats, stated)
+    finally:
+        # The prune reads every stored title, so an aborted run prunes as
+        # correctly as a finished one.
+        stats.roles_pruned = _prune_roles(conn)
 
     stats.roles_stated = len(stated)
     return stats
+
+
+def _prune_roles(conn: sqlite3.Connection) -> int:
+    """Delete every wikidata role row whose keyword no title carries under this
+    source. Returns the number of rows removed."""
+    with conn:
+        return conn.execute(
+            "DELETE FROM keyword_roles WHERE source = ? AND keyword NOT IN ("
+            "SELECT value FROM enrichment WHERE namespace = ? AND source = ? AND key = ?)",
+            (SOURCE, NAMESPACE, SOURCE, _KEYWORD_KEY),
+        ).rowcount
 
 
 def _write_batch(
@@ -208,13 +223,7 @@ def _write_batch(
                 "DELETE FROM enrichment WHERE item_id = ? AND namespace IN (?, ?) AND source = ?",
                 (item_id, NAMESPACE, AWARDS_NAMESPACE, SOURCE),
             )
-            conn.execute(
-                "INSERT INTO enrichment_cursor (item_id, namespace, source, key, fetched_at) "
-                "VALUES (?, ?, ?, ?, ?) "
-                "ON CONFLICT(item_id, namespace, source, key) DO UPDATE SET "
-                "fetched_at = excluded.fetched_at",
-                (item_id, NAMESPACE, SOURCE, _CURSOR_KEY, now_iso),
-            )
+            upsert_fetched(conn, NAMESPACE, SOURCE, item_id, now_iso)
             keywords: dict[str, None] = {}
             awards: dict[str, None] = {}
             for prop, label in by_imdb.get(imdb_id, []):

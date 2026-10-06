@@ -34,6 +34,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from .cursors import load_fetched, upsert_fetched
 from .errors import TMDbError
 
 # Re-exported (redundant `as` alias) so tests can check that every sweep binds
@@ -53,19 +54,6 @@ from .tmdb_common import media_type_for as media_type_for
 #: `NAMESPACE`, tagged with its own `source`.
 SOURCE = "tmdb"
 _KEYWORD_KEY = "keyword"
-
-#: This writer's per-title progress marker, in `enrichment_cursor` rather than
-#: in `enrichment` (ADR-0013). One row per enriched title regardless of how
-#: many keywords it carries, so a title with zero keywords still has a
-#: `fetched_at` to check staleness against.
-#:
-#: It used to be an `enrichment` row keyed `_fetched`, which made it
-#: indistinguishable from a keyword to anything that did not already know that
-#: a leading underscore meant "skip me". Measured on the live store, that put
-#: the string `1` at the top of the house's taste profile at 8.7x the real
-#: leader, and inflated every title's attribute count — worst on thinly-tagged
-#: titles, so the error did not cancel across the library (issue #41).
-_CURSOR_KEY = "fetched"
 
 
 @dataclass
@@ -142,14 +130,7 @@ def enrich_tmdb_keywords(
     # shape `walk_all` uses for `existing_by_rating_key`. Each item_id in
     # `items` is visited once per sweep, so a dict built before the loop
     # starts stays correct for the whole pass.
-    cached_fetched_at: dict[str, str] = {
-        row["item_id"]: row["fetched_at"]
-        for row in conn.execute(
-            "SELECT item_id, fetched_at FROM enrichment_cursor "
-            "WHERE namespace = ? AND source = ? AND key = ?",
-            (NAMESPACE, SOURCE, _CURSOR_KEY),
-        )
-    }
+    cached_fetched_at = load_fetched(conn, NAMESPACE, SOURCE)
 
     # A correlated subquery, not a JOIN, so a title is visited exactly once
     # even in the (schema-legal) case of more than one `tmdb` row landing on
@@ -206,13 +187,7 @@ def enrich_tmdb_keywords(
                 "DELETE FROM enrichment WHERE item_id = ? AND namespace = ? AND source = ?",
                 (item_id, NAMESPACE, SOURCE),
             )
-            conn.execute(
-                "INSERT INTO enrichment_cursor (item_id, namespace, source, key, fetched_at) "
-                "VALUES (?, ?, ?, ?, ?) "
-                "ON CONFLICT(item_id, namespace, source, key) DO UPDATE SET "
-                "fetched_at = excluded.fetched_at",
-                (item_id, NAMESPACE, SOURCE, _CURSOR_KEY, now_iso),
-            )
+            upsert_fetched(conn, NAMESPACE, SOURCE, item_id, now_iso)
             # Every raw spelling TMDB returned is recorded in `keyword_forms`
             # even when two of them stem to the same stored value — `heists`
             # and `heist` are both worth remembering as surfaces TMDB used.

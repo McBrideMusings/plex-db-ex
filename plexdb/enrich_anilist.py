@@ -46,6 +46,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from .anilist_client import PAGE_SIZE, AniListSource, Tag
+from .cursors import load_fetched, upsert_fetched
 from .errors import AniListError
 from .keywords import NAMESPACE, state_role, upsert_keyword_form
 from .staleness import DEFAULT_STALE_DAYS, is_stale
@@ -54,7 +55,6 @@ from .staleness import DEFAULT_STALE_DAYS, is_stale
 SOURCE = "anilist"
 KEYWORD_KEY = "keyword"
 SPOILER_KEY = "spoiler_keyword"
-_CURSOR_KEY = "fetched"
 
 #: AniList tag category → the role it states. A category matches its own entry
 #: or, failing that, its nearest `-`-separated parent: `Theme-Other-Organisations`
@@ -202,14 +202,7 @@ def enrich_anilist(
     cutoff = now - timedelta(days=stale_days)
     stats = AniListStats()
 
-    cached_fetched_at: dict[str, str] = {
-        row["item_id"]: row["fetched_at"]
-        for row in conn.execute(
-            "SELECT item_id, fetched_at FROM enrichment_cursor "
-            "WHERE namespace = ? AND source = ? AND key = ?",
-            (NAMESPACE, SOURCE, _CURSOR_KEY),
-        )
-    }
+    cached_fetched_at = load_fetched(conn, NAMESPACE, SOURCE)
     kinds: dict[str, str] = {
         row["item_id"]: row["type"]
         for row in conn.execute("SELECT item_id, type FROM items WHERE type IN ('movie', 'show')")
@@ -322,11 +315,7 @@ def _write_batch(
     with conn:
         for item_id, anilist_ids in batch:
             _delete_title(conn, item_id)
-            conn.execute(
-                "INSERT INTO enrichment_cursor (item_id, namespace, source, key, fetched_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (item_id, NAMESPACE, SOURCE, _CURSOR_KEY, now_iso),
-            )
+            upsert_fetched(conn, NAMESPACE, SOURCE, item_id, now_iso)
             # Every entry the title maps to, merged per stored keyword: the highest
             # rank wins, and a keyword is a spoiler if any copy says so.
             rows: dict[str, tuple[int | None, bool]] = {}

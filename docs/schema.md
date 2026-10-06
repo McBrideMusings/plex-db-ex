@@ -952,11 +952,13 @@ picks its own rule — the query under [Reading the store to build collections](
 counts a source-stated row, or a judge's score at or above a threshold.
 
 **Refresh rule.** `enrich-wikidata` writes `region` and `era` rows with `source = 'wikidata'`. A row
-is per keyword, not per title, so a title's re-fetch only moves its `stated_at`; a keyword Wikidata
-stops calling a place, while some title still carries it, keeps its row until `enrich-wikidata
---rewipe`. `enrich-anilist` writes `theme`, `era` and `character_trait` rows with `source =
-'anilist'` from tag categories ([AniList tags and roles](#anilist-tags-and-roles)), under the same
-per-keyword rule. Only `plexdb fold-role-decisions` writes `keyword_role_decisions`, from
+is per keyword, not per title, so a title's re-fetch only moves its `stated_at`. Every run then
+deletes each `wikidata` role row whose keyword no title carries under `source = 'wikidata'`,
+judged against every stored title, fetched this run or not — an aborted run included. A keyword
+Wikidata stops calling a place or a period on every title, while some title still lists it as a
+main subject or genre, keeps its row until `enrich-wikidata --rewipe`. `enrich-anilist` writes
+`theme`, `era` and `character_trait` rows with `source = 'anilist'` from tag categories
+([AniList tags and roles](#anilist-tags-and-roles)), under the same per-keyword rule. Only `plexdb fold-role-decisions` writes `keyword_role_decisions`, from
 [`role_decisions.json`](#role-decisions-json). `plexdb prune-keyword-verdicts` deletes every row in
 both tables, whatever its source, keyed on a value no title carries.
 
@@ -998,7 +1000,8 @@ shape is refused whole, and no row changes. The file is not deleted, so a decisi
 
 Plex TVX's Roles tab writes this file (`POST /api/roles`, one (keyword, role) per request,
 refused with a 404 when `keyword_roles` has no verdict for it) and reads it back over the table
-(`GET /api/roles`), so a decision shows at once and is marked "applies at next sweep" until the
+(`GET /api/roles`), so a decision shows at once — the table outlines the pressed button, the
+decisions list marks it "applies at next sweep" — until the
 fold writes it. A write keeps one entry per (keyword, role).
 
 ## Reading the store to build collections

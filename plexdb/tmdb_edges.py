@@ -39,6 +39,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from .cursors import load_fetched, upsert_fetched
 from .errors import TMDbError
 
 # Re-exported (redundant `as` alias) so tests can check that every sweep binds
@@ -170,14 +171,7 @@ def _sweep(
     stats = EdgeStats()
     cursor_key = _CURSOR_KEYS[edge_type]
 
-    cached_fetched_at: dict[str, str] = {
-        row["item_id"]: row["fetched_at"]
-        for row in conn.execute(
-            "SELECT item_id, fetched_at FROM enrichment_cursor "
-            "WHERE namespace = ? AND source = ? AND key = ?",
-            (_CURSOR_NAMESPACE, _CURSOR_SOURCE, cursor_key),
-        )
-    }
+    cached_fetched_at = load_fetched(conn, _CURSOR_NAMESPACE, _CURSOR_SOURCE, cursor_key)
 
     consecutive_failures = 0
 
@@ -248,13 +242,7 @@ def _sweep(
                     "VALUES (?, ?, ?, ?, ?)",
                     (item_id, to_item_id, edge_type, rank, now_iso),
                 )
-            conn.execute(
-                "INSERT INTO enrichment_cursor (item_id, namespace, source, key, fetched_at) "
-                "VALUES (?, ?, ?, ?, ?) "
-                "ON CONFLICT(item_id, namespace, source, key) DO UPDATE SET "
-                "fetched_at = excluded.fetched_at",
-                (item_id, _CURSOR_NAMESPACE, _CURSOR_SOURCE, cursor_key, now_iso),
-            )
+            upsert_fetched(conn, _CURSOR_NAMESPACE, _CURSOR_SOURCE, item_id, now_iso, cursor_key)
         stats.titles_fetched += 1
         stats.edges_written += len(edges)
 
