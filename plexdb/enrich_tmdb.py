@@ -219,10 +219,15 @@ def enrich_tmdb_keywords(
             # The stored *values* are then deduped (`dict.fromkeys` keeps
             # first-seen order) before the enrichment insert, since the row's
             # primary key includes `value` and an unguarded duplicate there
-            # would raise mid-insert.
-            stored_values = list(
-                dict.fromkeys(upsert_keyword_form(conn, keyword) for keyword in keywords)
-            )
+            # would raise mid-insert. A spelling that is all punctuation (`&`)
+            # normalizes to `""` and is no keyword, so it is dropped here.
+            stored_values = [
+                value
+                for value in dict.fromkeys(
+                    upsert_keyword_form(conn, keyword) for keyword in keywords
+                )
+                if value
+            ]
             for value in stored_values:
                 conn.execute(
                     "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) "

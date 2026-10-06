@@ -392,6 +392,18 @@ def test_spelling_variants_from_two_sources_collapse_and_every_surface_is_record
     assert forms["bank heist"] == "bank heist"
 
 
+def test_an_all_punctuation_keyword_is_not_stored(tmp_path: Path) -> None:
+    store = tmp_path / "plexdb.db"
+    with _open(store) as conn:
+        _seed(conn, item_id=MOVIE_ID, item_type="movie", title="The Dark Knight", tmdb_id="155")
+        source = FakeTMDbSource(keywords_by_id={("155", "movie"): ["&", "Heists,"]})
+        stats = enrich_tmdb_keywords(conn, source)
+        values = [r["value"] for r in _rows(conn, "SELECT value FROM enrichment")]
+
+    assert values == ["heist"]
+    assert stats.keywords_written == 1
+
+
 def test_no_bookkeeping_row_ever_lands_in_the_keyword_namespace(tmp_path: Path) -> None:
     """The rule ADR-0013 exists to make unbreakable.
 

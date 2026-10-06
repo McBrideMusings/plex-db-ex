@@ -131,12 +131,26 @@ Every keyword-bearing writer now shares the namespace `keywords` and scopes its 
 `WHERE namespace = 'keywords' AND source = <itself>`, so a keyword two sources both list on an item
 survives either one's refresh alone.
 
-**Every keyword is normalized and stemmed before it lands here** (`plexdb/keywords.py`): lowercase,
-trim, collapse whitespace, `-`/`_` become spaces, then each word is run through Snowball's English
-stemmer. `Heists`, `heist`, and `bank-heist`/`bank heist` all resolve to one stored value, so a
-consumer scoring by keyword-cosine sees one confirmed signal instead of unrelated near-misses.
-`keyword_forms` is what lets a reader still show the spelling a source actually used — every keyword
-write upserts a row mapping its raw `surface` to the `keyword` value stored in `enrichment`.
+**Every keyword is normalized and stemmed before it lands here** (`plexdb/keywords.py`): lowercase;
+`’` becomes `'`; whitespace and every Unicode dash or connector character (categories `Pd` and `Pc`:
+`-`, `‑`, `–`, `—`, `_`) split words; each word loses the punctuation at its start and end (any
+Unicode `P*` character except `#` and `%`, so `quirky,`, `(soccer)` and `st.` become `quirky`,
+`soccer` and `st`, `c#` and `100%` stay, and a lone `&` or `/` drops out); words are joined with one
+space and each is run through Snowball's English stemmer. Punctuation inside a word stays (`9/11`,
+`u.s`), and a symbol such as `+` is not punctuation. A surface left with no word (`&`, `...`) is no
+keyword: no writer stores it and `keyword_forms` gets no row for it. `Heists`, `heist`, `bank-heist`/`bank heist`
+and Letterboxd's `Dreamlike, quirky` beside a plain `dreamlike quirky` each resolve to one stored
+value, so a consumer scoring by keyword-cosine sees one confirmed signal instead of unrelated
+near-misses. `keyword_forms` is what lets a reader still show the spelling a source actually used —
+every keyword write upserts a row mapping its raw `surface` to the `keyword` value stored in
+`enrichment`, overwriting the mapping a surface had under an earlier rule.
+
+A change to this rule reaches the store one title at a time: a source rewrites a title's keyword
+rows, and the `keyword_forms` rows for the surfaces it saw, only when that title is next fetched
+(45 days after its last fetch). Until then a title fetched under the earlier rule keeps that rule's
+value, so a reader can see both values for one surface across titles. `keyword_pairs`,
+`keyword_roles` and `keyword_role_decisions` rows are keyed on the stored value, so a row keyed on a
+value no title carries any more matches nothing, and the new value is judged on the next sweep.
 
 `external_ids` is what lets an enrichment fetcher that needs a TMDb id find one without
 assuming the primary key is one. It is also where a Trakt slug, a Letterboxd URL, and a

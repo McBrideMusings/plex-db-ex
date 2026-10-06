@@ -83,7 +83,7 @@ def test_inception_stores_its_themes_unranked(conn: Any) -> None:
     rows = _rows(conn, INCEPTION)
     assert len(rows) == 7
     assert rows["high speed and special op"] == ("keyword", None)
-    assert rows["dreamlike, quirky, and surreal storytel"] == ("keyword", None)
+    assert rows["dreamlik quirki and surreal storytel"] == ("keyword", None)
     surfaces = dict(conn.execute("SELECT surface, keyword FROM keyword_forms").fetchall())
     assert surfaces["High speed and special ops"] == "high speed and special op"
     assert conn.execute("SELECT COUNT(*) FROM keyword_roles").fetchone()[0] == 0
