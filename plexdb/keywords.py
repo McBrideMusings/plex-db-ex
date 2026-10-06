@@ -59,12 +59,16 @@ def normalize_keyword(surface: str) -> str:
     `bank-heist`, `bank‑heist` and `bank_heist` split into two words the same
     way `bank heist` already does), each word loses the punctuation at its
     edges (so `quirky,`, `(soccer)` and `st.` stem like `quirky`, `soccer` and
-    `st`, and a lone `&` or `/` drops out), and each word left is stemmed.
-    Punctuation inside a word stays — `u.s`, `9/11`, `women's` — as do `#`
-    and `%` at an edge (`c#`, `100%`), and a symbol such as `+` or `$` is not
-    punctuation. A surface with no word left
-    normalizes to `""` — callers writing a keyword row are expected to have
-    already dropped those before calling this.
+    `st`, and a lone `&` or `/` drops out) together with any invisible format
+    character (`Cf`, such as a zero-width space) and any combining mark on that
+    punctuation or with no character before it (so `heists` + U+200B + `,`
+    stems like `heists`, and `café.` + U+0301 like `café`), and each word left
+    is stemmed. Punctuation and format characters inside a word stay — `u.s`,
+    `9/11`, `women's`, the U+200C zero-width non-joiner in a Persian plural —
+    as do `#` and `%` at an edge (`c#`, `100%`), and a symbol such as `+` or
+    `$` is not punctuation. A surface with no word left normalizes to `""` —
+    callers writing a keyword row are expected to have already dropped those
+    before calling this.
     """
     text = surface.lower().replace("’", "'")
     text = "".join(" " if _is_word_break(char) else char for char in text)
@@ -72,13 +76,31 @@ def normalize_keyword(surface: str) -> str:
     return " ".join(_stemmer.stemWords([word for word in words if word]))
 
 
+def _clusters(word: str) -> list[str]:
+    """`word` split into characters, each carrying the combining marks (`M*`)
+    that follow it; a mark with nothing before it is a cluster of its own."""
+    clusters: list[str] = []
+    for char in word:
+        if clusters and unicodedata.category(char).startswith("M"):
+            clusters[-1] += char
+        else:
+            clusters.append(char)
+    return clusters
+
+
+def _is_edge_debris(cluster: str) -> bool:
+    category = unicodedata.category(cluster[0])
+    return _is_punctuation(cluster[0]) or category == "Cf" or category.startswith("M")
+
+
 def _strip_edge_punctuation(word: str) -> str:
-    start, end = 0, len(word)
-    while start < end and _is_punctuation(word[start]):
+    clusters = _clusters(word)
+    start, end = 0, len(clusters)
+    while start < end and _is_edge_debris(clusters[start]):
         start += 1
-    while end > start and _is_punctuation(word[end - 1]):
+    while end > start and _is_edge_debris(clusters[end - 1]):
         end -= 1
-    return word[start:end]
+    return "".join(clusters[start:end])
 
 
 def upsert_keyword_form(conn: sqlite3.Connection, surface: str) -> str:

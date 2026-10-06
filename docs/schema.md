@@ -135,7 +135,12 @@ survives either one's refresh alone.
 `’` becomes `'`; whitespace and every Unicode dash or connector character (categories `Pd` and `Pc`:
 `-`, `‑`, `–`, `—`, `_`) split words; each word loses the punctuation at its start and end (any
 Unicode `P*` character except `#` and `%`, so `quirky,`, `(soccer)` and `st.` become `quirky`,
-`soccer` and `st`, `c#` and `100%` stay, and a lone `&` or `/` drops out); words are joined with one
+`soccer` and `st`, `c#` and `100%` stay, and a lone `&` or `/` drops out), together with any
+invisible format character (category `Cf`, such as a zero-width space) at those edges and any
+combining mark (category `M*`) sitting on that punctuation or leading the word with no character to
+sit on — so `heists` followed by a zero-width space and a comma becomes `heist`, and `café.` with an
+acute accent on the full stop becomes `café`. A format character inside a word stays, such as the
+zero-width non-joiner in Persian `کتاب‌ها`; words are joined with one
 space and each is run through Snowball's English stemmer. Punctuation inside a word stays (`9/11`,
 `u.s`), and a symbol such as `+` is not punctuation. A surface left with no word (`&`, `...`) is no
 keyword: no writer stores it and `keyword_forms` gets no row for it. `Heists`, `heist`, `bank-heist`/`bank heist`

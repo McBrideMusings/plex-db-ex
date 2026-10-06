@@ -51,6 +51,10 @@ def test_stating_an_unknown_role_is_refused_before_sql(tmp_path: Path) -> None:
         ("sci‑fi romance", "sci-fi romance"),
         ("Women’s prison", "women's prison"),
         ("social & cultural documentary", "social cultural documentary"),
+        ("heists\u200b,", "heists"),
+        ("\u200b(heists)\u2060", "heists"),
+        ("café.\u0301", "café"),
+        ("\u0301(heists", "heists"),
     ],
 )
 def test_punctuation_at_a_word_edge_does_not_stop_it_stemming(surface: str, same_as: str) -> None:
@@ -62,6 +66,7 @@ def test_punctuation_inside_a_word_and_symbols_stay() -> None:
     assert normalize_keyword("c++") == "c++"
     assert normalize_keyword("C#,") == "c#"
     assert normalize_keyword("(100%)") == "100%"
+    assert normalize_keyword("کتاب\u200cها,") == ("کتاب\u200cها")
 
 
 def test_an_all_punctuation_surface_is_no_keyword_and_records_no_form(tmp_path: Path) -> None:
