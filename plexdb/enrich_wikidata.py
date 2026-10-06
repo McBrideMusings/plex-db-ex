@@ -114,6 +114,18 @@ def wipe(conn: sqlite3.Connection) -> int:
         return removed
 
 
+# Joins on item_id so SQLite searches idx_external_ids_item; without that term it
+# scans every imdb row for each title.
+CANDIDATES_SQL = """
+SELECT i.item_id AS item_id, MIN(e.value) AS imdb_id
+FROM items i
+LEFT JOIN external_ids e ON e.item_id = i.item_id AND e.ns = 'imdb'
+WHERE i.type IN ('movie', 'show')
+GROUP BY i.item_id
+ORDER BY i.item_id
+"""
+
+
 def enrich_wikidata(
     conn: sqlite3.Connection,
     source: WikidataSource,
@@ -135,16 +147,7 @@ def enrich_wikidata(
             (NAMESPACE, SOURCE, _CURSOR_KEY),
         )
     }
-    candidates = conn.execute(
-        """
-        SELECT i.item_id AS item_id, MIN(e.value) AS imdb_id
-        FROM items i
-        LEFT JOIN external_ids e ON e.item_id = i.item_id AND e.ns = 'imdb'
-        WHERE i.type IN ('movie', 'show')
-        GROUP BY i.item_id
-        ORDER BY i.item_id
-        """
-    ).fetchall()
+    candidates = conn.execute(CANDIDATES_SQL).fetchall()
 
     due: list[tuple[str, str]] = []
     for row in candidates:

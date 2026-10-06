@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 from wikidata_fixtures import RecordedWikidataSource
 
-from plexdb.enrich_wikidata import enrich_wikidata, wipe
+from plexdb.enrich_wikidata import CANDIDATES_SQL, enrich_wikidata, wipe
 from plexdb.errors import WikidataError
 from plexdb.store import init as init_store
 from plexdb.store import open_store
@@ -183,3 +183,8 @@ def test_a_malformed_imdb_id_is_skipped_without_failing_its_batch(conn: Any) -> 
 
     assert stats.titles_skipped_no_imdb_id == 1
     assert stats.titles_fetched == 3 and stats.titles_failed == 0
+
+
+def test_the_candidate_query_searches_the_external_ids_item_index(conn: Any) -> None:
+    plan = [row["detail"] for row in conn.execute("EXPLAIN QUERY PLAN " + CANDIDATES_SQL)]
+    assert any("idx_external_ids_item" in d for d in plan), plan
