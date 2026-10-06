@@ -425,7 +425,8 @@
 "use strict";
 const PAGE = 300;
 // `?demo` and `?clip` play a fixed choreography on the movie title map; see the Demo section at the end.
-const DEMO = ["demo", "clip"].some(k => new URLSearchParams(location.search).has(k));
+const CLIP = new URLSearchParams(location.search).has("clip");
+const DEMO = CLIP || new URLSearchParams(location.search).has("demo");
 const NOISE_KEY = "plexdb-explore:noise";
 const VIEWS = ["table", "graph", "map"];
 const state = { tab: "tags", kind: "movie", view: "table", data: null, sort: "df", dir: -1, shown: PAGE, tag: null, tagIds: new Set() };
@@ -1998,37 +1999,49 @@ document.getElementById("ctltoggle").addEventListener("click", () => {
 // flows into the first. `?demo` plays it live. `?clip` leaves it paused and exposes
 // `window.__clip = { period, seek(t) }` for a recorder: `seek(t)` draws the frame at t seconds and
 // resolves once it is painted, and t and t + period draw the same frame.
-const DEMO_SECONDS = 4.5;
 const DEMO_TAGS = [
   { tag: "western film", colour: "#ff6b5e" },
   { tag: "superhero", colour: "#ffc233" },
   { tag: "hong kong", colour: "#3ddc97" },
 ];
+// The period is DEMO_LEAD + one DEMO_PER_TAG per tag lit + DEMO_OUT, so the loop closes at any tag count.
+const DEMO_OUT = 1.1;
 const DEMO_LEAD = 0.4, DEMO_PER_TAG = 1.0, DEMO_ZOOM = 1.3, DEMO_TRAVEL = 0.4;
 const smoother = u => u * u * u * (u * (u * 6 - 15) + 10);
 
 async function startDemo() {
   document.body.classList.add("demo");
+  const fail = msg => { document.body.dataset.demo = "failed"; document.getElementById("error").textContent = `Demo: ${msg}`; document.getElementById("error").hidden = false; };
   const found = {};
-  for (const d of DEMO_TAGS) {
-    const body = await getJSON(`/api/titles?kind=movie&tag=${encodeURIComponent(d.tag)}`);
-    found[d.tag] = new Set(body.titles.map(x => x.item_id));
+  try {
+    for (const d of DEMO_TAGS) {
+      const body = await getJSON(`/api/titles?kind=movie&tag=${encodeURIComponent(d.tag)}`);
+      found[d.tag] = new Set(body.titles.map(x => x.item_id));
+    }
+  } catch (err) { return fail(err.message); }
+  for (let waited = 0; !(map.data && !map.dim && mapVP.w && map.items.length); waited += 100) {
+    if (waited >= 120000) return fail("the map did not load");
+    await new Promise(r => setTimeout(r, 100));
   }
-  while (!(map.data && !map.dim && mapVP.w && map.items.length)) await new Promise(r => setTimeout(r, 100));
+  // Only tags with titles on this map are lit; the period follows from how many remain.
   const centre = {};
-  for (const d of DEMO_TAGS) {
+  const tags = DEMO_TAGS.filter(d => {
     const own = map.items.filter(it => found[d.tag].has(it.id));
+    if (!own.length) return false;
     const b = boundsOf(own);
     centre[d.tag] = { x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2, n: own.length };
-  }
+    return true;
+  });
+  if (!tags.length) return fail("none of the demo tags are on this map");
+  const period = DEMO_LEAD + tags.length * DEMO_PER_TAG + DEMO_OUT;
   const whole = { x: (mapVP.bounds.x0 + mapVP.bounds.x1) / 2, y: (mapVP.bounds.y0 + mapVP.bounds.y1) / 2 };
   // Camera keyframes: [time, zoom, world x, world y]. Each tag gets a glide in and a hold.
   const keys = [[0, 1, whole.x, whole.y], [DEMO_LEAD, 1, whole.x, whole.y]];
-  DEMO_TAGS.forEach((d, i) => {
+  tags.forEach((d, i) => {
     const at = DEMO_LEAD + i * DEMO_PER_TAG, c = centre[d.tag];
     keys.push([at + DEMO_TRAVEL, DEMO_ZOOM, c.x, c.y], [at + DEMO_PER_TAG, DEMO_ZOOM, c.x, c.y]);
   });
-  keys.push([DEMO_SECONDS, 1, whole.x, whole.y]);
+  keys.push([period, 1, whole.x, whole.y]);
   const camera = t => {
     let i = 0;
     while (i < keys.length - 2 && t >= keys[i + 1][0]) i++;
@@ -2038,13 +2051,13 @@ async function startDemo() {
   };
   const cap = document.getElementById("democap");
   const seek = t => {
-    t = ((t % DEMO_SECONDS) + DEMO_SECONDS) % DEMO_SECONDS;
+    t = ((t % period) + period) % period;
     const cam = camera(t);
     mapVP.k = mapVP.k0 * cam.z;
     mapVP.tx = mapVP.w / 2 - cam.x * mapVP.k; mapVP.ty = mapVP.h / 2 - cam.y * mapVP.k;
     mapVP.fitted = false; mapVP.hover = null;
-    const lit = DEMO_TAGS[Math.floor((t - DEMO_LEAD) / DEMO_PER_TAG)];
-    const active = t >= DEMO_LEAD && lit && t < DEMO_LEAD + DEMO_TAGS.length * DEMO_PER_TAG ? lit : null;
+    const lit = tags[Math.floor((t - DEMO_LEAD) / DEMO_PER_TAG)];
+    const active = t >= DEMO_LEAD && lit && t < DEMO_LEAD + tags.length * DEMO_PER_TAG ? lit : null;
     state.tagIds = active ? found[active.tag] : new Set();
     state.tag = active ? active.tag : null;
     document.documentElement.style.setProperty("--centre", active ? active.colour : "");
@@ -2053,8 +2066,8 @@ async function startDemo() {
     mapVP.paint();
   };
   const painted = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-  if (new URLSearchParams(location.search).has("clip")) {
-    window.__clip = { period: DEMO_SECONDS, async seek(t) { seek(t); await painted(); } };
+  if (CLIP) {
+    window.__clip = { period, async seek(t) { seek(t); await painted(); } };
     seek(0);
   } else {
     const t0 = performance.now();
