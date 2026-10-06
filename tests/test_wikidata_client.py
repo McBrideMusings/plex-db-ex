@@ -3,12 +3,14 @@
 
 from __future__ import annotations
 
+import re
 from urllib.parse import parse_qs
 
 import httpx
 import pytest
 from wikidata_fixtures import load
 
+from plexdb.commands import enrich_wikidata as enrich_wikidata_cmd
 from plexdb.errors import WikidataError
 from plexdb.wikidata_client import ENDPOINT, USER_AGENT, LiveWikidataClient, build_query
 
@@ -62,6 +64,55 @@ def test_a_retry_after_that_is_not_a_number_waits_a_minute() -> None:
     _client(httpx.MockTransport(lambda r: answers.pop(0)), waits).statements(["tt1375666"])
 
     assert waits[0] == 60.0
+
+
+def test_a_retry_after_given_as_a_date_waits_a_minute() -> None:
+    """RFC 9110 allows an HTTP date here; this client does not parse one."""
+    answers = [
+        httpx.Response(429, headers={"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}),
+        httpx.Response(200, json=load()),
+    ]
+    waits: list[float] = []
+
+    _client(httpx.MockTransport(lambda r: answers.pop(0)), waits).statements(["tt1375666"])
+
+    assert waits[0] == 60.0
+
+
+def test_a_retry_after_past_the_cap_fails_the_batch_without_waiting() -> None:
+    waits: list[float] = []
+    client = _client(
+        httpx.MockTransport(lambda r: httpx.Response(429, headers={"Retry-After": "121"})), waits
+    )
+
+    with pytest.raises(WikidataError, match="asked for a 121 s wait"):
+        client.statements(["tt1375666"])
+    assert waits == []
+
+
+def test_a_200_that_is_not_json_raises() -> None:
+    client = _client(
+        httpx.MockTransport(lambda r: httpx.Response(200, text="<html>maintenance</html>")), []
+    )
+
+    with pytest.raises(WikidataError, match="not JSON"):
+        client.statements(["tt1375666"])
+
+
+def test_a_transport_error_raises_cannot_reach() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    with pytest.raises(
+        WikidataError, match=f"cannot reach Wikidata at {re.escape(ENDPOINT)}: ConnectError"
+    ):
+        _client(httpx.MockTransport(handler), []).statements(["tt1375666"])
+
+
+def test_wikidata_stale_days_is_read_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WIKIDATA_STALE_DAYS", "12")
+
+    assert enrich_wikidata_cmd.SOURCE.resolve_stale_days(None) == 12
 
 
 def test_a_server_error_raises_without_retrying() -> None:
