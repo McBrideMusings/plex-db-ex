@@ -657,9 +657,9 @@ computes the value at read time, and a stored copy goes stale the moment the for
 inputs are not in the store, storing the output hides that they are missing: the reader sees a
 number and cannot tell which facts produced it, or that the store holds none of them. A score the
 source publishes passes, because it is one thing the source said. MDBList's `imdb` rating of `7.9`
-is IMDb's own number. This test asks only where a value came from. It does not decide whether a
-judge such as Jev counts as a source, and so whether `keyword_pairs.jev_score` and
-`keyword_roles.score` pass it. That question is open as plex-db-ex-2we.
+is IMDb's own number. A judge's answer passes too: ADR-0012 counts a judge such as Jev as a
+source, so `keyword_pairs.jev_score` and `keyword_roles.score` are each one thing the judge said,
+stored with its model.
 
 **Every column past the keys is nullable on purpose.** A source fills what it genuinely has and
 leaves the rest empty rather than inventing a value to fill a slot, so a missing `rank` stays
