@@ -998,7 +998,8 @@ shape is refused whole, and no row changes. The file is not deleted, so a decisi
 
 Plex TVX's Roles tab writes this file (`POST /api/roles`, one (keyword, role) per request,
 refused with a 404 when `keyword_roles` has no verdict for it) and reads it back over the table
-(`GET /api/roles`), so a decision shows at once and is marked "applies at next sweep" until the
+(`GET /api/roles`), so a decision shows at once — the table outlines the pressed button, the
+decisions list marks it "applies at next sweep" — until the
 fold writes it. A write keeps one entry per (keyword, role).
 
 ## Reading the store to build collections
