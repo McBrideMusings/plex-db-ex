@@ -11,17 +11,53 @@ text fields naming what was decided, plus `decision` (`accepted`, `rejected` or
 from __future__ import annotations
 
 import json
+import os
 import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import ClassVar
 
+from .config import Config
 from .errors import DecisionsFileError
 
-__all__ = ["DECISIONS", "DecisionsFile", "FoldStats"]
+__all__ = [
+    "DECISIONS",
+    "EXPLORE_SAVED_PATH_VAR",
+    "SAVED_FILE",
+    "DecisionsFile",
+    "FoldStats",
+    "decisions_dir",
+]
 
 DECISIONS = ("accepted", "rejected", "cleared")
+
+#: Full path to the saved-queries file, set in the container to a dedicated
+#: mount (`/explore-data`, its own bind mount in `[docker_run]`) rather than
+#: etv-station's `/snapshot` directory — Plex TVX has no login, so anyone
+#: who reaches the port could otherwise write into a directory another
+#: consumer reads (plex-db-ex-oyg.3). Unset in dev, where `make_server` falls
+#: back to a file beside the store.
+EXPLORE_SAVED_PATH_VAR = "PLEXDB_EXPLORE_SAVED_PATH"
+
+#: The saved-queries file's name. In dev it sits beside the store; in the
+#: container `EXPLORE_SAVED_PATH_VAR` names its own dedicated mount instead.
+SAVED_FILE = "explore-queries.json"
+
+
+def decisions_dir(config: Config) -> Path:
+    """Where Plex TVX's files sit: the saved queries, `merge_decisions.json` and
+    `role_decisions.json`.
+
+    The directory of `PLEXDB_EXPLORE_SAVED_PATH` when set (the container's own
+    mount); otherwise beside the published snapshot when one is configured, as the
+    scheduler's Plex TVX puts it, and beside the store otherwise, as `plexdb
+    explore` does.
+    """
+    raw = os.environ.get(EXPLORE_SAVED_PATH_VAR, "").strip()
+    if raw:
+        return Path(raw).expanduser().parent
+    return (config.snapshot_path or config.store_path).parent
 
 
 @dataclass

@@ -24,7 +24,6 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import os
 import sqlite3
 import sys
 import threading
@@ -42,7 +41,7 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 
-from .config import Config
+from .decisions import SAVED_FILE
 from .errors import DecisionsFileError, StoreError
 from .identity import PRIORITY
 from .merge_review import (
@@ -66,14 +65,6 @@ from .tmdb_edges import SIMILAR_EDGE_TYPE
 #: Set in the container to have `plexdb schedule` serve Plex TVX beside the
 #: sweep, reading the published snapshot. Unset, the scheduler serves nothing.
 EXPLORE_PORT_VAR = "PLEXDB_EXPLORE_PORT"
-
-#: Full path to the saved-queries file, set in the container to a dedicated
-#: mount (`/explore-data`, its own bind mount in `[docker_run]`) rather than
-#: etv-station's `/snapshot` directory — Plex TVX has no login, so anyone
-#: who reaches the port could otherwise write into a directory another
-#: consumer reads (plex-db-ex-oyg.3). Unset in dev, where `make_server` falls
-#: back to a file beside the store.
-EXPLORE_SAVED_PATH_VAR = "PLEXDB_EXPLORE_SAVED_PATH"
 
 #: The media types TMDB has keywords for. An episode never carries them
 #: (`enrich_tmdb_keywords` enriches movies and shows only).
@@ -1673,26 +1664,6 @@ def merges_json(pairs: list[dict[str, object]]) -> dict[str, object]:
 
 def _page() -> bytes:
     return resources.files("plexdb").joinpath("explore.html").read_bytes()
-
-
-#: The saved-queries file's name. In dev it sits beside the store; in the
-#: container `EXPLORE_SAVED_PATH_VAR` names its own dedicated mount instead.
-SAVED_FILE = "explore-queries.json"
-
-
-def decisions_dir(config: Config) -> Path:
-    """Where Plex TVX's files sit: the saved queries, `merge_decisions.json` and
-    `role_decisions.json`.
-
-    The directory of `PLEXDB_EXPLORE_SAVED_PATH` when set (the container's own
-    mount); otherwise beside the published snapshot when one is configured, as the
-    scheduler's Plex TVX puts it, and beside the store otherwise, as `plexdb
-    explore` does.
-    """
-    raw = os.environ.get(EXPLORE_SAVED_PATH_VAR, "").strip()
-    if raw:
-        return Path(raw).expanduser().parent
-    return (config.snapshot_path or config.store_path).parent
 
 
 def _error_reply(err: Exception, store_path: Path) -> tuple[str, HTTPStatus] | None:

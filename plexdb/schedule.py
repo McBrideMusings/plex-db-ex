@@ -120,7 +120,8 @@ def _start_explorer() -> None:
     rather than failing to start.
     """
     from .config import Config
-    from .explore import EXPLORE_PORT_VAR, EXPLORE_SAVED_PATH_VAR, serve_in_background
+    from .decisions import EXPLORE_SAVED_PATH_VAR
+    from .explore import EXPLORE_PORT_VAR, serve_in_background
 
     raw = os.environ.get(EXPLORE_PORT_VAR, "").strip()
     if not raw:

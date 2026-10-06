@@ -55,10 +55,9 @@ import numpy as np
 import numpy.typing as npt
 
 from .config import Config
-from .decisions import FoldStats
+from .decisions import FoldStats, decisions_dir
 from .embed_client import MODEL, Embedder
 from .errors import JevRejected
-from .explore import decisions_dir
 from .jev_client import Judge, Verdict
 from .keywords import readable_surfaces
 from .merge_review import MERGE_DECISIONS_FILE, MergeDecisions

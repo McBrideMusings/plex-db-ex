@@ -25,10 +25,10 @@ import httpx
 import pytest
 
 from plexdb import explore, schedule
+from plexdb.decisions import EXPLORE_SAVED_PATH_VAR
 from plexdb.errors import ConfigError, StoreError
 from plexdb.explore import (
     EXPLORE_PORT_VAR,
-    EXPLORE_SAVED_PATH_VAR,
     RECIPES,
     QueryError,
     SavedQueries,

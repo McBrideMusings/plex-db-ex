@@ -33,9 +33,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .config import Config
-from .decisions import FoldStats
+from .decisions import FoldStats, decisions_dir
 from .errors import JevRejected
-from .explore import decisions_dir
 from .jev_client import RoleJudge, RoleVerdict
 from .keywords import ROLES, readable_surfaces
 from .role_review import ROLE_DECISIONS_FILE, RoleDecisions, has_verdict
