@@ -43,6 +43,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from .cursors import load_cursors, mark_attempted, write_fetched
 from .errors import LetterboxdError
 from .keywords import NAMESPACE, upsert_keyword_form
 from .letterboxd_client import LetterboxdSource, Lookup, Outcome, is_tmdb_id
@@ -51,10 +52,8 @@ from .staleness import DEFAULT_STALE_DAYS, is_stale
 #: This writer's source name, in `keywords` and `enrichment_cursor`.
 SOURCE = "letterboxd"
 _KEYWORD_KEY = "keyword"
-_CURSOR_KEY = "fetched"
 #: When a title was last asked without a result worth caching — a parse failure
 #: or a failed request. Orders the next run; never read as freshness.
-_ATTEMPTED_KEY = "attempted"
 
 #: Titles one run fetches at most. Two requests and about 2.5 s per title, so
 #: one run takes about 40 minutes and the ~11,700 movies with a TMDB id are
@@ -131,15 +130,7 @@ def enrich_letterboxd(
     cutoff = datetime.now(UTC) - timedelta(days=stale_days)
     stats = LetterboxdStats()
 
-    cursors: dict[str, dict[str, str]] = {_CURSOR_KEY: {}, _ATTEMPTED_KEY: {}}
-    for row in conn.execute(
-        "SELECT item_id, key, fetched_at FROM enrichment_cursor "
-        "WHERE namespace = ? AND source = ? AND key IN (?, ?)",
-        (NAMESPACE, SOURCE, _CURSOR_KEY, _ATTEMPTED_KEY),
-    ):
-        cursors[row["key"]][row["item_id"]] = row["fetched_at"]
-    cached_fetched_at = cursors[_CURSOR_KEY]
-    attempted_at = cursors[_ATTEMPTED_KEY]
+    cursors = load_cursors(conn, NAMESPACE, SOURCE)
     # A join, not a correlated subquery: the planner answers `e.ns = 'tmdb'`
     # inside a subquery from the (ns, value, kind) key and scans every tmdb row
     # once per movie — minutes on the real store, against 0.06 s for this.
@@ -160,13 +151,13 @@ def enrich_letterboxd(
         if row["tmdb_id"] is None or not is_tmdb_id(row["tmdb_id"]):
             stats.titles_skipped_no_tmdb_id += 1
             continue
-        fetched_at = cached_fetched_at.get(row["item_id"])
+        fetched_at = cursors.fetched.get(row["item_id"])
         if fetched_at is not None and not is_stale(fetched_at, cutoff):
             stats.titles_cached += 1
             continue
         due.append((row["item_id"], row["tmdb_id"]))
     # Stable, so titles never attempted keep their `item_id` order.
-    due.sort(key=lambda title: (title[0] in attempted_at, attempted_at.get(title[0], "")))
+    due.sort(key=lambda title: cursors.order_key(title[0]))
     stats.titles_capped = max(0, len(due) - limit)
 
     consecutive_failures = 0
@@ -176,7 +167,7 @@ def enrich_letterboxd(
         except LetterboxdError as err:
             stats.titles_failed += 1
             consecutive_failures += 1
-            _mark_attempted(conn, item_id)
+            mark_attempted(conn, NAMESPACE, SOURCE, [item_id])
             print(f"letterboxd: tmdb {tmdb_id} failed: {err}", flush=True)
             if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
                 raise LetterboxdError(
@@ -188,30 +179,11 @@ def enrich_letterboxd(
         consecutive_failures = 0
         if found.outcome is Outcome.UNPARSED:
             stats.parse_failures += 1
-            _mark_attempted(conn, item_id)
+            mark_attempted(conn, NAMESPACE, SOURCE, [item_id])
             continue
         _write_title(conn, item_id, found, datetime.now(UTC), stats)
 
     return stats
-
-
-def _mark_attempted(conn: sqlite3.Connection, item_id: str) -> None:
-    """Move a title that produced nothing cacheable to the back of the next
-    run's order. Its `fetched` cursor and its keywords are left as they were."""
-    with conn:
-        conn.execute(
-            "INSERT INTO enrichment_cursor (item_id, namespace, source, key, fetched_at) "
-            "VALUES (?, ?, ?, ?, ?) "
-            "ON CONFLICT(item_id, namespace, source, key) DO UPDATE SET "
-            "fetched_at = excluded.fetched_at",
-            (
-                item_id,
-                NAMESPACE,
-                SOURCE,
-                _ATTEMPTED_KEY,
-                datetime.now(UTC).isoformat(timespec="microseconds"),
-            ),
-        )
 
 
 def _write_title(
@@ -229,18 +201,7 @@ def _write_title(
             "DELETE FROM enrichment WHERE item_id = ? AND namespace = ? AND source = ?",
             (item_id, NAMESPACE, SOURCE),
         )
-        conn.execute(
-            "INSERT INTO enrichment_cursor (item_id, namespace, source, key, fetched_at) "
-            "VALUES (?, ?, ?, ?, ?) "
-            "ON CONFLICT(item_id, namespace, source, key) DO UPDATE SET "
-            "fetched_at = excluded.fetched_at",
-            (item_id, NAMESPACE, SOURCE, _CURSOR_KEY, now_iso),
-        )
-        conn.execute(
-            "DELETE FROM enrichment_cursor "
-            "WHERE item_id = ? AND namespace = ? AND source = ? AND key = ?",
-            (item_id, NAMESPACE, SOURCE, _ATTEMPTED_KEY),
-        )
+        write_fetched(conn, NAMESPACE, SOURCE, item_id, now_iso)
         keywords: dict[str, None] = {}
         for label in found.themes:
             keyword = upsert_keyword_form(conn, label.strip())

@@ -44,6 +44,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from .cursors import load_cursors, mark_attempted, write_fetched
 from .errors import MDBListError, MDBListQuotaError
 from .mdblist_client import BATCH_SIZE, MDBListRatingsSource, MDBListTitleRatings
 from .staleness import DEFAULT_STALE_DAYS, is_stale
@@ -52,10 +53,8 @@ from .staleness import DEFAULT_STALE_DAYS, is_stale
 NAMESPACE = "ratings"
 #: This writer's source name.
 SOURCE = "mdblist"
-_CURSOR_KEY = "fetched"
 #: When a title was last in a batch whose request failed. Orders the next run;
 #: never read as freshness.
-_ATTEMPTED_KEY = "attempted"
 _VOTES_SUFFIX = "_votes"
 
 #: Requests one run sends at most. At 200 titles a batch this covers 20,000
@@ -128,15 +127,7 @@ def enrich_mdblist_ratings(
     cutoff = datetime.now(UTC) - timedelta(days=stale_days)
     stats = RatingsStats()
 
-    cursors: dict[str, dict[str, str]] = {_CURSOR_KEY: {}, _ATTEMPTED_KEY: {}}
-    for row in conn.execute(
-        "SELECT item_id, key, fetched_at FROM enrichment_cursor "
-        "WHERE namespace = ? AND source = ? AND key IN (?, ?)",
-        (NAMESPACE, SOURCE, _CURSOR_KEY, _ATTEMPTED_KEY),
-    ):
-        cursors[row["key"]][row["item_id"]] = row["fetched_at"]
-    cached_fetched_at = cursors[_CURSOR_KEY]
-    attempted_at = cursors[_ATTEMPTED_KEY]
+    cursors = load_cursors(conn, NAMESPACE, SOURCE)
     # A join, not a correlated subquery, for the reason enrich_letterboxd.py gives.
     candidates = conn.execute(
         """
@@ -155,13 +146,13 @@ def enrich_mdblist_ratings(
         if not row["imdb_id"]:
             stats.titles_skipped_no_imdb_id += 1
             continue
-        fetched_at = cached_fetched_at.get(row["item_id"])
+        fetched_at = cursors.fetched.get(row["item_id"])
         if fetched_at is not None and not is_stale(fetched_at, cutoff):
             stats.titles_cached += 1
             continue
         due.append(_Due(row["item_id"], row["type"], row["imdb_id"]))
     # Stable, so titles never attempted keep their `item_id` order.
-    due.sort(key=lambda t: (t.item_id in attempted_at, attempted_at.get(t.item_id, "")))
+    due.sort(key=lambda t: cursors.order_key(t.item_id))
 
     batches = _batches(due)
     stats.titles_capped = sum(len(batch) for batch in batches[limit:])
@@ -179,7 +170,7 @@ def enrich_mdblist_ratings(
             stats.requests_failed += 1
             stats.titles_failed += len(batch)
             consecutive_failures += 1
-            _mark_attempted(conn, batch)
+            mark_attempted(conn, NAMESPACE, SOURCE, [t.item_id for t in batch])
             print(f"mdblist: {batch[0].media_type} batch of {len(batch)} failed: {err}", flush=True)
             if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
                 raise MDBListError(
@@ -210,20 +201,6 @@ def _batches(due: list[_Due]) -> list[list[_Due]]:
     return batches
 
 
-def _mark_attempted(conn: sqlite3.Connection, batch: list[_Due]) -> None:
-    """Move every title of a failed batch to the back of the next run's order.
-    Their `fetched` cursors and their ratings are left as they were."""
-    now = datetime.now(UTC).isoformat(timespec="microseconds")
-    with conn:
-        conn.executemany(
-            "INSERT INTO enrichment_cursor (item_id, namespace, source, key, fetched_at) "
-            "VALUES (?, ?, ?, ?, ?) "
-            "ON CONFLICT(item_id, namespace, source, key) DO UPDATE SET "
-            "fetched_at = excluded.fetched_at",
-            [(t.item_id, NAMESPACE, SOURCE, _ATTEMPTED_KEY, now) for t in batch],
-        )
-
-
 def _write_batch(
     conn: sqlite3.Connection,
     batch: list[_Due],
@@ -241,18 +218,7 @@ def _write_batch(
                 "DELETE FROM enrichment WHERE item_id = ? AND namespace = ? AND source = ?",
                 (title.item_id, NAMESPACE, SOURCE),
             )
-            conn.execute(
-                "INSERT INTO enrichment_cursor (item_id, namespace, source, key, fetched_at) "
-                "VALUES (?, ?, ?, ?, ?) "
-                "ON CONFLICT(item_id, namespace, source, key) DO UPDATE SET "
-                "fetched_at = excluded.fetched_at",
-                (title.item_id, NAMESPACE, SOURCE, _CURSOR_KEY, now_iso),
-            )
-            conn.execute(
-                "DELETE FROM enrichment_cursor "
-                "WHERE item_id = ? AND namespace = ? AND source = ? AND key = ?",
-                (title.item_id, NAMESPACE, SOURCE, _ATTEMPTED_KEY),
-            )
+            write_fetched(conn, NAMESPACE, SOURCE, title.item_id, now_iso)
             stats.titles_fetched += 1
             answer = by_imdb.get(title.imdb_id)
             if answer is None:
