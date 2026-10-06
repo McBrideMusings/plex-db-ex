@@ -40,6 +40,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from .cursors import load_fetched, upsert_fetched
 from .errors import WikidataError
 from .keywords import NAMESPACE, state_role, upsert_keyword_form
 from .staleness import DEFAULT_STALE_DAYS, is_stale
@@ -59,7 +60,6 @@ SOURCE = "wikidata"
 AWARDS_NAMESPACE = "awards"
 _KEYWORD_KEY = "keyword"
 _AWARD_KEY = "award"
-_CURSOR_KEY = "fetched"
 
 #: Properties whose labels become keywords, and the role each one states, if any.
 KEYWORD_PROPERTIES: dict[str, str | None] = {
@@ -145,14 +145,7 @@ def enrich_wikidata(
     cutoff = now - timedelta(days=stale_days)
     stats = WikidataStats()
 
-    cached_fetched_at: dict[str, str] = {
-        row["item_id"]: row["fetched_at"]
-        for row in conn.execute(
-            "SELECT item_id, fetched_at FROM enrichment_cursor "
-            "WHERE namespace = ? AND source = ? AND key = ?",
-            (NAMESPACE, SOURCE, _CURSOR_KEY),
-        )
-    }
+    cached_fetched_at = load_fetched(conn, NAMESPACE, SOURCE)
     candidates = conn.execute(CANDIDATES_SQL).fetchall()
 
     due: list[tuple[str, str]] = []
@@ -230,13 +223,7 @@ def _write_batch(
                 "DELETE FROM enrichment WHERE item_id = ? AND namespace IN (?, ?) AND source = ?",
                 (item_id, NAMESPACE, AWARDS_NAMESPACE, SOURCE),
             )
-            conn.execute(
-                "INSERT INTO enrichment_cursor (item_id, namespace, source, key, fetched_at) "
-                "VALUES (?, ?, ?, ?, ?) "
-                "ON CONFLICT(item_id, namespace, source, key) DO UPDATE SET "
-                "fetched_at = excluded.fetched_at",
-                (item_id, NAMESPACE, SOURCE, _CURSOR_KEY, now_iso),
-            )
+            upsert_fetched(conn, NAMESPACE, SOURCE, item_id, now_iso)
             keywords: dict[str, None] = {}
             awards: dict[str, None] = {}
             for prop, label in by_imdb.get(imdb_id, []):

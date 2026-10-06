@@ -1,12 +1,15 @@
-"""The `fetched` / `attempted` cursor scheme of a capped enrichment writer.
+"""Every enrichment writer's `enrichment_cursor` rows.
 
-A writer that spends a request budget per run keeps two `enrichment_cursor`
-rows per title under its (namespace, source): `fetched` says the title's facts
-are current as of that time, and `attempted` says a run tried the title and
-got nothing cacheable. A fetched title leaves the next run's list until its
-cursor goes stale; an attempted one moves to the back of it, so a capped run
-never spends the same budget on the same failing titles twice. Cursors are
-scheduling, never facts (ADR-0013), so they live in `enrichment_cursor`.
+Each writer keeps a `fetched` cursor per title under its (namespace, source):
+the title's facts are current as of that time, and the title leaves the next
+run's list until the cursor goes stale. `load_fetched` and `upsert_fetched`
+read and write it; `tmdb_edges` passes its own key per edge type.
+
+A writer that spends a request budget per run also keeps an `attempted`
+cursor: a run tried the title and got nothing cacheable. An attempted title
+moves to the back of the next run's list, so a capped run never spends the
+same budget on the same failing titles twice. Cursors are scheduling, never
+facts (ADR-0013), so they live in `enrichment_cursor`.
 """
 
 from __future__ import annotations
@@ -24,6 +27,34 @@ _UPSERT = (
     "ON CONFLICT(item_id, namespace, source, key) DO UPDATE SET "
     "fetched_at = excluded.fetched_at"
 )
+
+
+def load_fetched(
+    conn: sqlite3.Connection, namespace: str, source: str, key: str = FETCHED_KEY
+) -> dict[str, str]:
+    """item_id -> when its facts were last written, for one writer's cursor key."""
+    return {
+        row["item_id"]: row["fetched_at"]
+        for row in conn.execute(
+            "SELECT item_id, fetched_at FROM enrichment_cursor "
+            "WHERE namespace = ? AND source = ? AND key = ?",
+            (namespace, source, key),
+        )
+    }
+
+
+def upsert_fetched(
+    conn: sqlite3.Connection,
+    namespace: str,
+    source: str,
+    item_id: str,
+    now_iso: str,
+    key: str = FETCHED_KEY,
+) -> None:
+    """Record a title as fetched at `now_iso`. Runs on the caller's connection
+    without its own transaction, so it commits or rolls back together with the
+    facts it vouches for."""
+    conn.execute(_UPSERT, (item_id, namespace, source, key, now_iso))
 
 
 class Cursors:
@@ -70,7 +101,7 @@ def write_fetched(
     """Record a title as fetched and clear its `attempted` cursor. Runs on the
     caller's connection without its own transaction, so it commits or rolls
     back together with the facts it vouches for."""
-    conn.execute(_UPSERT, (item_id, namespace, source, FETCHED_KEY, now_iso))
+    upsert_fetched(conn, namespace, source, item_id, now_iso)
     conn.execute(
         "DELETE FROM enrichment_cursor "
         "WHERE item_id = ? AND namespace = ? AND source = ? AND key = ?",

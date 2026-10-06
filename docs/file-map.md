@@ -71,7 +71,7 @@ plex-db-ex/
 │   ├── jev_client.py      Jev pair judge (`score` and `noul` questions in one request, 429 backoff) behind a `Judge` protocol, and the role judge (one `noul` question per role in one request) behind `RoleJudge`; `judge_all`, the thread fan-out both judges share
 │   ├── tmdb_client.py     read-only TMDB client (keywords, recommendations, similar) behind a TMDbSource protocol
 │   ├── tmdb_common.py     media_type_for / MAX_CONSECUTIVE_FAILURES shared by enrich_tmdb.py and tmdb_edges.py
-│   ├── cursors.py         the `fetched` / `attempted` cursor scheme of a capped enrichment writer: load, order attempted-last, mark attempted, write fetched; used by the Letterboxd and MDBList ratings sweeps
+│   ├── cursors.py         every enrichment writer's `enrichment_cursor` reads and writes: `load_fetched` / `upsert_fetched` for the AniList, Wikidata, TMDB keyword and TMDB edge sweeps, and the `fetched` / `attempted` scheme (load, order attempted-last, mark attempted, write fetched) for the capped Letterboxd and MDBList ratings sweeps
 │   ├── staleness.py       is_stale / DEFAULT_STALE_DAYS — the one "is this row due a re-fetch" rule, shared by both TMDB sweeps and the crowd-list harvest
 │   ├── mdblist_client.py  read-only MDBList client (top lists, list entries) behind an MDBListSource protocol, and the batch title endpoint's ratings (`POST /imdb/{movie|show}/`, 200 ids) behind MDBListRatingsSource; pages until has_more clears and sends an explicit User-Agent, without which the service 403s a valid key
 │   ├── collections.py     crowd-list harvest into collection/collection_membership: rank is array position, replace-wholesale per collection_id, no computed weight (ADR-0012), an entry outside the library dropped rather than invented
