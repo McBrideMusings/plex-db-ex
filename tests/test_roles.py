@@ -192,7 +192,7 @@ def test_the_command_runs_through_the_cli_and_needs_only_the_jev_key(
 ) -> None:
     store = _store(tmp_path, ["heist", "grief"])
     monkeypatch.setenv("PLEXDB_PATH", str(store))
-    monkeypatch.setenv("LLAMA_SWAP_BASE_URL", "")
+    monkeypatch.setenv("LLAMA_BROKER_BASE_URL", "")
     monkeypatch.setenv("TYPESAFE_API_KEY", "")
 
     assert main(["judge-keyword-roles"]) == 1

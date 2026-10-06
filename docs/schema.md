@@ -847,7 +847,7 @@ with cosine >= 0.75 between `nomic-embed-text` vectors of their shortest readabl
 batches of 200 keywords, each batch in one transaction, so a run killed partway leaves every
 finished batch behind and the next run asks only about the pairs still without a row. `--limit N`
 stops a run after N pairs have been asked about. The step needs
-`LLAMA_SWAP_BASE_URL` and `TYPESAFE_API_KEY`; with either unset the sweep reports it skipped.
+`LLAMA_BROKER_BASE_URL` and `TYPESAFE_API_KEY`; with either unset the sweep reports it skipped.
 Nothing records that a keyword was examined, so a keyword that gains a new neighbour proposes the
 pair on the next run.
 

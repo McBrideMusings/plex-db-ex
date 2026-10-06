@@ -29,7 +29,7 @@ plex-db-ex/
 │   │   ├── harvest_mdblist.py
 │   │   ├── idle.py            exit 0 only when no migration and no writer holds the store; read-only. Given a command, it claims both store locks and runs that command under them, which is how `tools/host-exec.sh` runs anything
 │   │   ├── ingest_plays.py
-│   │   ├── judge_keyword_pairs.py  embeds stored keywords with no `keyword_pairs` row, asks Jev about each one's nearest neighbours, writes one row per judged pair; sweep step 65, skipped when `LLAMA_SWAP_BASE_URL` or `TYPESAFE_API_KEY` is unset
+│   │   ├── judge_keyword_pairs.py  embeds stored keywords with no `keyword_pairs` row, asks Jev about each one's nearest neighbours, writes one row per judged pair; sweep step 65, skipped when `LLAMA_BROKER_BASE_URL` or `TYPESAFE_API_KEY` is unset
 │   │   ├── judge_keyword_roles.py  asks Jev about every stored keyword with no `jev` row in `keyword_roles` (one request, five `noul` questions), writes five rows per keyword; sweep step 66, skipped when `TYPESAFE_API_KEY` is unset
 │   │   ├── migrate.py
 │   │   ├── latent_users.py

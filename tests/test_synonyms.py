@@ -404,13 +404,13 @@ def test_the_commands_run_through_the_cli_and_skip_when_a_service_is_unset(
     monkeypatch.setenv("PLEXDB_SNAPSHOT_PATH", "")
     monkeypatch.setenv("PLEXDB_EXPLORE_SAVED_PATH", "")
     _decisions_file(store.parent, [])
-    monkeypatch.setenv("LLAMA_SWAP_BASE_URL", "")
+    monkeypatch.setenv("LLAMA_BROKER_BASE_URL", "")
     monkeypatch.setenv("TYPESAFE_API_KEY", "")
 
     assert main(["judge-keyword-pairs"]) == 1
-    assert "LLAMA_SWAP_BASE_URL" in capsys.readouterr().err
+    assert "LLAMA_BROKER_BASE_URL" in capsys.readouterr().err
 
-    monkeypatch.setenv("LLAMA_SWAP_BASE_URL", "http://embed.test")
+    monkeypatch.setenv("LLAMA_BROKER_BASE_URL", "http://embed.test")
     assert main(["judge-keyword-pairs"]) == 1
     assert "TYPESAFE_API_KEY" in capsys.readouterr().err
 
