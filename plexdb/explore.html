@@ -2085,7 +2085,7 @@ async function startDemo() {
 }
 
 readHash();
-if (DEMO) { state.view = "map"; state.kind = "movie"; state.tag = null; }
+if (DEMO) { state.view = "map"; state.kind = "movie"; state.tag = null; state.tab = "tags"; }
 setView(state.view);
 loadKind();
 if (state.tab !== "tags") setTab(state.tab);

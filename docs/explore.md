@@ -14,7 +14,8 @@ live in `startDemo()` in `plexdb/explore.html`.
 | `/?demo` | Plays the tour live, looping for as long as the page is open. |
 | `/?clip` | Draws the first frame, stays paused, and sets `window.__clip` for a recorder to step through frame by frame. |
 
-Either mode forces the movie kind and the Title map view over whatever the URL's hash says, hides
+Either mode forces the Tags tab, the movie kind and the Title map view over whatever the URL's hash
+says, hides
 the map's controls and the side panel, and ignores the pointer. The header and the View switch stay
 on screen.
 
