@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from plexdb.cli import main
 from plexdb.keywords import (
     ROLES,
     normalize_keyword,
@@ -166,6 +167,22 @@ def test_a_value_a_refetch_moved_loses_its_rows_and_a_carried_value_keeps_its(
     }
     assert (stats.keywords_pruned, stats.keywords_stored) == ([OLD], 2)
     assert (stats.pairs_deleted, stats.roles_deleted, stats.decisions_deleted) == (1, 1, 1)
+
+
+def test_the_command_prints_the_counts_and_each_pruned_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    store = _judged_store(tmp_path)
+    with open_store(store) as conn:
+        conn.execute("DELETE FROM enrichment WHERE value = ?", (OLD,))
+        conn.commit()
+    monkeypatch.setenv("PLEXDB_PATH", str(store))
+    assert main(["prune-keyword-verdicts"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "pruned 1 keyword value(s) no title carries (of 1 stored): "
+        "1 pair row(s), 1 role row(s), 1 decision row(s)",
+        "pruned keyword '\\u200bhidden world'",
+    ]
 
 
 def test_a_pruned_decision_comes_back_from_its_file_once_the_value_is_judged_again(
