@@ -52,8 +52,6 @@ from .staleness import DEFAULT_STALE_DAYS, is_stale
 #: This writer's source name, in `keywords` and `enrichment_cursor`.
 SOURCE = "letterboxd"
 _KEYWORD_KEY = "keyword"
-#: When a title was last asked without a result worth caching — a parse failure
-#: or a failed request. Orders the next run; never read as freshness.
 
 #: Titles one run fetches at most. Two requests and about 2.5 s per title, so
 #: one run takes about 40 minutes and the ~11,700 movies with a TMDB id are

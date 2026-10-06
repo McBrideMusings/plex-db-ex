@@ -53,8 +53,6 @@ from .staleness import DEFAULT_STALE_DAYS, is_stale
 NAMESPACE = "ratings"
 #: This writer's source name.
 SOURCE = "mdblist"
-#: When a title was last in a batch whose request failed. Orders the next run;
-#: never read as freshness.
 _VOTES_SUFFIX = "_votes"
 
 #: Requests one run sends at most. At 200 titles a batch this covers 20,000

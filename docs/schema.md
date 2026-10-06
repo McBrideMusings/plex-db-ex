@@ -339,10 +339,10 @@ Letterboxd has no public API for individuals, so `enrich-letterboxd` reads the f
 `letterboxd.com/tmdb/<tmdb id>/` redirects to the film's page (`/tmdb/27205/` → `/film/inception/`);
 an id Letterboxd has no film for answers a 200 "TMDB Import Result" page instead, and that movie
 is cached as not listed, with no keywords. The film page's `<body>` carries `data-tmdb-id`. A page
-where it is missing or names another id is a **parse failure**: no keyword and no `fetched`
+where it is missing or names another id, or that carries theme links but none under the `Themes` heading (a renamed heading), is a **parse failure**: no keyword and no `fetched`
 cursor is written, only an `attempted` one, so the next run asks again, and a run whose parse failures exceed 10% of the film pages
 it loaded exits non-zero after printing the count. The Themes section mixes Letterboxd's broad
-themes (`/films/theme/…`) and its narrower mini-themes (`/films/mini-theme/…`); both are stored.
+themes (`/films/theme/…`) and its narrower mini-themes (`/films/mini-theme/…`); both are stored. A film page with no theme links at all is listed with no themes.
 The full list behind "Show All…" sits behind a Cloudflare challenge, so it is not read. Every
 request is checked against the `User-agent: *` rules in robots.txt, fetched once per run.
 
