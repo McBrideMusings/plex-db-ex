@@ -23,6 +23,7 @@ from typing import Any
 
 import httpx
 import pytest
+from playwright.sync_api import Browser, Page, sync_playwright
 
 from plexdb import explore, schedule
 from plexdb.decisions import EXPLORE_SAVED_PATH_VAR
@@ -1334,3 +1335,82 @@ def test_query_endpoint_refuses_a_body_that_is_not_json_typed(base_url: str) -> 
         urllib.request.urlopen(request)
     assert caught.value.code == 400
     assert "application/json" in json.loads(caught.value.read())["error"]
+
+
+# ---- ?clip in a headless browser ----
+# The recorder contract in docs/explore.md, read off the page with Playwright. Only `superhero`
+# of the three demo tags is on this store's movie map, so the period here is 2.5 s, not 4.5 s.
+
+CLIP_READY = "() => window.__clip || document.body.dataset.demo === 'failed'"
+CLIP_FRAME = "() => ({ k: mapVP.k, tx: mapVP.tx, ty: mapVP.ty, tag: state.tag })"
+# The fit the viewport should draw at zoom 1, worked out from the canvas size and the map bounds.
+CLIP_FIT = """() => {
+  const c = document.getElementById("map"), b = mapVP.bounds, pad = mapVP.pad;
+  return { k: mapVP.k, fit: Math.min((c.clientWidth - 2 * pad) / (b.x1 - b.x0),
+                                     (c.clientHeight - 2 * pad) / (b.y1 - b.y0)) };
+}"""
+
+
+@pytest.fixture
+def browser() -> Iterator[Browser]:
+    with sync_playwright() as pw:
+        chromium = pw.chromium.launch(headless=True)
+        try:
+            yield chromium
+        finally:
+            chromium.close()
+
+
+def _open_clip(browser: Browser, store: Path, url: str) -> Page:
+    with open_store(store) as conn:
+        refresh_title_maps(conn)
+    page = browser.new_page(viewport={"width": 1280, "height": 800})
+    page.goto(url)
+    page.wait_for_function(CLIP_READY, timeout=60_000)
+    assert page.evaluate("() => document.body.dataset.demo") != "failed", page.evaluate(
+        "() => document.getElementById('error').textContent"
+    )
+    return page
+
+
+def _seek(page: Page, t: float) -> dict[str, Any]:
+    page.evaluate("t => window.__clip.seek(t)", t)
+    return dict(page.evaluate(CLIP_FRAME))
+
+
+def test_clip_seek_draws_the_same_frame_at_t_and_t_plus_period(
+    browser: Browser, store: Path, base_url: str
+) -> None:
+    page = _open_clip(browser, store, f"{base_url}/?clip")
+    period = page.evaluate("() => window.__clip.period")
+    frames = {t: _seek(page, t) for t in (0, 0.7, 1.0, 1.9, 2.2)}
+    for t, frame in frames.items():
+        assert _seek(page, t + period) == frame, t
+    # A tag is lit and the camera moves somewhere in the loop, so the seam compares real frames.
+    assert {f["tag"] for f in frames.values()} > {None}
+    assert len({f["k"] for f in frames.values()}) > 1
+
+
+def test_clip_seek_after_a_resize_fits_the_whole_map_to_the_new_canvas(
+    browser: Browser, store: Path, base_url: str
+) -> None:
+    page = _open_clip(browser, store, f"{base_url}/?clip")
+    _seek(page, 1.0)  # a zoomed frame, so the viewport is no longer fitted when the resize lands
+    # 900x600 seeks before the ResizeObserver can run; 1600x500 seeks after it has.
+    for width, height, settle in ((900, 600, False), (1600, 500, True)):
+        page.set_viewport_size({"width": width, "height": height})
+        if settle:
+            page.evaluate(
+                "() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))"
+            )
+        _seek(page, 0)
+        drawn = page.evaluate(CLIP_FIT)
+        assert drawn["k"] == pytest.approx(drawn["fit"], rel=1e-9), (width, height)
+
+
+def test_clip_forces_the_tags_tab_over_the_hash(
+    browser: Browser, store: Path, base_url: str
+) -> None:
+    page = _open_clip(browser, store, f"{base_url}/?clip#tab=query")
+    assert page.evaluate("() => state.tab") == "tags"
+    assert page.evaluate("() => document.getElementById('tagsmain').hidden") is False

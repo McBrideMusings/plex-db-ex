@@ -19,6 +19,7 @@ plexdb = "plexdb.cli:main"
 [dependency-groups]
 dev = [
     "mypy>=1.11",
+    "playwright>=1.63.0",
     "pytest>=8.0",
     "ruff>=0.6",
 ]

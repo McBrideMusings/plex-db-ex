@@ -52,6 +52,9 @@ window.__clip = { period, seek(t) }
   waiting for the page's resize observer: `seek` re-measures the canvas first, and the
   whole-map frames refit to the new size.
 
+The `test_clip_*` tests in `tests/test_explore.py` hold the page to the seam and the resize rule
+in a headless Chromium, as part of `admin vet`. `admin build` fetches that browser.
+
 `window.__clip` appears only once the three tags' title lists have been fetched and the map has
 loaded. The page fetches the title lists first, with no time limit of its own, then gives the
 map 120 s; a cold server takes tens of seconds. If the tour cannot start, `window.__clip` never
