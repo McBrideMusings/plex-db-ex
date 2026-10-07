@@ -651,6 +651,7 @@ class Viewport {
     this.w = w; this.h = h;
     const ratio = window.devicePixelRatio || 1;
     this.canvas.width = Math.round(w * ratio); this.canvas.height = Math.round(h * ratio);
+    this.k0 = this.viewFor(this.bounds, this.pad).k;   // the whole-picture scale follows the size, whatever the view shows
     if (this.fitted || !ow) this.reset();
     else { this.tx += (w - ow) / 2; this.ty += (h - oh) / 2; this.redraw(); }
   }
@@ -2060,6 +2061,7 @@ async function startDemo() {
   const cap = document.getElementById("democap");
   const seek = t => {
     t = ((t % period) + period) % period;
+    mapVP.resize();   // a recorder may resize and seek before the ResizeObserver has run
     const cam = camera(t);
     mapVP.k = mapVP.k0 * cam.z;
     mapVP.tx = mapVP.w / 2 - cam.x * mapVP.k; mapVP.ty = mapVP.h / 2 - cam.y * mapVP.k;
@@ -2085,7 +2087,7 @@ async function startDemo() {
 }
 
 readHash();
-if (DEMO) { state.view = "map"; state.kind = "movie"; state.tag = null; }
+if (DEMO) { state.view = "map"; state.kind = "movie"; state.tag = null; state.tab = "tags"; }
 setView(state.view);
 loadKind();
 if (state.tab !== "tags") setTab(state.tab);

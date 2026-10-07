@@ -34,6 +34,7 @@ export default defineConfig({
             { text: 'Schema', link: '/schema' },
             { text: 'The baseline store', link: '/baseline' },
             { text: 'Development practice', link: '/development' },
+            { text: 'Plex TVX', link: '/explore' },
             { text: 'Original spec', link: '/spec' },
             { text: 'Vocabulary', link: '/CONTEXT' },
             { text: 'Decisions', link: '/adr/' },
