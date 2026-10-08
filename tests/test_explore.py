@@ -1337,11 +1337,16 @@ def test_query_endpoint_refuses_a_body_that_is_not_json_typed(base_url: str) -> 
     assert "application/json" in json.loads(caught.value.read())["error"]
 
 
-# ---- ?clip in a headless browser ----
+# ---- ?clip and ?demo in a headless browser ----
 # The recorder contract in docs/explore.md, read off the page with Playwright. Only `superhero`
 # of the three demo tags is on this store's movie map, so the period here is 2.5 s, not 4.5 s.
 
 CLIP_READY = "() => window.__clip || document.body.dataset.demo === 'failed'"
+# ?demo exposes no seam; its caption names a tag once the live tour has reached the first one.
+DEMO_READY = (
+    "() => document.getElementById('democap').childElementCount"
+    " || document.body.dataset.demo === 'failed'"
+)
 CLIP_FRAME = "() => ({ k: mapVP.k, tx: mapVP.tx, ty: mapVP.ty, tag: state.tag })"
 # The fit the viewport should draw at zoom 1, worked out from the canvas size and the map bounds.
 CLIP_FIT = """() => {
@@ -1361,12 +1366,12 @@ def browser() -> Iterator[Browser]:
             chromium.close()
 
 
-def _open_clip(browser: Browser, store: Path, url: str) -> Page:
+def _open_clip(browser: Browser, store: Path, url: str, ready: str = CLIP_READY) -> Page:
     with open_store(store) as conn:
         refresh_title_maps(conn)
     page = browser.new_page(viewport={"width": 1280, "height": 800})
     page.goto(url)
-    page.wait_for_function(CLIP_READY, timeout=60_000)
+    page.wait_for_function(ready, timeout=60_000)
     assert page.evaluate("() => document.body.dataset.demo") != "failed", page.evaluate(
         "() => document.getElementById('error').textContent"
     )
@@ -1414,3 +1419,22 @@ def test_clip_forces_the_tags_tab_over_the_hash(
     page = _open_clip(browser, store, f"{base_url}/?clip#tab=query")
     assert page.evaluate("() => state.tab") == "tags"
     assert page.evaluate("() => document.getElementById('tagsmain').hidden") is False
+
+
+def test_demo_exposes_no_clip_seam(browser: Browser, store: Path, base_url: str) -> None:
+    page = _open_clip(browser, store, f"{base_url}/?demo", ready=DEMO_READY)
+    assert page.evaluate("() => window.__clip") is None
+
+
+def test_demo_moves_the_camera_without_a_seek(browser: Browser, store: Path, base_url: str) -> None:
+    page = _open_clip(browser, store, f"{base_url}/?demo", ready=DEMO_READY)
+    # One second of samples, longer than the 0.6 s the camera holds still on a tag.
+    xs = page.evaluate(
+        """() => new Promise(r => {
+          const xs = [], t0 = performance.now();
+          const take = () => { xs.push(mapVP.tx);
+                               performance.now() - t0 < 1000 ? setTimeout(take, 50) : r(xs); };
+          take();
+        })"""
+    )
+    assert len(set(xs)) > 1, xs

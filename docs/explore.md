@@ -53,7 +53,8 @@ window.__clip = { period, seek(t) }
   whole-map frames refit to the new size.
 
 The `test_clip_*` tests in `tests/test_explore.py` hold the page to the seam and the resize rule
-in a headless Chromium, as part of `admin vet`. `admin build` fetches that browser.
+in a headless Chromium, as part of `admin vet`, and the `test_demo_*` tests hold `?demo` to a
+camera that moves on its own with no `window.__clip`. `admin build` fetches that browser.
 
 `window.__clip` appears only once the three tags' title lists have been fetched and the map has
 loaded. The page fetches the title lists first, with no time limit of its own, then gives the
