@@ -46,7 +46,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from .anilist_client import PAGE_SIZE, AniListSource, Tag
-from .cursors import load_fetched, upsert_fetched
+from .cursors import delete_cursors, load_fetched, write_fetched
 from .errors import AniListError
 from .keywords import NAMESPACE, state_role, upsert_keyword_form
 from .staleness import DEFAULT_STALE_DAYS, is_stale
@@ -182,10 +182,7 @@ def wipe(conn: sqlite3.Connection) -> int:
             "DELETE FROM enrichment WHERE namespace = ? AND source = ?", (NAMESPACE, SOURCE)
         ).rowcount
         removed += conn.execute("DELETE FROM keyword_roles WHERE source = ?", (SOURCE,)).rowcount
-        removed += conn.execute(
-            "DELETE FROM enrichment_cursor WHERE namespace = ? AND source = ?",
-            (NAMESPACE, SOURCE),
-        ).rowcount
+        removed += delete_cursors(conn, NAMESPACE, SOURCE)
         return removed
 
 
@@ -286,10 +283,6 @@ def _delete_title(conn: sqlite3.Connection, item_id: str) -> None:
         "DELETE FROM enrichment WHERE item_id = ? AND namespace = ? AND source = ?",
         (item_id, NAMESPACE, SOURCE),
     )
-    conn.execute(
-        "DELETE FROM enrichment_cursor WHERE item_id = ? AND namespace = ? AND source = ?",
-        (item_id, NAMESPACE, SOURCE),
-    )
 
 
 def _higher(a: int | None, b: int | None) -> int | None:
@@ -315,7 +308,7 @@ def _write_batch(
     with conn:
         for item_id, anilist_ids in batch:
             _delete_title(conn, item_id)
-            upsert_fetched(conn, NAMESPACE, SOURCE, item_id, now_iso)
+            write_fetched(conn, NAMESPACE, SOURCE, item_id, now_iso)
             # Every entry the title maps to, merged per stored keyword: the highest
             # rank wins, and a keyword is a spoiler if any copy says so.
             rows: dict[str, tuple[int | None, bool]] = {}

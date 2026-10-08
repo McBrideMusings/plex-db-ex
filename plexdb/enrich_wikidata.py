@@ -45,7 +45,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from .cursors import load_fetched, upsert_fetched
+from .cursors import delete_cursors, load_fetched, write_fetched
 from .errors import WikidataError
 from .keywords import NAMESPACE, state_role, upsert_keyword_form
 from .staleness import DEFAULT_STALE_DAYS, is_stale
@@ -121,10 +121,7 @@ def wipe(conn: sqlite3.Connection) -> int:
         removed += conn.execute(
             "DELETE FROM keyword_role_statements WHERE source = ?", (SOURCE,)
         ).rowcount
-        removed += conn.execute(
-            "DELETE FROM enrichment_cursor WHERE namespace = ? AND source = ?",
-            (NAMESPACE, SOURCE),
-        ).rowcount
+        removed += delete_cursors(conn, NAMESPACE, SOURCE)
         return removed
 
 
@@ -236,7 +233,7 @@ def _write_batch(
                 "DELETE FROM keyword_role_statements WHERE item_id = ? AND source = ?",
                 (item_id, SOURCE),
             )
-            upsert_fetched(conn, NAMESPACE, SOURCE, item_id, now_iso)
+            write_fetched(conn, NAMESPACE, SOURCE, item_id, now_iso)
             keywords: dict[str, None] = {}
             stating: dict[tuple[str, str], None] = {}
             awards: dict[str, None] = {}

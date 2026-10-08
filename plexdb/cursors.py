@@ -2,8 +2,10 @@
 
 Each writer keeps a `fetched` cursor per title under its (namespace, source):
 the title's facts are current as of that time, and the title leaves the next
-run's list until the cursor goes stale. `load_fetched` and `upsert_fetched`
-read and write it; `tmdb_edges` passes its own key per edge type.
+run's list until the cursor goes stale. `load_fetched` and `write_fetched`
+read and write it; `tmdb_edges` passes its own key per edge type. A writer's
+wipe removes its cursors through `delete_cursors`, so every runtime write to
+`enrichment_cursor` is in this module.
 
 A writer that spends a request budget per run also keeps an `attempted`
 cursor: a run tried the title and got nothing cacheable. An attempted title
@@ -43,7 +45,7 @@ def load_fetched(
     }
 
 
-def upsert_fetched(
+def write_fetched(
     conn: sqlite3.Connection,
     namespace: str,
     source: str,
@@ -51,10 +53,36 @@ def upsert_fetched(
     now_iso: str,
     key: str = FETCHED_KEY,
 ) -> None:
-    """Record a title as fetched at `now_iso`. Runs on the caller's connection
-    without its own transaction, so it commits or rolls back together with the
-    facts it vouches for."""
+    """Record a title as fetched at `now_iso` and clear its `attempted` cursor.
+
+    Every writer records a fetch here, capped or not: a writer that never
+    marks a title attempted clears nothing, and one that does can never leave
+    a stale `attempted` cursor holding a fetched title at the back of its
+    order. Runs on the caller's connection without its own transaction, so it
+    commits or rolls back together with the facts it vouches for."""
     conn.execute(_UPSERT, (item_id, namespace, source, key, now_iso))
+    conn.execute(
+        "DELETE FROM enrichment_cursor "
+        "WHERE item_id = ? AND namespace = ? AND source = ? AND key = ?",
+        (item_id, namespace, source, ATTEMPTED_KEY),
+    )
+
+
+def delete_cursors(
+    conn: sqlite3.Connection, namespace: str, source: str, key: str | None = None
+) -> int:
+    """Delete one writer's cursors — every key, or only `key` — and no other
+    writer's. Runs on the caller's connection without its own transaction, so a
+    wipe removes cursors and facts together. Returns the number of rows removed."""
+    if key is None:
+        return conn.execute(
+            "DELETE FROM enrichment_cursor WHERE namespace = ? AND source = ?",
+            (namespace, source),
+        ).rowcount
+    return conn.execute(
+        "DELETE FROM enrichment_cursor WHERE namespace = ? AND source = ? AND key = ?",
+        (namespace, source, key),
+    ).rowcount
 
 
 class Cursors:
@@ -93,17 +121,3 @@ def mark_attempted(
     now = datetime.now(UTC).isoformat(timespec="microseconds")
     with conn:
         conn.executemany(_UPSERT, [(i, namespace, source, ATTEMPTED_KEY, now) for i in item_ids])
-
-
-def write_fetched(
-    conn: sqlite3.Connection, namespace: str, source: str, item_id: str, now_iso: str
-) -> None:
-    """Record a title as fetched and clear its `attempted` cursor. Runs on the
-    caller's connection without its own transaction, so it commits or rolls
-    back together with the facts it vouches for."""
-    upsert_fetched(conn, namespace, source, item_id, now_iso)
-    conn.execute(
-        "DELETE FROM enrichment_cursor "
-        "WHERE item_id = ? AND namespace = ? AND source = ? AND key = ?",
-        (item_id, namespace, source, ATTEMPTED_KEY),
-    )

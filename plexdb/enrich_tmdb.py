@@ -34,7 +34,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from .cursors import load_fetched, upsert_fetched
+from .cursors import delete_cursors, load_fetched, write_fetched
 from .errors import TMDbError
 
 # Re-exported (redundant `as` alias) so tests can check that every sweep binds
@@ -94,10 +94,7 @@ def wipe_namespace(conn: sqlite3.Connection) -> int:
         removed = conn.execute(
             "DELETE FROM enrichment WHERE namespace = ? AND source = ?", (NAMESPACE, SOURCE)
         ).rowcount
-        removed += conn.execute(
-            "DELETE FROM enrichment_cursor WHERE namespace = ? AND source = ?",
-            (NAMESPACE, SOURCE),
-        ).rowcount
+        removed += delete_cursors(conn, NAMESPACE, SOURCE)
         return removed
 
 
@@ -187,7 +184,7 @@ def enrich_tmdb_keywords(
                 "DELETE FROM enrichment WHERE item_id = ? AND namespace = ? AND source = ?",
                 (item_id, NAMESPACE, SOURCE),
             )
-            upsert_fetched(conn, NAMESPACE, SOURCE, item_id, now_iso)
+            write_fetched(conn, NAMESPACE, SOURCE, item_id, now_iso)
             # Every raw spelling TMDB returned is recorded in `keyword_forms`
             # even when two of them stem to the same stored value — `heists`
             # and `heist` are both worth remembering as surfaces TMDB used.

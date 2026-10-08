@@ -39,7 +39,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from .cursors import load_fetched, upsert_fetched
+from .cursors import delete_cursors, load_fetched, write_fetched
 from .errors import TMDbError
 
 # Re-exported (redundant `as` alias) so tests can check that every sweep binds
@@ -104,10 +104,9 @@ def wipe_edge_type(conn: sqlite3.Connection, edge_type: str) -> tuple[int, int]:
     """
     with conn:
         edges_removed = conn.execute("DELETE FROM edges WHERE edge_type = ?", (edge_type,)).rowcount
-        cursor_removed = conn.execute(
-            "DELETE FROM enrichment_cursor WHERE namespace = ? AND source = ? AND key = ?",
-            (_CURSOR_NAMESPACE, _CURSOR_SOURCE, _CURSOR_KEYS[edge_type]),
-        ).rowcount
+        cursor_removed = delete_cursors(
+            conn, _CURSOR_NAMESPACE, _CURSOR_SOURCE, _CURSOR_KEYS[edge_type]
+        )
     return edges_removed, cursor_removed
 
 
@@ -242,7 +241,7 @@ def _sweep(
                     "VALUES (?, ?, ?, ?, ?)",
                     (item_id, to_item_id, edge_type, rank, now_iso),
                 )
-            upsert_fetched(conn, _CURSOR_NAMESPACE, _CURSOR_SOURCE, item_id, now_iso, cursor_key)
+            write_fetched(conn, _CURSOR_NAMESPACE, _CURSOR_SOURCE, item_id, now_iso, cursor_key)
         stats.titles_fetched += 1
         stats.edges_written += len(edges)
 

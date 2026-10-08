@@ -44,7 +44,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from .cursors import load_cursors, mark_attempted, write_fetched
+from .cursors import delete_cursors, load_cursors, mark_attempted, write_fetched
 from .errors import MDBListError, MDBListQuotaError
 from .mdblist_client import BATCH_SIZE, MDBListRatingsSource, MDBListTitleRatings
 from .staleness import DEFAULT_STALE_DAYS, is_stale
@@ -106,10 +106,7 @@ def wipe(conn: sqlite3.Connection) -> int:
         removed = conn.execute(
             "DELETE FROM enrichment WHERE namespace = ? AND source = ?", (NAMESPACE, SOURCE)
         ).rowcount
-        removed += conn.execute(
-            "DELETE FROM enrichment_cursor WHERE namespace = ? AND source = ?",
-            (NAMESPACE, SOURCE),
-        ).rowcount
+        removed += delete_cursors(conn, NAMESPACE, SOURCE)
         return removed
 
 
