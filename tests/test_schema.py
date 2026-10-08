@@ -23,6 +23,7 @@ V10_TABLES = {"keyword_forms"}
 V11_TABLES = {"tag_network", "tag_network_edge", "tag_network_state"}
 V12_TABLES = {"keyword_pairs"}
 V14_TABLES = {"keyword_roles", "keyword_role_decisions"}
+V16_TABLES = {"keyword_role_statements"}
 #: V4 adds no new table — it only alters the existing `plays` table and adds
 #: an index (issue #9).
 
@@ -184,6 +185,7 @@ def test_a_current_store_carries_every_migrations_tables_and_nothing_else(
         | V11_TABLES
         | V12_TABLES
         | V14_TABLES
+        | V16_TABLES
         | {"reader_shape"}
         | {"schema_version"}
     )
@@ -880,6 +882,34 @@ def test_v14_adds_a_null_rank_to_every_existing_enrichment_row(tmp_path: Path) -
         assert conn.execute("SELECT count(*) FROM plays").fetchone()[0] == 1
     assert result.backup == tmp_path / "backups" / f"plexdb.pre-v{schema.SCHEMA_VERSION}.db"
     assert result.backup.exists()
+
+
+def test_v16_makes_every_wikidata_title_due_and_keeps_its_rows(tmp_path: Path) -> None:
+    store = tmp_path / "plexdb.db"
+    _store_at(store, 15)
+    conn = sqlite3.connect(store)
+    try:
+        conn.execute("INSERT INTO items (item_id, type, title) VALUES ('imdb:tt1', 'movie', 'x')")
+        conn.execute(
+            "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) "
+            "VALUES ('imdb:tt1', 'keywords', 'wikidata', 'keyword', 'pari', '2026-10-01T00:00:00Z')"
+        )
+        conn.executemany(
+            "INSERT INTO enrichment_cursor (item_id, namespace, source, key, fetched_at) "
+            "VALUES ('imdb:tt1', 'keywords', ?, 'fetched', '2026-10-01T00:00:00Z')",
+            [("wikidata",), ("tmdb",)],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = migrate(store, tmp_path / "backups")
+
+    assert (result.was, result.now) == (15, schema.SCHEMA_VERSION)
+    with open_readonly(store) as conn:
+        cursors = conn.execute("SELECT source FROM enrichment_cursor").fetchall()
+        assert [r[0] for r in cursors] == ["tmdb"]
+        assert conn.execute("SELECT value FROM enrichment").fetchone()[0] == "pari"
 
 
 def test_keyword_roles_holds_a_stated_role_a_score_or_a_refusal_for_the_closed_role_set(

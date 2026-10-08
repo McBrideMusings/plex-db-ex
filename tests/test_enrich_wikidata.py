@@ -151,6 +151,7 @@ def test_rewipe_removes_only_wikidata_rows(conn: Any) -> None:
     assert [r[0] for r in left] == ["tmdb"]
     assert [r[0] for r in conn.execute("SELECT DISTINCT source FROM enrichment_cursor")] == ["tmdb"]
     assert [r[0] for r in conn.execute("SELECT DISTINCT source FROM keyword_roles")] == ["jev"]
+    assert conn.execute("SELECT COUNT(*) FROM keyword_role_statements").fetchone()[0] == 0
 
 
 def test_a_stale_title_is_asked_again_and_its_rows_replaced(conn: Any) -> None:
@@ -193,11 +194,42 @@ def test_a_role_no_title_states_any_more_is_pruned_and_another_sources_kept(conn
     regions = _roles(conn)["region"]
     assert "pari" in regions
     assert "los angel" not in regions
-    # Still carried under this source, so its role stays until --rewipe.
-    assert "australia" in regions
+    # Still a keyword, but no title states it as a place any more.
+    assert "australia" in _values(conn, INCEPTION, "keywords")
+    assert "australia" not in regions
     assert stats.roles_pruned == before - sum(len(k) for k in _roles(conn).values()) > 0
     jev = conn.execute("SELECT keyword FROM keyword_roles WHERE source = 'jev'").fetchall()
     assert [r[0] for r in jev] == ["los angel"]
+
+
+def test_a_role_one_title_still_states_survives_another_listing_it_as_a_subject(
+    conn: Any,
+) -> None:
+    both = RecordedWikidataSource(
+        statements_recorded=[("tt1375666", "P921", "Paris"), ("tt0120815", "P840", "Paris")]
+    )
+
+    enrich_wikidata(conn, both)
+
+    assert _roles(conn)["region"] == {"pari"}
+    stating = conn.execute(
+        "SELECT item_id, role FROM keyword_role_statements WHERE keyword = 'pari'"
+    ).fetchall()
+    assert [tuple(r) for r in stating] == [(RYAN, "region")]
+    # The statement is not a title fact a taste rollup would count.
+    keys = conn.execute("SELECT DISTINCT key FROM enrichment WHERE namespace = 'keywords'")
+    assert [r[0] for r in keys] == ["keyword"]
+
+
+def test_a_deleted_title_takes_its_statements_and_then_its_role_with_it(conn: Any) -> None:
+    only_ryan = RecordedWikidataSource(statements_recorded=[("tt0120815", "P840", "Paris")])
+    enrich_wikidata(conn, only_ryan)
+    conn.execute("DELETE FROM items WHERE item_id = ?", (RYAN,))
+    conn.commit()
+
+    assert conn.execute("SELECT COUNT(*) FROM keyword_role_statements").fetchone()[0] == 0
+    stats = enrich_wikidata(conn, RecordedWikidataSource(statements_recorded=[]), stale_days=45)
+    assert stats.roles_pruned == 1 and _roles(conn) == {}
 
 
 def test_an_aborted_run_still_prunes(conn: Any) -> None:

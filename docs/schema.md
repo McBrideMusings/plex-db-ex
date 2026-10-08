@@ -33,7 +33,7 @@ Every reader built before it then refuses the store instead of misreading it. A 
 only adds leaves both alone. `tests/test_schema.py` fails when `READER_SHAPE` and the reader's
 constant disagree.
 
-**Versions 1 through 15 are live.** Everything under "Not yet built" is the target for later
+**Versions 1 through 16 are live.** Everything under "Not yet built" is the target for later
 slices.
 
 ### A migration is copied before it runs, and rolled back if it goes wrong
@@ -211,7 +211,7 @@ own GUIDs derive the contested id keeps it, the other one moves off.
 | Namespace | Source | Writer | Keys |
 |---|---|---|---|
 | `keywords` | `tmdb` | `plexdb enrich-tmdb-keywords` | `keyword`, one row per normalized-and-stemmed keyword, `value` is the stored keyword text (see `keyword_forms` above for the raw spelling). Nothing else. Only `items.type` `movie` and `show` are enriched — TMDB has no keywords endpoint for an episode. |
-| `keywords` | `wikidata` | `plexdb enrich-wikidata` | `keyword`, stored the same way: the English labels of the title's Wikidata narrative location (P840), set in period (P2408), main subject (P921) and genre (P136). Movies and shows with an `imdb` external id only. A P840 keyword also gets a `region` row in `keyword_roles`, a P2408 keyword an `era` row. |
+| `keywords` | `wikidata` | `plexdb enrich-wikidata` | `keyword`, stored the same way: the English labels of the title's Wikidata narrative location (P840), set in period (P2408), main subject (P921) and genre (P136). Movies and shows with an `imdb` external id only. A P840 keyword also gets a `region` row in `keyword_roles`, a P2408 keyword an `era` row, and the title a matching row in `keyword_role_statements`. |
 | `keywords` | `anilist` | `plexdb enrich-anilist` | `keyword`, stored the same way: the title's AniList tags, with AniList's 0–100 rank (the share of voters who agree the tag applies) in `rank`, verbatim. `spoiler_keyword`, the same for a tag AniList flags `isMediaSpoiler` or `isGeneralSpoiler`, so a reader of key `keyword` never sees a spoiler. Anime movies and shows only, found through Fribb's mapping (see [AniList](#anilist-tags-and-roles) below). |
 | `keywords` | `letterboxd` | `plexdb enrich-letterboxd` | `keyword`, stored the same way: every theme and mini-theme label in the Themes section of the film's Letterboxd page (up to about seven — the page shows a subset), with `rank` NULL, because Letterboxd ranks nothing. No `keyword_roles` row. Movies with a `tmdb` external id only (see [Letterboxd themes](#letterboxd-themes) below). |
 | `awards` | `wikidata` | `plexdb enrich-wikidata` | `award`, one row per English label of the title's award received (P166), stored verbatim — not normalized or stemmed, and not a keyword. |
@@ -953,12 +953,17 @@ counts a source-stated row, or a judge's score at or above a threshold.
 
 **Refresh rule.** `enrich-wikidata` writes `region` and `era` rows with `source = 'wikidata'`. A row
 is per keyword, not per title, so a title's re-fetch only moves its `stated_at`. Every run then
-deletes each `wikidata` role row whose keyword no title carries under `source = 'wikidata'`,
-judged against every stored title, fetched this run or not — an aborted run included. A keyword
-Wikidata stops calling a place or a period on every title, while some title still lists it as a
-main subject or genre, keeps its row until `enrich-wikidata --rewipe`. `enrich-anilist` writes
-`theme`, `era` and `character_trait` rows with `source = 'anilist'` from tag categories
-([AniList tags and roles](#anilist-tags-and-roles)), under the same per-keyword rule. Only `plexdb fold-role-decisions` writes `keyword_role_decisions`, from
+deletes each `wikidata` role row that no `keyword_role_statements` row backs, meaning no stored
+title states that keyword in that role any more. It judges every stored title, fetched this run or
+not, and runs even when the sweep aborts. A keyword Wikidata stops calling a place or a period on
+every title loses its row, even while some title still lists it as a main subject or genre.
+
+`enrich-anilist` writes `theme`, `era` and `character_trait` rows with `source = 'anilist'` from
+tag categories ([AniList tags and roles](#anilist-tags-and-roles)). It writes no
+`keyword_role_statements` rows and prunes nothing on a run: an `anilist` role row stays until
+`enrich-anilist --rewipe` or `plexdb prune-keyword-verdicts` removes it.
+
+Only `plexdb fold-role-decisions` writes `keyword_role_decisions`, from
 [`role_decisions.json`](#role-decisions-json). `plexdb prune-keyword-verdicts` deletes every row in
 both tables, whatever its source, keyed on a value no title carries.
 
@@ -1003,6 +1008,29 @@ refused with a 404 when `keyword_roles` has no verdict for it) and reads it back
 (`GET /api/roles`), so a decision shows at once — the table outlines the pressed button, the
 decisions list marks it "applies at next sweep" — until the
 fold writes it. A write keeps one entry per (keyword, role).
+
+## Version 16 — which title states a role
+
+```
+keyword_role_statements  (item_id, keyword, role, source) PK, stated_at TEXT
+```
+
+One row per role a source states for one title: `enrich-wikidata` writes `(title, 'pari',
+'region', 'wikidata')` for a title whose narrative location (P840) is Paris, and `era` for a set in
+period (P2408). `keyword` is stored as `enrichment.value` holds it, and `role` is the closed set
+`keyword_roles` uses. A source's fetch of a title replaces that title's rows, so the table says
+which titles state a role today; `keyword_roles` keeps one row per keyword, and the writer's prune
+deletes a role row no statement backs (see the refresh rule under Version 14).
+
+It sits outside `enrichment` on purpose. A reader rolls every `enrichment` row into a title's
+taste, so a second row per place there would count the place twice and shrink every other
+attribute of the title. No reader reads this table, so `reader_shape` stays 10.
+
+No stored title had a row before v16, so the migration also deletes every `enrichment_cursor` row
+with `namespace = 'keywords'` and `source = 'wikidata'`: the next run fetches every title again and
+writes them, instead of its prune deleting every Wikidata role. A title's Wikidata keywords stay in
+place until that re-fetch replaces them. A run that fails partway leaves the roles of the titles it
+did not reach pruned until a later run fetches them.
 
 ## Reading the store to build collections
 

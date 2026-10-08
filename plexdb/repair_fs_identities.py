@@ -64,6 +64,7 @@ _PK_COLUMNS: dict[str, tuple[str, ...]] = {
     "enrichment": ("namespace", "source", "key", "value"),
     "enrichment_cursor": ("namespace", "source", "key"),
     "collection_membership": ("collection_id",),
+    "keyword_role_statements": ("keyword", "role", "source"),
 }
 
 

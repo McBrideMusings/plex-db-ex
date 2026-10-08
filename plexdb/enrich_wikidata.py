@@ -13,11 +13,16 @@ a place, and a period is a time. Those become `keyword_roles` rows with role
 `region` and `era`, `source = 'wikidata'`, and score, model and error NULL —
 stated by the source, not judged (ADR-0019). Main subject and genre carry no
 role. A role row is per keyword, not per title, so a title's refresh restates it
-rather than replacing it. Each run ends by deleting every wikidata role row whose
-keyword no title carries under this source any more — read from the whole stored
-snapshot, cached titles included, so a partial or failed run prunes correctly.
-A keyword some title still carries only as a subject or genre keeps its role
-until `--rewipe`, since the stored rows do not say which property stated them.
+rather than replacing it.
+
+Which title stated a role is kept per title in `keyword_role_statements`, one row
+per (title, keyword, role), replaced with the title's other rows on each fetch.
+It lives outside `enrichment` because a reader rolls every enrichment row into a
+title's taste, and a second row per place would count it twice. Each run ends by
+deleting every wikidata role row no statement backs any more — read from the
+whole stored snapshot, cached titles included, so a partial or failed run prunes
+correctly. A keyword every title now lists only as a main subject or genre loses
+its role.
 
 Award received (P166) is not a keyword. Its labels go verbatim into their own
 `awards` namespace, key `award` — stemming "Academy Award for Best Sound" would
@@ -98,7 +103,7 @@ class WikidataStats:
     keywords_written: int = 0
     #: Distinct (keyword, role) rows this run stated or restated.
     roles_stated: int = 0
-    #: Role rows deleted because no title carries their keyword under this source.
+    #: Role rows deleted because no title states them any more.
     roles_pruned: int = 0
     awards_written: int = 0
 
@@ -113,6 +118,9 @@ def wipe(conn: sqlite3.Connection) -> int:
             (NAMESPACE, AWARDS_NAMESPACE, SOURCE),
         ).rowcount
         removed += conn.execute("DELETE FROM keyword_roles WHERE source = ?", (SOURCE,)).rowcount
+        removed += conn.execute(
+            "DELETE FROM keyword_role_statements WHERE source = ?", (SOURCE,)
+        ).rowcount
         removed += conn.execute(
             "DELETE FROM enrichment_cursor WHERE namespace = ? AND source = ?",
             (NAMESPACE, SOURCE),
@@ -196,13 +204,14 @@ def enrich_wikidata(
 
 
 def _prune_roles(conn: sqlite3.Connection) -> int:
-    """Delete every wikidata role row whose keyword no title carries under this
-    source. Returns the number of rows removed."""
+    """Delete every wikidata role row no title's statement backs. Returns the
+    number of rows removed."""
     with conn:
         return conn.execute(
-            "DELETE FROM keyword_roles WHERE source = ? AND keyword NOT IN ("
-            "SELECT value FROM enrichment WHERE namespace = ? AND source = ? AND key = ?)",
-            (SOURCE, NAMESPACE, SOURCE, _KEYWORD_KEY),
+            "DELETE FROM keyword_roles WHERE source = ? AND NOT EXISTS ("
+            "SELECT 1 FROM keyword_role_statements s WHERE s.source = keyword_roles.source "
+            "AND s.keyword = keyword_roles.keyword AND s.role = keyword_roles.role)",
+            (SOURCE,),
         ).rowcount
 
 
@@ -223,8 +232,13 @@ def _write_batch(
                 "DELETE FROM enrichment WHERE item_id = ? AND namespace IN (?, ?) AND source = ?",
                 (item_id, NAMESPACE, AWARDS_NAMESPACE, SOURCE),
             )
+            conn.execute(
+                "DELETE FROM keyword_role_statements WHERE item_id = ? AND source = ?",
+                (item_id, SOURCE),
+            )
             upsert_fetched(conn, NAMESPACE, SOURCE, item_id, now_iso)
             keywords: dict[str, None] = {}
+            stating: dict[tuple[str, str], None] = {}
             awards: dict[str, None] = {}
             for prop, label in by_imdb.get(imdb_id, []):
                 label = label.strip()
@@ -243,11 +257,18 @@ def _write_batch(
                 if role is not None:
                     state_role(conn, keyword, role, SOURCE, now_iso)
                     stated.add((keyword, role))
+                    stating[(keyword, role)] = None
             for keyword in keywords:
                 conn.execute(
                     "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) "
                     "VALUES (?, ?, ?, ?, ?, ?)",
                     (item_id, NAMESPACE, SOURCE, _KEYWORD_KEY, keyword, now_iso),
+                )
+            for keyword, role in stating:
+                conn.execute(
+                    "INSERT INTO keyword_role_statements "
+                    "(item_id, keyword, role, source, stated_at) VALUES (?, ?, ?, ?, ?)",
+                    (item_id, keyword, role, SOURCE, now_iso),
                 )
             for award in awards:
                 conn.execute(

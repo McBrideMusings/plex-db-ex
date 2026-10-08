@@ -126,12 +126,13 @@ def _store_one_version_behind(path: Path, plays: int = 3) -> None:
     behind = schema.SCHEMA_VERSION - 1
     conn = sqlite3.connect(path)
     try:
-        script = "BEGIN;\nCREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);\n"
-        # Every migration up to and including v9 is a SQL batch (v10 is the
-        # first Python step); `behind` never reaches v10 in this helper.
-        script += "".join(m for m in schema.MIGRATIONS[:behind] if isinstance(m, str))
-        script += f"INSERT INTO schema_version (version) VALUES ({behind});\nCOMMIT;\n"
-        conn.executescript(script)
+        for migration in schema.MIGRATIONS[:behind]:
+            if isinstance(migration, str):
+                conn.executescript(migration)
+            else:
+                migration(conn)
+        conn.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
+        conn.execute("INSERT INTO schema_version (version) VALUES (?)", (behind,))
         conn.execute("INSERT INTO items (item_id, type, title) VALUES ('imdb:tt1', 'movie', 'A')")
         for n in range(plays):
             conn.execute(
