@@ -731,6 +731,120 @@ DELETE FROM enrichment_cursor WHERE namespace = 'keywords' AND source = 'wikidat
 """
 
 
+#: Version 17 — keywords are folded plurals, not Snowball stems, derived from the
+#: raw spellings `keyword_surfaces` keeps (ADR-0016).
+#:
+#: `enrichment` held only stems, so each row's raw spelling has to be recovered
+#: from `keyword_forms`. A stem whose spellings all normalize to one new form
+#: (`christma` ← Christmas) takes that form's shortest spelling as its surface.
+#: A stem whose spellings now normalize apart (`anim` ← animal, animation,
+#: anime) cannot say which one each row came from, and neither can a stem with
+#: no spelling recorded at all: its rows keep the stem itself as their surface,
+#: and the source's cursor for that title is deleted,
+#: so the next sweep fetches the title again and replaces them with what the
+#: source really sent. Then every keyword row is re-derived (`rederive_keywords`),
+#: and the rows keyed on a keyword — pair, role, role-decision and
+#: role-statement verdicts — move to the new form where the stem maps to exactly
+#: one; the rest stay until the prune step finds their keyword gone.
+#:
+#: Re-deriving can merge two stems into one form on a title, so `enrichment` may
+#: shrink, by exactly the count this returns as a declared shrink.
+def _V17(conn: sqlite3.Connection) -> DeclaredShrinks:
+    conn.execute(
+        """
+        CREATE TABLE keyword_surfaces (
+            item_id    TEXT NOT NULL REFERENCES items(item_id) ON DELETE CASCADE,
+            source     TEXT NOT NULL,
+            surface    TEXT NOT NULL,
+            rank       INTEGER,
+            spoiler    INTEGER NOT NULL CHECK (spoiler IN (0, 1)),
+            fetched_at TEXT NOT NULL,
+            PRIMARY KEY (item_id, source, surface)
+        )
+        """
+    )
+    forms: dict[str, list[str]] = {}
+    for surface, stem in conn.execute("SELECT surface, keyword FROM keyword_forms"):
+        forms.setdefault(stem, []).append(surface)
+    # Each stem's new form when every spelling of it lands on one, with the
+    # shortest such spelling to stand in as the surface; None when they split.
+    moved: dict[str, tuple[str, str] | None] = {}
+    for stem, surfaces in forms.items():
+        targets = {keywords.normalize_keyword(s) for s in surfaces} - {""}
+        moved[stem] = (
+            (targets.pop(), min(surfaces, key=lambda s: (len(s), s))) if len(targets) == 1 else None
+        )
+
+    refetch: set[tuple[str, str]] = set()
+    surfaces_rows = []
+    keyword_rows = conn.execute(
+        "SELECT item_id, source, key, value, rank, fetched_at FROM enrichment "
+        "WHERE namespace = ? AND key IN (?, ?)",
+        (keywords.NAMESPACE, keywords.KEYWORD_KEY, keywords.SPOILER_KEY),
+    ).fetchall()
+    for item_id, source, key, stem, rank, fetched_at in keyword_rows:
+        target = moved.get(stem)
+        if target is None:
+            refetch.add((item_id, source))
+        surface = stem if target is None else target[1]
+        surfaces_rows.append(
+            (item_id, source, surface, rank, int(key == keywords.SPOILER_KEY), fetched_at)
+        )
+    conn.executemany(
+        "INSERT INTO keyword_surfaces (item_id, source, surface, rank, spoiler, fetched_at) "
+        "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (item_id, source, surface) DO UPDATE SET "
+        "rank = max(coalesce(rank, excluded.rank), coalesce(excluded.rank, rank)), "
+        "spoiler = max(spoiler, excluded.spoiler), "
+        "fetched_at = max(fetched_at, excluded.fetched_at)",
+        surfaces_rows,
+    )
+    conn.executemany(
+        "DELETE FROM enrichment_cursor WHERE item_id = ? AND namespace = ? AND source = ?",
+        [(item_id, keywords.NAMESPACE, source) for item_id, source in sorted(refetch)],
+    )
+
+    other_rows = conn.execute("SELECT COUNT(*) FROM enrichment").fetchone()[0] - len(keyword_rows)
+    written = keywords.rederive_keywords(conn)
+
+    rename = {stem: target[0] for stem, target in moved.items() if target and target[0] != stem}
+    _rekey(conn, rename)
+    return {"enrichment": other_rows + written}
+
+
+def _rekey(conn: sqlite3.Connection, rename: dict[str, str]) -> None:
+    """Move every verdict row keyed on a renamed keyword to its new name. Where
+    two rows land on one key, the first kept wins; a pair whose two keywords
+    land on one name is no pair and is dropped."""
+    conn.execute("CREATE TEMP TABLE v17_rename (old TEXT PRIMARY KEY, new TEXT NOT NULL)")
+    conn.executemany("INSERT INTO v17_rename VALUES (?, ?)", rename.items())
+    new = "coalesce((SELECT new FROM v17_rename WHERE old = {col}), {col})"
+    for table, cols in (
+        ("keyword_roles", ("keyword",)),
+        ("keyword_role_decisions", ("keyword",)),
+        ("keyword_role_statements", ("keyword",)),
+    ):
+        all_cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
+        select = ", ".join(new.format(col=c) if c in cols else c for c in all_cols)
+        conn.execute(f"CREATE TEMP TABLE v17_{table} AS SELECT {select} FROM {table}")
+        conn.execute(f"DELETE FROM {table}")
+        conn.execute(f"INSERT OR IGNORE INTO {table} SELECT * FROM v17_{table}")
+        conn.execute(f"DROP TABLE v17_{table}")
+    all_cols = [r[1] for r in conn.execute("PRAGMA table_info(keyword_pairs)")]
+    a, b = new.format(col="keyword_a"), new.format(col="keyword_b")
+    rest = ", ".join(c for c in all_cols if c not in ("keyword_a", "keyword_b"))
+    conn.execute(
+        f"CREATE TEMP TABLE v17_pairs AS SELECT min({a}, {b}) AS keyword_a, "
+        f"max({a}, {b}) AS keyword_b, {rest} FROM keyword_pairs"
+    )
+    conn.execute("DELETE FROM keyword_pairs")
+    conn.execute(
+        f"INSERT OR IGNORE INTO keyword_pairs (keyword_a, keyword_b, {rest}) "
+        f"SELECT keyword_a, keyword_b, {rest} FROM v17_pairs WHERE keyword_a < keyword_b"
+    )
+    conn.execute("DROP TABLE v17_pairs")
+    conn.execute("DROP TABLE v17_rename")
+
+
 #: Append-only. Index i takes the store from version i to version i+1.
 MIGRATIONS: tuple[Migration, ...] = (
     _V1,
@@ -749,6 +863,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     _V14,
     _V15,
     _V16,
+    _V17,
 )
 
 #: The version a store is at once every migration has been applied.

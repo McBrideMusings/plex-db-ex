@@ -24,6 +24,7 @@ V11_TABLES = {"tag_network", "tag_network_edge", "tag_network_state"}
 V12_TABLES = {"keyword_pairs"}
 V14_TABLES = {"keyword_roles", "keyword_role_decisions"}
 V16_TABLES = {"keyword_role_statements"}
+V17_TABLES = {"keyword_surfaces"}
 #: V4 adds no new table — it only alters the existing `plays` table and adds
 #: an index (issue #9).
 
@@ -186,6 +187,7 @@ def test_a_current_store_carries_every_migrations_tables_and_nothing_else(
         | V12_TABLES
         | V14_TABLES
         | V16_TABLES
+        | V17_TABLES
         | {"reader_shape"}
         | {"schema_version"}
     )
@@ -910,6 +912,79 @@ def test_v16_makes_every_wikidata_title_due_and_keeps_its_rows(tmp_path: Path) -
         cursors = conn.execute("SELECT source FROM enrichment_cursor").fetchall()
         assert [r[0] for r in cursors] == ["tmdb"]
         assert conn.execute("SELECT value FROM enrichment").fetchone()[0] == "pari"
+
+
+def test_v17_renames_a_stem_with_one_new_form_and_refetches_one_that_splits(
+    tmp_path: Path,
+) -> None:
+    """`christma` has one spelling, so it becomes `christmas` and its pair moves
+    with it; `anim` was both Animals and Anime, so its row stays and its title is
+    fetched again. Nothing else is lost."""
+    store = tmp_path / "plexdb.db"
+    _store_at(store, 16)
+    at = "2026-10-01T00:00:00Z"
+    conn = sqlite3.connect(store)
+    try:
+        conn.executemany(
+            "INSERT INTO items (item_id, type, title) VALUES (?, 'movie', ?)",
+            [("imdb:tt1", "Elf"), ("imdb:tt2", "Akira")],
+        )
+        conn.executemany(
+            "INSERT INTO keyword_forms (surface, keyword) VALUES (?, ?)",
+            [
+                ("Christmas", "christma"),
+                ("Christmas film", "christma film"),
+                ("Animals", "anim"),
+                ("Anime", "anim"),
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) "
+            "VALUES (?, 'keywords', ?, 'keyword', ?, ?)",
+            [
+                ("imdb:tt1", "tmdb", "christma", at),
+                ("imdb:tt1", "wikidata", "christma film", at),
+                ("imdb:tt2", "tmdb", "anim", at),
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO enrichment_cursor (item_id, namespace, source, key, fetched_at) "
+            "VALUES (?, 'keywords', ?, 'fetched', ?)",
+            [("imdb:tt1", "tmdb", at), ("imdb:tt2", "tmdb", at)],
+        )
+        conn.execute(
+            "INSERT INTO keyword_pairs (keyword_a, keyword_b, jev_score, jev_model, judged_at) "
+            "VALUES ('christma', 'christma film', 0.09, 'jev-1', ?)",
+            (at,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = migrate(store, tmp_path / "backups")
+
+    assert (result.was, result.now) == (16, schema.SCHEMA_VERSION)
+    assert result.counts_after == result.counts_before
+    with open_readonly(store) as conn:
+        values = {tuple(r) for r in conn.execute("SELECT item_id, value FROM enrichment")}
+        assert values == {
+            ("imdb:tt1", "christmas"),
+            ("imdb:tt1", "christmas film"),
+            ("imdb:tt2", "anim"),
+        }
+        cursors = [r[0] for r in conn.execute("SELECT item_id FROM enrichment_cursor")]
+        assert cursors == ["imdb:tt1"]
+        pairs = [tuple(r) for r in conn.execute("SELECT keyword_a, keyword_b FROM keyword_pairs")]
+        assert pairs == [("christmas", "christmas film")]
+        forms = dict(conn.execute("SELECT surface, keyword FROM keyword_forms").fetchall())
+        assert forms["Christmas"] == "christmas"
+        assert forms["Anime"] == "anime" and forms["Animals"] == "animal"
+        surfaces = {tuple(r) for r in conn.execute("SELECT item_id, surface FROM keyword_surfaces")}
+        assert surfaces == {
+            ("imdb:tt1", "Christmas"),
+            ("imdb:tt1", "Christmas film"),
+            ("imdb:tt2", "anim"),
+        }
 
 
 def test_keyword_roles_holds_a_stated_role_a_score_or_a_refusal_for_the_closed_role_set(

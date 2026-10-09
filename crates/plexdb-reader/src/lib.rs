@@ -40,7 +40,7 @@
 //! Keywords live in the one `keywords` namespace, whatever source wrote them
 //! (ADR-0016). [`Reader::keyword_for_surface`] and
 //! [`Reader::surfaces_for_keyword`] read `keyword_forms`, the store's map
-//! between raw spellings and the stemmed form it keeps. Every read that returns
+//! between raw spellings and the normalized form it keeps. Every read that returns
 //! enrichment returns each `(key, value)` once per title even when several
 //! sources carry it, and `source` never reaches a caller.
 //!
@@ -221,7 +221,7 @@ impl Reader {
     ///
     /// `surface` is lowercased, trimmed and its whitespace runs collapsed to one
     /// space, then looked up in `keyword_forms`. **Nothing else happens here, and
-    /// in particular no stemming**: the stored keywords are stemmed by the
+    /// in particular no plural folding**: the stored keywords are normalized by the
     /// Python writer and only it (ADR-0016), so `Heists` resolves because the
     /// writer recorded that spelling, not because this crate can derive `heist`.
     /// `Bank-Heist` is likewise found only when `bank-heist` was recorded.

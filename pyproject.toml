@@ -10,7 +10,7 @@ dependencies = [
     "scikit-learn>=1.5",
     "scipy>=1.13",
     "umap-learn>=0.5.12",
-    "snowballstemmer>=3.1.1",
+    "simplemma>=2.0.0",
 ]
 
 [project.scripts]
@@ -48,10 +48,4 @@ testpaths = ["tests"]
 # that calls them, through a handful of documented functions.
 [[tool.mypy.overrides]]
 module = ["sklearn.*", "scipy.*", "umap.*"]
-ignore_missing_imports = true
-
-# snowballstemmer ships no type information either; keywords.py is the one place
-# that calls it.
-[[tool.mypy.overrides]]
-module = ["snowballstemmer.*"]
 ignore_missing_imports = true

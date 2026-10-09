@@ -115,10 +115,22 @@ CREATE TABLE enrichment (
 );
 
 -- Every raw keyword spelling a source has ever written, mapped to the
--- normalized-and-stemmed value stored above it.
+-- normalized value stored above it.
 CREATE TABLE keyword_forms (
     surface TEXT PRIMARY KEY,
     keyword TEXT NOT NULL
+);
+
+-- Each keyword exactly as a source sent it for a title (v17). The keyword
+-- rows in `enrichment` are derived from these.
+CREATE TABLE keyword_surfaces (
+    item_id    TEXT NOT NULL REFERENCES items(item_id) ON DELETE CASCADE,
+    source     TEXT NOT NULL,
+    surface    TEXT NOT NULL,
+    rank       INTEGER,
+    spoiler    INTEGER NOT NULL CHECK (spoiler IN (0, 1)),
+    fetched_at TEXT NOT NULL,
+    PRIMARY KEY (item_id, source, surface)
 );
 ```
 
@@ -131,7 +143,7 @@ Every keyword-bearing writer now shares the namespace `keywords` and scopes its 
 `WHERE namespace = 'keywords' AND source = <itself>`, so a keyword two sources both list on an item
 survives either one's refresh alone.
 
-**Every keyword is normalized and stemmed before it lands here** (`plexdb/keywords.py`): lowercase;
+**Every keyword is normalized before it lands here** (`plexdb/keywords.py`): lowercase;
 `’` becomes `'`; whitespace and every Unicode dash or connector character (categories `Pd` and `Pc`:
 `-`, `‑`, `–`, `—`, `_`) split words; each word loses the punctuation at its start and end (any
 Unicode `P*` character except `#` and `%`, so `quirky,`, `(soccer)` and `st.` become `quirky`,
@@ -141,19 +153,24 @@ combining mark (category `M*`) sitting on that punctuation or leading the word w
 sit on — so `heists` followed by a zero-width space and a comma becomes `heist`, and `café.` with an
 acute accent on the full stop becomes `café`. A format character inside a word stays, such as the
 zero-width non-joiner in Persian `کتاب‌ها`; words are joined with one
-space and each is run through Snowball's English stemmer. Punctuation inside a word stays (`9/11`,
-`u.s`), and a symbol such as `+` is not punctuation. A surface left with no word (`&`, `...`) is no
-keyword: no writer stores it and `keyword_forms` gets no row for it. `Heists`, `heist`, `bank-heist`/`bank heist`
-and Letterboxd's `Dreamlike, quirky` beside a plain `dreamlike quirky` each resolve to one stored
+space, and a word ending in "s" becomes its singular — simplemma's English lemma, taken only when it
+is shorter than the word — unless it is in `keywords.NEVER_FOLD` (`mars`, `alps`, `wales`, `las`,
+`arms`, `states`, …). No other inflection changes: `christmas`, `boxing`, `murderer` and `racing`
+stay themselves. Punctuation inside a word stays (`9/11`, `u.s`), and a symbol such as `+` is not
+punctuation. A surface left with no word (`&`, `...`) is no keyword: no writer stores a row for it
+and `keyword_forms` gets no row for it. `Heists`, `heist`, `bank-heist`/`bank heist` and
+Letterboxd's `Dreamlike, quirky` beside a plain `dreamlike quirky` each resolve to one stored
 value, so a consumer scoring by keyword-cosine sees one confirmed signal instead of unrelated
 near-misses. `keyword_forms` is what lets a reader still show the spelling a source actually used —
 every keyword write upserts a row mapping its raw `surface` to the `keyword` value stored in
-`enrichment`, overwriting the mapping a surface had under an earlier rule.
+`enrichment`.
 
-A change to this rule reaches the store one title at a time: a source rewrites a title's keyword
-rows, and the `keyword_forms` rows for the surfaces it saw, only when that title is next fetched
-(45 days after its last fetch). Until then a title fetched under the earlier rule keeps that rule's
-value, so a reader can see both values for one surface across titles. `keyword_pairs`,
+**The raw spellings are the facts; the keyword rows are derived from them.** A writer replaces a
+title's `keyword_surfaces` rows for its source, one per distinct spelling (two copies keep the
+higher rank, and are a spoiler if either is), and the `enrichment` rows follow: one per stored
+value, with the highest rank, the newest `fetched_at`, and key `spoiler_keyword` when any spelling
+that folded into it is a spoiler. A change to this rule is a migration that re-derives every
+keyword row from `keyword_surfaces` (`keywords.rederive_keywords`) — nothing is fetched. `keyword_pairs`,
 `keyword_roles` and `keyword_role_decisions` rows are keyed on the stored value. `plexdb
 prune-keyword-verdicts` deletes every such row keyed on a value no `enrichment` row in namespace
 `keywords` carries under key `keyword` or `spoiler_keyword`, after the keyword writers and before the judges in each sweep, so a value a
@@ -210,11 +227,11 @@ own GUIDs derive the contested id keeps it, the other one moves off.
 
 | Namespace | Source | Writer | Keys |
 |---|---|---|---|
-| `keywords` | `tmdb` | `plexdb enrich-tmdb-keywords` | `keyword`, one row per normalized-and-stemmed keyword, `value` is the stored keyword text (see `keyword_forms` above for the raw spelling). Nothing else. Only `items.type` `movie` and `show` are enriched — TMDB has no keywords endpoint for an episode. |
+| `keywords` | `tmdb` | `plexdb enrich-tmdb-keywords` | `keyword`, one row per normalized keyword, `value` is the stored keyword text (see `keyword_forms` above for the raw spelling). Nothing else. Only `items.type` `movie` and `show` are enriched — TMDB has no keywords endpoint for an episode. |
 | `keywords` | `wikidata` | `plexdb enrich-wikidata` | `keyword`, stored the same way: the English labels of the title's Wikidata narrative location (P840), set in period (P2408), main subject (P921) and genre (P136). Movies and shows with an `imdb` external id only. A P840 keyword also gets a `region` row in `keyword_roles`, a P2408 keyword an `era` row, and the title a matching row in `keyword_role_statements`. |
 | `keywords` | `anilist` | `plexdb enrich-anilist` | `keyword`, stored the same way: the title's AniList tags, with AniList's 0–100 rank (the share of voters who agree the tag applies) in `rank`, verbatim. `spoiler_keyword`, the same for a tag AniList flags `isMediaSpoiler` or `isGeneralSpoiler`, so a reader of key `keyword` never sees a spoiler. Anime movies and shows only, found through Fribb's mapping (see [AniList](#anilist-tags-and-roles) below). |
 | `keywords` | `letterboxd` | `plexdb enrich-letterboxd` | `keyword`, stored the same way: every theme and mini-theme label in the Themes section of the film's Letterboxd page (up to about seven — the page shows a subset), with `rank` NULL, because Letterboxd ranks nothing. No `keyword_roles` row. Movies with a `tmdb` external id only (see [Letterboxd themes](#letterboxd-themes) below). |
-| `awards` | `wikidata` | `plexdb enrich-wikidata` | `award`, one row per English label of the title's award received (P166), stored verbatim — not normalized or stemmed, and not a keyword. |
+| `awards` | `wikidata` | `plexdb enrich-wikidata` | `award`, one row per English label of the title's award received (P166), stored verbatim — not normalized, and not a keyword. |
 | `ratings` | `mdblist` | `plexdb enrich-mdblist-ratings` | One key per site MDBList relays — `imdb`, `tmdb`, `trakt`, `letterboxd`, `tomatoes` (Rotten Tomatoes critics), `popcorn` (Rotten Tomatoes audience), `metacritic`, `metacriticuser`, `rogerebert`, `myanimelist` — whose `value` is the site's own number on the site's own scale, as MDBList's JSON carried it (`7.9` from IMDb, `84` from Metacritic, `4.0` from RogerEbert). `<site>_votes` beside it holds the vote count where one is given. A site with a null value writes no row, its votes included. Nothing is converted to one scale or combined (ADR-0012); MDBList's own 0–100 `score` is not stored. `rank` NULL. Movies and shows with an `imdb` external id only (see [MDBList ratings](#mdblist-ratings) below). |
 
 **A reader rolling up keyword rows into a count or a set reads `enrichment` through
@@ -815,8 +832,8 @@ keyword_pairs  (keyword_a, keyword_b) PK, jev_score REAL, jev_model TEXT, judged
                decision TEXT, decided_at TEXT, jev_error TEXT
 ```
 
-`keyword_a` and `keyword_b` are values as `enrichment.value` holds them — normalized and
-stemmed — with `keyword_a < keyword_b`, so a pair is stored once whichever way round it was
+`keyword_a` and `keyword_b` are values as `enrichment.value` holds them — normalized — with
+`keyword_a < keyword_b`, so a pair is stored once whichever way round it was
 asked. `jev_score` is Jev's answer to "do these two mean the same thing", 0 to 1, stored as Jev
 gave it, with the model that gave it in `jev_model`; a pair Jev said no to is stored too, so the
 writer never asks about it twice. `judged_at` is UTC. A pair Jev refused with a 400 or 422 has
@@ -932,7 +949,7 @@ keyword_role_decisions  (keyword, role) PK, decision TEXT, decided_at TEXT
 | `theme` | what it is about — `grief`, `reveng` |
 | `character_trait` | what its people are like — `antihero`, `genius` |
 
-`keyword` is a value as `enrichment.value` holds it, normalized and stemmed. A row in
+`keyword` is a value as `enrichment.value` holds it, normalized. A row in
 `keyword_roles` is one of three things:
 
 - **A role a source states** — Wikidata's narrative location is a `region`. `score`, `model` and
@@ -1032,10 +1049,26 @@ writes them, instead of its prune deleting every Wikidata role. A title's Wikida
 place until that re-fetch replaces them. A run that fails partway leaves the roles of the titles it
 did not reach pruned until a later run fetches them.
 
+## Version 17 — keywords are folded plurals derived from raw spellings
+
+`keyword_surfaces` is added (see Version 1), and every keyword value changes from a Snowball stem to
+the rule above: `christma` becomes `christmas`, `documentari film` becomes `documentary film`.
+`enrichment` held only stems, so the migration recovers each row's spelling from `keyword_forms`.
+A stem whose spellings all normalize to one value takes that value's shortest spelling. A stem
+whose spellings now normalize apart (`anim` ← animal, animation, anime) cannot say which one each
+row came from, so its rows keep the stem as their surface and value, and the source's
+`enrichment_cursor` row for that title is deleted: the next sweep fetches the title again and
+replaces them with what the source sent. On the 2026-10-09 store that is 8,309 TMDB titles and 407
+AniList titles. `keyword_pairs`, `keyword_roles`, `keyword_role_decisions` and
+`keyword_role_statements` rows move to the new value where the stem maps to exactly one; the rest
+stay until `prune-keyword-verdicts` finds their value gone. Two stems that land on one value on the
+same title merge, so `enrichment` may shrink by the count the migration declares. Values are still
+looked up by spelling through `keyword_forms`, so `reader_shape` stays 10.
+
 ## Reading the store to build collections
 
 Each query below was run against a migrated copy of the real store. Parameters are written as
-literals; swap in your own. Keyword values are the stored, stemmed ones — look a spelling up in
+literals; swap in your own. Keyword values are the stored, normalized ones — look a spelling up in
 `keyword_forms` first (`SELECT keyword FROM keyword_forms WHERE surface = 'Los Angeles'`).
 
 **Titles carrying every keyword in a set.** The `HAVING` count is the set's size.

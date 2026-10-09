@@ -41,7 +41,7 @@ from .errors import TMDbError
 # the exact same function/constant object rather than a drifted copy — see
 # test_staleness.py and test_tmdb_common.py.
 from .keywords import NAMESPACE as NAMESPACE
-from .keywords import upsert_keyword_form
+from .keywords import RawKeyword, write_title_keywords
 from .staleness import DEFAULT_STALE_DAYS as DEFAULT_STALE_DAYS
 from .staleness import is_stale as is_stale
 from .tmdb_client import TMDbSource
@@ -53,7 +53,6 @@ from .tmdb_common import media_type_for as media_type_for
 #: under `SOURCE`; another keyword source writes its own rows under this same
 #: `NAMESPACE`, tagged with its own `source`.
 SOURCE = "tmdb"
-_KEYWORD_KEY = "keyword"
 
 
 @dataclass
@@ -94,6 +93,7 @@ def wipe_namespace(conn: sqlite3.Connection) -> int:
         removed = conn.execute(
             "DELETE FROM enrichment WHERE namespace = ? AND source = ?", (NAMESPACE, SOURCE)
         ).rowcount
+        conn.execute("DELETE FROM keyword_surfaces WHERE source = ?", (SOURCE,))
         removed += delete_cursors(conn, NAMESPACE, SOURCE)
         return removed
 
@@ -176,37 +176,15 @@ def enrich_tmdb_keywords(
         consecutive_failures = 0
 
         with conn:
-            # Both tables, in one transaction: the cursor and the keywords it
-            # vouches for are replaced together or not at all. Split across two
-            # transactions, an interrupted sweep could leave a cursor saying
-            # "fetched" over keywords that had already been deleted.
-            conn.execute(
-                "DELETE FROM enrichment WHERE item_id = ? AND namespace = ? AND source = ?",
-                (item_id, NAMESPACE, SOURCE),
-            )
+            # The cursor and the keywords it vouches for are replaced in one
+            # transaction, together or not at all. Split across two, an
+            # interrupted sweep could leave a cursor saying "fetched" over
+            # keywords that had already been deleted.
             write_fetched(conn, NAMESPACE, SOURCE, item_id, now_iso)
-            # Every raw spelling TMDB returned is recorded in `keyword_forms`
-            # even when two of them stem to the same stored value — `heists`
-            # and `heist` are both worth remembering as surfaces TMDB used.
-            # The stored *values* are then deduped (`dict.fromkeys` keeps
-            # first-seen order) before the enrichment insert, since the row's
-            # primary key includes `value` and an unguarded duplicate there
-            # would raise mid-insert. A spelling that is all punctuation (`&`)
-            # normalizes to `""` and is no keyword, so it is dropped here.
-            stored_values = [
-                value
-                for value in dict.fromkeys(
-                    upsert_keyword_form(conn, keyword) for keyword in keywords
-                )
-                if value
-            ]
-            for value in stored_values:
-                conn.execute(
-                    "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    (item_id, NAMESPACE, SOURCE, _KEYWORD_KEY, value, now_iso),
-                )
+            stored = write_title_keywords(
+                conn, item_id, SOURCE, (RawKeyword(k) for k in keywords), now_iso
+            )
         stats.titles_fetched += 1
-        stats.keywords_written += len(stored_values)
+        stats.keywords_written += len(set(stored.values()))
 
     return stats

@@ -47,7 +47,7 @@ from datetime import UTC, datetime, timedelta
 
 from .cursors import delete_cursors, load_fetched, write_fetched
 from .errors import WikidataError
-from .keywords import NAMESPACE, state_role, upsert_keyword_form
+from .keywords import NAMESPACE, RawKeyword, state_role, write_title_keywords
 from .staleness import DEFAULT_STALE_DAYS, is_stale
 from .wikidata_client import (
     AWARD_RECEIVED,
@@ -63,7 +63,6 @@ from .wikidata_client import (
 #: `enrichment_cursor`.
 SOURCE = "wikidata"
 AWARDS_NAMESPACE = "awards"
-_KEYWORD_KEY = "keyword"
 _AWARD_KEY = "award"
 
 #: Properties whose labels become keywords, and the role each one states, if any.
@@ -117,6 +116,7 @@ def wipe(conn: sqlite3.Connection) -> int:
             "DELETE FROM enrichment WHERE namespace IN (?, ?) AND source = ?",
             (NAMESPACE, AWARDS_NAMESPACE, SOURCE),
         ).rowcount
+        conn.execute("DELETE FROM keyword_surfaces WHERE source = ?", (SOURCE,))
         removed += conn.execute("DELETE FROM keyword_roles WHERE source = ?", (SOURCE,)).rowcount
         removed += conn.execute(
             "DELETE FROM keyword_role_statements WHERE source = ?", (SOURCE,)
@@ -226,16 +226,15 @@ def _write_batch(
     with conn:
         for item_id, imdb_id in batch:
             conn.execute(
-                "DELETE FROM enrichment WHERE item_id = ? AND namespace IN (?, ?) AND source = ?",
-                (item_id, NAMESPACE, AWARDS_NAMESPACE, SOURCE),
+                "DELETE FROM enrichment WHERE item_id = ? AND namespace = ? AND source = ?",
+                (item_id, AWARDS_NAMESPACE, SOURCE),
             )
             conn.execute(
                 "DELETE FROM keyword_role_statements WHERE item_id = ? AND source = ?",
                 (item_id, SOURCE),
             )
             write_fetched(conn, NAMESPACE, SOURCE, item_id, now_iso)
-            keywords: dict[str, None] = {}
-            stating: dict[tuple[str, str], None] = {}
+            labels: list[tuple[str, str | None]] = []
             awards: dict[str, None] = {}
             for prop, label in by_imdb.get(imdb_id, []):
                 label = label.strip()
@@ -243,24 +242,19 @@ def _write_batch(
                     continue
                 if prop == AWARD_RECEIVED:
                     awards[label] = None
-                    continue
-                if prop not in KEYWORD_PROPERTIES:
-                    continue
-                keyword = upsert_keyword_form(conn, label)
-                if not keyword:
-                    continue
-                keywords[keyword] = None
-                role = KEYWORD_PROPERTIES[prop]
-                if role is not None:
+                elif prop in KEYWORD_PROPERTIES:
+                    labels.append((label, KEYWORD_PROPERTIES[prop]))
+            stored = write_title_keywords(
+                conn, item_id, SOURCE, (RawKeyword(label) for label, _ in labels), now_iso
+            )
+            stating: dict[tuple[str, str], None] = {}
+            for label, role in labels:
+                keyword = stored.get(label)
+                if keyword is not None and role is not None:
                     state_role(conn, keyword, role, SOURCE, now_iso)
                     stated.add((keyword, role))
                     stating[(keyword, role)] = None
-            for keyword in keywords:
-                conn.execute(
-                    "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    (item_id, NAMESPACE, SOURCE, _KEYWORD_KEY, keyword, now_iso),
-                )
+            keywords = set(stored.values())
             for keyword, role in stating:
                 conn.execute(
                     "INSERT INTO keyword_role_statements "

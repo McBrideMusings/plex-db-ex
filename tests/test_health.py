@@ -38,10 +38,11 @@ NOW = datetime(2026, 8, 12, 12, 0, 0, tzinfo=UTC)
 def _store_at(path: Path, version: int) -> None:
     """Build a store at exactly `version` by applying only that many migrations."""
     with open_store(path, create=True) as conn:
-        # Every migration up to and including v9 is a SQL batch (v10 is the
-        # first Python step); this helper is never called at v10 itself.
-        script = "".join(m for m in schema.MIGRATIONS[:version] if isinstance(m, str))
-        conn.executescript(script)
+        for migration in schema.MIGRATIONS[:version]:
+            if isinstance(migration, str):
+                conn.executescript(migration)
+            else:
+                migration(conn)
         conn.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
         conn.execute("DELETE FROM schema_version")
         conn.execute("INSERT INTO schema_version (version) VALUES (?)", (version,))

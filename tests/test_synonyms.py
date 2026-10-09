@@ -42,6 +42,9 @@ VECTORS = {
     "zebra": [0.0, 0.0, 1.0],
 }
 HEIST, BANK, ROBBERY, PRISON, JAIL, ZEBRA = (normalize_keyword(s) for s in VECTORS)
+#: A spelling whose stored form differs from it, which the fake embedder also
+#: knows, embedded like "robbery".
+EXTRA_VECTORS = {"Robberies": VECTORS["robbery"]}
 MODEL = "jev-test-1.0"
 
 
@@ -56,7 +59,7 @@ class FakeEmbedder:
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         self.calls.append(texts)
-        return [VECTORS[text] for text in texts]
+        return [VECTORS[text] if text in VECTORS else EXTRA_VECTORS[text] for text in texts]
 
 
 class FakeJudge:
@@ -140,16 +143,16 @@ def test_six_keywords_yield_four_pairs_stored_as_jev_answered_and_a_rerun_adds_n
     assert len(_pair_rows(store)) == 4
 
 
-def test_jev_is_asked_about_the_readable_surface_not_the_stem(tmp_path: Path) -> None:
-    store = _store(tmp_path, ["robbery", "bank robbery"])
+def test_jev_is_asked_about_the_readable_surface_not_the_stored_form(tmp_path: Path) -> None:
+    store = _store(tmp_path, ["Robberies", "bank robbery"])
     judge = FakeJudge()
     embedder = FakeEmbedder()
 
     _run(store, judge, embedder)
 
-    assert normalize_keyword("robbery") == "robberi"
-    assert [sorted(call) for call in embedder.calls] == [["bank robbery", "robbery"]]
-    assert [frozenset(pair) for pair in judge.asked] == [frozenset({"bank robbery", "robbery"})]
+    assert normalize_keyword("Robberies") == "robbery"
+    assert [sorted(call) for call in embedder.calls] == [["Robberies", "bank robbery"]]
+    assert [frozenset(pair) for pair in judge.asked] == [frozenset({"Robberies", "bank robbery"})]
 
 
 def test_a_pair_that_has_a_row_keeps_its_decision_and_is_not_asked_again(tmp_path: Path) -> None:

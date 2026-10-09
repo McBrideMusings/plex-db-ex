@@ -64,18 +64,18 @@ def test_narrative_locations_become_stemmed_keywords_with_a_region_role(conn: An
     enrich_wikidata(conn, RecordedWikidataSource())
 
     keywords = _values(conn, INCEPTION, "keywords")
-    assert {"los angel", "pari", "australia"} <= keywords
+    assert {"los angeles", "paris", "australia"} <= keywords
     assert "heist film" in keywords  # a P136 genre, no role
-    assert {"los angel", "pari", "australia"} <= _roles(conn)["region"]
+    assert {"los angeles", "paris", "australia"} <= _roles(conn)["region"]
     assert "heist film" not in set().union(*_roles(conn).values())
     surfaces = dict(conn.execute("SELECT surface, keyword FROM keyword_forms").fetchall())
-    assert surfaces["Los Angeles"] == "los angel"
+    assert surfaces["Los Angeles"] == "los angeles"
 
 
 def test_a_period_states_an_era_and_an_award_lands_in_its_own_namespace(conn: Any) -> None:
     enrich_wikidata(conn, RecordedWikidataSource())
 
-    assert {"1940s", "world war ii", "20th centuri"} <= _roles(conn)["era"]
+    assert {"1940s", "world war ii", "20th century"} <= _roles(conn)["era"]
     assert "Academy Award for Best Director" in _values(conn, RYAN, "awards")
     # An award is not a keyword.
     assert not any("award" in v for v in _values(conn, RYAN, "keywords"))
@@ -168,7 +168,7 @@ def test_a_stale_title_is_asked_again_and_its_rows_replaced(conn: Any) -> None:
     enrich_wikidata(conn, fewer)
 
     assert fewer.calls == [["tt1375666"]]
-    assert _values(conn, INCEPTION, "keywords") == {"pari"}
+    assert _values(conn, INCEPTION, "keywords") == {"paris"}
     assert _values(conn, INCEPTION, "awards") == {"Hugo Award"}
 
 
@@ -176,7 +176,7 @@ def test_a_role_no_title_states_any_more_is_pruned_and_another_sources_kept(conn
     enrich_wikidata(conn, RecordedWikidataSource())
     conn.execute(
         "INSERT INTO keyword_roles (keyword, role, source, score, model, stated_at) "
-        "VALUES ('los angel', 'region', 'jev', 0.9, 'jev-1', '2026-01-01T00:00:00+00:00')"
+        "VALUES ('los angeles', 'region', 'jev', 0.9, 'jev-1', '2026-01-01T00:00:00+00:00')"
     )
     conn.execute(
         "UPDATE enrichment_cursor SET fetched_at = '2020-01-01T00:00:00+00:00' WHERE item_id = ?",
@@ -192,14 +192,14 @@ def test_a_role_no_title_states_any_more_is_pruned_and_another_sources_kept(conn
     stats = enrich_wikidata(conn, moved)
 
     regions = _roles(conn)["region"]
-    assert "pari" in regions
-    assert "los angel" not in regions
+    assert "paris" in regions
+    assert "los angeles" not in regions
     # Still a keyword, but no title states it as a place any more.
     assert "australia" in _values(conn, INCEPTION, "keywords")
     assert "australia" not in regions
     assert stats.roles_pruned == before - sum(len(k) for k in _roles(conn).values()) > 0
     jev = conn.execute("SELECT keyword FROM keyword_roles WHERE source = 'jev'").fetchall()
-    assert [r[0] for r in jev] == ["los angel"]
+    assert [r[0] for r in jev] == ["los angeles"]
 
 
 def test_a_role_one_title_still_states_survives_another_listing_it_as_a_subject(
@@ -211,9 +211,9 @@ def test_a_role_one_title_still_states_survives_another_listing_it_as_a_subject(
 
     enrich_wikidata(conn, both)
 
-    assert _roles(conn)["region"] == {"pari"}
+    assert _roles(conn)["region"] == {"paris"}
     stating = conn.execute(
-        "SELECT item_id, role FROM keyword_role_statements WHERE keyword = 'pari'"
+        "SELECT item_id, role FROM keyword_role_statements WHERE keyword = 'paris'"
     ).fetchall()
     assert [tuple(r) for r in stating] == [(RYAN, "region")]
     # The statement is not a title fact a taste rollup would count.

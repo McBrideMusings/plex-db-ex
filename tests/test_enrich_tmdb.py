@@ -70,11 +70,8 @@ def test_keywords_land_as_enrichment_rows_with_a_fetched_at(tmp_path: Path) -> N
             "WHERE item_id = ? AND namespace = ? AND key = 'keyword' ORDER BY value",
             (MOVIE_ID, NAMESPACE),
         )
-        # Snowball's English stemmer reduces "city" to "citi" — expected, not a
-        # bug: stemming trades a real word for one that collapses with its
-        # plural/inflected forms, which is the whole point of normalizing.
         assert [(r["key"], r["value"]) for r in rows] == [
-            ("keyword", "gotham citi"),
+            ("keyword", "gotham city"),
             ("keyword", "superhero"),
         ]
         for row in rows:

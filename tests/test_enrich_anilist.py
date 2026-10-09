@@ -70,23 +70,23 @@ def _roles(conn: sqlite3.Connection) -> dict[str, set[str]]:
 def test_fmab_stores_alchemy_with_its_rank(conn: Any) -> None:
     enrich_anilist(conn, RecordedAniListSource())
 
-    assert _rows(conn, FMAB)["alchemi"] == ("keyword", 97)
+    assert _rows(conn, FMAB)["alchemy"] == ("keyword", 97)
     surfaces = dict(conn.execute("SELECT surface, keyword FROM keyword_forms").fetchall())
-    assert surfaces["Alchemy"] == "alchemi"
+    assert surfaces["Alchemy"] == "alchemy"
 
 
 def test_a_spoiler_tag_is_stored_under_spoiler_keyword(conn: Any) -> None:
     enrich_anilist(conn, RecordedAniListSource())
 
     rows = _rows(conn, FMAB)
-    assert rows["conspiraci"] == ("spoiler_keyword", 94)
+    assert rows["conspiracy"] == ("spoiler_keyword", 94)
     keyword_values = {
         r[0]
         for r in conn.execute(
             "SELECT value FROM enrichment WHERE item_id = ? AND key = 'keyword'", (FMAB,)
         )
     }
-    assert "conspiraci" not in keyword_values
+    assert "conspiracy" not in keyword_values
 
 
 def test_a_show_spanning_two_entries_merges_their_tags(conn: Any) -> None:
@@ -98,7 +98,7 @@ def test_a_show_spanning_two_entries_merges_their_tags(conn: Any) -> None:
     assert rows["magic"] == ("keyword", 79)  # 75 on the first OVA, 79 on the second
     assert rows["demon"] == ("keyword", 90)
     assert rows["amnesia"] == ("spoiler_keyword", 60)  # only the second carries it
-    assert rows["motorcycl"] == ("keyword", 10)  # only the first carries it
+    assert rows["motorcycle"] == ("keyword", 10)  # only the first carries it
     assert sorted(source.calls[0]) == [300, 1225, 5114]
 
 
@@ -121,12 +121,12 @@ def test_tag_categories_state_roles_through_the_table(conn: Any) -> None:
     stats = enrich_anilist(conn, RecordedAniListSource())
 
     roles = _roles(conn)
-    assert roles["alchemi"] == {"theme"}  # Theme-Fantasy
-    assert roles["militari"] == {"theme"}  # Theme-Other-Organisations, via its parent
+    assert roles["alchemy"] == {"theme"}  # Theme-Fantasy
+    assert roles["military"] == {"theme"}  # Theme-Other-Organisations, via its parent
     assert roles["cyborg"] == {"character_trait"}  # Cast-Traits
-    assert roles["anachron"] == {"era"}  # Setting-Time
+    assert roles["anachronism"] == {"era"}  # Setting-Time
     assert "shounen" not in roles  # Demographic states nothing
-    assert "ensembl cast" not in roles  # Cast-Main Cast states nothing
+    assert "ensemble cast" not in roles  # Cast-Main Cast states nothing
     assert stats.roles_stated == sum(len(r) for r in roles.values())
 
 
@@ -233,7 +233,7 @@ def test_rewipe_removes_only_anilist_rows(conn: Any) -> None:
     enrich_anilist(conn, RecordedAniListSource())
     conn.execute(
         "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) "
-        "VALUES (?, 'keywords', 'tmdb', 'keyword', 'alchemi', '2026-01-01T00:00:00+00:00')",
+        "VALUES (?, 'keywords', 'tmdb', 'keyword', 'alchemy', '2026-01-01T00:00:00+00:00')",
         (FMAB,),
     )
     conn.execute(
@@ -243,7 +243,7 @@ def test_rewipe_removes_only_anilist_rows(conn: Any) -> None:
     )
     conn.execute(
         "INSERT INTO keyword_roles (keyword, role, source, stated_at) "
-        "VALUES ('alchemi', 'theme', 'wikidata', '2026-01-01T00:00:00+00:00')"
+        "VALUES ('alchemy', 'theme', 'wikidata', '2026-01-01T00:00:00+00:00')"
     )
     conn.commit()
 

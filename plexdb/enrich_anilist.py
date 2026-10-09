@@ -48,13 +48,11 @@ from typing import Any
 from .anilist_client import PAGE_SIZE, AniListSource, Tag
 from .cursors import delete_cursors, load_fetched, write_fetched
 from .errors import AniListError
-from .keywords import NAMESPACE, state_role, upsert_keyword_form
+from .keywords import NAMESPACE, RawKeyword, state_role, write_title_keywords
 from .staleness import DEFAULT_STALE_DAYS, is_stale
 
 #: This writer's source name, in `keywords`, `keyword_roles` and `enrichment_cursor`.
 SOURCE = "anilist"
-KEYWORD_KEY = "keyword"
-SPOILER_KEY = "spoiler_keyword"
 
 #: AniList tag category → the role it states. A category matches its own entry
 #: or, failing that, its nearest `-`-separated parent: `Theme-Other-Organisations`
@@ -181,6 +179,7 @@ def wipe(conn: sqlite3.Connection) -> int:
         removed = conn.execute(
             "DELETE FROM enrichment WHERE namespace = ? AND source = ?", (NAMESPACE, SOURCE)
         ).rowcount
+        conn.execute("DELETE FROM keyword_surfaces WHERE source = ?", (SOURCE,))
         removed += conn.execute("DELETE FROM keyword_roles WHERE source = ?", (SOURCE,)).rowcount
         removed += delete_cursors(conn, NAMESPACE, SOURCE)
         return removed
@@ -278,22 +277,6 @@ def _batches(
         yield batch
 
 
-def _delete_title(conn: sqlite3.Connection, item_id: str) -> None:
-    conn.execute(
-        "DELETE FROM enrichment WHERE item_id = ? AND namespace = ? AND source = ?",
-        (item_id, NAMESPACE, SOURCE),
-    )
-
-
-def _higher(a: int | None, b: int | None) -> int | None:
-    """The higher of two ranks, where NULL means unranked rather than zero."""
-    if a is None:
-        return b
-    if b is None:
-        return a
-    return max(a, b)
-
-
 def _write_batch(
     conn: sqlite3.Connection,
     batch: list[tuple[str, list[int]]],
@@ -307,43 +290,30 @@ def _write_batch(
     now_iso = now.isoformat(timespec="seconds")
     with conn:
         for item_id, anilist_ids in batch:
-            _delete_title(conn, item_id)
             write_fetched(conn, NAMESPACE, SOURCE, item_id, now_iso)
-            # Every entry the title maps to, merged per stored keyword: the highest
-            # rank wins, and a keyword is a spoiler if any copy says so.
-            rows: dict[str, tuple[int | None, bool]] = {}
-            for tag in (tag for a in anilist_ids for tag in found.get(a, [])):
-                keyword = upsert_keyword_form(conn, tag.name)
-                if not keyword:
+            # Every entry the title maps to; `write_title_keywords` merges them per
+            # stored keyword: the highest rank wins, and a keyword is a spoiler if
+            # any copy says so.
+            tags = [tag for a in anilist_ids for tag in found.get(a, [])]
+            stored = write_title_keywords(
+                conn,
+                item_id,
+                SOURCE,
+                (RawKeyword(tag.name, tag.rank, tag.spoiler) for tag in tags),
+                now_iso,
+            )
+            spoilers: dict[str, bool] = {}
+            for tag in tags:
+                keyword = stored.get(tag.name.strip())
+                if keyword is None:
                     continue
-                rank, spoiler = tag.rank, tag.spoiler
-                if keyword in rows:
-                    rank = _higher(rank, rows[keyword][0])
-                    spoiler = spoiler or rows[keyword][1]
-                rows[keyword] = (rank, spoiler)
+                spoilers[keyword] = spoilers.get(keyword, False) or tag.spoiler
                 role = role_for(tag.category)
                 if role is not None:
                     state_role(conn, keyword, role, SOURCE, now_iso)
                     stated.add((keyword, role))
-            for keyword, (rank, spoiler) in rows.items():
-                conn.execute(
-                    "INSERT INTO enrichment "
-                    "(item_id, namespace, source, key, value, fetched_at, rank) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        item_id,
-                        NAMESPACE,
-                        SOURCE,
-                        SPOILER_KEY if spoiler else KEYWORD_KEY,
-                        keyword,
-                        now_iso,
-                        rank,
-                    ),
-                )
-                if spoiler:
-                    stats.spoiler_keywords_written += 1
-                else:
-                    stats.keywords_written += 1
+            stats.spoiler_keywords_written += sum(spoilers.values())
+            stats.keywords_written += len(spoilers) - sum(spoilers.values())
             stats.titles_fetched += 1
-            if rows:
+            if spoilers:
                 stats.titles_matched += 1

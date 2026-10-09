@@ -7,26 +7,34 @@ sources can call the same idea `Heists`, `bank-heist`, and `bank heist`; a
 consumer asking "does this item carry heist" should get one answer, not three
 near-misses. `normalize_keyword` is that answer: lowercase, treat whitespace,
 dashes and `_` as word breaks, strip the punctuation at each word's edges, then
-stem each word with the Snowball English algorithm (`snowballstemmer`) so
-`heists`, `heists,` and `heist` land on the same row.
+fold each plural to its singular (simplemma's English lemma, for a word ending
+in "s" only) so `heists`, `heists,` and `heist` land on the same row while
+`christmas`, `boxing` and `murderer` stay the words they are.
 
-Every writer that stores a keyword calls `upsert_keyword_form` rather than
-`normalize_keyword` alone, so `keyword_forms(surface, keyword)` always has an
-entry mapping the raw spelling it saw back to the stored form — the only way a
-reader can show a human "bank heist" instead of the stemmed `bank heist` (or,
-after stemming a plural, a form that is not even a real word on its own).
+A writer stores a title's keywords through `write_title_keywords`, which keeps
+every raw spelling in `keyword_surfaces` and derives the `enrichment` rows from
+them with `normalize_keyword` — so a change to normalization re-derives the
+store (`rederive_keywords`) instead of fetching every title again — and records
+each spelling's stored form in `keyword_forms`, the map a reader uses to show
+a person the spelling a source wrote.
 """
 
 from __future__ import annotations
 
 import sqlite3
 import unicodedata
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
-import snowballstemmer
+import simplemma
 
 #: The source-agnostic namespace every keyword source writes to (ADR-0016).
 NAMESPACE = "keywords"
+
+#: The `enrichment.key` of an ordinary keyword, and of one its source flags as a
+#: spoiler (AniList); a reader that counts a title's keywords reads `KEYWORD_KEY`.
+KEYWORD_KEY = "keyword"
+SPOILER_KEY = "spoiler_keyword"
 
 #: Every role a `keyword_roles` or `keyword_role_decisions` row may carry
 #: (ADR-0019). The v14 migration CHECKs the same set in SQL, and that migration
@@ -34,7 +42,43 @@ NAMESPACE = "keywords"
 #: two to each other.
 ROLES: tuple[str, ...] = ("tone", "era", "region", "theme", "character_trait")
 
-_stemmer = snowballstemmer.stemmer("english")
+#: Words ending in "s" that are not plurals of the word simplemma would fold
+#: them to: proper nouns (`mars`, `alps`, `wales`, `las` of Las Vegas, `cruces`
+#: of Las Cruces), plurals whose meaning differs from the singular (`arms`,
+#: `goods`-style `customs`, `woods`, `falls`, `states`), and abbreviations.
+NEVER_FOLD: frozenset[str] = frozenset(
+    {
+        "aids",
+        "alps",
+        "arms",
+        "cruces",
+        "customs",
+        "falls",
+        "interspecies",
+        "it's",
+        "las",
+        "mars",
+        "ops",
+        "ss",
+        "states",
+        "vis",
+        "wales",
+        "woods",
+    }
+)
+
+
+def _fold_plural(word: str) -> str:
+    """`word`'s singular when it is a plural simplemma knows, else `word`.
+
+    Only a word ending in "s" is looked up, and only a strictly shorter lemma is
+    taken: simplemma also maps verb forms to their base (`racing` → `race`,
+    `opera` → `opus`), which would merge tags that mean different things.
+    """
+    if not word.endswith("s") or word in NEVER_FOLD:
+        return word
+    lemma = simplemma.lemmatize(word, lang="en").lower()
+    return lemma if len(lemma) < len(word) else word
 
 
 #: Punctuation that is part of the word it ends or starts — `c#`, `100%` — and
@@ -55,26 +99,26 @@ def _is_word_break(char: str) -> bool:
 def normalize_keyword(surface: str) -> str:
     """The stored form of one raw keyword spelling.
 
-    Lowercase and turn `’` into `'` (the stemmer strips a possessive `'s` only
-    in the straight form), then whitespace, every dash and `_` break words (so
-    `bank-heist`, `bank‑heist` and `bank_heist` split into two words the same
-    way `bank heist` already does), each word loses the punctuation at its
-    edges (so `quirky,`, `(soccer)` and `st.` stem like `quirky`, `soccer` and
-    `st`, and a lone `&` or `/` drops out) together with any invisible format
-    character (`Cf`, such as a zero-width space) and any combining mark on that
-    punctuation or with no character before it (so `heists` + U+200B + `,`
-    stems like `heists`, and `café.` + U+0301 like `café`), and each word left
-    is stemmed. Punctuation and format characters inside a word stay — `u.s`,
-    `9/11`, `women's`, the U+200C zero-width non-joiner in a Persian plural —
-    as do `#` and `%` at an edge (`c#`, `100%`), and a symbol such as `+` or
-    `$` is not punctuation. A surface with no word left normalizes to `""` —
+    Lowercase and turn `’` into `'` (so `women’s` folds like `women's`), then
+    whitespace, every dash and `_` break words (so `bank-heist`, `bank‑heist`
+    and `bank_heist` split into two words the same way `bank heist` already
+    does), each word loses the punctuation at its edges (so `quirky,`,
+    `(soccer)` and `st.` become `quirky`, `soccer` and `st`, and a lone `&` or
+    `/` drops out) together with any invisible format character (`Cf`, such as
+    a zero-width space) and any combining mark on that punctuation or with no
+    character before it (so `heists` + U+200B + `,` becomes `heist`, and
+    `café.` + U+0301 becomes `café`), and each word left has its plural folded
+    (`_fold_plural`). Punctuation and format characters inside a word stay —
+    `u.s`, `9/11`, the U+200C zero-width non-joiner in a Persian plural — as
+    do `#` and `%` at an edge (`c#`, `100%`), and a symbol such as `+` or `$`
+    is not punctuation. A surface with no word left normalizes to `""` —
     callers writing a keyword row are expected to have already dropped those
     before calling this.
     """
     text = surface.lower().replace("’", "'")
     text = "".join(" " if _is_word_break(char) else char for char in text)
     words = [_strip_edge_punctuation(word) for word in text.split()]
-    return " ".join(_stemmer.stemWords([word for word in words if word]))
+    return " ".join(_fold_plural(word) for word in words if word)
 
 
 def _clusters(word: str) -> list[str]:
@@ -111,8 +155,8 @@ def upsert_keyword_form(conn: sqlite3.Connection, surface: str) -> str:
     `ON CONFLICT ... DO UPDATE` rather than `INSERT OR IGNORE`: the same raw
     spelling always normalizes to the same stored form, so the update is a
     no-op in practice, but it means a change to `normalize_keyword` itself
-    (a stemmer version bump, say) self-heals every surface the next time this
-    source writes it, rather than freezing whatever the first writer saw.
+    self-heals every surface the next time a source writes it, rather than
+    freezing whatever the first writer saw.
 
     A surface that normalizes to `""` (`&`, `...`) is no keyword: nothing is
     recorded, and the caller drops the `""` it gets back.
@@ -126,6 +170,150 @@ def upsert_keyword_form(conn: sqlite3.Connection, surface: str) -> str:
         (surface, keyword),
     )
     return keyword
+
+
+@dataclass(frozen=True)
+class RawKeyword:
+    """One keyword exactly as a source sent it for one title."""
+
+    surface: str
+    #: The source's own rank for the keyword on this title, higher first; NULL
+    #: when the source ranks nothing.
+    rank: int | None = None
+    #: The source flags the keyword as a spoiler (AniList).
+    spoiler: bool = False
+
+
+def _higher(a: int | None, b: int | None) -> int | None:
+    """The higher of two ranks, where None means unranked rather than zero."""
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return max(a, b)
+
+
+def write_title_keywords(
+    conn: sqlite3.Connection,
+    item_id: str,
+    source: str,
+    raw: Iterable[RawKeyword],
+    fetched_at: str,
+) -> dict[str, str]:
+    """Replace `source`'s keywords on `item_id` with `raw`, and return each kept
+    surface's stored form.
+
+    The raw spellings go into `keyword_surfaces`, one row per distinct surface
+    (two copies of one surface keep the higher rank, and are a spoiler if
+    either is); the `enrichment` rows are then derived from them exactly as
+    `rederive_keywords` derives the whole store. A surface that normalizes to
+    `""` is kept as a raw fact but derives no row. The caller owns the
+    transaction.
+    """
+    merged: dict[str, RawKeyword] = {}
+    for keyword in raw:
+        surface = keyword.surface.strip()
+        if not surface:
+            continue
+        held = merged.get(surface)
+        merged[surface] = RawKeyword(
+            surface,
+            keyword.rank if held is None else _higher(held.rank, keyword.rank),
+            keyword.spoiler or (held is not None and held.spoiler),
+        )
+    conn.execute("DELETE FROM keyword_surfaces WHERE item_id = ? AND source = ?", (item_id, source))
+    conn.executemany(
+        "INSERT INTO keyword_surfaces (item_id, source, surface, rank, spoiler, fetched_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        [(item_id, source, k.surface, k.rank, int(k.spoiler), fetched_at) for k in merged.values()],
+    )
+    stored = {surface: upsert_keyword_form(conn, surface) for surface in merged}
+    conn.execute(
+        "DELETE FROM enrichment WHERE item_id = ? AND namespace = ? AND source = ? "
+        "AND key IN (?, ?)",
+        (item_id, NAMESPACE, source, KEYWORD_KEY, SPOILER_KEY),
+    )
+    _insert_derived(
+        conn,
+        _derive(
+            (item_id, source, k.surface, k.rank, k.spoiler, fetched_at) for k in merged.values()
+        ),
+    )
+    return {surface: keyword for surface, keyword in stored.items() if keyword}
+
+
+#: A derived `enrichment` row: item_id, source, key, value, fetched_at, rank.
+_Derived = tuple[str, str, str, str, str, int | None]
+
+
+def _derive(
+    surfaces: Iterable[tuple[str, str, str, int | None, bool | int, str]],
+    normalize: dict[str, str] | None = None,
+) -> list[_Derived]:
+    """The `enrichment` rows `keyword_surfaces` rows derive: one per (title,
+    source, stored form), keeping the highest rank, the newest `fetched_at`, and
+    `SPOILER_KEY` when any surface that folded into it is a spoiler."""
+    seen = normalize if normalize is not None else {}
+    rows: dict[tuple[str, str, str], tuple[bool, str, int | None]] = {}
+    for item_id, source, surface, rank, spoiler, fetched_at in surfaces:
+        value = seen.get(surface)
+        if value is None:
+            value = seen[surface] = normalize_keyword(surface)
+        if not value:
+            continue
+        held = rows.get((item_id, source, value))
+        if held is None:
+            rows[(item_id, source, value)] = (bool(spoiler), fetched_at, rank)
+        else:
+            rows[(item_id, source, value)] = (
+                held[0] or bool(spoiler),
+                max(held[1], fetched_at),
+                _higher(held[2], rank),
+            )
+    return [
+        (item_id, source, SPOILER_KEY if spoiler else KEYWORD_KEY, value, fetched_at, rank)
+        for (item_id, source, value), (spoiler, fetched_at, rank) in rows.items()
+    ]
+
+
+def _insert_derived(conn: sqlite3.Connection, rows: list[_Derived]) -> None:
+    conn.executemany(
+        "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at, rank) "
+        f"VALUES (?, '{NAMESPACE}', ?, ?, ?, ?, ?)",
+        rows,
+    )
+
+
+def rederive_keywords(conn: sqlite3.Connection) -> int:
+    """Rebuild every keyword `enrichment` row from `keyword_surfaces` with the
+    current `normalize_keyword`, and re-point every `keyword_forms` surface at
+    its current stored form. Returns the number of keyword rows written.
+
+    What a migration calls when normalization changes: nothing is fetched. The
+    caller owns the transaction.
+    """
+    seen: dict[str, str] = {}
+    conn.execute(
+        "DELETE FROM enrichment WHERE namespace = ? AND key IN (?, ?)",
+        (NAMESPACE, KEYWORD_KEY, SPOILER_KEY),
+    )
+    rows = _derive(
+        conn.execute(
+            "SELECT item_id, source, surface, rank, spoiler, fetched_at FROM keyword_surfaces"
+        ),
+        seen,
+    )
+    _insert_derived(conn, rows)
+    forms = conn.execute("SELECT surface FROM keyword_forms").fetchall()
+    for (surface,) in forms:
+        if surface not in seen:
+            seen[surface] = normalize_keyword(surface)
+    conn.execute("DELETE FROM keyword_forms")
+    conn.executemany(
+        "INSERT INTO keyword_forms (surface, keyword) VALUES (?, ?)",
+        [(surface, seen[surface]) for (surface,) in forms if seen[surface]],
+    )
+    return len(rows)
 
 
 def readable_surfaces(conn: sqlite3.Connection) -> dict[str, str]:

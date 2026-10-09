@@ -45,13 +45,12 @@ from datetime import UTC, datetime, timedelta
 
 from .cursors import delete_cursors, load_cursors, mark_attempted, write_fetched
 from .errors import LetterboxdError
-from .keywords import NAMESPACE, upsert_keyword_form
+from .keywords import NAMESPACE, RawKeyword, write_title_keywords
 from .letterboxd_client import LetterboxdSource, Lookup, Outcome, is_tmdb_id
 from .staleness import DEFAULT_STALE_DAYS, is_stale
 
 #: This writer's source name, in `keywords` and `enrichment_cursor`.
 SOURCE = "letterboxd"
-_KEYWORD_KEY = "keyword"
 
 #: Titles one run fetches at most. Two requests and about 2.5 s per title, so
 #: one run takes about 40 minutes and the ~11,700 movies with a TMDB id are
@@ -108,6 +107,7 @@ def wipe(conn: sqlite3.Connection) -> int:
         removed = conn.execute(
             "DELETE FROM enrichment WHERE namespace = ? AND source = ?", (NAMESPACE, SOURCE)
         ).rowcount
+        conn.execute("DELETE FROM keyword_surfaces WHERE source = ?", (SOURCE,))
         removed += delete_cursors(conn, NAMESPACE, SOURCE)
         return removed
 
@@ -192,22 +192,12 @@ def _write_title(
     interrupted run never leaves a cursor vouching for rows already deleted."""
     now_iso = now.isoformat(timespec="seconds")
     with conn:
-        conn.execute(
-            "DELETE FROM enrichment WHERE item_id = ? AND namespace = ? AND source = ?",
-            (item_id, NAMESPACE, SOURCE),
-        )
         write_fetched(conn, NAMESPACE, SOURCE, item_id, now_iso)
-        keywords: dict[str, None] = {}
-        for label in found.themes:
-            keyword = upsert_keyword_form(conn, label.strip())
-            if keyword:
-                keywords[keyword] = None
-        for keyword in keywords:
-            conn.execute(
-                "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (item_id, NAMESPACE, SOURCE, _KEYWORD_KEY, keyword, now_iso),
-            )
+        keywords = set(
+            write_title_keywords(
+                conn, item_id, SOURCE, (RawKeyword(label) for label in found.themes), now_iso
+            ).values()
+        )
     stats.titles_fetched += 1
     stats.keywords_written += len(keywords)
     if found.outcome is Outcome.NOT_LISTED:

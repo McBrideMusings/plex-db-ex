@@ -91,7 +91,7 @@ def test_each_unjudged_keyword_gets_five_rows_from_one_request_about_its_shortes
     rows = _rows(store)
     assert len(rows) == 15
     assert stats.keywords_judged == 3 and stats.rows_written == 15
-    la = {row["role"]: row for row in rows if row["keyword"] == "los angel"}
+    la = {row["role"]: row for row in rows if row["keyword"] == "los angeles"}
     assert set(la) == set(ROLES)
     assert {role: row["score"] for role, row in la.items()} == SCORES
     assert {row["model"] for row in rows} == {MODEL}

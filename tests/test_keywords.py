@@ -12,10 +12,13 @@ import pytest
 from plexdb.cli import main
 from plexdb.keywords import (
     ROLES,
+    RawKeyword,
     normalize_keyword,
     prune_keyword_verdicts,
+    rederive_keywords,
     state_role,
     upsert_keyword_form,
+    write_title_keywords,
 )
 from plexdb.roles import fold_role_decisions
 from plexdb.store import init as init_store
@@ -66,8 +69,89 @@ def test_stating_an_unknown_role_is_refused_before_sql(tmp_path: Path) -> None:
         ("\u0301(heists", "heists"),
     ],
 )
-def test_punctuation_at_a_word_edge_does_not_stop_it_stemming(surface: str, same_as: str) -> None:
+def test_punctuation_at_a_word_edge_does_not_stop_it_folding(surface: str, same_as: str) -> None:
     assert normalize_keyword(surface) == normalize_keyword(same_as)
+
+
+@pytest.mark.parametrize(
+    ("surface", "stored"),
+    [
+        ("Heists", "heist"),
+        ("Vampires", "vampire"),
+        ("comedies", "comedy"),
+        ("Women's prison", "woman prison"),
+        ("Christmas", "christmas"),
+        ("Christmas film", "christmas film"),
+        ("boxing", "boxing"),
+        ("racing", "racing"),
+        ("murderer", "murderer"),
+        ("Mars", "mars"),
+        ("Las Vegas", "las vegas"),
+        ("United States", "united states"),
+        ("news", "news"),
+    ],
+)
+def test_a_plural_folds_to_its_singular_and_every_other_word_stays(
+    surface: str, stored: str
+) -> None:
+    assert normalize_keyword(surface) == stored
+
+
+def test_a_title_keeps_each_spelling_and_derives_one_row_per_stored_value(
+    tmp_path: Path,
+) -> None:
+    store = tmp_path / "plexdb.db"
+    init_store(store)
+    with open_store(store) as conn:
+        conn.execute("INSERT INTO items (item_id, type, title) VALUES ('t', 'movie', 'x')")
+        stored = write_title_keywords(
+            conn,
+            "t",
+            "anilist",
+            [
+                RawKeyword("Heists", rank=40),
+                RawKeyword("heist", rank=80, spoiler=True),
+                RawKeyword("Heists", rank=10),
+                RawKeyword(" & "),
+                RawKeyword("Christmas"),
+            ],
+            AT,
+        )
+        surfaces = conn.execute(
+            "SELECT surface, rank, spoiler FROM keyword_surfaces ORDER BY surface"
+        ).fetchall()
+        rows = conn.execute(
+            "SELECT key, value, rank FROM enrichment WHERE item_id = 't' ORDER BY value"
+        ).fetchall()
+    assert stored == {"Heists": "heist", "heist": "heist", "Christmas": "christmas"}
+    assert [tuple(r) for r in surfaces] == [
+        ("&", None, 0),
+        ("Christmas", None, 0),
+        ("Heists", 40, 0),
+        ("heist", 80, 1),
+    ]
+    assert [tuple(r) for r in rows] == [
+        ("keyword", "christmas", None),
+        ("spoiler_keyword", "heist", 80),
+    ]
+
+
+def test_rederiving_rebuilds_every_keyword_row_and_form_from_the_spellings(
+    tmp_path: Path,
+) -> None:
+    store = tmp_path / "plexdb.db"
+    init_store(store)
+    with open_store(store) as conn:
+        conn.execute("INSERT INTO items (item_id, type, title) VALUES ('t', 'movie', 'x')")
+        write_title_keywords(conn, "t", "tmdb", [RawKeyword("Vampires")], AT)
+        conn.execute("UPDATE enrichment SET value = 'vampir'")
+        conn.execute("UPDATE keyword_forms SET keyword = 'vampir'")
+        written = rederive_keywords(conn)
+        rows = conn.execute("SELECT value FROM enrichment").fetchall()
+        forms = conn.execute("SELECT surface, keyword FROM keyword_forms").fetchall()
+    assert written == 1
+    assert [tuple(r) for r in rows] == [("vampire",)]
+    assert [tuple(r) for r in forms] == [("Vampires", "vampire")]
 
 
 def test_punctuation_inside_a_word_and_symbols_stay() -> None:
