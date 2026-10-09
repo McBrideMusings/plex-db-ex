@@ -820,11 +820,11 @@ class TitleCard {
       for (const s of d.similar) {
         const on = this.canPick(s.item_id);
         const li = el("li", { className: on ? "link" : "off", title: on ? "Show it on the map" : "Not on the map" },
-          el("span", { className: "rk" }, `#${s.rank}`), el("span", {}, s.year ? `${s.title} (${s.year})` : s.title));
+          el("span", { className: "rk", title: "Keyword cosine with this title" }, s.score.toFixed(2)), el("span", {}, s.year ? `${s.title} (${s.year})` : s.title));
         if (on && this.pinned) li.addEventListener("click", () => this.onPick(s.item_id));
         list.append(li);
       }
-      parts.push(el("h4", {}, "Similar titles"), d.similar.length ? list : el("div", { className: "meta" }, "none recorded"));
+      parts.push(el("h4", {}, "Nearest by keywords"), d.similar.length ? list : el("div", { className: "meta" }, "none share a keyword"));
     }
     this.root.replaceChildren(...(this.close ? [this.close] : []), ...parts);
   }
@@ -839,8 +839,8 @@ class TitleCard {
 const map = { data: null, key: null, items: [], byId: new Map(), itemsOf: null, dim: false, error: null, defaults: {}, labels: [], shown: [] };
 // `search` is null, or {type: "title"|"tag", label, ids: Set of item_ids to keep at full strength,
 // focus: the searched title's id}. Everything outside `ids` is drawn faded.
-// `similar` is the item_ids of the pinned title's similar titles that are on this map: they are
-// drawn in the accent colour, with a line from the pinned title to each.
+// `similar` is the item_ids of the pinned title's nearest titles by keyword cosine that are on
+// this map: they are drawn in the accent colour, with a line from the pinned title to each.
 const mapUI = { search: null, token: 0, similar: [] };
 
 async function mapRequest(kind, exclude) {

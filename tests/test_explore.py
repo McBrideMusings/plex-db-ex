@@ -353,24 +353,20 @@ def test_server_serves_the_page_and_both_endpoints(base_url: str) -> None:
     ]
 
 
-def test_title_endpoint_returns_the_card_with_similar_titles_in_rank_order(
+def test_title_endpoint_returns_the_card_with_its_nearest_titles_by_keyword_cosine(
     base_url: str, store: Path
 ) -> None:
+    """Iron Man shares superhero and stinger with Thor, only superhero with
+    Unbreakable, and nothing with Heat; Daredevil is a show. A TMDB similar edge
+    no longer decides anything."""
     with open_store(store) as conn:
         conn.execute(
             "UPDATE items SET studio = 'Marvel', content_rating = 'PG-13' "
             "WHERE item_id = 'imdb:tt1'"
         )
-        for to_id, rank in (("imdb:tt3", 5), ("imdb:tt2", 1), ("imdb:tt4", 3)):
-            conn.execute(
-                "INSERT INTO edges (from_id, to_id, edge_type, rank, fetched_at) "
-                "VALUES ('imdb:tt1', ?, 'tmdb_similar', ?, ?)",
-                (to_id, rank, FETCHED),
-            )
-        # Another edge type from the same title is not a similar title.
         conn.execute(
             "INSERT INTO edges (from_id, to_id, edge_type, rank, fetched_at) "
-            "VALUES ('imdb:tt1', 'tvdb:9', 'tmdb_recommendations', 0, ?)",
+            "VALUES ('imdb:tt1', 'imdb:tt4', 'tmdb_similar', 1, ?)",
             (FETCHED,),
         )
         conn.commit()
@@ -384,8 +380,19 @@ def test_title_endpoint_returns_the_card_with_similar_titles_in_rank_order(
         "Marvel",
         "PG-13",
     )
-    assert [s["title"] for s in card["similar"]] == ["Thor", "Heat", "Unbreakable"]
-    assert card["similar"][0] == {"item_id": "imdb:tt2", "title": "Thor", "year": 2011, "rank": 1}
+    hero, stinger, comic = 1 + math.log(4 / 3), 1 + math.log(4 / 2), 1 + math.log(4 / 1)
+    iron_man = math.sqrt(hero**2 + stinger**2 + comic**2)
+    thor = (hero**2 + stinger**2) / (iron_man * math.sqrt(hero**2 + stinger**2))
+    unbreakable = hero**2 / (iron_man * hero)
+    assert card["similar"] == [
+        {"item_id": "imdb:tt2", "title": "Thor", "year": 2011, "score": round(thor, 4)},
+        {
+            "item_id": "imdb:tt3",
+            "title": "Unbreakable",
+            "year": 2000,
+            "score": round(unbreakable, 4),
+        },
+    ]
 
 
 def test_title_endpoint_refuses_a_missing_unknown_or_oversize_id(base_url: str) -> None:

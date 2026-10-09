@@ -61,7 +61,6 @@ from .role_review import (
     roles_json,
 )
 from .store import open_readonly
-from .tmdb_edges import SIMILAR_EDGE_TYPE
 
 #: Set in the container to have `plexdb schedule` serve Plex TVX beside the
 #: sweep, reading the published snapshot. Unset, the scheduler serves nothing.
@@ -821,23 +820,75 @@ class TooManyTitleRequests(Exception):
     """More /api/title or /api/titles requests are already running than TITLE_SLOTS allows."""
 
 
-def title_details(conn: sqlite3.Connection, item_id: str) -> dict[str, object]:
-    """What a title's card shows: its facts, its keywords, and its nearest similar titles.
+class KeywordSpace:
+    """Every title of one kind as an IDF-weighted, unit-length keyword vector — the
+    vector the etv-station endless plugin walks by — so a title's nearest titles are
+    one sparse product away.
 
-    The similar titles are the `tmdb_similar` edges out of it, in the rank TMDB
-    gave them; an edge's target is always an item in the store.
+    Built from `keyword_rows`, so a merged group is one tag. Every tag counts,
+    including one only this title carries: it adds nothing to any cosine but
+    makes the title's own vector longer, as it does for a keyword scorer.
+    """
+
+    def __init__(self, conn: sqlite3.Connection, kind: str) -> None:
+        from scipy.sparse import csr_matrix
+        from sklearn.preprocessing import normalize
+
+        rows = keyword_rows(conn, kind)
+        df = Counter(value for _, value in rows)
+        n = len({item_id for item_id, _ in rows})
+        cols = {value: col for col, value in enumerate(sorted(df))}
+        self._row: dict[str, int] = {}
+        cells_r: list[int] = []
+        cells_c: list[int] = []
+        cells_v: list[float] = []
+        for item_id, value in rows:
+            cells_r.append(self._row.setdefault(item_id, len(self._row)))
+            cells_c.append(cols[value])
+            cells_v.append(1.0 + math.log(n / df[value]))
+        self._ids = list(self._row)
+        self._matrix = normalize(
+            csr_matrix((cells_v, (cells_r, cells_c)), shape=(len(self._ids), len(cols)))
+        )
+
+    def nearest(self, item_id: str, limit: int) -> list[tuple[str, float]]:
+        """The `limit` titles with the highest keyword cosine to `item_id`, highest
+        first (ties by item id), each with that cosine; none share no keyword with
+        it. Empty for a title with no keywords."""
+        import numpy as np
+
+        row = self._row.get(item_id)
+        if row is None:
+            return []
+        scores = (self._matrix @ self._matrix[row].T).toarray().ravel()
+        scores[row] = 0.0
+        top = np.flatnonzero(scores > 0)
+        ranked = sorted(top, key=lambda j: (-scores[j], self._ids[j]))[:limit]
+        return [(self._ids[j], round(float(scores[j]), 4)) for j in ranked]
+
+
+def title_details(
+    conn: sqlite3.Connection, item_id: str, space: KeywordSpace | None = None
+) -> dict[str, object]:
+    """What a title's card shows: its facts, its keywords, and its nearest titles.
+
+    The nearest titles are the `SIMILAR_LIMIT` with the highest keyword cosine in
+    `space` (the title's own kind), each with its score; none without a space.
     """
     row = conn.execute(
         "SELECT title, year, studio, content_rating FROM items WHERE item_id = ?", (item_id,)
     ).fetchone()
     if row is None:
         raise NoSuchTitle(item_id)
-    similar = conn.execute(
-        "SELECT i.item_id, i.title, i.year, e.rank FROM edges e "
-        "JOIN items i ON i.item_id = e.to_id "
-        "WHERE e.from_id = ? AND e.edge_type = ? ORDER BY e.rank, i.title LIMIT ?",
-        (item_id, SIMILAR_EDGE_TYPE, SIMILAR_LIMIT),
-    ).fetchall()
+    nearest = space.nearest(item_id, SIMILAR_LIMIT) if space is not None else []
+    marks = ",".join("?" * len(nearest))
+    about = {
+        r[0]: (r[1], r[2])
+        for r in conn.execute(
+            f"SELECT item_id, title, year FROM items WHERE item_id IN ({marks})",
+            [other for other, _ in nearest],
+        )
+    }
     return {
         "item_id": item_id,
         "title": row["title"],
@@ -846,8 +897,8 @@ def title_details(conn: sqlite3.Connection, item_id: str) -> dict[str, object]:
         "content_rating": row["content_rating"],
         "keywords": title_keywords_json(conn, item_id),
         "similar": [
-            {"item_id": r["item_id"], "title": r["title"], "year": r["year"], "rank": r["rank"]}
-            for r in similar
+            {"item_id": other, "title": about[other][0], "year": about[other][1], "score": score}
+            for other, score in nearest
         ],
     }
 
@@ -978,6 +1029,27 @@ class _IndexCache:
                 return index_json(build_index(conn, kind))
 
         return self._cache.get(kind, (stat.st_mtime_ns, stat.st_size), compute)
+
+
+class _SpaceCache:
+    """One `KeywordSpace` per kind, rebuilt when the store file changes, as
+    `_IndexCache` rebuilds the index."""
+
+    KEEP = 2
+
+    def __init__(self, store_path: Path) -> None:
+        self._path = store_path
+        self._cache = _KeyedCache(self.KEEP)
+
+    def get(self, kind: str) -> KeywordSpace:
+        stat = self._path.stat()
+
+        def compute() -> dict[str, object]:
+            with open_readonly(self._path) as conn:
+                return {"space": KeywordSpace(conn, kind)}
+
+        entry = self._cache.get(kind, (stat.st_mtime_ns, stat.st_size), compute)
+        return cast(KeywordSpace, entry["space"])
 
 
 class _MapCache:
@@ -1747,6 +1819,7 @@ def make_server(
     for exercising `/api/poster` without a real Plex server.
     """
     cache = _IndexCache(store_path)
+    spaces = _SpaceCache(store_path)
     maps = _MapCache(store_path)
     networks = _TagNetworkCache(store_path)
     saved_file = saved_path or store_path.with_name(SAVED_FILE)
@@ -1908,7 +1981,11 @@ def make_server(
                     )
                 try:
                     with open_readonly(store_path) as conn:
-                        self._json(title_details(conn, item_id))
+                        kind = conn.execute(
+                            "SELECT type FROM items WHERE item_id = ?", (item_id,)
+                        ).fetchone()
+                        space = spaces.get(kind[0]) if kind and kind[0] in KINDS else None
+                        self._json(title_details(conn, item_id, space))
                 finally:
                     TITLE_SLOTS.release()
             elif url.path == "/api/poster":
