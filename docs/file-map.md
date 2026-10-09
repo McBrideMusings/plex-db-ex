@@ -29,14 +29,15 @@ plex-db-ex/
 │   │   ├── harvest_mdblist.py
 │   │   ├── idle.py            exit 0 only when no migration and no writer holds the store; read-only. Given a command, it claims both store locks and runs that command under them, which is how `tools/host-exec.sh` runs anything
 │   │   ├── ingest_plays.py
+│   │   ├── film_suffix_verdicts.py  writes a `rule:film-suffix` merge verdict for each stored "X film" whose bare "X" is stored, except `keywords.FILM_SUFFIX_KEEP`; sweep step 64, after the prune and before the judge, needs no service
 │   │   ├── judge_keyword_pairs.py  embeds stored keywords with no `keyword_pairs` row, asks Jev about each one's nearest neighbours, writes one row per judged pair; sweep step 65, skipped when `LLAMA_BROKER_BASE_URL` or `TYPESAFE_API_KEY` is unset
 │   │   ├── judge_keyword_roles.py  asks Jev about every stored keyword with no `jev` row in `keyword_roles` (one request, five `noul` questions), writes five rows per keyword; sweep step 66, skipped when `TYPESAFE_API_KEY` is unset
 │   │   ├── migrate.py
 │   │   ├── latent_users.py
-│   │   ├── prune_keyword_verdicts.py  deletes `keyword_pairs`, `keyword_roles` and `keyword_role_decisions` rows keyed on a keyword value no `enrichment` row carries; sweep step 64, between the keyword writers and the judges, needs no service
+│   │   ├── prune_keyword_verdicts.py  deletes `keyword_pairs`, `keyword_roles` and `keyword_role_decisions` rows keyed on a keyword value no `enrichment` row carries; sweep step 63, between the keyword writers and the film-suffix rule, needs no service
 │   │   ├── publish.py
-│   │   ├── refresh_map.py
-│   │   ├── refresh_tagnetwork.py
+│   │   ├── refresh_map.py  sweep step 67, after both judges so the map draws that night's merges
+│   │   ├── refresh_tagnetwork.py  sweep step 68
 │   │   ├── repair_fs_identities.py
 │   │   ├── repair_identities.py
 │   │   ├── schedule.py
@@ -63,7 +64,7 @@ plex-db-ex/
 │   ├── tautulli_client.py read-only Tautulli client (get_history, get_users) behind TautulliSource/TautulliUserSource protocols
 │   ├── plex_client.py     read-only Plex HTTP client behind PlexSource/PlexAccountSource protocols
 │   ├── decisions.py       `DecisionsFile`, the shape both Plex TVX decisions files share: validates a file for the page and the sweep's fold, writes it (temp file then rename, a lock, one entry per key, capped in count and bytes); `FoldStats`; `decisions_dir`, where those files and the saved queries sit
-│   ├── merge_review.py    the Plex TVX Merges tab's server side: `MergeDecisions` is `merge_decisions.json` keyed by pair, and `review_rows` lays the file's pending decisions over `keyword_pairs` and sorts each pair into merged, rejected or proposed by the reader's rule (`MERGE_AT` 0.9, `PROPOSE_AT` 0.5); Plex TVX serves it at `/api/merges`
+│   ├── merge_review.py    the Plex TVX Merges tab's server side: `MergeDecisions` is `merge_decisions.json` keyed by pair, and `review_rows` lays the file's pending decisions over `keyword_pairs` and sorts each pair into merged, rejected or proposed by the reader's rule (`MERGE_AT` 0.9, `PROPOSE_AT` 0.5); Plex TVX serves it at `/api/merges`. `merge_map` chains every merged pair into groups and maps each member to the one the most titles carry — the fold `explore.keyword_rows` applies to every Plex TVX keyword view
 │   ├── synonyms.py        synonym keywords: embeds the surface forms, proposes each keyword's 10 nearest neighbours at cosine >= 0.75, has Jev judge each pair, writes `keyword_pairs` in committed batches of 200 keywords, caching vectors in `keyword-embeddings.npz` beside the store so only new keywords are embedded; `fold_merge_decisions` applies a person's `merge_decisions.json`; `merge_decisions_path` places that file beside the saved-queries file
 │   ├── role_review.py     the Plex TVX Roles tab's server side: `RoleDecisions` is `role_decisions.json` keyed by (keyword, role), `require_role` refuses a (keyword, role) with no verdict, and `roles_json` lists up to 200 keywords matching a filter with every source's verdict per role and every decision, the file's pending ones over the table's; Plex TVX serves it at `/api/roles`
 │   ├── roles.py           the Jev role judge: every keyword with no `jev` row in `keyword_roles` gets five rows (score and model, or a 400/422 refusal in `error`), written in committed batches of 200 keywords; `fold_role_decisions` applies `role_decisions.json` to `keyword_role_decisions`

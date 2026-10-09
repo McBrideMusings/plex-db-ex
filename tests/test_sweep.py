@@ -34,13 +34,14 @@ EXPECTED_SWEEP = [
     ("enrich-anilist", Step.BEST_EFFORT),
     ("enrich-letterboxd", Step.BEST_EFFORT),
     ("enrich-wikidata", Step.BEST_EFFORT),
-    ("refresh-map", Step.BEST_EFFORT),
-    ("refresh-tagnetwork", Step.BEST_EFFORT),
     ("enrich-mdblist-ratings", Step.BEST_EFFORT),
     ("harvest-mdblist", Step.BEST_EFFORT),
     ("prune-keyword-verdicts", Step.BEST_EFFORT),
+    ("film-suffix-verdicts", Step.BEST_EFFORT),
     ("judge-keyword-pairs", Step.BEST_EFFORT),
     ("judge-keyword-roles", Step.BEST_EFFORT),
+    ("refresh-map", Step.BEST_EFFORT),
+    ("refresh-tagnetwork", Step.BEST_EFFORT),
     ("publish", Step.REQUIRED),
 ]
 

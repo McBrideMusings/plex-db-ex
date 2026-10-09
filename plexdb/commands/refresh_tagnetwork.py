@@ -18,7 +18,7 @@ from ..tagnetwork import Refreshed, refresh_tag_networks
 
 NAME = "refresh-tagnetwork"
 #: Right after `refresh-map` and before `publish`, which snapshots what this writes.
-ORDER = 58
+ORDER = 68
 #: Plex TVX draws a missing or stale network live, so a failed refresh
 #: costs load time and nothing else.
 SWEEP = Step.BEST_EFFORT

@@ -409,3 +409,70 @@ def prune_keyword_verdicts(conn: sqlite3.Connection) -> PruneStats:
             f"DELETE FROM keyword_role_decisions WHERE keyword NOT IN ({_CARRIED})"
         ).rowcount
     return stats
+
+
+#: The `keyword_pairs.jev_model` the film-suffix rule writes, so a reader can tell
+#: its verdicts from Jev's (ADR-0018).
+FILM_SUFFIX_MODEL = "rule:film-suffix"
+
+#: Stored keywords whose "<keyword> film" means something else, so the
+#: film-suffix rule never pairs the two: "art film" is not art, "student film" is
+#: not about students, "race film" is a historical genre, "essay film" a form.
+FILM_SUFFIX_KEEP: frozenset[str] = frozenset({"art", "essay", "race", "student"})
+
+_FILM_SUFFIX = " film"
+
+
+@dataclass
+class FilmSuffixStats:
+    #: Pairs the rule holds this run.
+    pairs: int = 0
+    #: Of those, pairs that had no rule row before: new, or a Jev score replaced.
+    pairs_written: int = 0
+    #: Rule rows deleted because the rule no longer holds for them.
+    pairs_removed: int = 0
+
+
+def write_film_suffix_verdicts(conn: sqlite3.Connection, judged_at: str) -> FilmSuffixStats:
+    """Pair every stored "X film" with its bare "X" when some title carries both
+    values (on any titles), unless X is in `FILM_SUFFIX_KEEP`.
+
+    Each pair gets `jev_score` 1.0 under `FILM_SUFFIX_MODEL`, replacing any score
+    Jev gave it; a person's `decision` on the pair stays. A rule row the rule no
+    longer holds for is deleted, so the next judge run asks Jev about it again.
+    One transaction.
+    """
+    stats = FilmSuffixStats()
+    carried = {row[0] for row in conn.execute(f"SELECT DISTINCT value FROM ({_CARRIED})")}
+    pairs = sorted(
+        (bare, value) if bare < value else (value, bare)
+        for value in carried
+        if value.endswith(_FILM_SUFFIX)
+        for bare in (value[: -len(_FILM_SUFFIX)],)
+        if bare in carried and bare not in FILM_SUFFIX_KEEP
+    )
+    stats.pairs = len(pairs)
+    with conn:
+        held = {
+            (row[0], row[1])
+            for row in conn.execute(
+                "SELECT keyword_a, keyword_b FROM keyword_pairs WHERE jev_model = ?",
+                (FILM_SUFFIX_MODEL,),
+            )
+        }
+        stale = held - set(pairs)
+        conn.executemany(
+            "DELETE FROM keyword_pairs WHERE keyword_a = ? AND keyword_b = ?", sorted(stale)
+        )
+        stats.pairs_removed = len(stale)
+        fresh = [pair for pair in pairs if pair not in held]
+        conn.executemany(
+            "INSERT INTO keyword_pairs "
+            "(keyword_a, keyword_b, jev_score, jev_model, judged_at, jev_error) "
+            "VALUES (?, ?, 1.0, ?, ?, NULL) "
+            "ON CONFLICT (keyword_a, keyword_b) DO UPDATE SET jev_score = 1.0, "
+            "jev_model = excluded.jev_model, judged_at = excluded.judged_at, jev_error = NULL",
+            [(a, b, FILM_SUFFIX_MODEL, judged_at) for a, b in fresh],
+        )
+        stats.pairs_written = len(fresh)
+    return stats

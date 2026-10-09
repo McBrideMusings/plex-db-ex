@@ -18,6 +18,7 @@ from typing import Any, ClassVar
 
 from .decisions import DecisionsFile
 from .errors import MergeDecisionsError
+from .keywords import FILM_SUFFIX_MODEL
 
 __all__ = [
     "MERGE_AT",
@@ -26,6 +27,7 @@ __all__ = [
     "MergeDecisions",
     "NoSuchPair",
     "bucket",
+    "merge_map",
     "require_pair",
     "review_rows",
 ]
@@ -72,6 +74,61 @@ def bucket(score: float, decision: str | None) -> str | None:
     if score >= PROPOSE_AT:
         return "proposed"
     return None
+
+
+def merge_map(conn: sqlite3.Connection) -> dict[str, str]:
+    """Each keyword a merged pair folds away, mapped to the keyword it folds into.
+
+    Merged pairs chain: `a`~`b` and `b`~`c` make one group. A group folds into
+    its member the most titles carry (ties by name), so the name a reader sees is
+    the one sources use most — except that the "X film" side of a film-suffix
+    rule pair never names a group, which folds toward the bare "X" however many
+    titles say "X film". A keyword in no merged pair is absent. Nothing in
+    `enrichment` changes (ADR-0018); a reader applies this when it reads.
+    """
+    suffixed = {
+        row[0]
+        for row in conn.execute(
+            "SELECT CASE WHEN keyword_a LIKE '% film' THEN keyword_a ELSE keyword_b END "
+            "FROM keyword_pairs WHERE jev_model = ?",
+            (FILM_SUFFIX_MODEL,),
+        )
+    }
+    parent: dict[str, str] = {}
+
+    def root(keyword: str) -> str:
+        while parent.get(keyword, keyword) != keyword:
+            parent[keyword] = parent.get(parent[keyword], parent[keyword])
+            keyword = parent[keyword]
+        return keyword
+
+    for a, b in conn.execute(
+        "SELECT keyword_a, keyword_b FROM keyword_pairs WHERE decision = 'accepted' "
+        "OR (decision IS NULL AND jev_score >= ?)",
+        (MERGE_AT,),
+    ):
+        ra, rb = root(a), root(b)
+        if ra != rb:
+            parent[ra] = rb
+    if not parent:
+        return {}
+    groups: dict[str, list[str]] = {}
+    for keyword in list(parent):
+        groups.setdefault(root(keyword), []).append(keyword)
+    for top in list(groups):
+        if top not in groups[top]:
+            groups[top].append(top)
+    carried = dict(
+        conn.execute(
+            "SELECT value, COUNT(DISTINCT item_id) FROM enrichment "
+            "WHERE namespace = 'keywords' AND key = 'keyword' GROUP BY value"
+        ).fetchall()
+    )
+    folded: dict[str, str] = {}
+    for group in groups.values():
+        into = min(group, key=lambda k: (k in suffixed, -carried.get(k, 0), k))
+        folded.update({keyword: into for keyword in group if keyword != into})
+    return folded
 
 
 def _row(

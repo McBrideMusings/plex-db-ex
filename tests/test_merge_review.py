@@ -12,7 +12,8 @@ from pathlib import Path
 import pytest
 
 from plexdb.explore import make_server
-from plexdb.merge_review import MergeDecisions
+from plexdb.keywords import FILM_SUFFIX_MODEL
+from plexdb.merge_review import MergeDecisions, merge_map
 from plexdb.store import init, open_store
 from plexdb.synonyms import fold_merge_decisions
 
@@ -252,3 +253,48 @@ def test_the_file_refuses_a_decision_past_the_entry_cap_and_past_the_size_cap(
     with pytest.raises(ValueError, match="exceed"):
         small.record(("a", "b"), "accepted")
     assert small.latest() == {}
+
+
+def test_merged_pairs_chain_into_a_group_named_by_its_most_carried_keyword_not_x_film(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "plexdb.db"
+    init(path)
+    at = "2026-10-09T00:00:00Z"
+    with open_store(path) as conn:
+        conn.executemany(
+            "INSERT INTO items (item_id, type, title) VALUES (?, 'movie', ?)",
+            [("t1", "a"), ("t2", "b"), ("t3", "c")],
+        )
+        conn.executemany(
+            "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) "
+            "VALUES (?, 'keywords', 'tmdb', 'keyword', ?, ?)",
+            [
+                ("t1", "kid", at),
+                ("t2", "kid", at),
+                ("t3", "child", at),
+                ("t3", "youngster", at),
+                ("t1", "slasher film", at),
+                ("t2", "slasher film", at),
+                ("t3", "slasher", at),
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO keyword_pairs "
+            "(keyword_a, keyword_b, jev_score, jev_model, judged_at, decision, decided_at) "
+            "VALUES (?, ?, ?, 'jev-1', ?, ?, ?)",
+            [
+                ("child", "kid", 0.95, at, None, None),
+                ("child", "youngster", 0.6, at, "accepted", at),
+                ("heist", "robbery", 0.97, at, "rejected", at),
+                ("dog", "puppy", 0.8, at, None, None),
+            ],
+        )
+        conn.execute(
+            "INSERT INTO keyword_pairs (keyword_a, keyword_b, jev_score, jev_model, judged_at) "
+            "VALUES ('slasher', 'slasher film', 1.0, ?, ?)",
+            (FILM_SUFFIX_MODEL, at),
+        )
+        conn.commit()
+        folded = merge_map(conn)
+    assert folded == {"child": "kid", "youngster": "kid", "slasher film": "slasher"}

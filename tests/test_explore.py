@@ -46,6 +46,7 @@ from plexdb.explore import (
     title_map,
     titles_tagged,
 )
+from plexdb.merge_review import merge_map
 from plexdb.store import init, open_readonly, open_store, publish
 from plexdb.tagnetwork import refresh_tag_networks
 from plexdb.titlemap import refresh_title_maps
@@ -494,7 +495,34 @@ def test_keyword_fingerprint_digests_the_repr_of_the_ordered_rows(store: Path) -
             "ORDER BY e.item_id, e.source, e.value"
         ).fetchall()
         expected = hashlib.sha256(repr([tuple(r) for r in rows]).encode()).hexdigest()
-        assert keyword_fingerprint(conn, "movie") == f"{explore.MAP_RECIPE}|{expected}"
+        merges = hashlib.sha256(repr(sorted(merge_map(conn).items())).encode()).hexdigest()
+        assert keyword_fingerprint(conn, "movie") == f"{explore.MAP_RECIPE}|{expected}|{merges}"
+
+
+def test_a_merge_verdict_folds_one_keyword_into_another_in_every_view_and_redraws_the_map(
+    store: Path,
+) -> None:
+    with open_store(store) as conn:
+        values = [tag.value for tag in build_index(conn, "movie").tags]
+        a, b = values[0], values[1]
+        before = keyword_fingerprint(conn, "movie")
+        conn.execute(
+            "INSERT INTO keyword_pairs (keyword_a, keyword_b, jev_score, jev_model, judged_at) "
+            "VALUES (?, ?, 0.95, 'jev-1', '2026-10-09T00:00:00Z')",
+            tuple(sorted((a, b))),
+        )
+        conn.commit()
+        after = build_index(conn, "movie")
+        tagged = {t.item_id for t in titles_tagged(conn, "movie", a)}
+        rows = conn.execute(
+            "SELECT DISTINCT item_id FROM enrichment JOIN items USING (item_id) "
+            "WHERE value IN (?, ?) AND type = 'movie'",
+            (a, b),
+        ).fetchall()
+        assert keyword_fingerprint(conn, "movie") != before
+    assert a in {tag.value for tag in after.tags}
+    assert b not in {tag.value for tag in after.tags}
+    assert tagged == {r[0] for r in rows}
 
 
 def test_map_endpoint_serves_the_stored_map_and_draws_live_once_it_is_stale(

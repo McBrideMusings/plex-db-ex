@@ -17,8 +17,9 @@ from ..sweep import Step
 from ..titlemap import Refreshed, refresh_title_maps
 
 NAME = "refresh-map"
-#: After both TMDB steps and before `publish`, which snapshots what this writes.
-ORDER = 57
+#: After every keyword writer and both judges (65, 66), so the map draws the merges
+#: this sweep decided, and before `publish`, which snapshots what this writes.
+ORDER = 67
 #: Plex TVX draws a missing or stale map live, so a failed refresh costs
 #: load time and nothing else.
 SWEEP = Step.BEST_EFFORT

@@ -48,6 +48,7 @@ from .merge_review import (
     MERGE_DECISIONS_FILE,
     MergeDecisions,
     NoSuchPair,
+    merge_map,
     require_pair,
     review_rows,
 )
@@ -115,6 +116,27 @@ def _check_kind(kind: str) -> None:
         raise ValueError(f"kind must be one of {', '.join(KINDS)}, not {kind!r}")
 
 
+def keyword_rows(
+    conn: sqlite3.Connection, kind: str, folded: dict[str, str] | None = None
+) -> list[tuple[str, str]]:
+    """Every (item_id, keyword) of a title of `kind`, each pair once, with every
+    merged keyword folded into the one it merges with (`merge_map`).
+
+    The one read every Plex TVX keyword view goes through — the tag table, a
+    tag's titles, the title map, its region labels and the tag network — so a
+    merge shows the same way in all of them. A keyword two sources both list on a
+    title, or two keywords that fold into one, is one row.
+    """
+    _check_kind(kind)
+    into = merge_map(conn) if folded is None else folded
+    rows = conn.execute(
+        "SELECT DISTINCT e.item_id, e.value FROM enrichment e JOIN items i USING (item_id) "
+        "WHERE e.namespace = ? AND e.key = ? AND i.type = ?",
+        (_NAMESPACE, _KEY, kind),
+    ).fetchall()
+    return list(dict.fromkeys((item_id, into.get(value, value)) for item_id, value in rows))
+
+
 def build_index(conn: sqlite3.Connection, kind: str, co_tags: int = CO_TAGS) -> TagIndex:
     """Every keyword on titles of `kind`, with its count, IDF and co-tags.
 
@@ -122,17 +144,7 @@ def build_index(conn: sqlite3.Connection, kind: str, co_tags: int = CO_TAGS) -> 
     movie side is about three million tag pairs, which a `Counter` walks in
     half a second and a `GROUP BY` over a self-join does not.
     """
-    _check_kind(kind)
-    # DISTINCT so a keyword two sources both list on one title (ADR-0016's
-    # `source` column lets both rows exist) is one entry in that title's tag
-    # set, not two — both the per-tag title count (`df`) and every title's
-    # own tag list below would otherwise double-count it.
-    rows = conn.execute(
-        "SELECT k.item_id, k.value FROM "
-        "(SELECT DISTINCT item_id, value FROM enrichment WHERE namespace = ? AND key = ?) k "
-        "JOIN items i USING (item_id) WHERE i.type = ?",
-        (_NAMESPACE, _KEY, kind),
-    ).fetchall()
+    rows = keyword_rows(conn, kind)
 
     by_title: defaultdict[str, list[str]] = defaultdict(list)
     for item_id, value in rows:
@@ -162,22 +174,26 @@ def build_index(conn: sqlite3.Connection, kind: str, co_tags: int = CO_TAGS) -> 
 
 
 def titles_tagged(conn: sqlite3.Connection, kind: str, value: str) -> list[Title]:
-    """Every title of `kind` carrying the keyword `value`, by title."""
+    """Every title of `kind` carrying the keyword `value`, or a keyword merged into
+    it, by title; each title's keyword count counts a merged group once."""
     _check_kind(kind)
-    # DISTINCT on the outer query, and COUNT(DISTINCT ...) on the inner one:
-    # a title tagged `value` by two sources must appear once in this list, not
-    # once per source, and its own keyword count must count each distinct
-    # keyword once regardless of how many sources agree on it.
-    rows = conn.execute(
-        "SELECT DISTINCT i.item_id, i.title, i.year, "
-        "  (SELECT COUNT(DISTINCT k.value) FROM enrichment k "
-        "   WHERE k.item_id = i.item_id AND k.namespace = ? AND k.key = ?) "
-        "FROM enrichment e JOIN items i USING (item_id) "
-        "WHERE e.namespace = ? AND e.key = ? AND e.value = ? AND i.type = ? "
+    into = merge_map(conn)
+    group = [value, *(keyword for keyword, target in into.items() if target == value)]
+    marks = ",".join("?" * len(group))
+    found = conn.execute(
+        "SELECT DISTINCT i.item_id, i.title, i.year FROM enrichment e JOIN items i USING (item_id) "
+        f"WHERE e.namespace = ? AND e.key = ? AND e.value IN ({marks}) AND i.type = ? "
         "ORDER BY COALESCE(i.title_sort, i.title) COLLATE NOCASE, i.year",
-        (_NAMESPACE, _KEY, _NAMESPACE, _KEY, value, kind),
+        (_NAMESPACE, _KEY, *group, kind),
     ).fetchall()
-    return [Title(item_id=r[0], title=r[1], year=r[2], keywords=r[3]) for r in rows]
+    counts: dict[str, int] = {}
+    for item_id, *_ in found:
+        values = conn.execute(
+            "SELECT DISTINCT value FROM enrichment WHERE item_id = ? AND namespace = ? AND key = ?",
+            (item_id, _NAMESPACE, _KEY),
+        ).fetchall()
+        counts[item_id] = len({into.get(v, v) for (v,) in values})
+    return [Title(item_id=r[0], title=r[1], year=r[2], keywords=counts[r[0]]) for r in found]
 
 
 #: A tag on fewer titles than this cannot place a title near any other, so it
@@ -287,18 +303,15 @@ def title_map(
     numpy and scikit-learn are imported (by `_embed_2d`) rather than at the top
     of the module, so every other `plexdb` command starts without loading them.
     """
-    _check_kind(kind)
-    # DISTINCT so a title's tag-frequency vector below counts each keyword it
-    # carries once, not once per source that happens to also list it.
-    rows = conn.execute(
-        "SELECT k.item_id, k.value, i.title, i.year FROM "
-        "(SELECT DISTINCT item_id, value FROM enrichment WHERE namespace = ? AND key = ?) k "
-        "JOIN items i USING (item_id) WHERE i.type = ?",
-        (_NAMESPACE, _KEY, kind),
-    ).fetchall()
+    rows = keyword_rows(conn, kind)
     carrying: set[str] = {r[0] for r in rows}
     df = Counter(r[1] for r in rows)
     n = len(carrying)
+    about: dict[str, tuple[str, int | None]] = {
+        r[0]: (r[1], r[2])
+        for r in conn.execute("SELECT item_id, title, year FROM items WHERE type = ?", (kind,))
+        if r[0] in carrying
+    }
     vocab = {
         value: col
         for col, value in enumerate(
@@ -307,16 +320,14 @@ def title_map(
     }
 
     placed: dict[str, int] = {}
-    about: dict[str, tuple[str, int | None]] = {}
     cells_r: list[int] = []
     cells_c: list[int] = []
     cells_v: list[float] = []
-    for item_id, value, title, year in rows:
+    for item_id, value in rows:
         col = vocab.get(value)
         if col is None:
             continue
         row = placed.setdefault(item_id, len(placed))
-        about[item_id] = (title, year)
         cells_r.append(row)
         cells_c.append(col)
         cells_v.append(1.0 + math.log(n / df[value]))
@@ -344,7 +355,8 @@ def _fingerprint(conn: sqlite3.Connection, kind: str, recipe: str) -> str:
     its `item_id`, source, value and `fetched_at`. Any row added, removed,
     re-stamped or re-valued, and any title changing type, changes the digest,
     including a rewrite that leaves the row count and the newest `fetched_at`
-    alone. A change to the drawing code changes the recipe string.
+    alone. Then a SHA-256 over `merge_map`, so a new merge verdict redraws it
+    too. A change to the drawing code changes the recipe string.
     """
     _check_kind(kind)
     # typeshed types an aggregate as one int argument returning an int.
@@ -359,7 +371,8 @@ def _fingerprint(conn: sqlite3.Connection, kind: str, recipe: str) -> str:
         "ORDER BY e.item_id, e.source, e.value)",
         (_NAMESPACE, _KEY, kind),
     ).fetchone()
-    return f"{recipe}|{digest}"
+    merges = hashlib.sha256(repr(sorted(merge_map(conn).items())).encode()).hexdigest()
+    return f"{recipe}|{digest}|{merges}"
 
 
 class _RowDigest:
@@ -499,14 +512,7 @@ class _NetworkVocab:
 def _network_vocab(
     conn: sqlite3.Connection, kind: str, exclude: frozenset[str], min_df: int
 ) -> _NetworkVocab:
-    # DISTINCT so a title's tag set below counts each keyword it carries once,
-    # not once per source that happens to also list it.
-    rows = conn.execute(
-        "SELECT k.item_id, k.value FROM "
-        "(SELECT DISTINCT item_id, value FROM enrichment WHERE namespace = ? AND key = ?) k "
-        "JOIN items i USING (item_id) WHERE i.type = ?",
-        (_NAMESPACE, _KEY, kind),
-    ).fetchall()
+    rows = keyword_rows(conn, kind)
     df = Counter(value for _, value in rows)
     vocab = {
         value: col
@@ -727,13 +733,7 @@ def region_labels(
 
     A `RegionLabel` serialises as a JSON array in field order.
     """
-    _check_kind(kind)
-    rows = conn.execute(
-        "SELECT k.item_id, k.value FROM "
-        "(SELECT DISTINCT item_id, value FROM enrichment WHERE namespace = ? AND key = ?) k "
-        "JOIN items i USING (item_id) WHERE i.type = ?",
-        (_NAMESPACE, _KEY, kind),
-    ).fetchall()
+    rows = keyword_rows(conn, kind)
     df = Counter(r[1] for r in rows)
     n = len({r[0] for r in rows})
     tags: dict[str, list[str]] = defaultdict(list)

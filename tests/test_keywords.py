@@ -11,6 +11,7 @@ import pytest
 
 from plexdb.cli import main
 from plexdb.keywords import (
+    FILM_SUFFIX_MODEL,
     ROLES,
     RawKeyword,
     normalize_keyword,
@@ -18,6 +19,7 @@ from plexdb.keywords import (
     rederive_keywords,
     state_role,
     upsert_keyword_form,
+    write_film_suffix_verdicts,
     write_title_keywords,
 )
 from plexdb.roles import fold_role_decisions
@@ -301,3 +303,34 @@ def test_a_value_carried_only_as_a_spoiler_keyword_keeps_its_rows(tmp_path: Path
         kept = conn.execute("SELECT COUNT(*) FROM keyword_roles WHERE keyword = 'heist'").fetchone()
     assert kept[0] == 1
     assert stats.keywords_pruned == []
+
+
+def test_the_film_suffix_rule_pairs_x_film_with_a_stored_x_and_drops_a_pair_it_no_longer_holds(
+    tmp_path: Path,
+) -> None:
+    store = tmp_path / "plexdb.db"
+    init_store(store)
+    with open_store(store) as conn:
+        conn.execute("INSERT INTO items (item_id, type, title) VALUES ('imdb:tt1', 'movie', 'x')")
+        for value in ("christmas", "christmas film", "short film", "art", "art film", "horror"):
+            _carry(conn, value)
+        conn.executemany(
+            "INSERT INTO keyword_pairs "
+            "(keyword_a, keyword_b, jev_score, jev_model, judged_at, decision, decided_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                ("christmas", "christmas film", 0.09, "jev-1", AT, "rejected", AT),
+                ("horror", "horror film", 1.0, FILM_SUFFIX_MODEL, AT, None, None),
+            ],
+        )
+        conn.commit()
+
+        stats = write_film_suffix_verdicts(conn, "2026-10-09T00:00:00+00:00")
+        rows = conn.execute(
+            "SELECT keyword_a, keyword_b, jev_score, jev_model, decision FROM keyword_pairs"
+        ).fetchall()
+
+    assert (stats.pairs, stats.pairs_written, stats.pairs_removed) == (1, 1, 1)
+    assert [tuple(r) for r in rows] == [
+        ("christmas", "christmas film", 1.0, FILM_SUFFIX_MODEL, "rejected"),
+    ]

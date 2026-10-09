@@ -749,16 +749,17 @@ vectors, truncated SVD to 50 dimensions and UMAP with cosine distance. `item_id`
 foreign key: a title that has left `items` drops out of Plex TVX's join, and the next refresh
 redraws the map without it.
 
-`title_map_state` holds one row per kind. `fingerprint` names the drawing recipe and a SHA-256
-digest of the kind's keyword rows (`item_id`, source, value, `fetched_at`, in key order), so any
-row added, removed, re-stamped or re-valued, or a title changing type, makes the stored map stale.
+`title_map_state` holds one row per kind. `fingerprint` names the drawing recipe, a SHA-256
+digest of the kind's keyword rows (`item_id`, source, value, `fetched_at`, in key order), and a
+SHA-256 digest of the merge fold, so any row added, removed, re-stamped or re-valued, a title
+changing type, or a new merge verdict makes the stored map stale.
 `unplaced` counts titles with keywords that share no tag with another title and so are off the
 map. `computed_at` is UTC.
 
 **Refresh rule.** `plexdb refresh-map` recomputes each kind's fingerprint and redraws only a kind
 whose stored fingerprint differs, replacing both tables' rows for the redrawn kinds in one
-transaction. It runs as its own step of the sweep, after both TMDB steps and before `publish`, so
-the snapshot carries a current map. The
+transaction. It runs as its own step of the sweep, after every keyword writer, the film-suffix rule
+and both judges, and before `publish`, so the snapshot carries a map of that night's merges. The
 digest is SHA-256 over Python's `repr` of the row tuples, so only the Python package can
 recompute it; Plex TVX compares it and treats a mismatch as no map, then draws it live, which
 takes tens of seconds for the movies. A reader in another language reads the stored map as the
@@ -867,6 +868,19 @@ stops a run after N pairs have been asked about. The step needs
 `LLAMA_BROKER_BASE_URL` and `TYPESAFE_API_KEY`; with either unset the sweep reports it skipped.
 Nothing records that a keyword was examined, so a keyword that gains a new neighbour proposes the
 pair on the next run.
+
+`plexdb film-suffix-verdicts` runs just before the judge and adds rule rows: for each stored value
+"X film" whose bare "X" is also stored, a pair with `jev_score` 1.0 and `jev_model`
+`rule:film-suffix` (ADR-0018), replacing any score Jev gave it and keeping any `decision`. Bare
+values in `keywords.FILM_SUFFIX_KEEP` (`art`, `essay`, `race`, `student`) are never paired, because
+their "film" form means something else. A rule row the rule no longer holds for is deleted, so the
+judge asks about it again.
+
+**What counts as merged, and who applies it.** A pair is merged when `decision = 'accepted'`, or
+`decision` is NULL and `jev_score >= 0.9`. Merged pairs chain into groups, and each group folds into
+the member the most titles carry (`merge_review.merge_map`). Plex TVX's tag table, a tag's
+titles, the title map, its region labels and the tag network all read keywords through that fold
+(`explore.keyword_rows`); `enrichment` itself never changes.
 
 The vectors are cached in `keyword-embeddings.npz` beside the store (not in it): one unit vector
 per surface text and the model that made it. A sweep embeds only the texts the cache lacks, so a

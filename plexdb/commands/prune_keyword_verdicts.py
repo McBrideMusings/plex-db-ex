@@ -18,9 +18,10 @@ from ..sweep import Step
 
 NAME = "prune-keyword-verdicts"
 #: After every writer that stores keywords (50-60), so it sees this sweep's
-#: values, and before the judges (65, 66), so a moved value is judged the same
-#: night and no judge is asked about a value that is about to be deleted.
-ORDER = 64
+#: values, and before the film-suffix rule (64) and the judges (65, 66), so a moved
+#: value is judged the same night and no judge is asked about a value that is
+#: about to be deleted.
+ORDER = 63
 #: It needs no service, and a failure leaves only rows that match nothing.
 SWEEP = Step.BEST_EFFORT
 
