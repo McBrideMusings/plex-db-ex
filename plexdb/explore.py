@@ -198,16 +198,13 @@ MAP_NEIGHBOURS = 15
 MAP_MIN_DIST = 0.8
 MAP_SPREAD = 1.5
 
-#: Each axis is clipped to these percentiles before scaling to the unit square,
-#: so a few far outliers do not shrink everyone else. Points beyond land on the border.
-MAP_CLIP = (1.0, 99.0)
-
 #: Names how a map is drawn. It is part of a stored map's fingerprint, so
 #: changing the algorithm or any constant above and bumping this string makes
-#: every stored map stale and the next refresh redraws it.
+#: every stored map stale and the next refresh redraws it. `uniform` is the
+#: scaling: both axes by one factor, so the layout keeps its shape.
 MAP_RECIPE = (
     f"umap-cosine-svd{MAP_SVD_COMPONENTS}-df{MAP_MIN_DF}-nn{MAP_NEIGHBOURS}"
-    f"-md{MAP_MIN_DIST}-sp{MAP_SPREAD}-clip{MAP_CLIP[0]:g}-{MAP_CLIP[1]:g}"
+    f"-md{MAP_MIN_DIST}-sp{MAP_SPREAD}-uniform"
 )
 
 
@@ -216,7 +213,8 @@ class MapPoint:
     item_id: str
     title: str
     year: int | None
-    #: Position in the unit square. Only distances mean anything.
+    #: Position in the unit square; the longer axis spans it and the shorter
+    #: starts at 0. Only distances mean anything.
     x: float
     y: float
 
@@ -242,7 +240,9 @@ def _embed_2d(
     Shared by `title_map` (a row is a title, weighted by the keywords it
     carries) and `tag_network` (a row is a tag, weighted by the titles it is
     on): both reduce the sparse matrix with truncated SVD, then UMAP with
-    cosine distance, then clip outliers and scale to `[0, 1]`.
+    cosine distance, then scale both axes by one factor so the longer one spans
+    `[0, 1]`. Nothing is clipped: a clip pins the far rim of a real cluster onto
+    a straight border line, beside titles it has nothing to do with.
     """
     import numpy as np
     import umap
@@ -268,9 +268,9 @@ def _embed_2d(
         random_state=seed,
         n_jobs=1,  # a seed already forces one thread; saying so silences UMAP's warning
     ).fit_transform(reduced)
-    low, high = np.percentile(coords, MAP_CLIP, axis=0)
-    coords = np.clip(coords, low, high)
-    return (coords - low) / np.where(high > low, high - low, 1.0)
+    low = coords.min(axis=0)
+    span = float((coords.max(axis=0) - low).max())
+    return (coords - low) / (span if span > 0 else 1.0)
 
 
 def title_map(
@@ -456,7 +456,7 @@ NETWORK_EDGES_PER_NODE = 6
 #: network stale and the next refresh redraws it.
 NETWORK_RECIPE = (
     f"umap-cosine-svd{MAP_SVD_COMPONENTS}-df{NETWORK_MIN_DF}-nn{MAP_NEIGHBOURS}"
-    f"-md{MAP_MIN_DIST}-sp{MAP_SPREAD}-clip{MAP_CLIP[0]:g}-{MAP_CLIP[1]:g}"
+    f"-md{MAP_MIN_DIST}-sp{MAP_SPREAD}-uniform"
     f"-epn{NETWORK_EDGES_PER_NODE}"
 )
 

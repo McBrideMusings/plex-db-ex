@@ -132,10 +132,9 @@ def test_tag_network_positions_by_shared_titles_and_links_co_tags(store: Path) -
     assert all(0.0 <= n.x <= 1.0 and 0.0 <= n.y <= 1.0 for n in net.nodes)
 
 
-def test_embedding_clips_outliers_onto_the_unit_square_border() -> None:
-    """Each axis is clipped to the MAP_CLIP percentiles, so the far tails pile up
-    on 0 and 1: with 200 rows, 1% per tail is two points on each border, where an
-    unclipped layout reaches each border at exactly one point."""
+def test_embedding_scales_both_axes_by_one_factor_without_pinning_the_rim() -> None:
+    """Nothing piles onto the border: each axis reaches 0 at one point, only the
+    longer axis reaches 1, and the shorter keeps its share of the longer's span."""
     rows, cols = 200, 12
     cells_r = [i for i in range(rows) for _ in range(3)]
     cells_c = [(i * m + k) % cols for i in range(rows) for k, m in enumerate((1, 5, 7))]
@@ -145,9 +144,11 @@ def test_embedding_clips_outliers_onto_the_unit_square_border() -> None:
     for axis in (0, 1):
         column = coords[:, axis]
         assert column.min() == 0.0
-        assert column.max() == 1.0
-        assert (column == 0.0).sum() >= 2
-        assert (column == 1.0).sum() >= 2
+        assert (column == 0.0).sum() == 1
+    tops = sorted(coords.max(axis=0))
+    assert tops[1] == 1.0
+    assert 0.0 < tops[0] < 1.0
+    assert (coords == 1.0).sum() == 1
 
 
 def test_title_map_places_alike_titles_together(tmp_path: Path) -> None:
