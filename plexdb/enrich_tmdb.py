@@ -9,7 +9,7 @@ source is a snapshot, not an appended log — on a fresh fetch the whole set for
 that title-and-source is replaced, the same wipe-and-rewrite discipline the
 edges design uses.
 
-Every keyword is normalized and stemmed before it is stored
+Every keyword is normalized before it is stored
 (`keywords.normalize_keyword`) and every raw spelling TMDB returned is recorded
 in `keyword_forms`, so `heists` and `heist` land on one row and a reader can
 still show the spelling TMDB actually used.

@@ -601,7 +601,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "scikit-learn", specifier = ">=1.5" },
     { name = "scipy", specifier = ">=1.13" },
-    { name = "simplemma", specifier = ">=2.0.0" },
+    { name = "simplemma", specifier = "==2.0.0" },
     { name = "umap-learn", specifier = ">=0.5.12" },
 ]
 

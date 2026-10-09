@@ -305,7 +305,7 @@ def test_a_value_carried_only_as_a_spoiler_keyword_keeps_its_rows(tmp_path: Path
     assert stats.keywords_pruned == []
 
 
-def test_the_film_suffix_rule_pairs_x_film_with_a_stored_x_and_drops_a_pair_it_no_longer_holds(
+def test_the_film_suffix_rule_pairs_x_film_with_a_stored_x_and_drops_an_undecided_stale_pair(
     tmp_path: Path,
 ) -> None:
     store = tmp_path / "plexdb.db"
@@ -321,6 +321,7 @@ def test_the_film_suffix_rule_pairs_x_film_with_a_stored_x_and_drops_a_pair_it_n
             [
                 ("christmas", "christmas film", 0.09, "jev-1", AT, "rejected", AT),
                 ("horror", "horror film", 1.0, FILM_SUFFIX_MODEL, AT, None, None),
+                ("heist", "heist film", 1.0, FILM_SUFFIX_MODEL, AT, "rejected", AT),
             ],
         )
         conn.commit()
@@ -331,6 +332,7 @@ def test_the_film_suffix_rule_pairs_x_film_with_a_stored_x_and_drops_a_pair_it_n
         ).fetchall()
 
     assert (stats.pairs, stats.pairs_written, stats.pairs_removed) == (1, 1, 1)
-    assert [tuple(r) for r in rows] == [
+    assert sorted(tuple(r) for r in rows) == [
         ("christmas", "christmas film", 1.0, FILM_SUFFIX_MODEL, "rejected"),
+        ("heist", "heist film", 1.0, FILM_SUFFIX_MODEL, "rejected"),
     ]

@@ -530,6 +530,9 @@ def test_a_merge_verdict_folds_one_keyword_into_another_in_every_view_and_redraw
     assert a in {tag.value for tag in after.tags}
     assert b not in {tag.value for tag in after.tags}
     assert tagged == {r[0] for r in rows}
+    with open_store(store) as conn:
+        card = [k["value"] for k in title_keywords_json(conn, "imdb:tt2")]
+    assert a in card and b not in card
 
 
 def test_map_endpoint_serves_the_stored_map_and_draws_live_once_it_is_stale(

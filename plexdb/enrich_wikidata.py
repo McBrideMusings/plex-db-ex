@@ -4,7 +4,7 @@
 Four properties become keywords in the shared `keywords` namespace under
 `source = 'wikidata'` (ADR-0016): narrative location (P840), set in period
 (P2408), main subject (P921) and genre (P136). Each label goes through the same
-normalize-and-stem step TMDB's keywords do, with its raw spelling recorded in
+normalization TMDB's keywords do, with its raw spelling recorded in
 `keyword_forms`, so Wikidata's `heist film` and TMDB's `heist film` are one
 stored keyword.
 
@@ -25,7 +25,7 @@ correctly. A keyword every title now lists only as a main subject or genre loses
 its role.
 
 Award received (P166) is not a keyword. Its labels go verbatim into their own
-`awards` namespace, key `award` — stemming "Academy Award for Best Sound" would
+`awards` namespace, key `award` — normalizing "Academy Award for Best Sound" would
 make it unreadable and match nothing a keyword source says.
 
 Like TMDB, each title's rows under this source are a snapshot: a re-fetch

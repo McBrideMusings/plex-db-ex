@@ -2,7 +2,7 @@
 
 Every theme and mini-theme label on a film's page becomes a keyword in the
 shared `keywords` namespace under `source = 'letterboxd'` (ADR-0016), through
-the same normalize-and-stem step TMDB's keywords take, with its raw spelling in
+the same normalization TMDB's keywords take, with its raw spelling in
 `keyword_forms`. Letterboxd ranks nothing and states no role, so `rank` stays
 NULL and no `keyword_roles` row is written. Movies only: the lookup goes
 through a TMDB *movie* id (`letterboxd_client.py`).

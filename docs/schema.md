@@ -873,7 +873,7 @@ pair on the next run.
 "X film" whose bare "X" is also stored, a pair with `jev_score` 1.0 and `jev_model`
 `rule:film-suffix` (ADR-0018), replacing any score Jev gave it and keeping any `decision`. Bare
 values in `keywords.FILM_SUFFIX_KEEP` (`art`, `essay`, `race`, `student`) are never paired, because
-their "film" form means something else. A rule row the rule no longer holds for is deleted, so the
+their "film" form means something else. A rule row the rule no longer holds for is deleted unless a person has decided it, so the
 judge asks about it again.
 
 **What counts as merged, and who applies it.** A pair is merged when `decision = 'accepted'`, or
@@ -1077,7 +1077,9 @@ AniList titles. `keyword_pairs`, `keyword_roles`, `keyword_role_decisions` and
 `keyword_role_statements` rows move to the new value where the stem maps to exactly one; the rest
 stay until `prune-keyword-verdicts` finds their value gone. Two stems that land on one value on the
 same title merge, so `enrichment` may shrink by the count the migration declares. Values are still
-looked up by spelling through `keyword_forms`, so `reader_shape` stays 10.
+looked up by spelling through `keyword_forms`, so `reader_shape` stays 10. `idx_enrichment_ns_key`
+widens from `(namespace, key)` to `(namespace, key, value)`, so the titles carrying a keyword are
+found, and counted, from the index.
 
 ## Reading the store to build collections
 

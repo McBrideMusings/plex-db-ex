@@ -185,14 +185,15 @@ def titles_tagged(conn: sqlite3.Connection, kind: str, value: str) -> list[Title
         "ORDER BY COALESCE(i.title_sort, i.title) COLLATE NOCASE, i.year",
         (_NAMESPACE, _KEY, *group, kind),
     ).fetchall()
-    counts: dict[str, int] = {}
-    for item_id, *_ in found:
-        values = conn.execute(
-            "SELECT DISTINCT value FROM enrichment WHERE item_id = ? AND namespace = ? AND key = ?",
-            (item_id, _NAMESPACE, _KEY),
-        ).fetchall()
-        counts[item_id] = len({into.get(v, v) for (v,) in values})
-    return [Title(item_id=r[0], title=r[1], year=r[2], keywords=counts[r[0]]) for r in found]
+    carried: defaultdict[str, set[str]] = defaultdict(set)
+    ids = [r[0] for r in found]
+    for item_id, value in conn.execute(
+        "SELECT DISTINCT item_id, value FROM enrichment WHERE namespace = ? AND key = ? "
+        f"AND item_id IN ({','.join('?' * len(ids))})",
+        (_NAMESPACE, _KEY, *ids),
+    ):
+        carried[item_id].add(into.get(value, value))
+    return [Title(item_id=r[0], title=r[1], year=r[2], keywords=len(carried[r[0]])) for r in found]
 
 
 #: A tag on fewer titles than this cannot place a title near any other, so it
@@ -687,7 +688,7 @@ class RegionLabel(NamedTuple):
 
 
 def readable_forms(conn: sqlite3.Connection) -> dict[str, str]:
-    """For each stored (stemmed) keyword, the raw spelling to show a person.
+    """For each stored (normalized) keyword, the raw spelling to show a person.
 
     `keyword_forms` keeps every raw spelling that normalised to a stored
     keyword but not how often a source used it, so the choice is the shortest
@@ -789,15 +790,15 @@ def region_labels(
 
 
 def title_keywords(conn: sqlite3.Connection, item_id: str) -> list[str]:
-    """One title's keywords, by name."""
-    # DISTINCT: a keyword two sources both list on this title is one keyword
-    # on this title, not two entries in the list a person reads.
+    """One title's keywords, by name, with merged keywords folded as every other
+    view folds them (`merge_map`): a keyword two sources both list, or two that
+    merge, is one entry in the list a person reads."""
+    into = merge_map(conn)
     rows = conn.execute(
-        "SELECT DISTINCT value FROM enrichment WHERE item_id = ? AND namespace = ? AND key = ? "
-        "ORDER BY value",
+        "SELECT DISTINCT value FROM enrichment WHERE item_id = ? AND namespace = ? AND key = ?",
         (item_id, _NAMESPACE, _KEY),
     ).fetchall()
-    return [r[0] for r in rows]
+    return sorted({into.get(r[0], r[0]) for r in rows})
 
 
 def title_keywords_json(conn: sqlite3.Connection, item_id: str) -> list[dict[str, str]]:

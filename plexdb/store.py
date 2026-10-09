@@ -269,7 +269,7 @@ def _verify(
 
     A guarded table shrinking is not automatically "the history is gone": a
     migration can collapse rows on purpose (v10 merges keyword spellings that
-    normalize to the same fact once stemmed). Row counts alone cannot tell
+    normalize to the same fact). Row counts alone cannot tell
     that apart from real loss, so a migration that intends a shrink declares
     the exact row count it expects the table to land at (`schema.apply`'s
     `declared_shrinks`). A drop is accepted only when the actual after-count

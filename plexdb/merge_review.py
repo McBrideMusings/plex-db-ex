@@ -118,10 +118,13 @@ def merge_map(conn: sqlite3.Connection) -> dict[str, str]:
     for top in list(groups):
         if top not in groups[top]:
             groups[top].append(top)
+    members = sorted({keyword for group in groups.values() for keyword in group})
     carried = dict(
         conn.execute(
             "SELECT value, COUNT(DISTINCT item_id) FROM enrichment "
-            "WHERE namespace = 'keywords' AND key = 'keyword' GROUP BY value"
+            "WHERE namespace = 'keywords' AND key = 'keyword' "
+            f"AND value IN ({','.join('?' * len(members))}) GROUP BY value",
+            members,
         ).fetchall()
     )
     folded: dict[str, str] = {}

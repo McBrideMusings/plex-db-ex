@@ -21,8 +21,8 @@ from . import keywords
 from .errors import StoreError
 
 #: A migration is either a batch of SQL (every version through 9) or a Python
-#: step (version 10 on) — stemming needs the `snowballstemmer` package, which
-#: no SQL batch can call. `apply` below is what runs either kind.
+#: step (version 10 on) — normalizing a keyword needs `keywords.normalize_keyword`,
+#: which no SQL batch can call. `apply` below is what runs either kind.
 #:
 #: A Python step may return a mapping of guarded-table name -> the exact row
 #: count it expects that table to hold once the step lands, for a table it
@@ -406,8 +406,8 @@ CREATE TABLE title_map_state (
 #: column, backfilled the same way, so a per-title fetch cursor is scoped to
 #: one source exactly like the facts it vouches for.
 #:
-#: A plain function, not a SQL batch: stemming needs `snowballstemmer`, which
-#: no `CREATE TABLE`/`INSERT` can call. It rebuilds `enrichment` the same way
+#: A plain function, not a SQL batch: normalizing needs `keywords.normalize_keyword`,
+#: which no `CREATE TABLE`/`INSERT` can call. It rebuilds `enrichment` the same way
 #: `_V5` and `_V8` rebuilt `external_ids` — SQLite cannot add a column to an
 #: existing primary key — but has to do the column backfill and the value
 #: normalization in Python because the second one needs the stemmer.
@@ -749,7 +749,13 @@ DELETE FROM enrichment_cursor WHERE namespace = 'keywords' AND source = 'wikidat
 #:
 #: Re-deriving can merge two stems into one form on a title, so `enrichment` may
 #: shrink, by exactly the count this returns as a declared shrink.
+#:
+#: `idx_enrichment_ns_key` widens to `(namespace, key, value)`, so finding the
+#: titles that carry a keyword, or counting them, reads the index instead of
+#: every keyword row.
 def _V17(conn: sqlite3.Connection) -> DeclaredShrinks:
+    conn.execute("DROP INDEX idx_enrichment_ns_key")
+    conn.execute("CREATE INDEX idx_enrichment_ns_key ON enrichment(namespace, key, value)")
     conn.execute(
         """
         CREATE TABLE keyword_surfaces (
@@ -813,8 +819,9 @@ def _V17(conn: sqlite3.Connection) -> DeclaredShrinks:
 
 def _rekey(conn: sqlite3.Connection, rename: dict[str, str]) -> None:
     """Move every verdict row keyed on a renamed keyword to its new name. Where
-    two rows land on one key, the first kept wins; a pair whose two keywords
-    land on one name is no pair and is dropped."""
+    two rows land on one key, a row carrying a person's decision wins over one
+    without, then the newer; a pair whose two keywords land on one name is no
+    pair and is dropped."""
     conn.execute("CREATE TEMP TABLE v17_rename (old TEXT PRIMARY KEY, new TEXT NOT NULL)")
     conn.executemany("INSERT INTO v17_rename VALUES (?, ?)", rename.items())
     new = "coalesce((SELECT new FROM v17_rename WHERE old = {col}), {col})"
@@ -827,7 +834,10 @@ def _rekey(conn: sqlite3.Connection, rename: dict[str, str]) -> None:
         select = ", ".join(new.format(col=c) if c in cols else c for c in all_cols)
         conn.execute(f"CREATE TEMP TABLE v17_{table} AS SELECT {select} FROM {table}")
         conn.execute(f"DELETE FROM {table}")
-        conn.execute(f"INSERT OR IGNORE INTO {table} SELECT * FROM v17_{table}")
+        newest = "decided_at" if "decided_at" in all_cols else "stated_at"
+        conn.execute(
+            f"INSERT OR IGNORE INTO {table} SELECT * FROM v17_{table} ORDER BY {newest} DESC"
+        )
         conn.execute(f"DROP TABLE v17_{table}")
     all_cols = [r[1] for r in conn.execute("PRAGMA table_info(keyword_pairs)")]
     a, b = new.format(col="keyword_a"), new.format(col="keyword_b")
@@ -839,7 +849,8 @@ def _rekey(conn: sqlite3.Connection, rename: dict[str, str]) -> None:
     conn.execute("DELETE FROM keyword_pairs")
     conn.execute(
         f"INSERT OR IGNORE INTO keyword_pairs (keyword_a, keyword_b, {rest}) "
-        f"SELECT keyword_a, keyword_b, {rest} FROM v17_pairs WHERE keyword_a < keyword_b"
+        f"SELECT keyword_a, keyword_b, {rest} FROM v17_pairs WHERE keyword_a < keyword_b "
+        "ORDER BY decision IS NULL, coalesce(decided_at, judged_at) DESC"
     )
     conn.execute("DROP TABLE v17_pairs")
     conn.execute("DROP TABLE v17_rename")

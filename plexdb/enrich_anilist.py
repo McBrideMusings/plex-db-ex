@@ -14,7 +14,7 @@ tags merge into the one title: a tag keeps its highest rank across the entries,
 and is a spoiler if any entry flags it as one, so no season's spoiler reaches
 key `keyword`.
 
-Each tag goes through the same normalize-and-stem step TMDB's keywords do,
+Each tag goes through the same normalization TMDB's keywords do,
 under `source = 'anilist'`, with AniList's 0–100 rank in `enrichment.rank`
 verbatim. A spoiler tag (`isMediaSpoiler` or `isGeneralSpoiler`) is stored under
 key `spoiler_keyword` instead of `keyword`, so a reader of key `keyword` never

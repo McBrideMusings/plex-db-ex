@@ -439,7 +439,8 @@ def write_film_suffix_verdicts(conn: sqlite3.Connection, judged_at: str) -> Film
 
     Each pair gets `jev_score` 1.0 under `FILM_SUFFIX_MODEL`, replacing any score
     Jev gave it; a person's `decision` on the pair stays. A rule row the rule no
-    longer holds for is deleted, so the next judge run asks Jev about it again.
+    longer holds for is deleted, unless a person has decided it, so the next judge
+    run asks Jev about it again.
     One transaction.
     """
     stats = FilmSuffixStats()
@@ -461,10 +462,14 @@ def write_film_suffix_verdicts(conn: sqlite3.Connection, judged_at: str) -> Film
             )
         }
         stale = held - set(pairs)
-        conn.executemany(
-            "DELETE FROM keyword_pairs WHERE keyword_a = ? AND keyword_b = ?", sorted(stale)
+        stats.pairs_removed = sum(
+            conn.execute(
+                "DELETE FROM keyword_pairs WHERE keyword_a = ? AND keyword_b = ? "
+                "AND decision IS NULL",
+                pair,
+            ).rowcount
+            for pair in sorted(stale)
         )
-        stats.pairs_removed = len(stale)
         fresh = [pair for pair in pairs if pair not in held]
         conn.executemany(
             "INSERT INTO keyword_pairs "

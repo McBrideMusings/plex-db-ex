@@ -10,7 +10,9 @@ dependencies = [
     "scikit-learn>=1.5",
     "scipy>=1.13",
     "umap-learn>=0.5.12",
-    "simplemma>=2.0.0",
+    # Pinned: stored keyword values come from its dictionary, so a new version
+    # is a migration that re-derives them (keywords.rederive_keywords).
+    "simplemma==2.0.0",
 ]
 
 [project.scripts]

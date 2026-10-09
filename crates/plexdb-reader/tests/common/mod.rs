@@ -107,7 +107,7 @@ INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) VALU
     ('imdb:tt1', 'keywords', 'trakt', 'keyword', 'heist', '2026-02-01T00:00:00+00:00');
 
 -- Raw spellings, exactly as the source spelled them, capitalisation included,
--- recorded against the stored, stemmed form.
+-- recorded against the stored, normalized form.
 INSERT INTO keyword_forms (surface, keyword) VALUES
     ('heist',     'heist'),
     ('Heists',    'heist'),
