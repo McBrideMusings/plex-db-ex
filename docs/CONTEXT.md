@@ -49,8 +49,8 @@ A writer owns one source within a namespace and may wipe and rewrite only that
 source's rows.
 
 **Keyword pair**:
-Two stored keywords a judge has been asked about — today Jev, Typesafe's model — with the judge's
-score and, once a person has ruled, their decision. Whether a pair counts as merged is a reader's threshold, never a stored
+Two stored keywords a judge has scored — Jev, Typesafe's model, or the deterministic film-suffix
+rule — with that score and, once a person has ruled, their decision. Whether a pair counts as merged is a reader's threshold, never a stored
 flag.
 _Avoid_: synonym row, merge
 
