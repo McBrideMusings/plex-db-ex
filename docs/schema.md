@@ -744,8 +744,8 @@ title_map_state  kind PK, fingerprint TEXT, unplaced INTEGER, computed_at TEXT
 
 `title_map` holds the default map of Plex TVX's Map view: each title of `kind`
 (`movie` or `show`) with a position in the unit square. Only distances mean anything. It is the
-map with no noise tag excluded, drawn from the `tmdb_keywords` rows by IDF-weighted keyword
-vectors, truncated SVD to 50 dimensions and UMAP with cosine distance. `item_id` carries no
+map with no noise tag excluded, drawn from the `keywords` rows, merges folded, by IDF-weighted keyword
+vectors laid out whole by UMAP with cosine distance (`min_dist` 0.1). `item_id` carries no
 foreign key: a title that has left `items` drops out of Plex TVX's join, and the next refresh
 redraws the map without it.
 
@@ -802,8 +802,8 @@ tag_network_state  kind PK, fingerprint TEXT, computed_at TEXT
 (`movie` or `show`) that clears the Graph view's document-frequency floor, with its document
 frequency and a position in the unit square. Only distances mean anything. It is the network
 with no noise tag excluded, drawn the same way `title_map` is: IDF-weighted vectors — a tag's
-vector is which titles carry it, the transpose of `title_map`'s — truncated SVD to 50
-dimensions and UMAP with cosine distance. `tag_network_edge` holds each tag's strongest
+vector is which titles carry it, the transpose of `title_map`'s — laid out whole by UMAP with
+cosine distance. `tag_network_edge` holds each tag's strongest
 co-tags: `a` and `b` (`a < b`, each pair once), and how many titles carry both. Neither table
 carries a foreign key: a tag or title that drops out of `enrichment` or `items` drops out of
 the next refresh's network without it.

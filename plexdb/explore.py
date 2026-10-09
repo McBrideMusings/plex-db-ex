@@ -200,27 +200,24 @@ def titles_tagged(conn: sqlite3.Connection, kind: str, value: str) -> list[Title
 #: is left out of the map's vectors.
 MAP_MIN_DF = 2
 
-#: Dimensions the keyword vectors are reduced to before UMAP, which is slow
-#: and noisy on 19,000 sparse columns and fine on 50 dense ones.
-MAP_SVD_COMPONENTS = 50
-
 #: UMAP's neighbourhood size: how many nearest titles each title's position is
 #: pulled towards. Its own default; lowered only when a store is too small for it.
 #: Larger values pack the centre of the movie map tighter.
 MAP_NEIGHBOURS = 15
 
-#: UMAP's `min_dist` and `spread`: how tightly it may pack points together. A
-#: larger `min_dist` spreads a dense cluster out instead of piling it up.
-MAP_MIN_DIST = 0.8
-MAP_SPREAD = 1.5
+#: UMAP's `min_dist` and `spread`: how tightly it may pack points together. Its
+#: own defaults: a title's 12 keyword-cosine neighbours then sit a median 2.8% of
+#: the movie map's width away, where `min_dist` 0.8 left them at 4.7%.
+MAP_MIN_DIST = 0.1
+MAP_SPREAD = 1.0
 
 #: Names how a map is drawn. It is part of a stored map's fingerprint, so
 #: changing the algorithm or any constant above and bumping this string makes
-#: every stored map stale and the next refresh redraws it. `uniform` is the
-#: scaling: both axes by one factor, so the layout keeps its shape.
+#: every stored map stale and the next refresh redraws it. `full` is the input:
+#: the whole sparse keyword vector, every tag kept. `uniform` is the scaling:
+#: both axes by one factor, so the layout keeps its shape.
 MAP_RECIPE = (
-    f"umap-cosine-svd{MAP_SVD_COMPONENTS}-df{MAP_MIN_DF}-nn{MAP_NEIGHBOURS}"
-    f"-md{MAP_MIN_DIST}-sp{MAP_SPREAD}-uniform"
+    f"umap-cosine-full-df{MAP_MIN_DF}-nn{MAP_NEIGHBOURS}-md{MAP_MIN_DIST}-sp{MAP_SPREAD}-uniform"
 )
 
 
@@ -255,26 +252,22 @@ def _embed_2d(
 
     Shared by `title_map` (a row is a title, weighted by the keywords it
     carries) and `tag_network` (a row is a tag, weighted by the titles it is
-    on): both reduce the sparse matrix with truncated SVD, then UMAP with
-    cosine distance, then scale both axes by one factor so the longer one spans
-    `[0, 1]`. Nothing is clipped: a clip pins the far rim of a real cluster onto
-    a straight border line, beside titles it has nothing to do with.
+    on): both hand the whole sparse matrix to UMAP with cosine distance, so a
+    tag carried by two titles counts as much as it does in a cosine score, then
+    scale both axes by one factor so the longer one spans `[0, 1]`. Nothing is
+    clipped: a clip pins the far rim of a real cluster onto a straight border
+    line, beside titles it has nothing to do with.
     """
     import numpy as np
     import umap
     from scipy.sparse import csr_matrix
-    from sklearn.decomposition import TruncatedSVD
     from sklearn.preprocessing import normalize
 
     if rows < 5 or cols < 3:
         # Too few vectors for a layout to mean anything; lay them on a line.
         return np.array([[i / max(1, rows - 1), 0.5] for i in range(rows)])
     cells_r, cells_c, cells_v = cells
-    matrix = csr_matrix((cells_v, (cells_r, cells_c)), shape=(rows, cols))
-    matrix = normalize(matrix)
-    components = min(MAP_SVD_COMPONENTS, cols - 1, rows - 1)
-    reduced = TruncatedSVD(n_components=components, random_state=seed).fit_transform(matrix)
-    reduced = normalize(reduced)
+    matrix = normalize(csr_matrix((cells_v, (cells_r, cells_c)), shape=(rows, cols)))
     coords = umap.UMAP(
         n_components=2,
         n_neighbors=min(MAP_NEIGHBOURS, rows - 1),
@@ -283,7 +276,7 @@ def _embed_2d(
         spread=MAP_SPREAD,
         random_state=seed,
         n_jobs=1,  # a seed already forces one thread; saying so silences UMAP's warning
-    ).fit_transform(reduced)
+    ).fit_transform(matrix)
     low = coords.min(axis=0)
     span = float((coords.max(axis=0) - low).max())
     return (coords - low) / (span if span > 0 else 1.0)
@@ -296,8 +289,8 @@ def title_map(
 
     A title's vector is its tags weighted by the same IDF the table shows,
     normalised to unit length so a title with forty tags is not louder than one
-    with five — the cosine a keyword scorer compares. Truncated SVD takes it to
-    `MAP_SVD_COMPONENTS` dimensions and UMAP (cosine distance) to two. `seed`
+    with five — the cosine a keyword scorer compares. UMAP (cosine distance)
+    takes the whole sparse vector to two dimensions. `seed`
     fixes both, so the same store and the same exclusions draw the same map.
 
     numpy and scikit-learn are imported (by `_embed_2d`) rather than at the top
@@ -468,7 +461,7 @@ NETWORK_EDGES_PER_NODE = 6
 #: shared embedding recipe or either constant above makes every stored
 #: network stale and the next refresh redraws it.
 NETWORK_RECIPE = (
-    f"umap-cosine-svd{MAP_SVD_COMPONENTS}-df{NETWORK_MIN_DF}-nn{MAP_NEIGHBOURS}"
+    f"umap-cosine-full-df{NETWORK_MIN_DF}-nn{MAP_NEIGHBOURS}"
     f"-md{MAP_MIN_DIST}-sp{MAP_SPREAD}-uniform"
     f"-epn{NETWORK_EDGES_PER_NODE}"
 )
@@ -590,7 +583,7 @@ def tag_network(
     positioned by title co-membership and linked to its strongest co-tags.
 
     A tag's vector is which titles carry it — the transpose of `title_map`'s
-    title-by-tag matrix — reduced by the same truncated-SVD-then-UMAP recipe
+    title-by-tag matrix — laid out by the same UMAP recipe
     (`_embed_2d`), so two tags carried by the same titles sit close together.
     Computed once at `min_df`, the widest the page's slider allows: raising the
     slider only hides nodes and edges client-side, so it never re-fetches or
@@ -614,7 +607,7 @@ def tag_network_streaming(
 ) -> dict[str, object]:
     """Like `tag_network`, but calls `emit` with each of its first two real
     stages as it completes — filtered vocab (fast), then co-occurrence edges —
-    and returns the third, the laid-out nodes (the slow SVD+UMAP step), as the
+    and returns the third, the laid-out nodes (the slow UMAP step), as the
     `"stage": "done"` payload rather than emitting it: the caller's
     `_KeyedCache.get_streaming` emits the finished value itself, on every path.
     """
@@ -1959,7 +1952,7 @@ def make_server(
                 # A write failure here means the client is gone — a closed
                 # tab, or a kind/noise change that aborted the fetch. Swallow
                 # it rather than let it escape `networks.get_streaming`: the
-                # SVD+UMAP layout this call may already be most of the way
+                # UMAP layout this call may already be most of the way
                 # through is expensive, and single-flight only pays for it
                 # once if the compute is allowed to run to completion and
                 # land in the cache regardless of who is still listening.
