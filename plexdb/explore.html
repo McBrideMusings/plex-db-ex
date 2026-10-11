@@ -2138,7 +2138,9 @@ function paintList() {
   qEl("mlhead").textContent = `All mappings · ${fmt(merged)} merged, ${fmt(m.decided.length - merged)} rejected`;
   if (!shown.length) { qEl("mrows").replaceChildren(el("li", { className: "empty" }, "None.")); return; }
   const rows = shown.slice(0, 300).map(p => {
-    const label = p.decision === "accepted" ? "accepted" : p.decision === "rejected" ? "rejected" : "Jev ≥ 0.9";
+    // A rule writes its verdict at score 1.0 like a confident Jev call, so only `model` tells them apart.
+    const judge = p.model && p.model.startsWith("rule:") ? `${p.model.slice(5)} rule` : "Jev ≥ 0.9";
+    const label = p.decision === "accepted" ? "accepted" : p.decision === "rejected" ? "rejected" : judge;
     const badges = [el("span", { className: "badge" + (p.decision === "rejected" ? " rejected" : "") }, label)];
     if (p.pending) badges.push(el("span", { className: "badge", title: "In merge_decisions.json; the next sweep writes it into the store." }, "applies at next sweep"));
     const when = p.decided_at ? ` · ${p.decided_at.replace("T", " ").replace("+00:00", " UTC")}` : "";
