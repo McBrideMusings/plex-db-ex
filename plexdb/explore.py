@@ -2024,8 +2024,9 @@ def make_server(
                 # decided, so an anonymous caller cannot grow the file with made-up names.
                 with open_readonly(store_path) as conn:
                     require_pair(conn, (a, b))
-                    entry = merges.record((a, b), decision)
-                    pair = review_rows(conn, {(a, b): entry}, readable_forms(conn), (a, b))[0]
+                    forms = readable_forms(conn)
+                    entry = merges.record((a, b), decision, forms)
+                    pair = review_rows(conn, {(a, b): entry}, forms, (a, b))[0]
                 print(
                     f"explore: merge decision {a!r} {b!r} {decision} -> {merges.path}",
                     file=sys.stderr,
@@ -2038,8 +2039,9 @@ def make_server(
                 # As for a pair: only a (keyword, role) the table holds may be decided.
                 with open_readonly(store_path) as conn:
                     require_role(conn, keyword, role)
-                    entry = roles.record((keyword, role), decision)
-                    cell = role_cell(conn, roles.latest(), readable_forms(conn), keyword, role)
+                    forms = readable_forms(conn)
+                    entry = roles.record((keyword, role), decision, forms)
+                    cell = role_cell(conn, roles.latest(), forms, keyword, role)
                 print(
                     f"explore: role decision {keyword!r} {role} {decision} -> {roles.path}",
                     file=sys.stderr,

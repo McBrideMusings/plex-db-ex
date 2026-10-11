@@ -21,7 +21,7 @@ from typing import ClassVar
 
 from .decisions import DecisionsFile
 from .errors import RoleDecisionsError
-from .keywords import ROLES
+from .keywords import ROLES, normalize_keyword
 
 __all__ = [
     "LIST_LIMIT",
@@ -47,20 +47,33 @@ class NoSuchRole(LookupError):
 
 
 class RoleDecisions(DecisionsFile):
-    """`role_decisions.json`: one entry per (keyword, role)."""
+    """`role_decisions.json`: one entry per (keyword, role), keyed `(surface, role)`, one
+    spelling of the keyword."""
 
-    KEY: ClassVar[tuple[str, ...]] = ("keyword", "role")
+    KEY: ClassVar[tuple[str, ...]] = ("surface", "role")
     ERROR = RoleDecisionsError
     NOUN = "role decisions"
 
     @classmethod
     def key_problem(cls, key: tuple[str, ...]) -> str | None:
-        keyword, role = key
-        if not keyword:
-            return "has an empty keyword"
+        surface, role = key
+        if not surface:
+            return "has an empty surface"
         if role not in ROLES:
             return f"has role {role!r}, expected one of {ROLES}"
         return None
+
+    @classmethod
+    def resolve(cls, key: tuple[str, ...]) -> tuple[str, ...] | None:
+        """The stored (keyword, role); None when the spelling normalizes to nothing."""
+        surface, role = key
+        keyword = normalize_keyword(surface)
+        return (keyword, role) if keyword else None
+
+    @classmethod
+    def spell(cls, key: tuple[str, ...], forms: dict[str, str]) -> tuple[str, ...]:
+        keyword, role = key
+        return forms.get(keyword, keyword), role
 
     def check(self, keyword: object, role: object, decision: object) -> tuple[str, str, str]:
         """The three fields as text, or `ValueError` saying which is wrong."""
@@ -152,7 +165,7 @@ def roles_json(
     )
     page = matched[:LIST_LIMIT]
 
-    ruled = {
+    ruled: dict[tuple[str, ...], tuple[str, str]] = {
         (keyword, role): (decision, decided_at)
         for keyword, role, decision, decided_at in conn.execute(
             "SELECT keyword, role, decision, decided_at FROM keyword_role_decisions"
@@ -192,7 +205,7 @@ def roles_json(
     # A decision whose verdict is gone (a restored older store) is one the fold ignores and a
     # POST cannot clear, so it is not listed.
     decided = []
-    for key in ruled.keys() | {(e["keyword"], e["role"]) for e in overlay.values()}:
+    for key in ruled.keys() | overlay.keys():
         keyword, role = key
         decision, decided_at, pending = _decision(ruled.get(key), overlay.get(key))
         if decision is None or not has_verdict(conn, keyword, role):

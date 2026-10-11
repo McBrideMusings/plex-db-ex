@@ -6,6 +6,11 @@ folds that file into the store. `merge_decisions.json` (the Merges tab) and
 `role_decisions.json` (the Roles tab) share this shape: a list of entries, each a few
 text fields naming what was decided, plus `decision` (`accepted`, `rejected` or
 `cleared`) and `decided_at`. Entries apply in order, so the last one per key wins.
+
+An entry names a keyword by a raw spelling (`keyword_forms.surface`), never by its
+stored value, and every reader resolves it with the current `normalize_keyword`. A
+migration that changes normalization renames stored values, never spellings, so a
+decision follows its keyword to the new value with nothing rewriting the file.
 """
 
 from __future__ import annotations
@@ -13,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -71,7 +77,7 @@ class FoldStats:
     unmatched: int = 0
 
 
-class DecisionsFile:
+class DecisionsFile(ABC):
     """One decisions file, written the way `SavedQueries` writes its file.
 
     Replaced by rename so a reader never sees half of it, under a lock, and bounded
@@ -79,8 +85,9 @@ class DecisionsFile:
     applies entries in order), so a write keeps one entry per key and the file's
     size is bounded by the number of rows the store holds.
 
-    A subclass names its key fields (`KEY`), its error type, and what else an
-    entry's key must satisfy (`key_problem`).
+    A subclass names its key fields (`KEY`), its error type, what else an entry's
+    key must satisfy (`key_problem`), and how an entry's spellings and the stored
+    key they name turn into each other (`resolve`, `spell`).
     """
 
     MAX_ENTRIES = 50_000
@@ -107,6 +114,26 @@ class DecisionsFile:
     def key_problem(cls, key: tuple[str, ...]) -> str | None:
         """Why `key` cannot be an entry's key, or None."""
         return None
+
+    @classmethod
+    @abstractmethod
+    def resolve(cls, key: tuple[str, ...]) -> tuple[str, ...] | None:
+        """The stored key an entry's `key` names under the current normalization, or
+        None when it names nothing a row could be keyed on."""
+        raise NotImplementedError
+
+    @classmethod
+    @abstractmethod
+    def spell(cls, key: tuple[str, ...], forms: dict[str, str]) -> tuple[str, ...]:
+        """The entry key naming stored `key`, each keyword spelled as `forms` shows it."""
+        raise NotImplementedError
+
+    @classmethod
+    def resolved(
+        cls, entries: list[dict[str, str]]
+    ) -> list[tuple[tuple[str, ...] | None, dict[str, str]]]:
+        """Each entry in order, beside the stored key it names (`resolve`)."""
+        return [(cls.resolve(tuple(e[field] for field in cls.KEY)), e) for e in entries]
 
     @classmethod
     def parse(cls, path: Path, text: str) -> list[dict[str, str]]:
@@ -166,9 +193,6 @@ class DecisionsFile:
             raise ValueError(f"decision must be one of {', '.join(DECISIONS)}")
         return value
 
-    def _key(self, entry: dict[str, str]) -> tuple[str, ...]:
-        return tuple(entry[field] for field in self.KEY)
-
     def _write(self, body: str) -> None:
         tmp = self._path.with_name(self._path.name + ".tmp")
         try:
@@ -180,20 +204,28 @@ class DecisionsFile:
             tmp.unlink(missing_ok=True)
 
     def latest(self) -> dict[tuple[str, ...], dict[str, str]]:
-        """The last entry for each key."""
+        """The last entry for each stored key; an entry naming none is left out."""
         with self._lock:
-            return {self._key(e): e for e in self.load(self._path) or []}
+            entries = self.load(self._path) or []
+        return {key: e for key, e in self.resolved(entries) if key is not None}
 
-    def record(self, key: tuple[str, ...], decision: str) -> dict[str, str]:
-        """Append one decision, dropping the key's earlier entries; return the entry.
+    def record(self, key: tuple[str, ...], decision: str, forms: dict[str, str]) -> dict[str, str]:
+        """Append one decision on stored `key`, spelled through `forms`, dropping every
+        earlier entry naming the same key; return the entry.
 
         The caller has checked the fields and that the store has a row for `key`.
+        `ValueError` when the spelling would not resolve back to `key`, since the fold
+        would then apply the decision to some other row.
         """
-        entry = dict(zip(self.KEY, key, strict=True))
+        spelled = self.spell(key, forms)
+        if self.resolve(spelled) != key:
+            raise ValueError(f"no spelling of {key!r} normalizes back to it")
+        entry = dict(zip(self.KEY, spelled, strict=True))
         entry["decision"] = decision
         entry["decided_at"] = datetime.now(UTC).isoformat(timespec="seconds")
         with self._lock:
-            kept = [e for e in self.load(self._path) or [] if self._key(e) != key]
+            entries = self.load(self._path) or []
+            kept = [e for named, e in self.resolved(entries) if named != key]
             kept.append(entry)
             if len(kept) > self.MAX_ENTRIES:
                 raise ValueError(f"too many {self.NOUN} (max {self.MAX_ENTRIES})")

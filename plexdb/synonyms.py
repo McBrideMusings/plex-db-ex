@@ -107,15 +107,18 @@ def merge_decisions_path(config: Config) -> Path:
 def fold_merge_decisions(conn: sqlite3.Connection, path: Path) -> FoldStats:
     """Apply `path` to `keyword_pairs.decision`; a missing file is no decisions.
 
-    The file is a list of `{keyword_a, keyword_b, decision, decided_at}`, where
-    `decision` is `accepted`, `rejected` or `cleared`. Entries apply in list
+    The file is a list of `{surface_a, surface_b, decision, decided_at}`, where
+    `decision` is `accepted`, `rejected` or `cleared`. Each entry names the pair
+    its two spellings normalize to now (`MergeDecisions.resolve`), so a decision
+    survives a migration that renames stored values. Entries apply in list
     order, so the last entry for a pair wins. `cleared` sets `decision` and
     `decided_at` back to NULL, and deletes a row no judge wrote. A decision on a
     pair with no row, whose two keywords are both stored, inserts a row with only
-    the decision (schema v18, ADR-0020); one naming a keyword no title carries is
-    unmatched. The whole file is validated before the first row changes, and
-    applied in one transaction. It is applied every run, so the file stays the
-    record of the latest decision per pair.
+    the decision (schema v18, ADR-0020); one naming a keyword no title carries,
+    or two spellings that now normalize to one value, is unmatched. The whole
+    file is validated before the first row changes, and applied in one
+    transaction. It is applied every run, so the file stays the record of the
+    latest decision per pair.
     """
     stats = FoldStats()
     entries = MergeDecisions.load(path)
@@ -124,8 +127,10 @@ def fold_merge_decisions(conn: sqlite3.Connection, path: Path) -> FoldStats:
     stats.file_found = True
     stats.entries = len(entries)
     with conn:
-        for entry in entries:
-            pair = (entry["keyword_a"], entry["keyword_b"])
+        for pair, entry in MergeDecisions.resolved(entries):
+            if pair is None:
+                stats.unmatched += 1
+                continue
             if entry["decision"] == "cleared":
                 changed = conn.execute(
                     "DELETE FROM keyword_pairs WHERE keyword_a = ? AND keyword_b = ? "

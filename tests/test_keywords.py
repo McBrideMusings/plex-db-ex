@@ -16,15 +16,20 @@ from plexdb.keywords import (
     RawKeyword,
     normalize_keyword,
     prune_keyword_verdicts,
+    readable_surfaces,
     rederive_keywords,
     state_role,
     upsert_keyword_form,
     write_film_suffix_verdicts,
     write_title_keywords,
 )
+from plexdb.merge_review import MergeDecisions
+from plexdb.role_review import RoleDecisions
 from plexdb.roles import fold_role_decisions
+from plexdb.schema import _rekey
 from plexdb.store import init as init_store
 from plexdb.store import open_store
+from plexdb.synonyms import fold_merge_decisions
 
 
 def test_the_constant_is_exactly_the_set_the_schema_accepts(tmp_path: Path) -> None:
@@ -277,21 +282,62 @@ def test_a_pruned_decision_comes_back_from_its_file_once_the_value_is_judged_aga
     store = _judged_store(tmp_path)
     decisions = tmp_path / "role_decisions.json"
     decisions.write_text(
-        json.dumps([{"keyword": OLD, "role": "theme", "decision": "accepted", "decided_at": AT}])
+        json.dumps(
+            [{"surface": "Hidden World", "role": "theme", "decision": "accepted", "decided_at": AT}]
+        )
     )
     with open_store(store) as conn:
         conn.execute("DELETE FROM enrichment WHERE value = ?", (OLD,))
         conn.commit()
         prune_keyword_verdicts(conn)
         assert fold_role_decisions(conn, decisions).unmatched == 1
-        _carry(conn, OLD)
-        _judge(conn, OLD)
+        _carry(conn, "hidden world")
+        _judge(conn, "hidden world")
         conn.commit()
         fold_role_decisions(conn, decisions)
         restored = conn.execute(
-            "SELECT decision FROM keyword_role_decisions WHERE keyword = ?", (OLD,)
+            "SELECT decision FROM keyword_role_decisions WHERE keyword = 'hidden world'"
         ).fetchone()
     assert tuple(restored) == ("accepted",)
+
+
+def test_an_unfolded_decision_follows_its_keyword_through_a_normalization_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = tmp_path / "plexdb.db"
+    init_store(store)
+    with open_store(store) as conn:
+        conn.execute("INSERT INTO items (item_id, type, title) VALUES ('imdb:tt1', 'movie', 'One')")
+        raw = [RawKeyword("Documentary Films"), RawKeyword("Heists")]
+        write_title_keywords(conn, "imdb:tt1", "tmdb", raw, AT)
+        _judge(conn, "documentary film")
+        conn.commit()
+        forms = readable_surfaces(conn)
+    merges = MergeDecisions(tmp_path / "merge_decisions.json")
+    roles = RoleDecisions(tmp_path / "role_decisions.json")
+    merges.record(("documentary film", "heist"), "accepted", forms)
+    roles.record(("documentary film", "theme"), "accepted", forms)
+
+    # A new rule renames the value, and a migration re-derives the store and moves its
+    # verdict rows, as v17 did; the files are never touched.
+    def renamed(surface: str) -> str:
+        value = normalize_keyword(surface)
+        return "nonfiction" if value == "documentary film" else value
+
+    for module in ("plexdb.keywords", "plexdb.merge_review", "plexdb.role_review"):
+        monkeypatch.setattr(f"{module}.normalize_keyword", renamed)
+    with open_store(store) as conn:
+        rederive_keywords(conn)
+        _rekey(conn, {"documentary film": "nonfiction"})
+        conn.commit()
+        assert fold_merge_decisions(conn, merges.path).matched == 1
+        assert fold_role_decisions(conn, roles.path).matched == 1
+        pairs = conn.execute("SELECT keyword_a, keyword_b, decision FROM keyword_pairs").fetchall()
+        ruled = conn.execute(
+            "SELECT keyword, role, decision FROM keyword_role_decisions"
+        ).fetchall()
+    assert [tuple(r) for r in pairs] == [("heist", "nonfiction", "accepted")]
+    assert [tuple(r) for r in ruled] == [("nonfiction", "theme", "accepted")]
 
 
 def test_a_value_carried_only_as_a_spoiler_keyword_keeps_its_rows(tmp_path: Path) -> None:

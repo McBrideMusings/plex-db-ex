@@ -20,7 +20,7 @@ from typing import Any, ClassVar
 
 from .decisions import DecisionsFile
 from .errors import MergeDecisionsError
-from .keywords import FILM_SUFFIX_MODEL, KEYWORD_KEY, NAMESPACE
+from .keywords import FILM_SUFFIX_MODEL, KEYWORD_KEY, NAMESPACE, normalize_keyword
 
 __all__ = [
     "MERGE_AT",
@@ -49,15 +49,31 @@ class NoSuchPair(LookupError):
 
 
 class MergeDecisions(DecisionsFile):
-    """`merge_decisions.json`: one entry per pair, keyed `(keyword_a, keyword_b)`."""
+    """`merge_decisions.json`: one entry per pair, keyed `(surface_a, surface_b)`, one
+    spelling of each keyword."""
 
-    KEY: ClassVar[tuple[str, ...]] = ("keyword_a", "keyword_b")
+    KEY: ClassVar[tuple[str, ...]] = ("surface_a", "surface_b")
     ERROR = MergeDecisionsError
     NOUN = "merge decisions"
 
     @classmethod
     def key_problem(cls, key: tuple[str, ...]) -> str | None:
-        return None if key[0] < key[1] else "must have keyword_a < keyword_b"
+        if not all(key):
+            return "has an empty surface"
+        return None if key[0] != key[1] else "names one surface twice"
+
+    @classmethod
+    def resolve(cls, key: tuple[str, ...]) -> tuple[str, ...] | None:
+        """The stored pair, in `keyword_a < keyword_b` order; None when a spelling
+        normalizes to nothing or both normalize to one value, which is no pair."""
+        a, b = (normalize_keyword(surface) for surface in key)
+        if not a or not b or a == b:
+            return None
+        return (a, b) if a < b else (b, a)
+
+    @classmethod
+    def spell(cls, key: tuple[str, ...], forms: dict[str, str]) -> tuple[str, ...]:
+        return tuple(forms.get(keyword, keyword) for keyword in key)
 
     def check(self, keyword_a: object, keyword_b: object, decision: object) -> tuple[str, str, str]:
         """The three fields as text, or `ValueError` saying which is wrong."""

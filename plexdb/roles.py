@@ -151,8 +151,10 @@ def role_decisions_path(config: Config) -> Path:
 def fold_role_decisions(conn: sqlite3.Connection, path: Path) -> FoldStats:
     """Apply `path` to `keyword_role_decisions`; a missing file is no decisions.
 
-    The file is a list of `{keyword, role, decision, decided_at}`, where `decision`
-    is `accepted`, `rejected` or `cleared`. Entries apply in list order, so the last
+    The file is a list of `{surface, role, decision, decided_at}`, where `decision`
+    is `accepted`, `rejected` or `cleared`. Each entry names the keyword its spelling
+    normalizes to now (`RoleDecisions.resolve`), so a decision survives a migration
+    that renames stored values. Entries apply in list order, so the last
     entry for a (keyword, role) wins. `accepted` and `rejected` set the row's
     `decision` and `decided_at`; `cleared` deletes the row, so both read NULL. An
     entry naming a (keyword, role) with no verdict in `keyword_roles` is counted and
@@ -167,9 +169,8 @@ def fold_role_decisions(conn: sqlite3.Connection, path: Path) -> FoldStats:
     stats.file_found = True
     stats.entries = len(entries)
     with conn:
-        for entry in entries:
-            key = (entry["keyword"], entry["role"])
-            if not has_verdict(conn, *key):
+        for key, entry in RoleDecisions.resolved(entries):
+            if key is None or not has_verdict(conn, *key):
                 stats.unmatched += 1
                 continue
             stats.matched += 1

@@ -899,12 +899,18 @@ entry has four text fields:
 
 ```json
 [
-  {"keyword_a": "bank robberi", "keyword_b": "heist", "decision": "accepted",
+  {"surface_a": "Bank Robbery", "surface_b": "heists", "decision": "accepted",
    "decided_at": "2026-10-01T12:00:00+00:00"}
 ]
 ```
 
-`keyword_a` and `keyword_b` are stored values with `keyword_a < keyword_b`. `decision` is
+`surface_a` and `surface_b` are two different raw spellings (`keyword_forms.surface`), one of each
+keyword, never stored values. Every reader resolves an entry with the current `normalize_keyword`:
+the pair is the two values its spellings normalize to now, in `keyword_a < keyword_b` order, so
+the two spellings may sit in either order. A
+migration that changes normalization renames stored values but never a spelling, so a decision
+follows its keyword to the new value and nothing rewrites the file. An entry whose two spellings now
+normalize to one value names no pair and is unmatched. `decision` is
 `accepted`, `rejected` or `cleared`; `cleared` sets `decision` and `decided_at` back to NULL.
 `decided_at` is a UTC time, required for `accepted` and `rejected`. `plexdb fold-merge-decisions`
 applies the file, as the first sweep step after `migrate`, every run: entries apply in list order,
@@ -918,12 +924,13 @@ fold after the pair is judged again, which happens only if one of its keywords p
 among its nearest neighbours.
 
 Plex TVX's Merges tab and tag doctor write this file (`POST /api/merges`, one pair per request,
-refused with a 404 for a pair that has no row and names a value no title carries) and read it back
+refused with a 404 for a pair that has no row and names a value no title carries; the request
+names stored values, and the server writes each one's shortest spelling) and read it back
 over the table (`GET /api/merges`, `GET /api/doctor?item_id=`),
 so a decision shows at once and is marked "applies at next sweep" until the fold writes it into the
-table. A write keeps one entry per pair, which the fold's last-entry-wins rule makes equivalent.
-The Roles tab's [`role_decisions.json`](#role-decisions-json) has the same shape, keyed by
-(keyword, role).
+table. A write keeps one entry per resolved pair, which the fold's last-entry-wins rule makes
+equivalent. The Roles tab's [`role_decisions.json`](#role-decisions-json) has the same shape, keyed
+by (spelling, role).
 
 ## Version 13 — a pair the judge refused
 
@@ -1024,12 +1031,13 @@ list; every entry has four text fields:
 
 ```json
 [
-  {"keyword": "los angel", "role": "region", "decision": "accepted",
+  {"surface": "Los Angeles", "role": "region", "decision": "accepted",
    "decided_at": "2026-10-05T12:00:00+00:00"}
 ]
 ```
 
-`keyword` is a stored value and `role` one of the five roles. `decision` is `accepted`, `rejected`
+`surface` is a raw spelling of the keyword, resolved with the current `normalize_keyword` exactly as
+in `merge_decisions.json`, and `role` one of the five roles. `decision` is `accepted`, `rejected`
 or `cleared`; `decided_at` is a UTC time, required for `accepted` and `rejected`. `plexdb
 fold-role-decisions` applies the file as the sweep step right after `fold-merge-decisions`, every
 run: entries apply in list order, so the last entry for a (keyword, role) wins. `accepted` and
@@ -1043,7 +1051,7 @@ Plex TVX's Roles tab writes this file (`POST /api/roles`, one (keyword, role) pe
 refused with a 404 when `keyword_roles` has no verdict for it) and reads it back over the table
 (`GET /api/roles`), so a decision shows at once — the table outlines the pressed button, the
 decisions list marks it "applies at next sweep" — until the
-fold writes it. A write keeps one entry per (keyword, role).
+fold writes it. A write keeps one entry per resolved (keyword, role).
 
 ## Version 16 — which title states a role
 

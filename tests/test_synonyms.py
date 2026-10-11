@@ -314,7 +314,7 @@ def _decisions_file(tmp_path: Path, entries: object) -> Path:
 
 
 def _entry(a: str, b: str, decision: str, at: str = "2026-10-01T12:00:00+00:00") -> dict[str, str]:
-    return {"keyword_a": a, "keyword_b": b, "decision": decision, "decided_at": at}
+    return {"surface_a": a, "surface_b": b, "decision": decision, "decided_at": at}
 
 
 def _decisions(store: Path) -> dict[tuple[str, str], tuple[str | None, str | None]]:
@@ -362,10 +362,10 @@ def test_a_missing_decisions_file_changes_nothing(tmp_path: Path) -> None:
     [
         {"not": "a list"},
         [_entry(BANK, HEIST, "maybe")],
-        [_entry(HEIST, BANK, "accepted")],
+        [_entry(BANK, BANK, "accepted")],
         [_entry(BANK, HEIST, "accepted", at="")],
         [_entry(BANK, HEIST, "accepted", at="yesterday")],
-        [{"keyword_a": BANK, "keyword_b": HEIST, "decision": "accepted"}],
+        [{"surface_a": BANK, "surface_b": HEIST, "decision": "accepted"}],
     ],
 )
 def test_a_malformed_decisions_file_is_refused_before_any_row_changes(

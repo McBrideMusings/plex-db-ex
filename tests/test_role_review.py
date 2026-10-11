@@ -15,6 +15,7 @@ import pytest
 from plexdb.cli import main
 from plexdb.errors import RoleDecisionsError
 from plexdb.explore import make_server
+from plexdb.role_review import RoleDecisions
 from plexdb.roles import fold_role_decisions
 from plexdb.store import init, open_store
 
@@ -119,7 +120,7 @@ def test_a_decision_round_trips_marked_pending_and_leaves_the_store_alone(
     assert status == 200
     assert body["cell"]["decision"] == "accepted" and body["cell"]["pending"] is True  # type: ignore[index]
     entries = json.loads((store.parent / "role_decisions.json").read_text())
-    assert [(e["keyword"], e["role"], e["decision"]) for e in entries] == [
+    assert [(e["surface"], e["role"], e["decision"]) for e in entries] == [
         ("bleak", "tone", "accepted")
     ]
     _, listing = _send("GET", url)
@@ -178,7 +179,7 @@ def test_the_file_the_page_wrote_folds_into_the_table(base_url: str, store: Path
         stats = fold_role_decisions(conn, store.parent / "role_decisions.json")
 
     assert (stats.entries, stats.matched, stats.unmatched) == (3, 3, 0)
-    decided_at = {(e["keyword"], e["role"]): e["decided_at"] for e in entries}
+    decided_at = {key: e["decided_at"] for key, e in RoleDecisions.resolved(entries)}
     assert _decisions(store) == {
         ("bleak", "tone"): ("accepted", decided_at[("bleak", "tone")]),
         ("tokyo", "tone"): ("rejected", decided_at[("tokyo", "tone")]),
@@ -188,7 +189,7 @@ def test_the_file_the_page_wrote_folds_into_the_table(base_url: str, store: Path
 
 
 def _entry(keyword: str, role: str, decision: str, at: str = STATED) -> dict[str, str]:
-    return {"keyword": keyword, "role": role, "decision": decision, "decided_at": at}
+    return {"surface": keyword, "role": role, "decision": decision, "decided_at": at}
 
 
 def test_folding_applies_in_order_and_counts_unmatched(tmp_path: Path, store: Path) -> None:
@@ -225,7 +226,7 @@ def test_folding_applies_in_order_and_counts_unmatched(tmp_path: Path, store: Pa
         [_entry("bleak", "mood", "accepted")],
         [_entry("", "tone", "accepted")],
         [_entry("bleak", "tone", "accepted", at="yesterday")],
-        [{"keyword": "bleak", "role": "tone", "decision": "accepted"}],
+        [{"surface": "bleak", "role": "tone", "decision": "accepted"}],
     ],
 )
 def test_an_invalid_file_is_refused_whole_and_changes_nothing(

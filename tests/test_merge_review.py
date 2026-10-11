@@ -110,7 +110,7 @@ def test_an_accept_writes_one_entry_and_moves_the_pair_out_of_the_queue(
     assert status == 200
     assert body["pair"]["bucket"] == "merged" and body["pair"]["pending"] is True  # type: ignore[index]
     entries = json.loads(file.read_text())
-    assert [(e["keyword_a"], e["keyword_b"], e["decision"]) for e in entries] == [
+    assert [(e["surface_a"], e["surface_b"], e["decision"]) for e in entries] == [
         ("bank", "vault", "accepted")
     ]
     _, listing = _send("GET", f"{base_url}/api/merges")
@@ -326,7 +326,7 @@ def test_the_doctor_names_no_pair_for_a_fold_through_the_group_and_hides_dead_de
         )
         conn.commit()
     # A decision on a keyword no title carries never reaches the table.
-    MergeDecisions(store.parent / "merge_decisions.json").record(("gone", "karate"), "accepted")
+    MergeDecisions(store.parent / "merge_decisions.json").record(("gone", "karate"), "accepted", {})
 
     _, body = _send("GET", f"{base_url}/api/doctor?item_id=spin")
 
@@ -404,17 +404,35 @@ def test_the_file_refuses_a_decision_past_the_entry_cap_and_past_the_size_cap(
 ) -> None:
     decisions = MergeDecisions(tmp_path / "merge_decisions.json")
     decisions.MAX_ENTRIES = 2
-    decisions.record(("a", "b"), "accepted")
-    decisions.record(("c", "d"), "accepted")
+    decisions.record(("a", "b"), "accepted", {})
+    decisions.record(("c", "d"), "accepted", {})
     with pytest.raises(ValueError, match="too many merge decisions"):
-        decisions.record(("e", "f"), "accepted")
+        decisions.record(("e", "f"), "accepted", {})
     assert len(decisions.latest()) == 2
 
     small = MergeDecisions(tmp_path / "small.json")
     small.MAX_TOTAL_BYTES = 100
     with pytest.raises(ValueError, match="exceed"):
-        small.record(("a", "b"), "accepted")
+        small.record(("a", "b"), "accepted", {})
     assert small.latest() == {}
+
+
+def test_a_write_replaces_every_spelling_of_its_pair_and_refuses_one_naming_another(
+    tmp_path: Path,
+) -> None:
+    decisions = MergeDecisions(tmp_path / "merge_decisions.json")
+    decisions.record(("heist", "vault"), "rejected", {"heist": "Heists"})
+    decisions.record(("heist", "vault"), "accepted", {"heist": "heist", "vault": "Vaults"})
+
+    entries = json.loads(decisions.path.read_text())
+    assert [(e["surface_a"], e["surface_b"], e["decision"]) for e in entries] == [
+        ("heist", "Vaults", "accepted")
+    ]
+    assert {k: e["decision"] for k, e in decisions.latest().items()} == {
+        ("heist", "vault"): "accepted"
+    }
+    with pytest.raises(ValueError, match="normalizes back"):
+        decisions.record(("heist", "vault"), "accepted", {"vault": "Vault Doors"})
 
 
 def test_merged_pairs_chain_into_a_group_named_by_its_most_carried_keyword_not_x_film(
