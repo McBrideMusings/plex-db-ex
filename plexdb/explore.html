@@ -1140,7 +1140,8 @@ function drawRegionLabels(ctx, vp, token) {
 const mapBox = document.getElementById("mapbox");
 const canPick = id => map.byId.has(id);
 const pinCard = new TitleCard(document.getElementById("rightcol"), { pinned: true, onClose: () => selectItem(null), onTag: v => { ++mapUI.token; mapUI.search = null; searchEl.value = ""; showTag(v); }, onPick: id => pickById(id), canPick,
-  onDetail: (item, d) => { if (mapVP.selected === item) { mapUI.similar = d.similar.map(s => s.item_id).filter(canPick); mapVP.redraw(); } },
+  // By id, not the point object: a map redraw that lands while the details load swaps every point.
+  onDetail: (item, d) => { if (mapVP.selected && mapVP.selected.id === item.id) { mapUI.similar = d.similar.map(s => s.item_id).filter(canPick); mapVP.redraw(); } },
   onDoctor: (id, row) => openDoctorTab(id, row) });
 const hoverCard = new TitleCard(mapBox, { pinned: false, canPick });
 // Whether `#rightcol` is showing the pinned card or a non-empty tag detail panel, kept as a
@@ -1256,15 +1257,18 @@ async function chooseSuggestion(row) {
     let d;
     try { d = await titleDetail(row.it.id); } catch { d = { similar: [] }; }
     if (token !== mapUI.token) return;
+    // Look the title up again: a map redraw that landed during the await replaced every point.
+    const it = map.byId.get(row.it.id);
+    if (!it) { clearSearch(); return; }
     const near = d.similar.map(s => map.byId.get(s.item_id)).filter(Boolean);
-    mapUI.search = { type: "title", label: row.label, focus: row.it.id, ids: new Set([row.it.id, ...near.map(n => n.id)]) };
-    selectItem(row.it);
+    mapUI.search = { type: "title", label: row.label, focus: it.id, ids: new Set([it.id, ...near.map(n => n.id)]) };
+    selectItem(it);
     // The card's own async fetch (inside selectItem -> pinCard.show) would still be loading at
     // this point; paint it now with the detail already in hand so its real, full-content height
     // measures correctly below, rather than the shorter "Loading..." placeholder's.
-    pinCard.paint(row.it, d, null);
+    pinCard.paint(it, d, null);
     const rightcol = document.getElementById("rightcol");
-    mapVP.focusOn([row.it, ...near], clearOfPanel(mapVP.canvas, rightcol, { l: 40, t: 70, r: 24, b: 24 }));
+    mapVP.focusOn([it, ...near], clearOfPanel(mapVP.canvas, rightcol, { l: 40, t: 70, r: 24, b: 24 }));
   } else {
     let body;
     try { body = await getJSON(`/api/titles?kind=${state.kind}&tag=${encodeURIComponent(row.tag)}`); }

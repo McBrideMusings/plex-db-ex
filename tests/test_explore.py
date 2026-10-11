@@ -13,6 +13,7 @@ import math
 import socket
 import sqlite3
 import threading
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Iterator
@@ -1463,6 +1464,62 @@ def test_clip_forces_the_tags_tab_over_the_hash(
 def test_demo_exposes_no_clip_seam(browser: Browser, store: Path, base_url: str) -> None:
     page = _open_clip(browser, store, f"{base_url}/?demo", ready=DEMO_READY)
     assert page.evaluate("() => window.__clip") is None
+
+
+def _pin_while_the_map_redraws(browser: Browser, store: Path, base_url: str, pin: str) -> Page:
+    """Run `pin` on the dimmed default map, then land the redraw without the noise tags
+    before the title's details: the order that swaps every point under a pin in flight."""
+    with open_store(store) as conn:
+        refresh_title_maps(conn)
+    held: dict[str, Any] = {}
+    page = browser.new_page(viewport={"width": 1280, "height": 800})
+    page.add_init_script("localStorage.setItem('plexdb-explore:noise', '[\"stinger\"]')")
+    page.route(lambda u: "/api/map?" in u and "exclude=" in u, lambda r: held.update(map=r))
+    page.route(lambda u: "/api/title?" in u, lambda r: held.update(title=r))
+    page.goto(f"{base_url}/#kind=movie&view=map")
+    page.wait_for_function("() => map.dim && map.byId.has('imdb:tt1')", timeout=30_000)
+    page.evaluate(pin)
+    deadline = time.monotonic() + 10
+    while "title" not in held:
+        assert time.monotonic() < deadline, "the pin never asked for the title's details"
+        page.wait_for_timeout(20)
+    held.pop("map").continue_()
+    page.wait_for_function("() => !map.dim", timeout=30_000)
+    held.pop("title").continue_()
+    page.wait_for_function("() => document.querySelector('#rightcol .tcard ol')", timeout=30_000)
+    return page
+
+
+def test_a_title_pinned_while_the_map_redraws_keeps_its_card_and_nearest_titles(
+    browser: Browser, store: Path, base_url: str
+) -> None:
+    page = _pin_while_the_map_redraws(
+        browser, store, base_url, "() => mapVP.onSelect(map.byId.get('imdb:tt1'))"
+    )
+    pin = page.evaluate(
+        """() => ({ id: mapVP.selected && mapVP.selected.id,
+                    onMap: mapVP.selected === map.byId.get('imdb:tt1'),
+                    open: !pinCard.root.hidden, similar: mapUI.similar })"""
+    )
+    assert pin["id"] == "imdb:tt1" and pin["onMap"] and pin["open"], pin
+    assert "imdb:tt2" in pin["similar"], pin
+
+
+def test_a_title_searched_while_the_map_redraws_pins_its_point_on_the_new_map(
+    browser: Browser, store: Path, base_url: str
+) -> None:
+    page = _pin_while_the_map_redraws(
+        browser,
+        store,
+        base_url,
+        "() => { chooseSuggestion(suggestions('iron man')[0]); }",
+    )
+    page.wait_for_function("() => mapUI.search && mapVP.selected", timeout=10_000)
+    pin = page.evaluate(
+        """() => ({ id: mapVP.selected.id, onMap: mapVP.selected === map.byId.get('imdb:tt1'),
+                    focus: mapUI.search.focus })"""
+    )
+    assert pin == {"id": "imdb:tt1", "onMap": True, "focus": "imdb:tt1"}, pin
 
 
 def test_demo_moves_the_camera_without_a_seek(browser: Browser, store: Path, base_url: str) -> None:
