@@ -45,9 +45,11 @@ from .decisions import SAVED_FILE
 from .errors import DecisionsFileError, StoreError
 from .identity import PRIORITY
 from .merge_review import (
+    MERGE_AT,
     MERGE_DECISIONS_FILE,
     MergeDecisions,
     NoSuchPair,
+    decidable,
     merge_map,
     require_pair,
     review_rows,
@@ -904,6 +906,143 @@ def title_details(
     }
 
 
+def title_doctor(
+    conn: sqlite3.Connection, item_id: str, overlay: dict[tuple[str, ...], dict[str, str]]
+) -> dict[str, object]:
+    """What the tag doctor shows for one title: per source, each raw spelling the
+    source sent (`keyword_surfaces`), the stored value it normalizes to
+    (`keyword_forms`), the keyword its merge group folds into (`merge_map`) with the
+    pair that put it there, and any decision in `overlay` (`merge_decisions.json`)
+    naming it that the store has not folded in yet.
+    """
+    row = conn.execute("SELECT title, year FROM items WHERE item_id = ?", (item_id,)).fetchone()
+    if row is None:
+        raise NoSuchTitle(item_id)
+    folded = merge_map(conn)
+    forms = readable_forms(conn)
+    groups: defaultdict[str, list[str]] = defaultdict(list)
+    for member, head in folded.items():
+        groups[head].append(member)
+    spellings = conn.execute(
+        "SELECT s.source, s.surface, s.rank, s.spoiler, f.keyword FROM keyword_surfaces s "
+        "LEFT JOIN keyword_forms f USING (surface) WHERE s.item_id = ? "
+        "ORDER BY s.source, s.rank IS NULL, s.rank, s.surface",
+        (item_id,),
+    ).fetchall()
+    carried = {row[4] for row in spellings if row[4]}
+    # Decisions in the file the fold has not written yet, on this title's keywords only. One
+    # naming a keyword no title carries never reaches the table, so it is not shown.
+    pending: defaultdict[str, list[dict[str, object]]] = defaultdict(list)
+    for key, entry in overlay.items():
+        if not carried & set(key) or not decidable(conn, key):
+            continue
+        if review_rows(conn, overlay, forms, (key[0], key[1]))[0]["pending"]:
+            for keyword, other in ((key[0], key[1]), (key[1], key[0])):
+                pending[keyword].append(
+                    {
+                        "other": other,
+                        "label": forms.get(other, other),
+                        "decision": entry["decision"],
+                    }
+                )
+
+    def via(keyword: str, into: str) -> dict[str, object] | None:
+        # The pair between the two when it is itself merged; None when they are in one
+        # group only through other members.
+        pair = conn.execute(
+            "SELECT jev_score, jev_model, decision FROM keyword_pairs "
+            "WHERE keyword_a = ? AND keyword_b = ? "
+            "AND (decision = 'accepted' OR (decision IS NULL AND jev_score >= ?))",
+            (min(keyword, into), max(keyword, into), MERGE_AT),
+        ).fetchone()
+        return None if pair is None else {"score": pair[0], "model": pair[1], "decision": pair[2]}
+
+    sources: dict[str, list[dict[str, object]]] = {}
+    for source, surface, rank, spoiler, keyword in spellings:
+        into = folded.get(keyword) if keyword else None
+        head = into or keyword
+        sources.setdefault(source, []).append(
+            {
+                "surface": surface,
+                "rank": rank,
+                "spoiler": bool(spoiler),
+                "keyword": keyword,
+                "into": into,
+                "into_label": forms.get(into, into) if into else None,
+                "via": via(keyword, into) if keyword and into else None,
+                "group": sorted({head, *groups.get(head or "", [])} - {keyword}) if head else [],
+                "pending": pending.get(keyword or "", []),
+            }
+        )
+    return {
+        "item_id": item_id,
+        "title": row["title"],
+        "year": row["year"],
+        "forms": {
+            k: forms.get(k, k) for k in carried | {folded[k] for k in carried if k in folded}
+        },
+        "sources": [{"source": s, "rows": rows} for s, rows in sources.items()],
+    }
+
+
+#: How many keywords one vocabulary search answers with, and the shortest query it takes.
+KEYWORD_SEARCH_LIMIT = 12
+KEYWORD_SEARCH_MIN = 2
+
+
+def keyword_search(conn: sqlite3.Connection, q: str) -> list[dict[str, object]]:
+    """Stored keywords whose value or any raw spelling contains `q`, for the tag
+    doctor's "Merge with…": an exact match first, then those starting with it, then by
+    how many titles carry each, each with the keyword its merge group folds into."""
+    q = q.strip().lower()
+    if len(q) < KEYWORD_SEARCH_MIN:
+        raise ValueError(f"q must be at least {KEYWORD_SEARCH_MIN} characters")
+    like = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+    rows = conn.execute(
+        "SELECT value, COUNT(DISTINCT item_id) FROM enrichment "
+        "WHERE namespace = ? AND key = ? AND value IN ("
+        "SELECT keyword FROM keyword_forms WHERE surface LIKE ? ESCAPE '\\' "
+        "OR keyword LIKE ? ESCAPE '\\') GROUP BY value",
+        (_NAMESPACE, _KEY, like, like),
+    ).fetchall()
+    ranked = sorted(rows, key=lambda r: (r[0] != q, not r[0].startswith(q), -r[1], r[0]))
+    folded = merge_map(conn)
+    forms = readable_forms(conn)
+    return [
+        {
+            "value": value,
+            "label": forms.get(value, value),
+            "titles": titles,
+            "into": into,
+            "into_label": forms.get(into, into) if into else None,
+        }
+        for value, titles in ranked[:KEYWORD_SEARCH_LIMIT]
+        for into in (folded.get(value),)
+    ]
+
+
+def doctor_titles(conn: sqlite3.Connection, q: str) -> list[dict[str, object]]:
+    """Titles some source sent a keyword for, whose title contains `q`, for the tag
+    doctor's title search: those starting with it first, then by title and year."""
+    q = q.strip()
+    if len(q) < KEYWORD_SEARCH_MIN:
+        raise ValueError(f"q must be at least {KEYWORD_SEARCH_MIN} characters")
+    like = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+    rows = conn.execute(
+        "SELECT item_id, title, year, type FROM items WHERE title LIKE ? ESCAPE '\\' "
+        "AND item_id IN (SELECT item_id FROM keyword_surfaces)",
+        (like,),
+    ).fetchall()
+    low = q.lower()
+    ranked = sorted(
+        rows, key=lambda r: (not r[1].lower().startswith(low), r[1].lower(), r[2] or 0, r[0])
+    )
+    return [
+        {"item_id": r[0], "title": r[1], "year": r[2], "kind": r[3]}
+        for r in ranked[:KEYWORD_SEARCH_LIMIT]
+    ]
+
+
 def index_json(index: TagIndex) -> dict[str, object]:
     return {
         "kind": index.kind,
@@ -1151,6 +1290,10 @@ QUERY_SLOTS = threading.BoundedSemaphore(2)
 #: (contrast `POSTER_SLOTS`, sized against a real page requesting 8+ posters
 #: at once).
 TITLE_SLOTS = threading.BoundedSemaphore(4)
+#: Concurrent /api/keywords and /api/doctor/titles requests, the tag doctor's
+#: search-as-you-type. Its own pool,
+#: so typing never takes a slot a card or the doctor itself is waiting for.
+KEYWORD_SLOTS = threading.BoundedSemaphore(2)
 
 #: Largest request body Plex TVX reads. A pasted query is a few kilobytes.
 #: `SavedQueries.MAX_TOTAL_BYTES` shares this literal by coincidence, not by
@@ -1710,7 +1853,8 @@ def merges_json(pairs: list[dict[str, object]]) -> dict[str, object]:
     pairs, a person's latest decision first and Jev-confirmed pairs after, best score first."""
 
     def score(p: dict[str, object]) -> float:
-        return cast(float, p["score"])
+        # A pair only a person decided has no score; it sorts as the lowest.
+        return -1.0 if p["score"] is None else cast(float, p["score"])
 
     proposed = sorted(
         (p for p in pairs if p["bucket"] == "proposed"),
@@ -1876,12 +2020,16 @@ def make_server(
             if path == "/api/merges":
                 body = self._body()
                 a, b, decision = merges.check(*(body.get(k) for k in MERGE_FIELDS))
-                # Only a pair the table holds may be decided, so an anonymous caller cannot
-                # grow the file with names that were never judged.
+                # Only a pair the table holds, or two keywords some title carries, may be
+                # decided, so an anonymous caller cannot grow the file with made-up names.
                 with open_readonly(store_path) as conn:
                     require_pair(conn, (a, b))
                     entry = merges.record((a, b), decision)
                     pair = review_rows(conn, {(a, b): entry}, readable_forms(conn), (a, b))[0]
+                print(
+                    f"explore: merge decision {a!r} {b!r} {decision} -> {merges.path}",
+                    file=sys.stderr,
+                )
                 self._json({"pair": pair})
                 return
             if path == "/api/roles":
@@ -1989,6 +2137,28 @@ def make_server(
                         self._json(title_details(conn, item_id, space))
                 finally:
                     TITLE_SLOTS.release()
+            elif url.path in ("/api/doctor", "/api/keywords", "/api/doctor/titles"):
+                slots = TITLE_SLOTS if url.path == "/api/doctor" else KEYWORD_SLOTS
+                if not slots.acquire(blocking=False):
+                    raise TooManyTitleRequests(
+                        "too many requests are already running; try again in a moment"
+                    )
+                try:
+                    with open_readonly(store_path) as conn:
+                        if url.path == "/api/keywords":
+                            self._json({"keywords": keyword_search(conn, query.get("q", ""))})
+                            return
+                        if url.path == "/api/doctor/titles":
+                            self._json({"titles": doctor_titles(conn, query.get("q", ""))})
+                            return
+                        item_id = query.get("item_id")
+                        if not item_id:
+                            raise ValueError("item_id is required")
+                        if len(item_id) > MAX_ITEM_ID:
+                            raise ValueError(f"item_id is over {MAX_ITEM_ID} characters")
+                        self._json(title_doctor(conn, item_id, merges.latest()))
+                finally:
+                    slots.release()
             elif url.path == "/api/poster":
                 item_id = query.get("item_id")
                 if not item_id:

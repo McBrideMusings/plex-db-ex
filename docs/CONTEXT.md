@@ -50,7 +50,7 @@ source's rows.
 
 **Keyword pair**:
 Two stored keywords a judge has scored — Jev, Typesafe's model, or the deterministic film-suffix
-rule — with that score and, once a person has ruled, their decision. Whether a pair counts as merged is a reader's threshold, never a stored
+rule — or a person has ruled on, with the score and the decision each has. Whether a pair counts as merged is a reader's threshold, never a stored
 flag.
 _Avoid_: synonym row, merge
 

@@ -28,7 +28,7 @@ def describe(stats: FoldStats, path: str) -> str:
         return f"merge decisions: no file at {path}"
     return (
         f"merge decisions: {stats.entries:,} entr(ies) in {path}, "
-        f"{stats.matched:,} matched a pair, {stats.unmatched:,} named no pair"
+        f"{stats.matched:,} applied, {stats.unmatched:,} named no pair of stored keywords"
     )
 
 

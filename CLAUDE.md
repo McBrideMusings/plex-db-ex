@@ -96,7 +96,7 @@ admin docs       serve the docs site
 admin dev explore  serve the read-only Plex TVX page on http://localhost:5194
 admin dev judge-keyword-pairs [--limit N]  ask Jev about synonym keyword pairs; needs LLAMA_BROKER_BASE_URL and TYPESAFE_API_KEY
 admin dev judge-keyword-roles [--limit N]  ask Jev what roles each keyword plays; needs TYPESAFE_API_KEY
-admin dev fold-merge-decisions  apply merge_decisions.json to keyword_pairs.decision
+admin dev fold-merge-decisions  apply merge_decisions.json to keyword_pairs (adds decision-only rows)
 admin dev fold-role-decisions   apply role_decisions.json to keyword_role_decisions
 admin dev prune-keyword-verdicts  delete judge-table rows for keyword values no title carries
 ```

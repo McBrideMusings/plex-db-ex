@@ -822,7 +822,8 @@ in another language never recomputes the fingerprint.
 
 ## Version 12 — a judge's verdicts on keyword pairs
 
-`keyword_pairs`, one row per unordered pair of stored keywords a judge has been asked about.
+`keyword_pairs`, one row per unordered pair of stored keywords a judge has been asked about or a
+person has decided (Version 18).
 It is the only place the store holds an interpretation of keyword values, and it holds the
 judge's answer, not a conclusion ([ADR-0018](./adr/0018-synonym-keywords-are-a-judges-verdicts-beside-enrichment)).
 `enrichment` is never rewritten: every keyword a source wrote is still there under the spelling
@@ -838,7 +839,8 @@ keyword_pairs  (keyword_a, keyword_b) PK, jev_score REAL, jev_model TEXT, judged
 asked. `jev_score` is Jev's answer to "do these two mean the same thing", 0 to 1, stored as Jev
 gave it, with the model that gave it in `jev_model`; a pair Jev said no to is stored too, so the
 writer never asks about it twice. `judged_at` is UTC. A pair Jev refused with a 400 or 422 has
-`jev_score` and `jev_model` NULL and `jev_error` holding the refusal; see Version 13.
+`jev_score` and `jev_model` NULL and `jev_error` holding the refusal; see Version 13. A pair only a
+person decided has `judged_at`, `jev_score`, `jev_model` and `jev_error` all NULL; see Version 18.
 
 `decision` is what a person said about the pair: `accepted`, `rejected`, or NULL while nobody
 has. `decided_at` is NULL exactly when `decision` is. A decision outranks the score.
@@ -906,15 +908,18 @@ entry has four text fields:
 `accepted`, `rejected` or `cleared`; `cleared` sets `decision` and `decided_at` back to NULL.
 `decided_at` is a UTC time, required for `accepted` and `rejected`. `plexdb fold-merge-decisions`
 applies the file, as the first sweep step after `migrate`, every run: entries apply in list order,
-so the last entry for a pair wins, and an entry naming a pair with no row is counted and ignored.
+so the last entry for a pair wins. An `accepted` or `rejected` entry for a pair with no row, whose
+two keywords are both stored values, inserts a row holding only the decision (Version 18); `cleared`
+deletes such a row. An entry naming a value no title carries is counted as unmatched and ignored.
 A missing file means no decisions. A file that is not valid JSON or breaks this shape is refused
 whole, and no row changes. The file is not deleted, so it stays the record of the latest
 decision per pair: a decision whose row `prune-keyword-verdicts` deleted comes back on the first
 fold after the pair is judged again, which happens only if one of its keywords proposes the other
 among its nearest neighbours.
 
-Plex TVX's Merges tab writes this file (`POST /api/merges`, one pair per request, refused with a
-404 for a pair `keyword_pairs` has no row for) and reads it back over the table (`GET /api/merges`),
+Plex TVX's Merges tab and tag doctor write this file (`POST /api/merges`, one pair per request,
+refused with a 404 for a pair that has no row and names a value no title carries) and read it back
+over the table (`GET /api/merges`, `GET /api/doctor?item_id=`),
 so a decision shows at once and is marked "applies at next sweep" until the fold writes it into the
 table. A write keeps one entry per pair, which the fold's last-entry-wins rule makes equivalent.
 The Roles tab's [`role_decisions.json`](#role-decisions-json) has the same shape, keyed by
@@ -933,7 +938,7 @@ NULL is never true. A reader that selects `jev_score` must expect NULL. Other Je
 answered eight times, a 5xx, a rejected key, no connection — write no row and stop the run, because
 they say nothing about the pair. To ask about a refused pair again, delete its row.
 
-Plex TVX's Merges tab lists and accepts only scored pairs, so a refused pair never appears there and a decision for one is refused with a 404.
+Plex TVX's Merges tab lists a refused pair only once a person has decided it, with no score.
 
 `plexdb judge-keyword-pairs` reports the count as `unjudgeable`.
 
@@ -1080,6 +1085,24 @@ same title merge, so `enrichment` may shrink by the count the migration declares
 looked up by spelling through `keyword_forms`, so `reader_shape` stays 10. `idx_enrichment_ns_key`
 widens from `(namespace, key)` to `(namespace, key, value)`, so the titles carrying a keyword are
 found, and counted, from the index.
+
+## Version 18 — a pair only a person decided
+
+A person can merge two stored keywords no judge was asked about, from Plex TVX's tag doctor
+([ADR-0020](./adr/0020-a-person-may-decide-a-pair-no-judge-saw)). `plexdb fold-merge-decisions`
+writes such a pair as a `keyword_pairs` row with `decision` and `decided_at` set and `judged_at`,
+`jev_score`, `jev_model` and `jev_error` all NULL. The table is rebuilt to allow it, every row and
+its decision carried over. Its checks now say:
+
+- `jev_score` and `jev_model` are both set or both NULL, and never set beside `jev_error`;
+- `judged_at` is NULL exactly when neither a score nor a refusal is;
+- a row has a judge's verdict, a person's decision, or both.
+
+`judged_at IS NULL` is how a reader tells a person-only row apart. Such a row counts as merged by
+the same rule as any other (`decision = 'accepted'`), so `merge_map` folds it with no change. The
+judge never asks about a pair that has a row, so a person's merge is never sent to Jev. Clearing a
+person-only decision deletes the row rather than leaving one with nothing in it. No reader reads
+`keyword_pairs` through `plexdb-reader`, so `reader_shape` stays 10.
 
 ## Reading the store to build collections
 

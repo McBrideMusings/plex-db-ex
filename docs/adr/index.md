@@ -24,3 +24,4 @@ ADR wins; [the PRD](../PRD) already reflects them.
 | [0017](./0017-the-explorers-client-is-a-thin-credential-less-visualizer) | The explorer's client is a thin, credential-less visualizer |
 | [0018](./0018-synonym-keywords-are-a-judges-verdicts-beside-enrichment) | Synonym keywords are a judge's verdicts beside `enrichment` |
 | [0019](./0019-keyword-roles-are-verdicts-beside-enrichment) | Keyword roles are verdicts beside `enrichment` |
+| [0020](./0020-a-person-may-decide-a-pair-no-judge-saw) | A person may decide a pair no judge saw |

@@ -1,7 +1,9 @@
 """What the Plex TVX review page shows and records about synonym keyword pairs.
 
-`keyword_pairs` holds a judge's score for each pair (ADR-0018). A person's accept or
-reject never touches the store, because Plex TVX never writes `plexdb.db`
+`keyword_pairs` holds a judge's score for each pair it was asked about (ADR-0018), and a
+row for each pair only a person decided (ADR-0020). A person's accept or reject from
+the Merges tab or the tag doctor never touches the store, because Plex TVX never writes
+`plexdb.db`
 (ADR-0007, ADR-0017): it goes into `merge_decisions.json`, which `plexdb
 fold-merge-decisions` applies at the next sweep. Until then this module lays the
 file's decisions over the table, so the page shows a click at once.
@@ -18,7 +20,7 @@ from typing import Any, ClassVar
 
 from .decisions import DecisionsFile
 from .errors import MergeDecisionsError
-from .keywords import FILM_SUFFIX_MODEL
+from .keywords import FILM_SUFFIX_MODEL, KEYWORD_KEY, NAMESPACE
 
 __all__ = [
     "MERGE_AT",
@@ -27,6 +29,8 @@ __all__ = [
     "MergeDecisions",
     "NoSuchPair",
     "bucket",
+    "decidable",
+    "is_stored",
     "merge_map",
     "require_pair",
     "review_rows",
@@ -41,7 +45,7 @@ PROPOSE_AT = 0.5
 
 
 class NoSuchPair(LookupError):
-    """A decision named a pair `keyword_pairs` has no row for."""
+    """A decision named a pair with no row and a keyword no title carries."""
 
 
 class MergeDecisions(DecisionsFile):
@@ -63,12 +67,15 @@ class MergeDecisions(DecisionsFile):
         return first, second, self.decision(decision)
 
 
-def bucket(score: float, decision: str | None) -> str | None:
-    """Where a pair sits: `merged`, `rejected`, `proposed`, or None below the proposal band."""
+def bucket(score: float | None, decision: str | None) -> str | None:
+    """Where a pair sits: `merged`, `rejected`, `proposed`, or None below the proposal
+    band or with no score and no decision."""
     if decision == "accepted":
         return "merged"
     if decision == "rejected":
         return "rejected"
+    if score is None:
+        return None
     if score >= MERGE_AT:
         return "merged"
     if score >= PROPOSE_AT:
@@ -161,15 +168,47 @@ def _row(
     }
 
 
-def require_pair(conn: sqlite3.Connection, pair: tuple[str, str]) -> None:
-    """Raise `NoSuchPair` unless `keyword_pairs` has a scored row for `pair`; a pair
-    Jev refused has no score to review."""
+def is_stored(conn: sqlite3.Connection, keyword: str) -> bool:
+    """Whether some title carries `keyword` as a stored keyword value."""
+    return (
+        conn.execute(
+            "SELECT 1 FROM enrichment WHERE namespace = ? AND key = ? AND value = ? LIMIT 1",
+            (NAMESPACE, KEYWORD_KEY, keyword),
+        ).fetchone()
+        is not None
+    )
+
+
+def decidable(conn: sqlite3.Connection, pair: tuple[str, ...]) -> bool:
+    """Whether a person's decision on `pair` reaches the table: `keyword_pairs` has a
+    row for it, or both keywords are stored values, so the fold writes one (ADR-0020)."""
     found = conn.execute(
-        "SELECT 1 FROM keyword_pairs WHERE keyword_a = ? AND keyword_b = ? AND jev_error IS NULL",
-        pair,
+        "SELECT 1 FROM keyword_pairs WHERE keyword_a = ? AND keyword_b = ?", pair
     ).fetchone()
-    if found is None:
+    return found is not None or all(is_stored(conn, keyword) for keyword in pair)
+
+
+def require_pair(conn: sqlite3.Connection, pair: tuple[str, str]) -> None:
+    """Raise `NoSuchPair` unless a person may decide `pair` (`decidable`)."""
+    if not decidable(conn, pair):
         raise NoSuchPair(pair)
+
+
+_REVIEW_SQL = (
+    "SELECT keyword_a, keyword_b, jev_score, jev_model, decision, decided_at "
+    "FROM keyword_pairs WHERE "
+)
+
+
+def _one_pair(
+    conn: sqlite3.Connection,
+    pair: tuple[str, ...],
+    forms: dict[str, str],
+    overlay: dict[tuple[str, ...], dict[str, str]],
+) -> dict[str, object]:
+    """`pair`'s row, or one with no score and no decision when the table has none."""
+    found = conn.execute(_REVIEW_SQL + "keyword_a = ? AND keyword_b = ?", pair).fetchone()
+    return _row(tuple(found) if found else (*pair, None, None, None, None), forms, overlay)
 
 
 def review_rows(
@@ -178,24 +217,21 @@ def review_rows(
     forms: dict[str, str],
     pair: tuple[str, str] | None = None,
 ) -> list[dict[str, object]]:
-    """Every pair in a bucket, or the one `pair` (raising `NoSuchPair` if it has no row)."""
-    sql = (
-        "SELECT keyword_a, keyword_b, jev_score, jev_model, decision, decided_at "
-        "FROM keyword_pairs WHERE jev_error IS NULL"
+    """Every pair in a bucket, or the one `pair`, which the caller has checked with
+    `require_pair`. A pair no judge scored has `score` and `model` None."""
+    if pair is not None:
+        return [_one_pair(conn, pair, forms, overlay)]
+    rows = conn.execute(
+        _REVIEW_SQL + "decision IS NOT NULL OR jev_score >= ?", (PROPOSE_AT,)
+    ).fetchall()
+    out = [_row(r, forms, overlay) for r in rows]
+    # A decision the table has not yet folded in can sit below the band, or name a pair
+    # with no row yet. A `cleared` entry on such a pair changes nothing the page lists, and
+    # one naming a keyword no title carries never reaches the table, so neither is listed.
+    have = {(r["keyword_a"], r["keyword_b"]) for r in out}
+    out.extend(
+        _one_pair(conn, key, forms, overlay)
+        for key, entry in overlay.items()
+        if entry["decision"] != "cleared" and key not in have and decidable(conn, key)
     )
-    if pair is None:
-        rows = conn.execute(sql + " AND (decision IS NOT NULL OR jev_score >= ?)", (PROPOSE_AT,))
-    else:
-        rows = conn.execute(sql + " AND keyword_a = ? AND keyword_b = ?", pair)
-    out = [_row(r, forms, overlay) for r in rows.fetchall()]
-    # A decision the table has not yet folded in can sit below the band. A `cleared` entry
-    # on such a pair changes nothing the page lists, so it is not looked up.
-    if pair is None:
-        have = {(r["keyword_a"], r["keyword_b"]) for r in out}
-        for key, entry in overlay.items():
-            if entry["decision"] != "cleared" and key not in have:
-                found = conn.execute(sql + " AND keyword_a = ? AND keyword_b = ?", key)
-                out.extend(_row(r, forms, overlay) for r in found.fetchall())
-    elif not out:
-        raise NoSuchPair(pair)
     return out

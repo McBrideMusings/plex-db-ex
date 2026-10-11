@@ -123,6 +123,46 @@
   .tcard li.link { cursor: pointer; }
   .tcard li.link:hover span:last-child { color: var(--accent); }
   .tcard li.off { color: var(--muted); }
+  .tcard .srcbox { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 6px; }
+  .tcard .srcbox summary { cursor: pointer; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .tcard .srcs { display: flex; flex-direction: column; gap: 1px; margin-top: 4px; }
+  .tcard .srcs .src { margin-top: 6px; font-size: 11px; color: var(--muted); }
+  .tcard .srcs a { color: inherit; text-decoration: none; overflow-wrap: anywhere; padding: 1px 0; }
+  .tcard .srcs a:hover { color: var(--accent); }
+  /* The Doctor tab: one title's keywords, a row per merge group and a column per source. */
+  #doctorwrap { padding: 16px 20px 24px; }
+  #doctorwrap h2 { font-size: 13px; margin: 0 0 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  #doctorwrap h3 { margin: 14px 0 6px; font-size: 16px; }
+  #dsearch { width: 22em; max-width: 100%; }
+  #dgrid { overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+  #dgrid table { font-size: 13px; }
+  #dgrid th { background: var(--panel); }
+  #dgrid td.grp { font-weight: 550; overflow-wrap: anywhere; min-width: 9em; }
+  #dgrid td.grp .via, #dgrid td .via { display: block; font-weight: 400; color: var(--muted); font-size: 11px; }
+  #dgrid td.cell { min-width: 9em; overflow-wrap: anywhere; }
+  #dgrid td.cell .sp + .sp { margin-top: 3px; }
+  #dgrid td.none { color: var(--muted); }
+  #dgrid td.act { text-align: right; white-space: nowrap; width: 1%; }
+  #dgrid tr.hl > td { background: var(--chip); }
+  #dgrid tr.open > td { border-bottom: 0; }
+  #dgrid .pick { border: 1px solid var(--accent); border-radius: 6px; padding: 8px; max-width: 40em; }
+  #dgrid .pick input { font: inherit; width: 100%; padding: 4px 8px; color: var(--ink); background: var(--bg);
+                       border: 1px solid var(--line); border-radius: 5px; }
+  #dgrid .pick ul { list-style: none; margin: 6px 0; padding: 0; }
+  #dgrid .pick li { padding: 3px 6px; border-radius: 4px; cursor: pointer; display: flex; justify-content: space-between; gap: 10px; }
+  #dgrid .pick li .n { color: var(--muted); white-space: nowrap; }
+  #dgrid .pick li[aria-selected="true"] { background: var(--accent); color: var(--accent-ink); }
+  #dgrid .pick li[aria-selected="true"] .n { color: inherit; }
+  #dstatus { color: var(--muted); min-height: 1.4em; margin: 8px 0; }
+  #dstatus.bad { color: var(--noise); }
+  /* Narrow: each group is a block, its sources one per line, each labelled. */
+  @media (max-width: 600px) {
+    #dgrid thead { display: none; }
+    #dgrid tr { display: block; border-bottom: 1px solid var(--line); padding: 4px 0; }
+    #dgrid td { display: block; border: 0; padding: 2px 8px; width: auto; text-align: left; }
+    #dgrid td.cell::before { content: attr(data-source); display: block; font-size: 11px; color: var(--muted); }
+    #dgrid td.cell.none { display: none; }
+  }
   aside .chips { margin-top: 4px; }
   aside .chip.noise { color: var(--noise); text-decoration: line-through; }
   .err { color: var(--noise); padding: 12px 20px; }
@@ -282,6 +322,7 @@
     <button type="button" data-tab="query" aria-pressed="false">Query</button>
     <button type="button" data-tab="merges" aria-pressed="false">Merges</button>
     <button type="button" data-tab="roles" aria-pressed="false">Roles</button>
+    <button type="button" data-tab="doctor" aria-pressed="false">Doctor</button>
   </div>
   <div class="seg tagsonly" role="group" aria-label="Title type">
     <button type="button" data-kind="movie" aria-pressed="true">Movies</button>
@@ -375,6 +416,18 @@
     <ul id="rrows"></ul>
   </section>
 </div>
+<section id="doctorwrap" hidden>
+  <h2>Tag doctor</h2>
+  <p class="mnote">One title's keywords: a row per merge group, and in each source's column the raw spelling that source sent. A merge you propose goes to merge_decisions.json, the same file the Merges tab writes, and the next sweep applies it.</p>
+  <div class="mtools">
+    <div class="searchbox">
+      <input type="search" id="dsearch" placeholder="Search a title…" autocomplete="off" aria-label="Search a title"
+             role="combobox" aria-expanded="false" aria-controls="dsugg">
+      <ul class="sugg" id="dsugg" role="listbox" hidden></ul>
+    </div>
+  </div>
+  <div id="dbody"><p class="empty">Search a title, or open one from a pinned card's "Sources and remapping".</p></div>
+</section>
 <main id="tagsmain">
   <div class="graphwrap" id="graphwrap" hidden>
     <div id="graphbox"><canvas id="network"></canvas></div>
@@ -432,6 +485,9 @@ const DEMO = CLIP || new URLSearchParams(location.search).has("demo");
 const NOISE_KEY = "plexdb-explore:noise";
 const VIEWS = ["table", "graph", "map"];
 const state = { tab: "tags", kind: "movie", view: "table", data: null, sort: "df", dir: -1, shown: PAGE, tag: null, tagIds: new Set() };
+// The Doctor tab: the title it shows and its /api/doctor answer, the merge group to highlight
+// (`row`), the group whose "Merge with…" row is open, that row's search results and highlighted one.
+const doctor = { itemId: null, data: null, row: null, open: null, hits: [], at: 0, token: 0, busy: false };
 
 function loadNoise() {
   if (DEMO) return new Set();   // the demo never shows a viewer's own noise list
@@ -468,13 +524,16 @@ function readHash() {
   const p = new URLSearchParams(location.hash.slice(1));
   if (p.get("kind") === "show" || p.get("kind") === "movie") state.kind = p.get("kind");
   if (VIEWS.includes(p.get("view"))) state.view = p.get("view");
-  if (["query", "merges", "roles"].includes(p.get("tab"))) state.tab = p.get("tab");
+  if (["query", "merges", "roles", "doctor"].includes(p.get("tab"))) state.tab = p.get("tab");
   state.tag = p.get("tag");
+  doctor.itemId = p.get("item"); doctor.row = p.get("row");
 }
 function writeHash() {
   const p = new URLSearchParams({ kind: state.kind, view: state.view });
   if (state.tab !== "tags") p.set("tab", state.tab);
   if (state.tag) p.set("tag", state.tag);
+  if (state.tab === "doctor" && doctor.itemId) p.set("item", doctor.itemId);
+  if (state.tab === "doctor" && doctor.row) p.set("row", doctor.row);
   history.replaceState(null, "", "#" + p.toString());
 }
 
@@ -769,8 +828,8 @@ function titleDetail(itemId) {
 }
 
 class TitleCard {
-  constructor(box, { pinned, onClose, onTag, onPick, canPick, onDetail }) {
-    this.pinned = pinned; this.onTag = onTag; this.onPick = onPick; this.canPick = canPick; this.onDetail = onDetail;
+  constructor(box, { pinned, onClose, onTag, onPick, canPick, onDetail, onDoctor }) {
+    this.pinned = pinned; this.onTag = onTag; this.onPick = onPick; this.canPick = canPick; this.onDetail = onDetail; this.onDoctor = onDoctor;
     this.root = el("div", { className: "tcard " + (pinned ? "pinned" : "hover"), hidden: true });
     if (pinned) {
       this.root.setAttribute("role", "dialog"); this.root.setAttribute("aria-label", "Title details");
@@ -825,8 +884,35 @@ class TitleCard {
         list.append(li);
       }
       parts.push(el("h4", {}, "Nearest by keywords"), d.similar.length ? list : el("div", { className: "meta" }, "none share a keyword"));
+      if (this.onDoctor) parts.push(this.sources(this.itemId));
     }
     this.root.replaceChildren(...(this.close ? [this.close] : []), ...parts);
+  }
+  // Closed until asked for: each source's raw spellings, the keyword each became and the group
+  // it folds into (/api/doctor, fetched on first open). A row opens the Doctor tab on its group.
+  sources(itemId) {
+    const body = el("div", { className: "srcs" }, el("div", { className: "meta" }, "Loading…"));
+    const box = el("details", { className: "srcbox" }, el("summary", {}, "Sources and remapping"), body);
+    box.addEventListener("toggle", async () => {
+      if (!box.open || box.dataset.loaded) return;
+      box.dataset.loaded = "1";
+      let d;
+      try { d = await doctorDetail(itemId); } catch (err) { body.replaceChildren(el("div", { className: "meta" }, `Could not load: ${err.message}`)); return; }
+      const rows = [];
+      for (const s of d.sources) {
+        rows.push(el("div", { className: "src" }, s.source));
+        for (const r of s.rows) {
+          const head = groupOf(r);
+          const a = el("a", { href: doctorHref(itemId, head), title: "Open in the Doctor tab" }, r.surface,
+            el("span", { className: "meta" }, r.keyword === null ? " · not stored" : r.keyword !== r.surface ? ` → ${r.keyword}` : ""),
+            r.into ? el("span", {}, ` ⇒ ${r.into_label}`) : "");
+          a.addEventListener("click", e => { e.preventDefault(); this.onDoctor(itemId, head); });
+          rows.push(a);
+        }
+      }
+      body.replaceChildren(...(rows.length ? rows : [el("div", { className: "meta" }, "No source sent a keyword for this title.")]));
+    });
+    return box;
   }
 }
 
@@ -1054,7 +1140,8 @@ function drawRegionLabels(ctx, vp, token) {
 const mapBox = document.getElementById("mapbox");
 const canPick = id => map.byId.has(id);
 const pinCard = new TitleCard(document.getElementById("rightcol"), { pinned: true, onClose: () => selectItem(null), onTag: v => { ++mapUI.token; mapUI.search = null; searchEl.value = ""; showTag(v); }, onPick: id => pickById(id), canPick,
-  onDetail: (item, d) => { if (mapVP.selected === item) { mapUI.similar = d.similar.map(s => s.item_id).filter(canPick); mapVP.redraw(); } } });
+  onDetail: (item, d) => { if (mapVP.selected === item) { mapUI.similar = d.similar.map(s => s.item_id).filter(canPick); mapVP.redraw(); } },
+  onDoctor: (id, row) => openDoctorTab(id, row) });
 const hoverCard = new TitleCard(mapBox, { pinned: false, canPick });
 // Whether `#rightcol` is showing the pinned card or a non-empty tag detail panel, kept as a
 // body class so the narrow-width count-line rule can select it — a `:has()` chain would need
@@ -1672,6 +1759,215 @@ document.getElementById("clear").addEventListener("click", () => {
   noise.clear(); saveNoise(); btn.dataset.armed = ""; btn.textContent = "Clear"; render();
 });
 
+// ---- Doctor tab ----
+// One title's keywords from /api/doctor: a row per merge group (the keyword the group folds into,
+// or the stored keyword when it is in no group), a column per source holding the raw spellings
+// that source sent. "Merge with…" searches the stored vocabulary (/api/keywords) and POSTs an
+// accepted pair to /api/merges, the Merges tab's own route, so the decision lands in
+// merge_decisions.json and the next sweep folds it in.
+const doctorCache = new Map();
+function doctorDetail(itemId) {
+  if (!doctorCache.has(itemId)) {
+    doctorCache.set(itemId, getJSON(`/api/doctor?item_id=${encodeURIComponent(itemId)}`).catch(err => { doctorCache.delete(itemId); throw err; }));
+  }
+  return doctorCache.get(itemId);
+}
+// The row a spelling sits on; a spelling that normalized to nothing gets a row of its own.
+const groupOf = r => r.into ?? r.keyword ?? "\u0000" + r.surface;
+const doctorHref = (itemId, row) => "#" + new URLSearchParams({ kind: state.kind, view: state.view, tab: "doctor", item: itemId, ...(row ? { row } : {}) });
+const dStatus = (text, bad = false) => { const n = qEl("dstatus"); if (n) { n.className = bad ? "bad" : ""; n.textContent = text; } };
+
+function openDoctorTab(itemId, row) {
+  doctor.itemId = itemId; doctor.row = row || null; doctor.data = null; doctor.open = null;
+  setTab("doctor");
+}
+function initDoctor() {
+  if (doctor.itemId && doctor.data?.item_id !== doctor.itemId) loadDoctor(); else paintDoctor();
+}
+async function loadDoctor() {
+  const itemId = doctor.itemId;
+  qEl("dbody").replaceChildren(el("p", { className: "empty" }, "Loading…"));
+  try {
+    const data = await doctorDetail(itemId);
+    if (doctor.itemId === itemId) { doctor.data = data; paintDoctor(); }
+  } catch (err) { if (doctor.itemId === itemId) qEl("dbody").replaceChildren(el("p", { className: "bad" }, `Could not load: ${err.message}`)); }
+}
+
+function viaText(r) {
+  const v = r.via;
+  if (!v) return "through other keywords in its group";
+  if (v.decision === "accepted") return "accepted by a person";
+  return `${v.model} ${v.score.toFixed(2)}`;
+}
+
+function paintDoctor() {
+  const d = doctor.data;
+  if (!d) {
+    if (!doctor.itemId) qEl("dbody").replaceChildren(el("p", { className: "empty" }, "Search a title, or open one from a pinned card's \"Sources and remapping\"."));
+    return;
+  }
+  const sources = d.sources.map(s => s.source);
+  const groups = new Map();
+  for (const s of d.sources) {
+    for (const r of s.rows) {
+      const key = groupOf(r);
+      if (!groups.has(key)) groups.set(key, { key, cells: new Map(), notes: new Map(), pending: new Map(), others: new Set() });
+      const g = groups.get(key);
+      if (!g.cells.has(s.source)) g.cells.set(s.source, []);
+      g.cells.get(s.source).push(r);
+      if (r.into) g.notes.set(r.keyword, `${r.keyword} ⇒ ${r.into_label} · ${viaText(r)}`);
+      for (const o of r.group) if (o !== key) g.others.add(o);
+      for (const p of r.pending) g.pending.set(p.other + "\u0000" + p.decision, p);
+    }
+  }
+  const label = key => key.startsWith("\u0000") ? key.slice(1) : d.forms[key] || key;
+  const rows = [...groups.values()].sort((a, b) => label(a.key).localeCompare(label(b.key)));
+  const body = el("tbody");
+  let hl = null;
+  for (const g of rows) {
+    const stored = !g.key.startsWith("\u0000");
+    const grp = el("td", { className: "grp" }, label(g.key) + (stored ? "" : " (not stored)"));
+    for (const note of g.notes.values()) grp.append(el("span", { className: "via" }, note));
+    const elsewhere = [...g.others].filter(o => !g.notes.has(o));
+    if (elsewhere.length) grp.append(el("span", { className: "via" }, "also in the group: " + elsewhere.map(o => d.forms[o] || o).join(", ")));
+    for (const p of g.pending.values()) {
+      grp.append(el("span", { className: "badge", title: "In merge_decisions.json; the next sweep writes it into the store." },
+        `${{ accepted: "merge with", rejected: "keep apart from", cleared: "clear the decision on" }[p.decision]} ${p.label} · applies at next sweep`));
+    }
+    const tr = el("tr", {}, grp);
+    for (const src of sources) {
+      const spellings = g.cells.get(src) || [];
+      const td = el("td", { className: "cell" + (spellings.length ? "" : " none") }, spellings.length ? "" : "·");
+      td.dataset.source = src;
+      for (const r of spellings) {
+        td.append(el("div", { className: "sp" }, r.surface,
+          r.keyword !== null && r.keyword !== r.surface ? el("span", { className: "meta" }, ` → ${r.keyword}`) : "",
+          r.spoiler ? el("span", { className: "badge" }, "spoiler") : ""));
+      }
+      tr.append(td);
+    }
+    const act = el("td", { className: "act" });
+    if (stored) {
+      const b = el("button", { type: "button", className: "plain" }, "Merge with…");
+      b.setAttribute("aria-expanded", String(doctor.open === g.key));
+      b.addEventListener("click", () => { doctor.open = doctor.open === g.key ? null : g.key; doctor.hits = []; doctor.at = 0; paintDoctor(); });
+      act.append(b);
+    }
+    tr.append(act);
+    if (g.key === doctor.row) { tr.className = "hl"; hl = tr; }
+    if (doctor.open === g.key) tr.classList.add("open");
+    body.append(tr);
+    if (doctor.open === g.key) body.append(el("tr", {}, el("td", { colSpan: sources.length + 2 }, pickRow(g.key, label(g.key)))));
+  }
+  const head = el("tr", {}, el("th", {}, "Group"), ...sources.map(s => el("th", {}, s)), el("th", {}, ""));
+  const n = d.sources.reduce((sum, s) => sum + s.rows.length, 0);
+  qEl("dbody").replaceChildren(
+    el("h3", {}, d.year ? `${d.title} (${d.year})` : d.title),
+    el("div", { className: "meta" }, `${fmt(n)} spelling${n === 1 ? "" : "s"} from ${fmt(sources.length)} source${sources.length === 1 ? "" : "s"}, ${fmt(rows.length)} group${rows.length === 1 ? "" : "s"}`),
+    el("div", { id: "dstatus" }),
+    sources.length ? el("div", { id: "dgrid" }, el("table", {}, el("thead", {}, head), body)) : el("p", { className: "empty" }, "No source sent a keyword for this title."));
+  if (hl && !doctor.open) hl.scrollIntoView({ block: "center" });
+}
+
+function pickRow(keyword, shown) {
+  const input = el("input", { type: "search", id: "doctorq", placeholder: "Search stored keywords…", autocomplete: "off" });
+  input.setAttribute("aria-label", `Keyword to merge with ${shown}`);
+  const list = el("ul", { id: "doctorhits", role: "listbox" });
+  const go = el("button", { type: "button", className: "primary", id: "doctorpropose", disabled: true }, "Propose merge");
+  const hits = () => doctor.hits.filter(h => h.value !== keyword);
+  const paintHits = () => {
+    list.replaceChildren(...hits().map((h, i) => {
+      const li = el("li", { role: "option" }, el("span", {}, h.label + (h.into ? ` ⇒ ${h.into_label}` : "")), el("span", { className: "n" }, `${fmt(h.titles)} title${h.titles === 1 ? "" : "s"}`));
+      li.setAttribute("aria-selected", String(i === doctor.at));
+      li.addEventListener("mousedown", e => { e.preventDefault(); doctor.at = i; paintHits(); });
+      li.addEventListener("dblclick", () => propose(keyword, h.value));
+      return li;
+    }));
+    go.disabled = !hits()[doctor.at] || doctor.busy;
+  };
+  go.addEventListener("click", () => { const h = hits()[doctor.at]; if (h) propose(keyword, h.value); });
+  let timer = 0;
+  input.addEventListener("input", () => {
+    clearTimeout(timer);
+    const q = input.value.trim();
+    const token = ++doctor.token;
+    if (q.length < 2) { doctor.hits = []; paintHits(); return; }
+    timer = setTimeout(async () => {
+      try {
+        const out = await getJSON(`/api/keywords?q=${encodeURIComponent(q)}`);
+        if (token === doctor.token) { doctor.hits = out.keywords; doctor.at = 0; paintHits(); }
+      } catch (err) { if (token === doctor.token) dStatus(err.message, true); }
+    }, 150);
+  });
+  input.addEventListener("keydown", e => {
+    const n = hits().length;
+    if (e.key === "ArrowDown") { e.preventDefault(); doctor.at = Math.min(doctor.at + 1, n - 1); paintHits(); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); doctor.at = Math.max(doctor.at - 1, 0); paintHits(); }
+    else if (e.key === "Enter") { e.preventDefault(); go.click(); }
+    else if (e.key === "Escape") { e.stopPropagation(); doctor.open = null; paintDoctor(); }
+  });
+  paintHits();
+  queueMicrotask(() => input.focus());
+  return el("div", { className: "pick" }, el("div", { className: "meta" }, `${shown} ⇄`), input, list,
+    el("div", {}, go, el("span", { className: "meta" }, "  goes to merge_decisions.json; the next sweep applies it")));
+}
+
+async function propose(a, b) {
+  if (doctor.busy) return;
+  doctor.busy = true;
+  const [keyword_a, keyword_b] = a < b ? [a, b] : [b, a];
+  try {
+    const out = (await sendJSON("POST", "/api/merges", { keyword_a, keyword_b, decision: "accepted" })).pair;
+    m.ready = false;  // the Merges tab reloads on its next visit and shows this decision
+    doctorCache.clear();  // a merge changes the groups of every title carrying either keyword
+    doctor.open = null; doctor.row = a;
+    writeHash();
+    await loadDoctor();
+    dStatus(`${pairName(out)}: accepted. It applies at the next sweep.`);
+  } catch (err) { dStatus(err.message, true); }
+  finally { doctor.busy = false; }
+}
+
+// The title search: titles some source sent a keyword for (/api/doctor/titles).
+const dsearchEl = document.getElementById("dsearch"), dsuggEl = document.getElementById("dsugg");
+const dsugg = { rows: [], at: 0, token: 0, timer: 0 };
+function closeDoctorSuggestions() { dsuggEl.hidden = true; dsearchEl.setAttribute("aria-expanded", "false"); }
+function paintDoctorSuggestions() {
+  dsuggEl.replaceChildren(...dsugg.rows.map((t, i) => {
+    const li = el("li", { className: "opt" + (i === dsugg.at ? " on" : ""), role: "option" },
+      el("span", {}, t.year ? `${t.title} (${t.year})` : t.title), el("span", { className: "n" }, t.kind));
+    li.setAttribute("aria-selected", String(i === dsugg.at));
+    li.addEventListener("mousedown", e => { e.preventDefault(); chooseDoctorTitle(t); });
+    return li;
+  }));
+  const open = dsugg.rows.length > 0;
+  dsuggEl.hidden = !open; dsearchEl.setAttribute("aria-expanded", String(open));
+}
+function chooseDoctorTitle(t) {
+  closeDoctorSuggestions(); dsearchEl.value = "";
+  doctor.itemId = t.item_id; doctor.row = null; doctor.open = null; doctor.data = null;
+  writeHash(); loadDoctor();
+}
+dsearchEl.addEventListener("input", () => {
+  clearTimeout(dsugg.timer);
+  const q = dsearchEl.value.trim();
+  const token = ++dsugg.token;
+  if (q.length < 2) { dsugg.rows = []; paintDoctorSuggestions(); return; }
+  dsugg.timer = setTimeout(async () => {
+    try {
+      const out = await getJSON(`/api/doctor/titles?q=${encodeURIComponent(q)}`);
+      if (token === dsugg.token) { dsugg.rows = out.titles; dsugg.at = 0; paintDoctorSuggestions(); }
+    } catch (err) { if (token === dsugg.token) dStatus(err.message, true); }
+  }, 150);
+});
+dsearchEl.addEventListener("keydown", e => {
+  if (e.key === "ArrowDown") { e.preventDefault(); dsugg.at = Math.min(dsugg.at + 1, dsugg.rows.length - 1); paintDoctorSuggestions(); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); dsugg.at = Math.max(dsugg.at - 1, 0); paintDoctorSuggestions(); }
+  else if (e.key === "Enter") { e.preventDefault(); if (dsugg.rows[dsugg.at]) chooseDoctorTitle(dsugg.rows[dsugg.at]); }
+  else if (e.key === "Escape") { e.stopPropagation(); closeDoctorSuggestions(); }
+});
+dsearchEl.addEventListener("blur", closeDoctorSuggestions);
+
 // ---- Query tab ----
 // The server holds the guards (read-only, one statement, 5 s, 500 rows). Saved queries live in a
 // JSON file beside the store, so they follow the server rather than this browser.
@@ -1686,8 +1982,12 @@ function setTab(tab) {
   qEl("querywrap").hidden = tab !== "query";
   qEl("mergewrap").hidden = tab !== "merges";
   qEl("rolewrap").hidden = tab !== "roles";
+  qEl("doctorwrap").hidden = tab !== "doctor";
   if (tab === "tags") { document.getElementById("error").hidden = !document.getElementById("error").textContent; setView(state.view); }
-  else { document.body.classList.remove("shell"); document.getElementById("error").hidden = true; writeHash(); if (tab === "query") initQuery(); else if (tab === "merges") initMerges(); else initRoles(); }
+  else {
+    document.body.classList.remove("shell"); document.getElementById("error").hidden = true; writeHash();
+    if (tab === "query") initQuery(); else if (tab === "merges") initMerges(); else if (tab === "roles") initRoles(); else initDoctor();
+  }
 }
 
 function qStatus(text, bad = false, ...extra) {
@@ -1847,7 +2147,7 @@ function paintList() {
       : el("button", { type: "button", className: "plain", title: "Forget the decision; the pair goes back to Jev's score" }, "Undo");
     act.addEventListener("click", () => decide(p, p.decision === null ? "rejected" : "cleared"));
     return el("li", {}, el("div", { className: "pair" }, pairName(p), ...badges,
-      el("div", { className: "sub" }, `${p.score.toFixed(2)}${when}`)), el("div", { className: "acts" }, act));
+      el("div", { className: "sub" }, `${p.score === null ? "no judge score" : p.score.toFixed(2)}${when}`)), el("div", { className: "acts" }, act));
   });
   if (shown.length > rows.length) rows.push(el("li", { className: "empty" }, `${fmt(shown.length - rows.length)} more — filter to find them.`));
   qEl("mrows").replaceChildren(...rows);

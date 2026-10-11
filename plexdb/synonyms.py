@@ -1,8 +1,9 @@
 """Finding synonym keywords: embeddings propose pairs, Jev judges them, and a
 person's decisions are folded in from a file (ADR-0018).
 
-`keyword_pairs` holds Jev's answer for every pair it was asked about, and
-nothing else the writer concludes: no cosine, no status, no "counts as merged".
+`keyword_pairs` holds Jev's answer for every pair it was asked about, a person's
+decision where one was made (a pair only a person decided has no answer, ADR-0020),
+and nothing else the writer concludes: no cosine, no status, no "counts as merged".
 A pair is judged once. A pair that has a row is never asked again, and the
 judge step never touches its `decision`.
 
@@ -59,7 +60,7 @@ from .embed_client import MODEL, Embedder
 from .errors import JevRejected
 from .jev_client import Judge, Verdict, judge_all
 from .keywords import readable_surfaces
-from .merge_review import MERGE_DECISIONS_FILE, MergeDecisions
+from .merge_review import MERGE_DECISIONS_FILE, MergeDecisions, is_stored
 
 __all__ = [
     "JudgeStats",
@@ -109,9 +110,12 @@ def fold_merge_decisions(conn: sqlite3.Connection, path: Path) -> FoldStats:
     The file is a list of `{keyword_a, keyword_b, decision, decided_at}`, where
     `decision` is `accepted`, `rejected` or `cleared`. Entries apply in list
     order, so the last entry for a pair wins. `cleared` sets `decision` and
-    `decided_at` back to NULL. The whole file is validated before the first row
-    changes, and applied in one transaction. It is applied every run, so the
-    file stays the record of the latest decision per pair.
+    `decided_at` back to NULL, and deletes a row no judge wrote. A decision on a
+    pair with no row, whose two keywords are both stored, inserts a row with only
+    the decision (schema v18, ADR-0020); one naming a keyword no title carries is
+    unmatched. The whole file is validated before the first row changes, and
+    applied in one transaction. It is applied every run, so the file stays the
+    record of the latest decision per pair.
     """
     stats = FoldStats()
     entries = MergeDecisions.load(path)
@@ -121,18 +125,31 @@ def fold_merge_decisions(conn: sqlite3.Connection, path: Path) -> FoldStats:
     stats.entries = len(entries)
     with conn:
         for entry in entries:
-            cleared = entry["decision"] == "cleared"
-            cursor = conn.execute(
-                "UPDATE keyword_pairs SET decision = ?, decided_at = ? "
-                "WHERE keyword_a = ? AND keyword_b = ?",
-                (
-                    None if cleared else entry["decision"],
-                    None if cleared else entry["decided_at"],
-                    entry["keyword_a"],
-                    entry["keyword_b"],
-                ),
-            )
-            if cursor.rowcount:
+            pair = (entry["keyword_a"], entry["keyword_b"])
+            if entry["decision"] == "cleared":
+                changed = conn.execute(
+                    "DELETE FROM keyword_pairs WHERE keyword_a = ? AND keyword_b = ? "
+                    "AND judged_at IS NULL",
+                    pair,
+                ).rowcount
+                changed += conn.execute(
+                    "UPDATE keyword_pairs SET decision = NULL, decided_at = NULL "
+                    "WHERE keyword_a = ? AND keyword_b = ?",
+                    pair,
+                ).rowcount
+            else:
+                changed = conn.execute(
+                    "UPDATE keyword_pairs SET decision = ?, decided_at = ? "
+                    "WHERE keyword_a = ? AND keyword_b = ?",
+                    (entry["decision"], entry["decided_at"], *pair),
+                ).rowcount
+                if not changed and all(is_stored(conn, keyword) for keyword in pair):
+                    changed = conn.execute(
+                        "INSERT INTO keyword_pairs (keyword_a, keyword_b, decision, decided_at) "
+                        "VALUES (?, ?, ?, ?)",
+                        (*pair, entry["decision"], entry["decided_at"]),
+                    ).rowcount
+            if changed:
                 stats.matched += 1
             else:
                 stats.unmatched += 1
