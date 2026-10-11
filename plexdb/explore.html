@@ -2130,20 +2130,22 @@ function paintQueue() {
     el("div", { className: "mkeys" }, "Accepted pairs count as the same tag; rejected pairs never come back.")));
 }
 
+// A rule writes its verdict at score 1.0 like a confident Jev call, so only `model` tells them apart.
+const byRule = p => Boolean(p.model?.startsWith("rule:"));
+
 function paintList() {
   const needle = qEl("mfilter").value.trim().toLowerCase();
   const shown = m.decided.filter(p => {
     if (m.show === "accepted" && p.decision !== "accepted") return false;
     if (m.show === "rejected" && p.decision !== "rejected") return false;
-    if (m.show === "jev" && p.decision !== null) return false;
+    if (m.show === "jev" && (p.decision !== null || byRule(p))) return false;
     return !needle || (p.form_a + " " + p.form_b + " " + p.keyword_a + " " + p.keyword_b).toLowerCase().includes(needle);
   });
   const merged = m.decided.filter(p => p.bucket === "merged").length;
   qEl("mlhead").textContent = `All mappings · ${fmt(merged)} merged, ${fmt(m.decided.length - merged)} rejected`;
   if (!shown.length) { qEl("mrows").replaceChildren(el("li", { className: "empty" }, "None.")); return; }
   const rows = shown.slice(0, 300).map(p => {
-    // A rule writes its verdict at score 1.0 like a confident Jev call, so only `model` tells them apart.
-    const judge = p.model && p.model.startsWith("rule:") ? `${p.model.slice(5)} rule` : "Jev ≥ 0.9";
+    const judge = byRule(p) ? `${p.model.slice(5)} rule` : "Jev ≥ 0.9";
     const label = p.decision === "accepted" ? "accepted" : p.decision === "rejected" ? "rejected" : judge;
     const badges = [el("span", { className: "badge" + (p.decision === "rejected" ? " rejected" : "") }, label)];
     if (p.pending) badges.push(el("span", { className: "badge", title: "In merge_decisions.json; the next sweep writes it into the store." }, "applies at next sweep"));

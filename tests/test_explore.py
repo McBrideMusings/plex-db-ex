@@ -1522,6 +1522,32 @@ def test_a_title_searched_while_the_map_redraws_pins_its_point_on_the_new_map(
     assert pin == {"id": "imdb:tt1", "onMap": True, "focus": "imdb:tt1"}, pin
 
 
+def test_merges_jev_only_filter_lists_jev_calls_and_no_rule_calls(
+    browser: Browser, store: Path, base_url: str
+) -> None:
+    with open_store(store) as conn:
+        conn.executemany(
+            "INSERT INTO keyword_pairs (keyword_a, keyword_b, jev_score, jev_model, judged_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            [
+                ("stinger", "superhero", 0.95, "jev-1.13.0", FETCHED),
+                ("heist", "lawyer", 1.0, "rule:film-suffix", FETCHED),
+            ],
+        )
+        conn.commit()
+    page = browser.new_page(viewport={"width": 1280, "height": 800})
+    page.goto(f"{base_url}/#tab=merges")
+    page.wait_for_function(
+        "() => document.querySelectorAll('#mrows li .badge').length", timeout=30_000
+    )
+    badges = "els => els.map(e => e.textContent)"
+    every = page.eval_on_selector_all("#mrows li .badge", badges)
+    assert sorted(every) == ["Jev ≥ 0.9", "film-suffix rule"], every
+    page.click("button[data-mshow='jev']")
+    jev = page.eval_on_selector_all("#mrows li .badge", badges)
+    assert jev == ["Jev ≥ 0.9"], jev
+
+
 def test_demo_moves_the_camera_without_a_seek(browser: Browser, store: Path, base_url: str) -> None:
     page = _open_clip(browser, store, f"{base_url}/?demo", ready=DEMO_READY)
     # One second of samples, longer than the 0.6 s the camera holds still on a tag.
