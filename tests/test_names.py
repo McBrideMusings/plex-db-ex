@@ -176,6 +176,18 @@ def test_a_merge_group_shows_a_members_name_when_its_head_has_none(
         assert display_labels(conn, {})["heist"] == "Heist"
 
 
+def test_a_merges_pair_names_each_side_by_its_own_label_not_its_groups(
+    store: Path, base_url: str
+) -> None:
+    _merge(store)
+    _send("POST", f"{base_url}/api/names", {"keyword": "bank robbery", "name": "Bank job"})
+    _, out = _send("GET", f"{base_url}/api/merges")
+    (pair,) = [p for p in out["decided"] if p["keyword_b"] == "heist"]
+    assert (pair["form_a"], pair["form_b"]) == ("Bank job", "heist")
+    _, card = _send("GET", f"{base_url}/api/title?item_id=imdb:tt2")
+    assert card["keywords"] == [{"value": "heist", "label": "Bank job"}]
+
+
 def test_the_judges_never_read_a_name(store: Path, tmp_path: Path) -> None:
     _fold(store, tmp_path, [_entry("Heists", "Something else entirely")])
     with open_readonly(store) as conn:

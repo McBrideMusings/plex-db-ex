@@ -1131,7 +1131,9 @@ its name when it has one, and its readable spelling (the shortest `keyword_forms
 name) otherwise. Nothing that computes reads this table: the judges embed and ask about readable
 spellings, and similarity, the map's vectors and the merge fold all use `enrichment` values. A
 merge group whose kept keyword has no name shows the newest name any of its members has, so a name
-stays on screen when title counts make another member the kept one.
+stays on screen when title counts make another member the kept one. A view of two keywords side by
+side, such as a proposed merge pair, labels each with its own name or spelling instead, since both
+can sit in one group.
 
 **Refresh rule.** Only `plexdb fold-name-decisions` writes the table, from
 [`name_decisions.json`](#name-decisions-json). `prune-keyword-verdicts` deletes a name once its

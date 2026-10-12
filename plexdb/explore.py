@@ -61,6 +61,7 @@ from .names import (
     NoSuchKeyword,
     display_labels,
     names_json,
+    own_labels,
 )
 from .role_review import (
     ROLE_DECISIONS_FILE,
@@ -2074,7 +2075,7 @@ def make_server(
                 with open_readonly(store_path) as conn:
                     require_pair(conn, (a, b))
                     entry = merges.record((a, b), decision, keyword_spellings(conn, (a, b)))
-                    labels = display_labels(conn, names.latest())
+                    labels = own_labels(conn, names.latest())
                     pair = review_rows(conn, {(a, b): entry}, labels, (a, b))[0]
                 print(
                     f"explore: merge decision {a!r} {b!r} {decision} -> {merges.path}",
@@ -2201,7 +2202,9 @@ def make_server(
             elif url.path == "/api/merges":
                 with open_readonly(store_path) as conn:
                     overlay = names.latest()
-                    labels = display_labels(conn, overlay)
+                    # Each side's own label, not its group's: both sides can already
+                    # sit in one merge group, and the group label would name them alike.
+                    labels = own_labels(conn, overlay)
                     pairs = review_rows(conn, merges.latest(), labels)
                     # Each named keyword's own name, so a side's rename box starts from it.
                     named = names_json(conn, overlay)

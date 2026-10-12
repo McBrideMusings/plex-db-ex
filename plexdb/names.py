@@ -33,6 +33,7 @@ __all__ = [
     "fold_name_decisions",
     "name_decisions_path",
     "names_json",
+    "own_labels",
 ]
 
 NAME_DECISIONS_FILE = "name_decisions.json"
@@ -163,19 +164,31 @@ def names_json(conn: sqlite3.Connection, overlay: _Overlay) -> dict[str, dict[st
     return out
 
 
+def _named(conn: sqlite3.Connection, overlay: _Overlay) -> dict[str, dict[str, object]]:
+    return {k: v for k, v in names_json(conn, overlay).items() if v["name"] is not None}
+
+
+def own_labels(conn: sqlite3.Connection, overlay: _Overlay) -> dict[str, str]:
+    """For each keyword with a `keyword_forms` row or a name, its own name
+    (`names_json`), else its readable spelling (`readable_forms`) — never one borrowed
+    from its merge group. The Merges tab labels a pair's two sides with these, since
+    both can sit in one group. A keyword absent here is shown as its stored form."""
+    labels = readable_forms(conn)
+    labels.update({keyword: str(v["name"]) for keyword, v in _named(conn, overlay).items()})
+    return labels
+
+
 def display_labels(conn: sqlite3.Connection, overlay: _Overlay) -> dict[str, str]:
     """For each keyword with a `keyword_forms` row or a name, the text to show a
-    person: its name (`names_json`), else its readable spelling (`readable_forms`).
-
-    A merge group whose head has no name shows the newest name any of its members
-    has, so a name set on a keyword stays on screen when title counts make another
-    member the head. A keyword absent here is shown as its stored form.
+    person: `own_labels`, except that a merge group whose head has no name shows the
+    newest name any of its members has, so a name set on a keyword stays on screen
+    when title counts make another member the head. A keyword absent here is shown
+    as its stored form.
     """
-    labels = readable_forms(conn)
-    named = {k: v for k, v in names_json(conn, overlay).items() if v["name"] is not None}
+    labels = own_labels(conn, overlay)
+    named = _named(conn, overlay)
     if not named:
         return labels
-    labels.update({keyword: str(v["name"]) for keyword, v in named.items()})
     newest: dict[str, dict[str, object]] = {}
     for member, head in merge_map(conn).items():
         if member not in named or head in named:
