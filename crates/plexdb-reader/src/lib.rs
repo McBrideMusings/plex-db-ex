@@ -485,29 +485,30 @@ impl Reader {
         // the 99 titles one account has today and is thousands of them on a
         // library that has been running for years.
         let shows = self.show_ids()?;
-        let attributes_by_item = self.attributes_by_item()?;
+        let ids: Vec<&str> = units.iter().map(|(unit, _)| unit.as_str()).collect();
+        let attributes_by_item = self.attributes_by_item(&ids)?;
 
         let mut totals: BTreeMap<AttributeKey, f64> = BTreeMap::new();
         let mut shows_without_seasons: Vec<String> = Vec::new();
 
-        for (unit, plays) in units {
-            let r = match seasons.get(&unit) {
-                Some(length) => plays as f64 / *length as f64,
+        for (unit, plays) in &units {
+            let r = match seasons.get(unit) {
+                Some(length) => *plays as f64 / *length as f64,
                 None => {
                     // Only a show can be missing a season length. A film has
                     // none by nature and is one whole thing, so `plays` is
                     // already its `r`; a show landing here is one Plex files
                     // with no season numbers, and that is worth naming.
-                    if shows.contains(&unit) {
+                    if shows.contains(unit) {
                         shows_without_seasons.push(unit.clone());
                     }
-                    plays as f64
+                    *plays as f64
                 }
             };
             if r < MIN_SEASONS_WATCHED {
                 continue;
             }
-            let Some(attributes) = attributes_by_item.get(&unit) else {
+            let Some(attributes) = attributes_by_item.get(unit) else {
                 continue;
             };
             let share = r.sqrt() / attributes.len() as f64;
@@ -592,22 +593,38 @@ impl Reader {
     /// kept alongside the fix, so a sentinel written back into `enrichment`
     /// shows up loudly instead of being silently swallowed here.
     ///
-    /// One scan rather than a query per watched title. Enrichment is the
-    /// biggest table a rollup touches, so this is the one place worth
-    /// measuring if a store ever grows past what a scan can hold.
-    fn attributes_by_item(&self) -> Result<AttributesByItem, ReaderError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT item_id, namespace, key, value FROM enrichment \
-             ORDER BY item_id, namespace, key, value",
-        )?;
-        let rows = stmt
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    (row.get(1)?, row.get(2)?, row.get(3)?),
-                ))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
+    /// Only `item_ids`' rows, one statement per 500 ids rather than a query
+    /// per watched title. Enrichment is the biggest table a rollup touches,
+    /// and a scan of all of it — every title in the library — cost a taste
+    /// rollup most of its time to read the ~1,000 rows a house's watched
+    /// titles actually carry.
+    fn attributes_by_item(&self, item_ids: &[&str]) -> Result<AttributesByItem, ReaderError> {
+        let mut rows = Vec::new();
+        // A repeated id must be asked for once: two copies in different
+        // chunks would list its attributes twice and halve its share.
+        let mut seen = std::collections::HashSet::new();
+        let unique: Vec<&str> = item_ids
+            .iter()
+            .copied()
+            .filter(|id| seen.insert(*id))
+            .collect();
+        for chunk in unique.chunks(500) {
+            let placeholders = vec!["?"; chunk.len()].join(",");
+            let mut stmt = self.conn.prepare(&format!(
+                "SELECT DISTINCT item_id, namespace, key, value FROM enrichment \
+                 WHERE item_id IN ({placeholders}) \
+                 ORDER BY item_id, namespace, key, value"
+            ))?;
+            let chunk_rows = stmt
+                .query_map(rusqlite::params_from_iter(chunk.iter()), |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        (row.get(1)?, row.get(2)?, row.get(3)?),
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows.extend(chunk_rows);
+        }
 
         let mut by_item: AttributesByItem = BTreeMap::new();
         for (item_id, attribute) in rows {
