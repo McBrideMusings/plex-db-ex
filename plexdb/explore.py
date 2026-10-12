@@ -44,7 +44,7 @@ import httpx
 from .decisions import SAVED_FILE
 from .errors import DecisionsFileError, StoreError
 from .identity import PRIORITY
-from .keywords import keyword_spellings
+from .keywords import keyword_spellings, readable_forms
 from .merge_review import (
     MERGE_AT,
     MERGE_DECISIONS_FILE,
@@ -688,26 +688,6 @@ class RegionLabel(NamedTuple):
     #: The readable spelling to draw, and the stored keyword it stands for.
     text: str
     tag: str
-
-
-def readable_forms(conn: sqlite3.Connection) -> dict[str, str]:
-    """For each stored (normalized) keyword, the raw spelling to show a person.
-
-    `keyword_forms` keeps every raw spelling that normalised to a stored
-    keyword but not how often a source used it, so the choice is the shortest
-    spelling, ties by name. A stored keyword with no entry, or a store that
-    predates the table, is absent, and the caller shows the stored form.
-    """
-    try:
-        rows = conn.execute("SELECT surface, keyword FROM keyword_forms").fetchall()
-    except sqlite3.OperationalError:
-        return {}
-    best: dict[str, str] = {}
-    for surface, keyword in rows:
-        held = best.get(keyword)
-        if held is None or (len(surface), surface) < (len(held), held):
-            best[keyword] = surface
-    return best
 
 
 def region_labels(

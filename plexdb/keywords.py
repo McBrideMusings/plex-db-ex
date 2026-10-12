@@ -316,15 +316,27 @@ def rederive_keywords(conn: sqlite3.Connection) -> int:
     return len(rows)
 
 
-def readable_surfaces(conn: sqlite3.Connection) -> dict[str, str]:
-    """Each stored keyword and the text a person or a judge reads for it: its
-    shortest surface form, shortest first then alphabetical so the choice is
-    stable. A keyword no `keyword_forms` row maps back to is its own text."""
+def readable_forms(conn: sqlite3.Connection) -> dict[str, str]:
+    """For each keyword `keyword_forms` maps a raw spelling to, the spelling a
+    person or a judge reads for it.
+
+    `keyword_forms` keeps every raw spelling that normalised to a stored keyword
+    but not how often a source used it, so the choice is the shortest spelling,
+    ties by name. A keyword with no row is absent, and the caller shows the
+    stored form."""
     chosen: dict[str, str] = {}
     for surface, keyword in conn.execute("SELECT surface, keyword FROM keyword_forms"):
         best = chosen.get(keyword)
         if best is None or (len(surface), surface) < (len(best), best):
             chosen[keyword] = surface
+    return chosen
+
+
+def readable_surfaces(conn: sqlite3.Connection) -> dict[str, str]:
+    """Each keyword a title carries in `enrichment`, and its readable spelling
+    (`readable_forms`), or its own text when no `keyword_forms` row maps back to
+    it."""
+    chosen = readable_forms(conn)
     return {
         row[0]: chosen.get(row[0], row[0])
         for row in conn.execute(
@@ -336,7 +348,7 @@ def readable_surfaces(conn: sqlite3.Connection) -> dict[str, str]:
 
 def keyword_spellings(conn: sqlite3.Connection, keywords: Iterable[str]) -> dict[str, list[str]]:
     """Every `keyword_forms` surface of each of `keywords`, shortest first then
-    alphabetical, the order `readable_surfaces` picks from. A keyword with no
+    alphabetical, the order `readable_forms` picks from. A keyword with no
     surface is absent."""
     wanted = sorted(set(keywords))
     spellings: dict[str, list[str]] = {}
