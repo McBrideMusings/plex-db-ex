@@ -1522,6 +1522,26 @@ def test_a_title_searched_while_the_map_redraws_pins_its_point_on_the_new_map(
     assert pin == {"id": "imdb:tt1", "onMap": True, "focus": "imdb:tt1"}, pin
 
 
+def test_a_redraw_under_a_zoomed_pin_keeps_the_zoom_and_centres_the_pin_beside_its_card(
+    browser: Browser, store: Path, base_url: str
+) -> None:
+    page = _pin_while_the_map_redraws(
+        browser,
+        store,
+        base_url,
+        "() => { mapVP.onSelect(map.byId.get('imdb:tt1')); mapVP.zoomAt(0, 0, 8); }",
+    )
+    view = page.evaluate(
+        """() => { const it = mapVP.selected, pad = clearOfPinCard();
+                   return { zoom: mapVP.zoom, fitted: mapVP.fitted,
+                            x: mapVP.sx(it.x), y: mapVP.sy(it.y),
+                            cx: (pad.l + mapVP.w - pad.r) / 2,
+                            cy: (pad.t + mapVP.h - pad.b) / 2 }; }"""
+    )
+    assert view["zoom"] == pytest.approx(8) and not view["fitted"], view
+    assert (view["x"], view["y"]) == pytest.approx((view["cx"], view["cy"]), abs=1), view
+
+
 def test_merges_jev_only_filter_lists_jev_calls_and_no_rule_calls(
     browser: Browser, store: Path, base_url: str
 ) -> None:

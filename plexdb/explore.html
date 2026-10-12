@@ -690,10 +690,10 @@ class Viewport {
     }
     this.redraw();
   }
-  // Fit the given items on screen, no closer than the zoom limit allows.
-  focusOn(items, pad = 70) {
+  // Fit the given items on screen, no closer than `maxZoom` times the whole-picture scale.
+  focusOn(items, pad = 70, maxZoom = Viewport.MAX_ZOOM) {
     if (!items.length || !this.w) return;
-    const v = this.viewFor(boundsOf(items), pad, this.k0 * Viewport.MAX_ZOOM);
+    const v = this.viewFor(boundsOf(items), pad, this.k0 * maxZoom);
     Object.assign(this, { k: v.k, tx: v.tx, ty: v.ty, fitted: false });
     this.updateHover();
     this.redraw();
@@ -1015,8 +1015,13 @@ function syncMapItems() {
     map.buckets[Math.min(HUE_BUCKETS - 1, Math.floor(hue / HUE_SPAN * HUE_BUCKETS))].push(it);
   }
   const keep = mapVP.selected && map.byId.get(mapVP.selected.id);
+  const zoom = mapVP.zoom, fitted = mapVP.fitted;
   mapVP.setItems(map.items, b);
-  if (keep) mapVP.selected = keep; else selectItem(null);
+  if (!keep) { selectItem(null); return; }
+  mapVP.selected = keep;
+  // Zoomed in on a pin that survived: the new layout moved it, so centre it beside its card at
+  // the same zoom rather than leaving the whole-map view setItems just fitted.
+  if (!fitted) mapVP.focusOn([keep], clearOfPinCard(), zoom);
 }
 
 function paintMap() {
@@ -1138,6 +1143,8 @@ function drawRegionLabels(ctx, vp, token) {
 
 // ---- Map: hover, selection, search ----
 const mapBox = document.getElementById("mapbox");
+// The map area a camera move onto a pin keeps clear of: the controls, and the card in `#rightcol`.
+const clearOfPinCard = () => clearOfPanel(mapVP.canvas, document.getElementById("rightcol"), { l: 40, t: 70, r: 24, b: 24 });
 const canPick = id => map.byId.has(id);
 const pinCard = new TitleCard(document.getElementById("rightcol"), { pinned: true, onClose: () => selectItem(null), onTag: v => { ++mapUI.token; mapUI.search = null; searchEl.value = ""; showTag(v); }, onPick: id => pickById(id), canPick,
   // By id, not the point object: a map redraw that lands while the details load swaps every point.
@@ -1267,8 +1274,7 @@ async function chooseSuggestion(row) {
     // this point; paint it now with the detail already in hand so its real, full-content height
     // measures correctly below, rather than the shorter "Loading..." placeholder's.
     pinCard.paint(it, d, null);
-    const rightcol = document.getElementById("rightcol");
-    mapVP.focusOn([it, ...near], clearOfPanel(mapVP.canvas, rightcol, { l: 40, t: 70, r: 24, b: 24 }));
+    mapVP.focusOn([it, ...near], clearOfPinCard());
   } else {
     let body;
     try { body = await getJSON(`/api/titles?kind=${state.kind}&tag=${encodeURIComponent(row.tag)}`); }
