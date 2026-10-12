@@ -44,7 +44,7 @@ import httpx
 from .decisions import SAVED_FILE
 from .errors import DecisionsFileError, StoreError
 from .identity import PRIORITY
-from .keywords import is_carried, keyword_spellings, readable_forms
+from .keywords import is_carried, keyword_spellings
 from .merge_review import (
     MERGE_AT,
     MERGE_DECISIONS_FILE,
@@ -221,13 +221,24 @@ MAP_NEIGHBOURS = 15
 MAP_MIN_DIST = 0.1
 MAP_SPREAD = 1.0
 
+#: Region labels come from a k-d split of the map: depth `d` has up to `2**d`
+#: regions, holding about the same number of titles each, so a dense part of the
+#: map splits into many small regions and an empty part stays one. Labels start at
+#: depth 2 (four regions) and stop at depth 9 (512), or where a region has fewer
+#: than `LABEL_MIN_TITLES` titles.
+LABEL_FIRST_DEPTH = 2
+LABEL_LAST_DEPTH = 9
+LABEL_MIN_TITLES = 8
+
 #: Names how a map is drawn. It is part of a stored map's fingerprint, so
 #: changing the algorithm or any constant above and bumping this string makes
 #: every stored map stale and the next refresh redraws it. `full` is the input:
 #: the whole sparse keyword vector, every tag kept. `uniform` is the scaling:
-#: both axes by one factor, so the layout keeps its shape.
+#: both axes by one factor, so the layout keeps its shape. `labels` is the
+#: region labels stored with it (`region_labels`), with their depths and floor.
 MAP_RECIPE = (
-    f"umap-cosine-full-df{MAP_MIN_DF}-nn{MAP_NEIGHBOURS}-md{MAP_MIN_DIST}-sp{MAP_SPREAD}-uniform"
+    f"umap-cosine-full-df{MAP_MIN_DF}-nn{MAP_NEIGHBOURS}-md{MAP_MIN_DIST}-sp{MAP_SPREAD}"
+    f"-uniform-labels{LABEL_FIRST_DEPTH}-{LABEL_LAST_DEPTH}-min{LABEL_MIN_TITLES}"
 )
 
 
@@ -423,8 +434,9 @@ def stored_map(
     conn: sqlite3.Connection, kind: str, *, stale_ok: bool = False
 ) -> dict[str, object] | None:
     """The default map the writer stored, as `title_map_json` would give it
-    plus a `stale` flag, or `None` when there is none or it was drawn from
-    different keyword rows.
+    plus a `stale` flag and the region labels stored with it (`labels`), or
+    `None` when there is none or it was drawn
+    from different keyword rows.
 
     `None` is the caller's cue to draw it live. With `stale_ok`, a map drawn
     from different keyword rows comes back anyway with `stale` set: its titles
@@ -448,6 +460,11 @@ def stored_map(
             "JOIN items i USING (item_id) WHERE m.kind = ? ORDER BY m.item_id",
             (kind,),
         ).fetchall()
+        labels = conn.execute(
+            "SELECT node, x, y, width, height, titles, value FROM title_map_label "
+            "WHERE kind = ? ORDER BY node",
+            (kind,),
+        ).fetchall()
     except sqlite3.OperationalError:
         return None
     return {
@@ -455,6 +472,7 @@ def stored_map(
         "unplaced": state[1],
         "stale": stale,
         "points": [[r[0], r[1], r[2], r[3], r[4]] for r in rows],
+        "labels": [RegionLabel(*r) for r in labels],
     }
 
 
@@ -683,16 +701,6 @@ def stored_network(conn: sqlite3.Connection, kind: str) -> dict[str, object] | N
     }
 
 
-#: Region labels come from a k-d split of the map: depth `d` has up to `2**d`
-#: regions, holding about the same number of titles each, so a dense part of the
-#: map splits into many small regions and an empty part stays one. Labels start at
-#: depth 2 (four regions) and stop at depth 9 (512), or where a region has fewer
-#: than `LABEL_MIN_TITLES` titles.
-LABEL_FIRST_DEPTH = 2
-LABEL_LAST_DEPTH = 9
-LABEL_MIN_TITLES = 8
-
-
 class RegionLabel(NamedTuple):
     #: The region's heap number: the children of `i` are `2i+1` and `2i+2`.
     node: int
@@ -703,8 +711,8 @@ class RegionLabel(NamedTuple):
     width: float
     height: float
     titles: int
-    #: The readable spelling to draw, and the stored keyword it stands for.
-    text: str
+    #: The stored keyword that names the region. The text a person reads is
+    #: not part of a label: `region_labels_json` adds it as it serves.
     tag: str
 
 
@@ -725,7 +733,7 @@ def region_labels(
     new words. Tags in `exclude`, and tags the map left out of its vectors
     (fewer than `MAP_MIN_DF` titles), never label anything.
 
-    A `RegionLabel` serialises as a JSON array in field order.
+    `region_labels_json` turns them into what `/api/map` sends.
     """
     rows = keyword_rows(conn, kind)
     df = Counter(r[1] for r in rows)
@@ -734,7 +742,6 @@ def region_labels(
     for item_id, value in rows:
         if df[value] >= MAP_MIN_DF and value not in exclude:
             tags[item_id].append(value)
-    forms = readable_forms(conn)
 
     def span(values: list[float]) -> tuple[float, float]:
         values = sorted(values)
@@ -774,7 +781,6 @@ def region_labels(
                         round(width, 4),
                         round(height, 4),
                         len(members),
-                        forms.get(tag, tag),
                         tag,
                     )
                 )
@@ -788,6 +794,15 @@ def region_labels(
         stack.append((2 * node + 2, ordered[half:], used))
     labels.sort(key=lambda label: label.node)
     return labels
+
+
+def region_labels_json(
+    regions: Sequence[RegionLabel], labels: dict[str, str]
+) -> list[list[object]]:
+    """Region labels as `/api/map` sends them: each an array of the label's
+    fields with, before its keyword, the text to draw — the keyword's display
+    label (`labels`, from `names.display_labels`), else the keyword itself."""
+    return [[*r[:-1], labels.get(r.tag, r.tag), r.tag] for r in regions]
 
 
 def title_keywords(conn: sqlite3.Connection, item_id: str) -> list[str]:
@@ -1225,9 +1240,15 @@ class _MapCache:
         def compute() -> dict[str, object]:
             with open_readonly(self._path) as conn:
                 payload = None if exclude else stored_map(conn, kind)
-                if payload is None:
-                    payload = {**title_map_json(title_map(conn, kind, exclude)), "stale": False}
-                return _labelled(conn, kind, payload, exclude)
+                if payload is not None:
+                    return payload
+                tmap = title_map(conn, kind, exclude)
+                placed = [(p.item_id, p.x, p.y) for p in tmap.points]
+                return {
+                    **title_map_json(tmap),
+                    "stale": False,
+                    "labels": region_labels(conn, kind, placed, exclude),
+                }
 
         return self._cache.get((kind, exclude), (stat.st_mtime_ns, stat.st_size), compute)
 
@@ -1242,18 +1263,10 @@ class _MapCache:
                 payload = stored_map(conn, kind, stale_ok=True)
                 if payload is None or not payload["stale"]:
                     return {}
-                return _labelled(conn, kind, payload, frozenset())
+                return payload
 
         stale = self._cache.get((kind, "stored"), (stat.st_mtime_ns, stat.st_size), compute)
         return stale or self.get(kind, frozenset())
-
-
-def _labelled(
-    conn: sqlite3.Connection, kind: str, payload: dict[str, object], exclude: frozenset[str]
-) -> dict[str, object]:
-    rows: list[list[Any]] = payload["points"]  # type: ignore[assignment]
-    placed = [(p[0], p[3], p[4]) for p in rows]
-    return {**payload, "labels": region_labels(conn, kind, placed, exclude)}
 
 
 class _TagNetworkCache:
@@ -2168,15 +2181,16 @@ def make_server(
                     payload = maps.get_stored(kind)
                 else:
                     payload = maps.get(kind, exclude)
-                # The drawn map is cached; a display name is not part of it, so it is
-                # laid over the cached labels on every request.
+                # The map and its labels are cached or stored as keywords; a display
+                # label is not part of either, so it is laid over them on every request
+                # and a rename shows on the next one.
                 with open_readonly(store_path) as conn:
                     labels = display_labels(conn, names.latest())
                 regions = cast(list[RegionLabel], payload["labels"])
                 self._json(
                     {
                         **payload,
-                        "labels": [r._replace(text=labels.get(r.tag, r.text)) for r in regions],
+                        "labels": region_labels_json(regions, labels),
                     }
                 )
             elif url.path == "/api/tagnetwork":

@@ -2,10 +2,10 @@
 
 `plexdb.explore` draws a map of every title by keyword similarity, which takes
 seconds to minutes. With no noise excluded that map is a pure function of the
-keyword rows, so this module draws it once and stores it in `title_map` and
-`title_map_state`; Plex TVX serves the stored copy while its fingerprint
-still matches the keyword rows and draws live when it does not. This is the only
-code that writes those tables (ADR-0001).
+keyword rows, so this module draws it once and stores it, with its region
+labels, in `title_map`, `title_map_label` and `title_map_state`; Plex TVX serves
+the stored copy while its fingerprint still matches the keyword rows and draws
+live when it does not. This is the only code that writes those tables (ADR-0001).
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from .explore import KINDS, keyword_fingerprint, title_map
+from .explore import KINDS, RegionLabel, TitleMap, keyword_fingerprint, region_labels, title_map
 
 
 @dataclass(frozen=True)
@@ -32,11 +32,12 @@ def refresh_title_maps(conn: sqlite3.Connection) -> list[Refreshed]:
     """Bring the stored default map of every kind up to date.
 
     A kind whose stored fingerprint equals the current one is left alone. Every
-    other kind is drawn first, with no write lock held, and then all the redrawn
-    kinds replace their rows in one transaction, so a reader sees either the old
-    maps or the new ones and a failure part-way leaves the old ones in place.
+    other kind is drawn and labelled first, with no write lock held, and then
+    all the redrawn kinds replace their rows in one transaction, so a reader
+    sees either the old maps or the new ones and a failure part-way leaves the
+    old ones in place.
     """
-    drawn = []
+    drawn: list[tuple[str, str, TitleMap, list[RegionLabel]]] = []
     results: list[Refreshed] = []
     for kind in KINDS:
         fingerprint = keyword_fingerprint(conn, kind)
@@ -51,18 +52,26 @@ def refresh_title_maps(conn: sqlite3.Connection) -> list[Refreshed]:
             continue
         started = time.monotonic()
         tmap = title_map(conn, kind)
+        labels = region_labels(conn, kind, [(p.item_id, p.x, p.y) for p in tmap.points])
         seconds = time.monotonic() - started
-        drawn.append((kind, fingerprint, tmap))
+        drawn.append((kind, fingerprint, tmap, labels))
         results.append(Refreshed(kind, True, len(tmap.points), seconds))
 
     if drawn:
         now = datetime.now(UTC).isoformat(timespec="seconds")
         with conn:
-            for kind, fingerprint, tmap in drawn:
+            for kind, fingerprint, tmap, labels in drawn:
                 conn.execute("DELETE FROM title_map WHERE kind = ?", (kind,))
                 conn.executemany(
                     "INSERT INTO title_map (kind, item_id, x, y) VALUES (?, ?, ?, ?)",
                     [(kind, p.item_id, p.x, p.y) for p in tmap.points],
+                )
+                conn.execute("DELETE FROM title_map_label WHERE kind = ?", (kind,))
+                conn.executemany(
+                    "INSERT INTO title_map_label "
+                    "(kind, node, x, y, width, height, titles, value) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    [(kind, *r[:6], r.tag) for r in labels],
                 )
                 conn.execute(
                     "INSERT INTO title_map_state (kind, fingerprint, unplaced, computed_at) "

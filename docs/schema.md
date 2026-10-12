@@ -734,7 +734,8 @@ report.
 
 ## Version 9 — Plex TVX's stored title map
 
-`title_map` and `title_map_state`, written by `plexdb refresh-map`. Both are derived from
+`title_map` and `title_map_state`, written by `plexdb refresh-map` together with the map's region
+labels ([Version 20](#version-20-the-stored-title-map-s-region-labels)). All are derived from
 `enrichment`, so a consumer that reads the keyword facts has no reason to read them.
 
 ```
@@ -757,8 +758,8 @@ changing type, or a new merge verdict makes the stored map stale.
 map. `computed_at` is UTC.
 
 **Refresh rule.** `plexdb refresh-map` recomputes each kind's fingerprint and redraws only a kind
-whose stored fingerprint differs, replacing both tables' rows for the redrawn kinds in one
-transaction. It runs as its own step of the sweep, after every keyword writer, the film-suffix rule
+whose stored fingerprint differs, replacing the redrawn kinds' rows in both tables and in
+`title_map_label` in one transaction. It runs as its own step of the sweep, after every keyword writer, the film-suffix rule
 and both judges, and before `publish`, so the snapshot carries a map of that night's merges. The
 digest is SHA-256 over Python's `repr` of the row tuples, so only the Python package can
 recompute it; Plex TVX compares it and treats a mismatch as no current map, then draws it live,
@@ -1166,6 +1167,31 @@ Plex TVX's Doctor tab ("Rename…" on a group) and Merges tab ("Rename…" besid
 name}`; a blank or null name clears it; a keyword no title carries is a 404) and lays it over the
 table on every page that labels a keyword, so a name shows at once, marked "applies at next sweep"
 on the Doctor tab, until the fold writes it. A write keeps one entry per resolved keyword.
+
+## Version 20 — the stored title map's region labels
+
+```
+title_map_label  (kind, node) PK, x REAL, y REAL, width REAL, height REAL, titles INTEGER, value TEXT
+```
+
+The region labels of the default map in [`title_map`](#version-9-plex-tvx-s-stored-title-map),
+one row per labelled region of a k-d split of that map's titles. `node` is the region's heap number
+(the children of `i` are `2i+1` and `2i+2`, so depth is `floor(log2(node + 1))`); `x` and `y` are
+the median position of its titles and `width` and `height` the span of the middle 80% of them, in
+map units; `titles` counts them. `value` is the keyword that names the region, as `enrichment.value`
+holds it after the merge fold: the region's highest count-times-IDF tag that names none of its
+ancestors. Like `title_map`, it is derived from `enrichment` and no consumer has a reason to read it.
+
+**A label holds a keyword, never display text.** Plex TVX shows each label's display name or
+readable spelling ([Version 19](#version-19-a-person-s-display-name-for-a-keyword)) as it serves
+the map, so a rename shows on the next request without redrawing anything.
+
+**Refresh rule.** `plexdb refresh-map` labels each map it redraws and replaces that kind's
+`title_map_label` rows in the same transaction as its `title_map` rows, so a stored map, current or
+stale, always carries the labels drawn with it. The drawing recipe in `title_map_state.fingerprint`
+names the labelling too, so every map stored before this version reads as stale until the next
+`refresh-map` redraws it with labels; until then Plex TVX shows it dimmed with no labels and draws
+the fresh one live. The migration only adds, so `reader_shape` stays 10.
 
 ## Reading the store to build collections
 

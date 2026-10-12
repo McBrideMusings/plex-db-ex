@@ -911,6 +911,30 @@ CREATE TABLE keyword_names (
 """
 
 
+#: Version 20 — the stored title map's region labels.
+#:
+#: `title_map_label` holds the region labels `plexdb refresh-map` computes with
+#: each kind's default map, written in the same transaction as `title_map`, so
+#: Plex TVX serves a stored map without labelling 11,000 points per request. A
+#: label holds the stored keyword, never display text: Plex TVX applies display
+#: names (ADR-0021) as it serves. Every map stored before this version is stale
+#: under the new drawing recipe, and the next refresh redraws it with labels.
+#: Only adds, so `READER_SHAPE` stays.
+_V20 = """
+CREATE TABLE title_map_label (
+    kind   TEXT NOT NULL,
+    node   INTEGER NOT NULL,
+    x      REAL NOT NULL,
+    y      REAL NOT NULL,
+    width  REAL NOT NULL,
+    height REAL NOT NULL,
+    titles INTEGER NOT NULL,
+    value  TEXT NOT NULL,
+    PRIMARY KEY (kind, node)
+);
+"""
+
+
 #: Append-only. Index i takes the store from version i to version i+1.
 MIGRATIONS: tuple[Migration, ...] = (
     _V1,
@@ -932,6 +956,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     _V17,
     _V18,
     _V19,
+    _V20,
 )
 
 #: The version a store is at once every migration has been applied.

@@ -20,7 +20,7 @@ from collections.abc import Iterator
 from http import HTTPStatus
 from http.server import ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -33,6 +33,7 @@ from plexdb.explore import (
     EXPLORE_PORT_VAR,
     RECIPES,
     QueryError,
+    RegionLabel,
     SavedQueries,
     build_index,
     keyword_fingerprint,
@@ -194,11 +195,10 @@ def test_title_map_places_alike_titles_together(tmp_path: Path) -> None:
         assert ("western" in nearest.item_id) == ("western" in point.item_id), point.item_id
 
 
-def test_region_labels_name_each_region_by_its_own_tag_and_skip_noise(tmp_path: Path) -> None:
-    """Forty titles on two islands, one per genre, each tagged with its genre's
-    stemmed word plus a packaging tag: the labels name the islands, show the
-    readable spelling, and never use the excluded tag."""
-    path = tmp_path / "plexdb.db"
+def _islands(path: Path) -> list[tuple[str, float, float]]:
+    """Forty movies on two islands, one per genre, each tagged with its genre's
+    stemmed word, the western island also with a packaging tag. Returns where
+    each sits, `(item_id, x, y)`."""
     init(path)
     points: list[tuple[str, float, float]] = []
     with open_store(path) as conn:
@@ -222,13 +222,19 @@ def test_region_labels_name_each_region_by_its_own_tag_and_skip_noise(tmp_path: 
                     )
         conn.execute("INSERT INTO keyword_forms (surface, keyword) VALUES ('galaxies', 'galaxi')")
         conn.commit()
+    return points
+
+
+def test_region_labels_name_each_region_by_its_own_tag_and_skip_noise(tmp_path: Path) -> None:
+    """The labels name the islands by keyword and never use the excluded tag."""
+    path = tmp_path / "plexdb.db"
+    points = _islands(path)
 
     with open_readonly(path) as conn:
         labels = region_labels(conn, "movie", points, frozenset({"stinger"}))
         with_noise = region_labels(conn, "movie", points)
 
     assert {label.tag for label in labels} == {"outlaw", "galaxi"}
-    assert {label.text for label in labels} == {"outlaw", "galaxies"}
     assert {label.tag for label in with_noise} == {"stinger", "galaxi"}
     depths = {(label.node + 1).bit_length() - 1 for label in labels}
     assert min(depths) == explore.LABEL_FIRST_DEPTH
@@ -434,6 +440,62 @@ def _add_keyword(store: Path, item_id: str, keyword: str) -> None:
             (item_id, keyword),
         )
         conn.commit()
+
+
+def test_the_stored_map_carries_its_labels_and_the_page_shows_each_keywords_display_label(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`refresh-map` stores the labels `region_labels` gives for the drawn
+    positions; `/api/map` serves them, current or stale, without labelling
+    again, and shows each keyword's readable spelling, or its name once a
+    person gives it one — on a map drawn live too."""
+    path = tmp_path / "plexdb.db"
+    _islands(path)
+    with open_store(path) as conn:
+        refresh_title_maps(conn)
+        payload = stored_map(conn, "movie")
+        assert payload is not None
+        placed = [(p[0], p[3], p[4]) for p in cast(list[list[Any]], payload["points"])]
+        assert payload["labels"] == region_labels(conn, "movie", placed)
+        assert "galaxi" in {label.tag for label in cast(list[RegionLabel], payload["labels"])}
+
+    def refuse(*_args: object) -> None:
+        raise AssertionError("a stored map was labelled again")
+
+    monkeypatch.setattr(explore, "region_labels", refuse)
+    server = make_server(path, "127.0.0.1", 0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        url = f"http://127.0.0.1:{server.server_port}/api/map?kind=movie"
+        _, body = _get(url)
+        shown = {r[7]: r[6] for r in json.loads(body)["labels"]}
+        assert shown.pop("galaxi") == "galaxies"
+        assert all(text == tag for tag, text in shown.items())
+        with open_store(path) as conn:
+            conn.execute(
+                "INSERT INTO keyword_names (keyword, name, decided_at) "
+                "VALUES ('galaxi', 'Deep Space', '2026-10-12T00:00:00+00:00')"
+            )
+            conn.commit()
+        _, body = _get(url)
+        assert ("galaxi", "Deep Space") in {(r[7], r[6]) for r in json.loads(body)["labels"]}
+
+        with open_store(path) as conn:
+            conn.execute("UPDATE title_map_state SET fingerprint = 'older' WHERE kind = 'movie'")
+            conn.commit()
+        _, body = _get(f"{url}&stored=1")
+        stale = json.loads(body)
+        assert stale["stale"] is True
+        assert ("galaxi", "Deep Space") in {(r[7], r[6]) for r in stale["labels"]}
+
+        monkeypatch.undo()
+        _, body = _get(f"{url}&exclude=stinger")
+        live = {r[7]: r[6] for r in json.loads(body)["labels"]}
+        assert live.get("galaxi") == "Deep Space" and "stinger" not in live
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def test_refresh_stores_both_kinds_and_skips_a_kind_whose_keywords_are_unchanged(
