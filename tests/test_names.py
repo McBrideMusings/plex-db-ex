@@ -184,6 +184,9 @@ def test_a_merges_pair_names_each_side_by_its_own_label_not_its_groups(
     _, out = _send("GET", f"{base_url}/api/merges")
     (pair,) = [p for p in out["decided"] if p["keyword_b"] == "heist"]
     assert (pair["form_a"], pair["form_b"]) == ("Bank job", "heist")
+    decision = {"keyword_a": "bank robbery", "keyword_b": "heist", "decision": "rejected"}
+    _, out = _send("POST", f"{base_url}/api/merges", decision)
+    assert (out["pair"]["form_a"], out["pair"]["form_b"]) == ("Bank job", "heist")
     _, card = _send("GET", f"{base_url}/api/title?item_id=imdb:tt2")
     assert card["keywords"] == [{"value": "heist", "label": "Bank job"}]
 
