@@ -212,11 +212,12 @@
     .vpctl { left: auto; right: 10px; bottom: auto; top: 10px; }
     .ovnote { left: 10px; max-width: calc(100% - 20px); }
     .searchbox input[type="search"] { width: min(20em, calc(100vw - 150px)); }
-    /* The bottom-docked card or tag panel would sit under the count line; move it above the
-       search row instead of hiding it, so it stays reachable at any width. `.panelopen` is set
-       in JS (a `:has()` cannot select this without nesting `:has()` inside `:has()`, which the
-       selector spec disallows). */
-    body.shell.panelopen .ovnote { bottom: auto; top: 50px; }
+    /* The bottom-docked card or tag panel would sit over the count line; move it to the top,
+       just under the Filters & noise panel, instead of hiding it, so it stays reachable at any
+       width. `--ctlbottom` is that panel's rendered bottom edge, open or shut, and `.panelopen`
+       is set in JS (a `:has()` cannot select this without nesting `:has()` inside `:has()`,
+       which the selector spec disallows). */
+    body.shell.panelopen .ovnote { bottom: auto; top: calc(var(--ctlbottom, 100px) + 6px); }
   }
   #querywrap { display: grid; grid-template-columns: minmax(0, 1fr) 320px; align-items: start; }
   @media (max-width: 900px) { #querywrap { grid-template-columns: 1fr; } #qside { border-left: 0 !important; border-top: 1px solid var(--line); } }
@@ -1026,10 +1027,10 @@ function syncMapItems() {
 
 function paintMap() {
   if (state.view !== "map") return;
+  mapNote();   // before the camera moves: a pin kept across the redraw is centred clear of the note's new height
   syncMapItems();
   document.getElementById("map").classList.toggle("dim", map.dim && !!map.data);
   document.getElementById("map").classList.toggle("failed", !!map.error);
-  mapNote();
   mapVP.resize();
   mapVP.redraw();
 }
@@ -1143,8 +1144,25 @@ function drawRegionLabels(ctx, vp, token) {
 
 // ---- Map: hover, selection, search ----
 const mapBox = document.getElementById("mapbox");
-// The map area a camera move onto a pin keeps clear of: the controls, and the card in `#rightcol`.
-const clearOfPinCard = () => clearOfPanel(mapVP.canvas, document.getElementById("rightcol"), { l: 40, t: 70, r: 24, b: 24 });
+// The map area a camera move onto a pin keeps clear of: the card in `#rightcol`, the Filters &
+// noise button and the count line. The last two move with the width — below 600px the count line
+// stacks under the button while a card is docked at the bottom, otherwise it sits along the
+// bottom edge — so each is read from its rendered box: one in the top half pushes the top edge
+// down, one in the bottom half pushes the bottom edge up. The button, not the opened panel, which
+// the user is working in. The top edge gives way so a band of map always stays free.
+function clearOfPinCard() {
+  syncPanelOpen();   // the card was just shown; place the count line where it will sit before measuring
+  const pad = clearOfPanel(mapVP.canvas, document.getElementById("rightcol"), { l: 40, t: 70, r: 24, b: 24 });
+  const c = mapVP.canvas.getBoundingClientRect(), margin = 16;
+  for (const id of ["ctltoggle", "mnote"]) {
+    const o = document.getElementById(id).getBoundingClientRect();
+    if (o.height < 1) continue;
+    if (o.top < c.top + c.height / 2) pad.t = Math.max(pad.t, o.bottom - c.top + margin);
+    else pad.b = Math.max(pad.b, c.bottom - o.top + margin);
+  }
+  pad.t = Math.max(0, Math.min(pad.t, c.height - pad.b - 48));
+  return pad;
+}
 const canPick = id => map.byId.has(id);
 const pinCard = new TitleCard(document.getElementById("rightcol"), { pinned: true, onClose: () => selectItem(null), onTag: v => { ++mapUI.token; mapUI.search = null; searchEl.value = ""; showTag(v); }, onPick: id => pickById(id), canPick,
   // By id, not the point object: a map redraw that lands while the details load swaps every point.
@@ -1164,6 +1182,10 @@ function syncPanelOpen() {
   const detailOpen = detailPanel.children.length !== 1 || !detailPanel.firstElementChild.classList.contains("empty");
   document.body.classList.toggle("panelopen", cardOpen || detailOpen);
 }
+// The Filters & noise panel's bottom edge within `#stage`, which the narrow-width count line
+// sits under; it grows when the panel opens and when its rows wrap.
+const controlsEl = document.getElementById("controls");
+new ResizeObserver(() => document.body.style.setProperty("--ctlbottom", `${controlsEl.offsetTop + controlsEl.offsetHeight}px`)).observe(controlsEl);
 new MutationObserver(syncPanelOpen).observe(pinCard.root, { attributes: true, attributeFilter: ["hidden"] });
 new MutationObserver(syncPanelOpen).observe(detailPanel, { childList: true });
 new MutationObserver(syncPanelOpen).observe(document.body, { attributes: true, attributeFilter: ["data-view"] });
