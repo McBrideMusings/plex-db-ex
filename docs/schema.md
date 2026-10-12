@@ -761,8 +761,9 @@ whose stored fingerprint differs, replacing both tables' rows for the redrawn ki
 transaction. It runs as its own step of the sweep, after every keyword writer, the film-suffix rule
 and both judges, and before `publish`, so the snapshot carries a map of that night's merges. The
 digest is SHA-256 over Python's `repr` of the row tuples, so only the Python package can
-recompute it; Plex TVX compares it and treats a mismatch as no map, then draws it live, which
-takes tens of seconds for the movies. A reader in another language reads the stored map as the
+recompute it; Plex TVX compares it and treats a mismatch as no current map, then draws it live,
+which takes tens of seconds for the movies, showing the stale stored map dimmed until the live
+one lands. A reader in another language reads the stored map as the
 last sweep left it and never recomputes the fingerprint.
 
 ## Version 10 — keywords become one source-agnostic namespace

@@ -565,6 +565,35 @@ def test_map_endpoint_serves_the_stored_map_and_draws_live_once_it_is_stale(
     assert len(json.loads(body)["points"]) == 4
 
 
+def test_map_endpoint_answers_a_stale_stored_map_at_once_when_asked(
+    store: Path, base_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with open_store(store) as conn:
+        refresh_title_maps(conn)
+    drawn: list[frozenset[str]] = []
+    real = explore.title_map
+
+    def counting(conn, kind, exclude=frozenset(), seed=0):  # type: ignore[no-untyped-def]
+        drawn.append(exclude)
+        return real(conn, kind, exclude, seed)
+
+    monkeypatch.setattr(explore, "title_map", counting)
+
+    _, body = _get(f"{base_url}/api/map?kind=movie&stored=1")
+    assert json.loads(body)["stale"] is False
+    _add_keyword(store, "imdb:tt4", "superhero")
+
+    _, body = _get(f"{base_url}/api/map?kind=movie&stored=1")
+    old = json.loads(body)
+    assert drawn == []
+    assert old["stale"] is True and len(old["points"]) == 3
+
+    _, body = _get(f"{base_url}/api/map?kind=movie")
+    fresh = json.loads(body)
+    assert drawn == [frozenset()]
+    assert fresh["stale"] is False and len(fresh["points"]) == 4
+
+
 def test_map_cache_computes_one_key_once_across_concurrent_requests(
     store: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -419,19 +419,29 @@ def network_fingerprint(conn: sqlite3.Connection, kind: str) -> str:
     return _fingerprint(conn, kind, NETWORK_RECIPE)
 
 
-def stored_map(conn: sqlite3.Connection, kind: str) -> dict[str, object] | None:
-    """The default map the writer stored, as `title_map_json` would give it, or
-    `None` when there is none or it was drawn from different keyword rows.
+def stored_map(
+    conn: sqlite3.Connection, kind: str, *, stale_ok: bool = False
+) -> dict[str, object] | None:
+    """The default map the writer stored, as `title_map_json` would give it
+    plus a `stale` flag, or `None` when there is none or it was drawn from
+    different keyword rows.
 
-    `None` is the caller's cue to draw it live. A store that predates the
-    `title_map` tables has neither, and reads as having no stored map.
+    `None` is the caller's cue to draw it live. With `stale_ok`, a map drawn
+    from different keyword rows comes back anyway with `stale` set: its titles
+    are still the library's, only their positions predate the keyword change,
+    which is enough to stand in while the live draw runs. A store that
+    predates the `title_map` tables has neither, and reads as having no
+    stored map.
     """
     _check_kind(kind)
     try:
         state = conn.execute(
             "SELECT fingerprint, unplaced FROM title_map_state WHERE kind = ?", (kind,)
         ).fetchone()
-        if state is None or state[0] != keyword_fingerprint(conn, kind):
+        if state is None:
+            return None
+        stale = state[0] != keyword_fingerprint(conn, kind)
+        if stale and not stale_ok:
             return None
         rows = conn.execute(
             "SELECT m.item_id, i.title, i.year, m.x, m.y FROM title_map m "
@@ -443,6 +453,7 @@ def stored_map(conn: sqlite3.Connection, kind: str) -> dict[str, object] | None:
     return {
         "kind": kind,
         "unplaced": state[1],
+        "stale": stale,
         "points": [[r[0], r[1], r[2], r[3], r[4]] for r in rows],
     }
 
@@ -1215,13 +1226,34 @@ class _MapCache:
             with open_readonly(self._path) as conn:
                 payload = None if exclude else stored_map(conn, kind)
                 if payload is None:
-                    payload = title_map_json(title_map(conn, kind, exclude))
-                rows: list[list[Any]] = payload["points"]  # type: ignore[assignment]
-                placed = [(p[0], p[3], p[4]) for p in rows]
-                payload = {**payload, "labels": region_labels(conn, kind, placed, exclude)}
-            return payload
+                    payload = {**title_map_json(title_map(conn, kind, exclude)), "stale": False}
+                return _labelled(conn, kind, payload, exclude)
 
         return self._cache.get((kind, exclude), (stat.st_mtime_ns, stat.st_size), compute)
+
+    def get_stored(self, kind: str) -> dict[str, object]:
+        """The stored default map at once, even one drawn from older keyword
+        rows (`stale` set), so the page has something to show while `get`
+        draws the fresh one. With no stored map at all this is `get`."""
+        stat = self._path.stat()
+
+        def compute() -> dict[str, object]:
+            with open_readonly(self._path) as conn:
+                payload = stored_map(conn, kind, stale_ok=True)
+                if payload is None or not payload["stale"]:
+                    return {}
+                return _labelled(conn, kind, payload, frozenset())
+
+        stale = self._cache.get((kind, "stored"), (stat.st_mtime_ns, stat.st_size), compute)
+        return stale or self.get(kind, frozenset())
+
+
+def _labelled(
+    conn: sqlite3.Connection, kind: str, payload: dict[str, object], exclude: frozenset[str]
+) -> dict[str, object]:
+    rows: list[list[Any]] = payload["points"]  # type: ignore[assignment]
+    placed = [(p[0], p[3], p[4]) for p in rows]
+    return {**payload, "labels": region_labels(conn, kind, placed, exclude)}
 
 
 class _TagNetworkCache:
@@ -2129,7 +2161,13 @@ def make_server(
             elif url.path == "/api/map":
                 kind = query.get("kind", "movie")
                 _check_kind(kind)
-                payload = maps.get(kind, frozenset(lists.get("exclude", [])))
+                exclude = frozenset(lists.get("exclude", []))
+                # `stored=1` asks for the stored map even when it is stale, for the page
+                # to show dimmed while the plain request draws the fresh one.
+                if query.get("stored") == "1" and not exclude:
+                    payload = maps.get_stored(kind)
+                else:
+                    payload = maps.get(kind, exclude)
                 # The drawn map is cached; a display name is not part of it, so it is
                 # laid over the cached labels on every request.
                 with open_readonly(store_path) as conn:

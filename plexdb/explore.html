@@ -925,21 +925,26 @@ class TitleCard {
 }
 
 // ---- Map view ----
-// `data` is what is on screen. `dim` is set while it is the default map standing in for one
-// still being drawn without the noise tags. `defaults` keeps each kind's default map, which the
-// server has stored and answers in milliseconds. `items` is `data.points` as viewport items.
+// `data` is what is on screen. `dim` says why it is a stand-in while another map is drawn, or is
+// null: "noise" while the default map stands in for one being drawn without the noise tags,
+// "stale" while the stored map, drawn before the keywords last changed, stands in for the fresh
+// default. `defaults` keeps each kind's current default map, which the server has stored and
+// answers in milliseconds, or draws live once the keywords have moved past it. `items` is `data.points` as viewport items.
 // `labels` are the region labels of `data`, `shown` is the text of the labels drawn in the last
 // frame (what a test reads to see the labels change).
-const map = { data: null, key: null, items: [], byId: new Map(), itemsOf: null, dim: false, error: null, defaults: {}, labels: [], shown: [] };
+const map = { data: null, key: null, items: [], byId: new Map(), itemsOf: null, dim: null, error: null, defaults: {}, labels: [], shown: [] };
 // `search` is null, or {type: "title"|"tag", label, ids: Set of item_ids to keep at full strength,
 // focus: the searched title's id}. Everything outside `ids` is drawn faded.
 // `similar` is the item_ids of the pinned title's nearest titles by keyword cosine that are on
 // this map: they are drawn in the accent colour, with a line from the pinned title to each.
 const mapUI = { search: null, token: 0, similar: [] };
 
-async function mapRequest(kind, exclude) {
+// `stored` asks for the stored map even if it is stale (`stale` set on the answer); without a
+// stored map at all the answer is the default map.
+async function mapRequest(kind, exclude, stored = false) {
   const p = new URLSearchParams({ kind });
   for (const t of exclude) p.append("exclude", t);
+  if (stored) p.set("stored", "1");
   return getJSON(`/api/map?${p}`);
 }
 async function drawMap() {
@@ -951,25 +956,33 @@ async function drawMap() {
     map.error = null;
     try {
       let base = map.defaults[kind] || null;
-      map.data = base; map.dim = noise.size > 0 && base !== null;
+      map.data = base; map.dim = noise.size > 0 && base !== null ? "noise" : null;
       note.textContent = `Placing every ${noun().slice(0, -1)} by its keywords…`;
       paintMap();
       if (!base) {
-        base = await mapRequest(kind, []);
+        base = await mapRequest(kind, [], true);
         if (map.key !== key) return;
+        if (base.stale) {
+          map.data = base; map.dim = "stale";
+          paintMap();
+          base = await mapRequest(kind, []);
+          if (map.key !== key) return;
+        }
         map.defaults[kind] = base;
-        map.data = base; map.dim = noise.size > 0;
+        map.data = base; map.dim = noise.size > 0 ? "noise" : null;
         paintMap();
       }
       if (noise.size > 0) {
         const live = await mapRequest(kind, noise);
         if (map.key !== key) return;
-        map.data = live; map.dim = false;
+        map.data = live; map.dim = null;
       }
     } catch (err) {
       if (map.key !== key) return;
-      const shown = map.defaults[kind] || null;
-      map.data = shown; map.dim = shown !== null; map.key = null;
+      // The fresh default if there is one, else the stale stored map if that is what was showing.
+      const shown = map.defaults[kind] || (map.dim === "stale" ? map.data : null);
+      map.dim = shown === null ? null : map.defaults[kind] ? "noise" : "stale";
+      map.data = shown; map.key = null;
       map.error = err.message;
       paintMap();
       return;
@@ -981,12 +994,17 @@ async function drawMap() {
 function mapNote() {
   const d = map.data;
   if (map.error) {
-    document.getElementById("mnote").textContent = d
-      ? `Could not redraw without the noise-marked tags: ${map.error}. Showing the default map, dimmed.`
-      : `Could not load: ${map.error}`;
+    document.getElementById("mnote").textContent = !d ? `Could not load: ${map.error}`
+      : map.dim === "stale" ? `Could not redraw the map since the keywords changed: ${map.error}. Showing the old map, dimmed.`
+      : `Could not redraw without the noise-marked tags: ${map.error}. Showing the default map, dimmed.`;
     return;
   }
   if (!d) return;
+  if (map.dim === "stale") {
+    document.getElementById("mnote").textContent =
+      "The keywords have changed since this map was drawn — redrawing it takes about a minute. Showing the old map, dimmed, until it lands…";
+    return;
+  }
   if (map.dim) {
     document.getElementById("mnote").textContent =
       `Recomputing without ${fmt(noise.size)} noise-marked tag${noise.size === 1 ? "" : "s"} — this takes tens of seconds. Showing the default map, dimmed, until it lands…`;
@@ -1036,7 +1054,7 @@ function paintMap() {
   if (state.view !== "map") return;
   mapNote();   // before the camera moves: a pin kept across the redraw is centred clear of the note's new height
   syncMapItems();
-  document.getElementById("map").classList.toggle("dim", map.dim && !!map.data);
+  document.getElementById("map").classList.toggle("dim", !!map.dim && !!map.data);
   document.getElementById("map").classList.toggle("failed", !!map.error);
   mapVP.resize();
   mapVP.redraw();
@@ -1107,7 +1125,7 @@ function drawRegionLabels(ctx, vp, token) {
   for (const l of map.labels) if (!l.tw) { ctx.font = `600 ${LABEL_FONT(l.depth)}px system-ui, sans-serif`; l.tw = ctx.measureText(l.text).width; }
   const eligible = new Map();
   for (const l of map.labels) {
-    if (map.dim && noise.has(l.tag)) continue;
+    if (map.dim === "noise" && noise.has(l.tag)) continue;
     if (!fits(l)) continue;
     const x = vp.sx(l.x), y = vp.sy(l.y), size = LABEL_FONT(l.depth);
     if (x + l.tw / 2 < 0 || x - l.tw / 2 > vp.w || y + size < 0 || y - size > vp.h) continue;
