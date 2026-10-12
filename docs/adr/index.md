@@ -25,3 +25,4 @@ ADR wins; [the PRD](../PRD) already reflects them.
 | [0018](./0018-synonym-keywords-are-a-judges-verdicts-beside-enrichment) | Synonym keywords are a judge's verdicts beside `enrichment` |
 | [0019](./0019-keyword-roles-are-verdicts-beside-enrichment) | Keyword roles are verdicts beside `enrichment` |
 | [0020](./0020-a-person-may-decide-a-pair-no-judge-saw) | A person may decide a pair no judge saw |
+| [0021](./0021-a-keyword-display-name-is-a-persons-label-beside-enrichment) | A keyword's display name is a person's label beside `enrichment` |
