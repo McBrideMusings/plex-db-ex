@@ -2187,9 +2187,12 @@ def make_server(
                 self._json({"queries": saved.all()})
             elif url.path == "/api/merges":
                 with open_readonly(store_path) as conn:
-                    labels = display_labels(conn, names.latest())
+                    overlay = names.latest()
+                    labels = display_labels(conn, overlay)
                     pairs = review_rows(conn, merges.latest(), labels)
-                self._json(merges_json(pairs))
+                    # Each named keyword's own name, so a side's rename box starts from it.
+                    named = names_json(conn, overlay)
+                self._json({**merges_json(pairs), "names": named})
             elif url.path == "/api/roles":
                 with open_readonly(store_path) as conn:
                     labels = display_labels(conn, names.latest())

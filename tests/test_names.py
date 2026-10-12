@@ -201,6 +201,8 @@ def test_a_name_round_trips_through_the_page_pending_and_leaves_the_store_alone(
     assert doctor["names"]["heist"]["pending"] is True
     _, card = _send("GET", f"{base_url}/api/title?item_id=imdb:tt2")
     assert card["keywords"] == [{"value": "heist", "label": "Heist job"}]
+    _, merges_out = _send("GET", f"{base_url}/api/merges")
+    assert merges_out["names"]["heist"]["name"] == "Heist job"
     with open_readonly(store) as conn:
         assert conn.execute("SELECT COUNT(*) FROM keyword_names").fetchone()[0] == 0
 

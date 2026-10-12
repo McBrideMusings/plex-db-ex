@@ -143,12 +143,12 @@
   #dgrid td.cell .sp + .sp { margin-top: 3px; }
   #dgrid td.none { color: var(--muted); }
   #dgrid td.act { text-align: right; white-space: nowrap; width: 1%; }
-  #dgrid td.act button + button, #dgrid .pick button + button { margin-left: 6px; }
-  #dgrid .pick .acts { margin: 8px 0 4px; }
+  #dgrid td.act button + button, .pick button + button { margin-left: 6px; }
+  .pick .acts { margin: 8px 0 4px; }
   #dgrid tr.hl > td { background: var(--chip); }
   #dgrid tr.open > td { border-bottom: 0; }
-  #dgrid .pick { border: 1px solid var(--accent); border-radius: 6px; padding: 8px; max-width: 40em; }
-  #dgrid .pick input { font: inherit; width: 100%; padding: 4px 8px; color: var(--ink); background: var(--bg);
+  .pick { border: 1px solid var(--accent); border-radius: 6px; padding: 8px; max-width: 40em; }
+  .pick input { font: inherit; width: 100%; padding: 4px 8px; color: var(--ink); background: var(--bg);
                        border: 1px solid var(--line); border-radius: 5px; }
   #dgrid .pick ul { list-style: none; margin: 6px 0; padding: 0; }
   #dgrid .pick li { padding: 3px 6px; border-radius: 4px; cursor: pointer; display: flex; justify-content: space-between; gap: 10px; }
@@ -266,7 +266,8 @@
   .mcard { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; }
   .mpair { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; font-size: 22px; font-weight: 650; overflow-wrap: anywhere; }
   .mpair .sep { color: var(--muted); font-weight: 400; }
-  .mstored { color: var(--muted); font-size: 12px; margin-top: 4px; overflow-wrap: anywhere; }
+  .mpair .mside button { font-size: 12px; font-weight: 400; padding: 1px 8px; margin-left: 8px; vertical-align: 0.2em; }
+  .mcard .pick { margin-top: 12px; font-size: 14px; }  .mstored { color: var(--muted); font-size: 12px; margin-top: 4px; overflow-wrap: anywhere; }
   .mscore { margin: 12px 0 16px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .mscore strong { color: var(--ink); font-size: 18px; }
   .mact { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -1934,7 +1935,8 @@ function paintDoctor() {
     if (doctor.open === g.key || doctor.renaming === g.key) tr.classList.add("open");
     body.append(tr);
     if (doctor.open === g.key) body.append(el("tr", {}, el("td", { colSpan: sources.length + 2 }, pickRow(g.key, label(g.key)))));
-    if (doctor.renaming === g.key) body.append(el("tr", {}, el("td", { colSpan: sources.length + 2 }, renameRow(g.key, label(g.key), named))));
+    if (doctor.renaming === g.key) body.append(el("tr", {}, el("td", { colSpan: sources.length + 2 }, renameRow(g.key, label(g.key), named,
+      name => rename(g.key, name), () => { doctor.renaming = null; paintDoctor(); }))));
   }
   const head = el("tr", {}, el("th", {}, "Group"), ...sources.map(s => el("th", {}, s)), el("th", {}, ""));
   const n = d.sources.reduce((sum, s) => sum + s.rows.length, 0);
@@ -1946,25 +1948,26 @@ function paintDoctor() {
   if (hl && !doctor.open && !doctor.renaming) hl.scrollIntoView({ block: "center" });
 }
 
-// The display name editor under a group's row: the text to show for stored `keyword` wherever
-// Plex TVX names it. Saving an empty name clears it, and the readable spelling shows again.
-// The box holds the keyword's own name; a group label borrowed from a member is only the
-// placeholder, so saving untouched never copies it onto the keyword.
-function renameRow(keyword, shown, named) {
+// The display name editor for stored `keyword`: the text to show wherever Plex TVX names it.
+// The Doctor tab opens it under a group's row, the Merges tab under the pair. Saving an empty
+// name clears it, and the readable spelling shows again. The box holds the keyword's own name;
+// a label borrowed from a group member is only the placeholder, so saving untouched never
+// copies it onto the keyword. `save(name)` and `cancel()` are the opening tab's.
+function renameRow(keyword, shown, named, save, cancel) {
   const own = named && named.name !== null ? named.name : "";
-  const input = el("input", { type: "text", id: "doctorname", value: own, placeholder: shown, maxLength: 200, autocomplete: "off" });
+  const input = el("input", { type: "text", className: "rename", value: own, placeholder: shown, maxLength: 200, autocomplete: "off" });
   input.setAttribute("aria-label", `Display name for ${keyword}`);
-  const save = el("button", { type: "button", className: "primary", id: "doctorsavename" }, "Save name");
-  save.addEventListener("click", () => rename(keyword, input.value));
-  const parts = [save];
+  const ok = el("button", { type: "button", className: "primary" }, "Save name");
+  ok.addEventListener("click", () => save(input.value));
+  const parts = [ok];
   if (named && named.name !== null) {
-    const clear = el("button", { type: "button", className: "plain", id: "doctorclearname" }, "Clear name");
-    clear.addEventListener("click", () => rename(keyword, ""));
+    const clear = el("button", { type: "button", className: "plain" }, "Clear name");
+    clear.addEventListener("click", () => save(""));
     parts.push(clear);
   }
   input.addEventListener("keydown", e => {
-    if (e.key === "Enter") { e.preventDefault(); save.click(); }
-    else if (e.key === "Escape") { e.stopPropagation(); doctor.renaming = null; paintDoctor(); }
+    if (e.key === "Enter") { e.preventDefault(); ok.click(); }
+    else if (e.key === "Escape") { e.stopPropagation(); cancel(); }
   });
   queueMicrotask(() => { input.focus(); input.select(); });
   return el("div", { className: "pick" }, el("div", { className: "meta" }, `Display name for ${keyword}`), input,
@@ -1972,20 +1975,26 @@ function renameRow(keyword, shown, named) {
     el("div", { className: "meta" }, "Shown only, never used to compare titles. Goes to name_decisions.json; the next sweep applies it."));
 }
 
+// POSTs a display name and marks every tab that labels keywords to reload on its next visit,
+// so each shows the name. Answers the status line to show.
+async function saveName(keyword, name) {
+  const out = await sendJSON("POST", "/api/names", { keyword, name });
+  m.ready = false; r.ready = false; map.defaults = {}; map.key = null;
+  doctorCache.clear();
+  return out.name && out.name.name !== null
+    ? `${keyword} shows as “${out.label}”. It applies at the next sweep.`
+    : `${keyword}: name cleared, shows as “${out.label}”. It applies at the next sweep.`;
+}
+
 async function rename(keyword, name) {
   if (doctor.busy) return;
   doctor.busy = true;
   try {
-    const out = await sendJSON("POST", "/api/names", { keyword, name });
-    // Every tab that labels keywords reloads on its next visit and shows the name.
-    m.ready = false; r.ready = false; map.defaults = {}; map.key = null;
-    doctorCache.clear();
+    const said = await saveName(keyword, name);
     doctor.renaming = null; doctor.row = keyword;
     writeHash();
     await loadDoctor();
-    dStatus(out.name && out.name.name !== null
-      ? `${keyword} shows as “${out.label}”. It applies at the next sweep.`
-      : `${keyword}: name cleared, shows as “${out.label}”. It applies at the next sweep.`);
+    dStatus(said);
   } catch (err) { dStatus(err.message, true); }
   finally { doctor.busy = false; }
 }
@@ -2215,7 +2224,7 @@ document.querySelectorAll(".seg button[data-tab]").forEach(b => b.addEventListen
 // The server sends both lists with the file's pending decisions already laid over the table. A
 // click POSTs the decision and the server answers with that one pair's new row, which moves
 // between the lists here without a reload.
-const m = { ready: false, proposed: [], decided: [], skipped: new Set(), show: "all", busy: false };
+const m = { ready: false, proposed: [], decided: [], names: {}, skipped: new Set(), show: "all", busy: false, renaming: null };
 const pairKey = p => p.keyword_a + "\u0000" + p.keyword_b;
 const pairName = p => p.form_a + "  ⇄  " + p.form_b;
 const mStatus = (text, bad = false) => { const n = qEl("mstatus"); n.className = bad ? "bad" : ""; n.textContent = text; };
@@ -2238,10 +2247,23 @@ function paintQueue() {
   const skip = el("button", { type: "button", className: "plain", id: "mskip" }, "Skip (S)");
   accept.addEventListener("click", () => decide(p, "accepted"));
   reject.addEventListener("click", () => decide(p, "rejected"));
-  skip.addEventListener("click", () => { m.skipped.add(pairKey(p)); paintQueue(); });
+  skip.addEventListener("click", () => { m.skipped.add(pairKey(p)); m.renaming = null; paintQueue(); });
+  // Each side carries its own Rename… button; the open one's editor sits under the pair.
+  const side = (keyword, form) => {
+    const b = el("button", { type: "button", className: "plain" }, "Rename…");
+    b.setAttribute("aria-expanded", String(m.renaming === keyword));
+    b.setAttribute("aria-label", `Rename ${form}`);
+    b.addEventListener("click", () => { m.renaming = m.renaming === keyword ? null : keyword; paintQueue(); });
+    return el("span", { className: "mside" }, form, b);
+  };
+  const editing = m.renaming === p.keyword_a || m.renaming === p.keyword_b
+    ? renameRow(m.renaming, m.renaming === p.keyword_a ? p.form_a : p.form_b, m.names[m.renaming],
+      name => renameInMerges(m.renaming, name), () => { m.renaming = null; paintQueue(); })
+    : "";
   card.replaceChildren(el("div", { className: "mcard" },
-    el("div", { className: "mpair" }, el("span", {}, p.form_a), el("span", { className: "sep" }, "⇄"), el("span", {}, p.form_b)),
+    el("div", { className: "mpair" }, side(p.keyword_a, p.form_a), el("span", { className: "sep" }, "⇄"), side(p.keyword_b, p.form_b)),
     stored,
+    editing,
     el("div", { className: "mscore" }, "Jev says ", el("strong", {}, p.score.toFixed(2)), ` (${p.model || "unknown model"})`),
     el("div", { className: "mact" }, accept, reject, skip),
     el("div", { className: "mkeys" }, "Accepted pairs count as the same tag; rejected pairs never come back.")));
@@ -2289,10 +2311,24 @@ async function decide(p, decision) {
     m.skipped.delete(key);
     if (out.bucket === "proposed") { m.proposed.push(out); m.proposed.sort((x, y) => y.score - x.score); }
     else if (out.bucket) { m.decided.unshift(out); }
+    m.renaming = null;
     mStatus(`${pairName(out)}: ${decision}.`);
   } catch (err) { mStatus(err.message, true); }
   finally { m.busy = false; }
   paintQueue(); paintList();
+}
+
+// A rename changes the label on every pair either keyword is in, so both lists reload.
+async function renameInMerges(keyword, name) {
+  if (m.busy) return;
+  m.busy = true;
+  try {
+    const said = await saveName(keyword, name);
+    m.renaming = null;
+    await initMerges();
+    mStatus(said);
+  } catch (err) { mStatus(err.message, true); }
+  finally { m.busy = false; }
 }
 
 async function initMerges() {
@@ -2301,7 +2337,7 @@ async function initMerges() {
   mStatus("Loading…");
   try {
     const out = await getJSON("/api/merges");
-    m.proposed = out.proposed; m.decided = out.decided;
+    m.proposed = out.proposed; m.decided = out.decided; m.names = out.names;
     mStatus("");
     paintQueue(); paintList();
   } catch (err) { m.ready = false; mStatus(`Could not load: ${err.message}`, true); }
