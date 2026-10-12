@@ -925,7 +925,8 @@ among its nearest neighbours.
 
 Plex TVX's Merges tab and tag doctor write this file (`POST /api/merges`, one pair per request,
 refused with a 404 for a pair that has no row and names a value no title carries; the request
-names stored values, and the server writes each one's shortest spelling) and read it back
+names stored values, and the server writes each one's shortest spelling that normalizes back to it, trying
+the longer spellings only when the shortest does not, and refusing with a 400 when none does) and read it back
 over the table (`GET /api/merges`, `GET /api/doctor?item_id=`),
 so a decision shows at once and is marked "applies at next sweep" until the fold writes it into the
 table. A write keeps one entry per resolved pair, which the fold's last-entry-wins rule makes
