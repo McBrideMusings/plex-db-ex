@@ -267,7 +267,8 @@
   .mpair { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; font-size: 22px; font-weight: 650; overflow-wrap: anywhere; }
   .mpair .sep { color: var(--muted); font-weight: 400; }
   .mpair .mside button { font-size: 12px; font-weight: 400; padding: 1px 8px; margin-left: 8px; vertical-align: 0.2em; }
-  .mcard .pick { margin-top: 12px; font-size: 14px; }  .mstored { color: var(--muted); font-size: 12px; margin-top: 4px; overflow-wrap: anywhere; }
+  .mcard .pick { margin-top: 12px; font-size: 14px; }
+  .mstored { color: var(--muted); font-size: 12px; margin-top: 4px; overflow-wrap: anywhere; }
   .mscore { margin: 12px 0 16px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .mscore strong { color: var(--ink); font-size: 18px; }
   .mact { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -2326,7 +2327,7 @@ async function renameInMerges(keyword, name) {
     const said = await saveName(keyword, name);
     m.renaming = null;
     await initMerges();
-    mStatus(said);
+    if (m.ready) mStatus(said);
   } catch (err) { mStatus(err.message, true); }
   finally { m.busy = false; }
 }
