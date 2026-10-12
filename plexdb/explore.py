@@ -435,8 +435,7 @@ def stored_map(
 ) -> dict[str, object] | None:
     """The default map the writer stored, as `title_map_json` would give it
     plus a `stale` flag and the region labels stored with it (`labels`), or
-    `None` when there is none or it was drawn
-    from different keyword rows.
+    `None` when there is none or it was drawn from different keyword rows.
 
     `None` is the caller's cue to draw it live. With `stale_ok`, a map drawn
     from different keyword rows comes back anyway with `stale` set: its titles
