@@ -1162,7 +1162,7 @@ last entry for a keyword wins. `named` writes the row and `cleared` deletes it. 
 keyword no title carries is counted and ignored. A missing file means no names. A file that is not
 valid JSON or breaks this shape is refused whole, and no row changes.
 
-Plex TVX's Doctor tab writes this file ("Rename…" on a group, `POST /api/names` with `{keyword,
+Plex TVX's Doctor tab ("Rename…" on a group) and Merges tab ("Rename…" beside each side of a pair, which then reloads the pair) write this file through one editor (`POST /api/names` with `{keyword,
 name}`; a blank or null name clears it; a keyword no title carries is a 404) and lays it over the
 table on every page that labels a keyword, so a name shows at once, marked "applies at next sweep"
 on the Doctor tab, until the fold writes it. A write keeps one entry per resolved keyword.
