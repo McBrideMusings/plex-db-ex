@@ -212,6 +212,11 @@
   @media (max-width: 600px) {
     body.shell #rightcol { top: auto; left: 8px; right: 8px; bottom: 8px; width: auto; max-height: 50%; }
     .vpctl { left: auto; right: 10px; bottom: auto; top: 10px; }
+    /* The search box leaves room for the zoom buttons beside it; anything after it in the row
+       (the network's minimum-titles slider) wraps below them, and Filters & noise sits under
+       whatever the row grew to. `--ovtlbottom` is the visible row's bottom edge, set in JS. */
+    .ovtl { flex-wrap: wrap; row-gap: 6px; }
+    body.shell .controls { top: calc(var(--ovtlbottom, 42px) + 6px); }
     .ovnote { left: 10px; max-width: calc(100% - 20px); }
     .searchbox input[type="search"] { width: min(20em, calc(100vw - 150px)); }
     /* The bottom-docked card or tag panel would sit over the count line; move it to the top,
@@ -1184,10 +1189,19 @@ function syncPanelOpen() {
   const detailOpen = detailPanel.children.length !== 1 || !detailPanel.firstElementChild.classList.contains("empty");
   document.body.classList.toggle("panelopen", cardOpen || detailOpen);
 }
-// The Filters & noise panel's bottom edge within `#stage`, which the narrow-width count line
-// sits under; it grows when the panel opens and when its rows wrap.
+// Bottom edges within `#stage` that narrow-width panels stack under: the visible view's search
+// row (Filters & noise sits below it) and then the Filters & noise panel (the count line sits
+// below that). The row grows when it wraps, the panel when it opens or wraps, and the panel
+// moves when the view switches rows, so both are read together, the row first.
 const controlsEl = document.getElementById("controls");
-new ResizeObserver(() => document.body.style.setProperty("--ctlbottom", `${controlsEl.offsetTop + controlsEl.offsetHeight}px`)).observe(controlsEl);
+const ovtlEls = [...document.querySelectorAll(".ovtl")];
+function syncOverlayEdges() {
+  const row = ovtlEls.find(el => el.offsetParent !== null);
+  if (row) document.body.style.setProperty("--ovtlbottom", `${row.offsetTop + row.offsetHeight}px`);
+  document.body.style.setProperty("--ctlbottom", `${controlsEl.offsetTop + controlsEl.offsetHeight}px`);
+}
+const overlayEdges = new ResizeObserver(syncOverlayEdges);
+for (const el of [controlsEl, ...ovtlEls]) overlayEdges.observe(el);
 new MutationObserver(syncPanelOpen).observe(pinCard.root, { attributes: true, attributeFilter: ["hidden"] });
 new MutationObserver(syncPanelOpen).observe(detailPanel, { childList: true });
 new MutationObserver(syncPanelOpen).observe(document.body, { attributes: true, attributeFilter: ["data-view"] });
