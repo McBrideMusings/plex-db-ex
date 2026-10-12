@@ -555,6 +555,48 @@ def test_a_same_size_rewrite_of_the_keyword_data_makes_the_stored_map_stale(
         assert stored_network(conn, "movie") is None
 
 
+def test_a_refresh_committing_mid_read_does_not_reach_the_stored_map(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "plexdb.db"
+    _islands(path)
+    with open_store(path) as conn:
+        refresh_title_maps(conn)
+    fingerprint = explore.keyword_fingerprint
+
+    def refresh_meanwhile(conn: sqlite3.Connection, kind: str) -> str:
+        # Runs after the state is read and before the points and labels are.
+        with open_store(path) as writer:
+            writer.execute("UPDATE title_map SET x = x + 100")
+            writer.execute("UPDATE title_map_label SET value = 'redrawn'")
+            writer.commit()
+        return fingerprint(conn, kind)
+
+    monkeypatch.setattr(explore, "keyword_fingerprint", refresh_meanwhile)
+    with open_readonly(path) as conn:
+        payload = stored_map(conn, "movie")
+        assert payload is not None
+        assert all(p[3] < 100 for p in cast(list[list[Any]], payload["points"]))
+        assert "redrawn" not in {label.tag for label in cast(list[RegionLabel], payload["labels"])}
+        assert not conn.in_transaction
+
+
+def test_the_stored_map_read_leaves_a_writers_open_transaction_open(tmp_path: Path) -> None:
+    path = tmp_path / "plexdb.db"
+    _islands(path)
+    with open_store(path) as conn:
+        refresh_title_maps(conn)
+        conn.execute("UPDATE title_map_label SET value = 'pending'")
+        payload = stored_map(conn, "movie")
+        assert payload is not None
+        assert {label.tag for label in cast(list[RegionLabel], payload["labels"])} == {"pending"}
+        assert conn.in_transaction
+        conn.rollback()
+        after = stored_map(conn, "movie")
+        assert after is not None
+        assert "pending" not in {label.tag for label in cast(list[RegionLabel], after["labels"])}
+
+
 def test_keyword_fingerprint_digests_the_repr_of_the_ordered_rows(store: Path) -> None:
     # The digest is what the writer stored on the host; changing its bytes would
     # make every stored map read as stale.

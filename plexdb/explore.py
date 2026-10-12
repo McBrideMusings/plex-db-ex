@@ -71,7 +71,7 @@ from .role_review import (
     role_cell,
     roles_json,
 )
-from .store import open_readonly
+from .store import open_readonly, read_snapshot
 
 #: Set in the container to have `plexdb schedule` serve Plex TVX beside the
 #: sweep, reading the published snapshot. Unset, the scheduler serves nothing.
@@ -444,27 +444,32 @@ def stored_map(
     which is enough to stand in while the live draw runs. A store that
     predates the `title_map` tables has neither, and reads as having no
     stored map.
+
+    The state, the fingerprint it is compared with, the points and the labels
+    are one snapshot, so a `refresh-map` committing meanwhile cannot pair one
+    drawing's points with another's labels.
     """
     _check_kind(kind)
     try:
-        state = conn.execute(
-            "SELECT fingerprint, unplaced FROM title_map_state WHERE kind = ?", (kind,)
-        ).fetchone()
-        if state is None:
-            return None
-        stale = state[0] != keyword_fingerprint(conn, kind)
-        if stale and not stale_ok:
-            return None
-        rows = conn.execute(
-            "SELECT m.item_id, i.title, i.year, m.x, m.y FROM title_map m "
-            "JOIN items i USING (item_id) WHERE m.kind = ? ORDER BY m.item_id",
-            (kind,),
-        ).fetchall()
-        labels = conn.execute(
-            "SELECT node, x, y, width, height, titles, value FROM title_map_label "
-            "WHERE kind = ? ORDER BY node",
-            (kind,),
-        ).fetchall()
+        with read_snapshot(conn):
+            state = conn.execute(
+                "SELECT fingerprint, unplaced FROM title_map_state WHERE kind = ?", (kind,)
+            ).fetchone()
+            if state is None:
+                return None
+            stale = state[0] != keyword_fingerprint(conn, kind)
+            if stale and not stale_ok:
+                return None
+            rows = conn.execute(
+                "SELECT m.item_id, i.title, i.year, m.x, m.y FROM title_map m "
+                "JOIN items i USING (item_id) WHERE m.kind = ? ORDER BY m.item_id",
+                (kind,),
+            ).fetchall()
+            labels = conn.execute(
+                "SELECT node, x, y, width, height, titles, value FROM title_map_label "
+                "WHERE kind = ? ORDER BY node",
+                (kind,),
+            ).fetchall()
     except sqlite3.OperationalError:
         return None
     return {

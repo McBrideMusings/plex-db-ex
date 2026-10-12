@@ -181,6 +181,23 @@ def _connect(path: Path) -> sqlite3.Connection:
 
 
 @contextmanager
+def read_snapshot(conn: sqlite3.Connection) -> Iterator[None]:
+    """Make every read inside the block see the store as of its first one.
+
+    Outside a transaction each SELECT is its own read, so a commit landing
+    between two of them pairs rows from before it with rows from after. A
+    savepoint rather than `BEGIN`: on a connection already inside a
+    transaction — a writer with pending rows — it nests, and its release
+    leaves that transaction and its rows as they were.
+    """
+    conn.execute("SAVEPOINT read_snapshot")
+    try:
+        yield
+    finally:
+        conn.execute("RELEASE read_snapshot")
+
+
+@contextmanager
 def open_readonly(path: Path) -> Iterator[sqlite3.Connection]:
     """Open the store read-only. Any write raises rather than being applied."""
     if path.is_dir():
