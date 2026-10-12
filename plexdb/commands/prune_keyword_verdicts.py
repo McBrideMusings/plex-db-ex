@@ -1,10 +1,11 @@
-"""`plexdb prune-keyword-verdicts` — delete `keyword_pairs`, `keyword_roles` and
-`keyword_role_decisions` rows keyed on a keyword value no title carries any more.
+"""`plexdb prune-keyword-verdicts` — delete `keyword_pairs`, `keyword_roles`,
+`keyword_role_decisions` and `keyword_names` rows keyed on a keyword value no title
+carries any more.
 
 A source rewrites a title's keywords on its next fetch, so a change to
 `normalize_keyword`, or a source that stops listing a keyword, leaves rows keyed
 on a value `enrichment` no longer holds. This step removes them; a person's
-decision among them stays in its decisions file and comes back with the value.
+decision or name among them stays in its decisions file and comes back with the value.
 """
 
 from __future__ import annotations
@@ -30,7 +31,8 @@ def describe(stats: PruneStats) -> list[str]:
     lines = [
         f"pruned {len(stats.keywords_pruned):,} keyword value(s) no title carries "
         f"(of {stats.keywords_stored:,} stored): {stats.pairs_deleted:,} pair row(s), "
-        f"{stats.roles_deleted:,} role row(s), {stats.decisions_deleted:,} decision row(s)"
+        f"{stats.roles_deleted:,} role row(s), {stats.decisions_deleted:,} decision row(s), "
+        f"{stats.names_deleted:,} name row(s)"
     ]
     lines.extend(f"pruned keyword {keyword!r}" for keyword in stats.keywords_pruned)
     return lines
@@ -48,7 +50,7 @@ def _cmd_prune_keyword_verdicts(_args: argparse.Namespace) -> int:
 def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parser = sub.add_parser(
         NAME,
-        help="delete keyword_pairs, keyword_roles and keyword_role_decisions rows "
-        "for keyword values no title carries",
+        help="delete keyword_pairs, keyword_roles, keyword_role_decisions and keyword_names "
+        "rows for keyword values no title carries",
     )
     parser.set_defaults(func=_cmd_prune_keyword_verdicts)

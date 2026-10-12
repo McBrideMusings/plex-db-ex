@@ -26,6 +26,7 @@ EXPECTED_SWEEP = [
     ("migrate", Step.REQUIRED),
     ("fold-merge-decisions", Step.BEST_EFFORT),
     ("fold-role-decisions", Step.BEST_EFFORT),
+    ("fold-name-decisions", Step.BEST_EFFORT),
     ("walk", Step.REQUIRED),
     ("ingest-plays", Step.REQUIRED),
     ("enrich-tautulli-plays", Step.BEST_EFFORT),

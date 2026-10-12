@@ -34,6 +34,7 @@ COUNTED_TABLES = (
     "edges",
     "collection_membership",
     "keyword_roles",
+    "keyword_names",
 )
 
 

@@ -115,6 +115,10 @@ INSERT INTO keyword_forms (surface, keyword) VALUES
     ('Bank-Heist', 'bank heist'),
     ('bank_heist', 'bank heist');
 
+-- A display name a person gave one keyword in Plex TVX (ADR-0021).
+INSERT INTO keyword_names (keyword, name, decided_at) VALUES
+    ('bank heist', 'Bank job', '2026-10-12T00:00:00+00:00');
+
 -- Bookkeeping, exactly as `plexdb enrich-tmdb-keywords` writes it: rows in
 -- `enrichment_cursor`, never in `enrichment` (ADR-0013). Seeded here so the
 -- rollup is exercised against a store that has bookkeeping in it — a fixture

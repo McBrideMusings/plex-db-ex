@@ -58,6 +58,10 @@ _Avoid_: synonym row, merge
 What a stored keyword names — a tone, era, region, theme or character trait — as a source stated it or a judge scored it, plus a person's decision once they have ruled. Whether a keyword has a role is a reader's threshold, never a stored flag.
 _Avoid_: keyword category, tag type
 
+**Display name**:
+A person's own text for a stored keyword, shown wherever a reader names that keyword to a person, in place of its readable spelling. Never compared, embedded, judged or counted. A merge group whose kept keyword has none shows its newest member's.
+_Avoid_: label, alias, rename
+
 **Edge**:
 A directed item-to-item relationship carrying a source rank. A snapshot of what a
 source said at one moment, not a fact.

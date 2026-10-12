@@ -48,6 +48,7 @@ from plexdb.explore import (
     titles_tagged,
 )
 from plexdb.merge_review import merge_map
+from plexdb.names import display_labels
 from plexdb.store import init, open_readonly, open_store, publish
 from plexdb.tagnetwork import refresh_tag_networks
 from plexdb.titlemap import refresh_title_maps
@@ -279,7 +280,7 @@ def test_title_keywords_json_carries_stored_form_and_readable_spelling(store: Pa
         conn.commit()
 
     with open_readonly(store) as conn:
-        keywords = title_keywords_json(conn, "imdb:tt1")
+        keywords = title_keywords_json(conn, "imdb:tt1", display_labels(conn, {}))
 
     assert keywords == [
         {"value": "based on comic", "label": "based on comic"},
@@ -532,7 +533,7 @@ def test_a_merge_verdict_folds_one_keyword_into_another_in_every_view_and_redraw
     assert b not in {tag.value for tag in after.tags}
     assert tagged == {r[0] for r in rows}
     with open_store(store) as conn:
-        card = [k["value"] for k in title_keywords_json(conn, "imdb:tt2")]
+        card = [k["value"] for k in title_keywords_json(conn, "imdb:tt2", {})]
     assert a in card and b not in card
 
 

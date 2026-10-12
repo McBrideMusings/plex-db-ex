@@ -1113,6 +1113,59 @@ judge never asks about a pair that has a row, so a person's merge is never sent 
 person-only decision deletes the row rather than leaving one with nothing in it. No reader reads
 `keyword_pairs` through `plexdb-reader`, so `reader_shape` stays 10.
 
+## Version 19 — a person's display name for a keyword
+
+```
+keyword_names  keyword TEXT PK, name TEXT NOT NULL, decided_at TEXT NOT NULL
+```
+
+At most one display name per stored keyword, set by a person in Plex TVX
+([ADR-0021](./adr/0021-a-keyword-display-name-is-a-persons-label-beside-enrichment)). `keyword` is
+a value as `enrichment.value` holds it; `name` is free text with its whitespace runs collapsed, 1
+to 200 characters, and can be wording no source sent; `decided_at` is UTC.
+
+**A name is for showing, never for computing.** A reader that shows a keyword to a person shows
+its name when it has one, and its readable spelling (the shortest `keyword_forms.surface`, ties by
+name) otherwise. Nothing that computes reads this table: the judges embed and ask about readable
+spellings, and similarity, the map's vectors and the merge fold all use `enrichment` values. A
+merge group whose kept keyword has no name shows the newest name any of its members has, so a name
+stays on screen when title counts make another member the kept one.
+
+**Refresh rule.** Only `plexdb fold-name-decisions` writes the table, from
+[`name_decisions.json`](#name-decisions-json). `prune-keyword-verdicts` deletes a name once its
+keyword is a value no title carries as a keyword or a spoiler keyword; the file keeps it, and the
+fold restores it when the value returns. The migration only adds, so `reader_shape` stays 10, and
+`plexdb-reader` reads a name with `display_name(keyword)` — the stored name only, since a merge
+group's label depends on the reader's own merge threshold. A reader built with that accessor
+expects a v19 store; deploy the writer first.
+
+### `name_decisions.json`
+
+A name reaches `keyword_names` only through this file, for the same reason as
+[`merge_decisions.json`](#merge-decisions-json), and it sits in the same directory. It is a JSON
+list:
+
+```json
+[
+  {"surface": "heists", "decision": "named", "name": "Heist",
+   "decided_at": "2026-10-12T12:00:00+00:00"},
+  {"surface": "Bank Robbery", "decision": "cleared", "decided_at": "2026-10-12T12:05:00+00:00"}
+]
+```
+
+`surface` is a raw spelling of the keyword, resolved with the current `normalize_keyword` exactly
+as in `merge_decisions.json`. `decision` is `named`, which needs `name`, or `cleared`;
+`decided_at` is a UTC time, required for `named`. `plexdb fold-name-decisions` applies the file as
+the sweep step right after `fold-role-decisions`, every run: entries apply in list order, so the
+last entry for a keyword wins. `named` writes the row and `cleared` deletes it. An entry naming a
+keyword no title carries is counted and ignored. A missing file means no names. A file that is not
+valid JSON or breaks this shape is refused whole, and no row changes.
+
+Plex TVX's Doctor tab writes this file ("Rename…" on a group, `POST /api/names` with `{keyword,
+name}`; a blank or null name clears it; a keyword no title carries is a 404) and lays it over the
+table on every page that labels a keyword, so a name shows at once, marked "applies at next sweep"
+on the Doctor tab, until the fold writes it. A write keeps one entry per resolved keyword.
+
 ## Reading the store to build collections
 
 Each query below was run against a migrated copy of the real store. Parameters are written as

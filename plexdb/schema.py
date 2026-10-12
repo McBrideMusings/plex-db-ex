@@ -896,6 +896,21 @@ CREATE INDEX idx_keyword_pairs_b ON keyword_pairs(keyword_b);
 """
 
 
+#: Version 19 — a person's display name for a keyword (ADR-0021).
+#:
+#: `keyword_names` holds at most one name per stored keyword, written only by
+#: `plexdb fold-name-decisions` from Plex TVX's `name_decisions.json`. A reader
+#: shows it in place of the keyword's readable spelling; nothing that computes
+#: reads it. Only adds, so `READER_SHAPE` stays.
+_V19 = """
+CREATE TABLE keyword_names (
+    keyword    TEXT NOT NULL PRIMARY KEY,
+    name       TEXT NOT NULL CHECK (length(trim(name)) > 0),
+    decided_at TEXT NOT NULL
+);
+"""
+
+
 #: Append-only. Index i takes the store from version i to version i+1.
 MIGRATIONS: tuple[Migration, ...] = (
     _V1,
@@ -916,6 +931,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     _V16,
     _V17,
     _V18,
+    _V19,
 )
 
 #: The version a store is at once every migration has been applied.

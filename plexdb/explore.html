@@ -143,6 +143,8 @@
   #dgrid td.cell .sp + .sp { margin-top: 3px; }
   #dgrid td.none { color: var(--muted); }
   #dgrid td.act { text-align: right; white-space: nowrap; width: 1%; }
+  #dgrid td.act button + button, #dgrid .pick button + button { margin-left: 6px; }
+  #dgrid .pick .acts { margin: 8px 0 4px; }
   #dgrid tr.hl > td { background: var(--chip); }
   #dgrid tr.open > td { border-bottom: 0; }
   #dgrid .pick { border: 1px solid var(--accent); border-radius: 6px; padding: 8px; max-width: 40em; }
@@ -488,7 +490,7 @@ const VIEWS = ["table", "graph", "map"];
 const state = { tab: "tags", kind: "movie", view: "table", data: null, sort: "df", dir: -1, shown: PAGE, tag: null, tagIds: new Set() };
 // The Doctor tab: the title it shows and its /api/doctor answer, the merge group to highlight
 // (`row`), the group whose "Merge with…" row is open, that row's search results and highlighted one.
-const doctor = { itemId: null, data: null, row: null, open: null, hits: [], at: 0, token: 0, busy: false };
+const doctor = { itemId: null, data: null, row: null, open: null, renaming: null, hits: [], at: 0, token: 0, busy: false };
 
 function loadNoise() {
   if (DEMO) return new Set();   // the demo never shows a viewer's own noise list
@@ -1796,7 +1798,8 @@ document.getElementById("clear").addEventListener("click", () => {
 // or the stored keyword when it is in no group), a column per source holding the raw spellings
 // that source sent. "Merge with…" searches the stored vocabulary (/api/keywords) and POSTs an
 // accepted pair to /api/merges, the Merges tab's own route, so the decision lands in
-// merge_decisions.json and the next sweep folds it in.
+// merge_decisions.json and the next sweep folds it in. "Rename…" POSTs a display name for the
+// group's keyword to /api/names (name_decisions.json); a name is only ever shown, never computed on.
 const doctorCache = new Map();
 function doctorDetail(itemId) {
   if (!doctorCache.has(itemId)) {
@@ -1810,7 +1813,7 @@ const doctorHref = (itemId, row) => "#" + new URLSearchParams({ kind: state.kind
 const dStatus = (text, bad = false) => { const n = qEl("dstatus"); if (n) { n.className = bad ? "bad" : ""; n.textContent = text; } };
 
 function openDoctorTab(itemId, row) {
-  doctor.itemId = itemId; doctor.row = row || null; doctor.data = null; doctor.open = null;
+  doctor.itemId = itemId; doctor.row = row || null; doctor.data = null; doctor.open = null; doctor.renaming = null;
   setTab("doctor");
 }
 function initDoctor() {
@@ -1866,6 +1869,12 @@ function paintDoctor() {
       grp.append(el("span", { className: "badge", title: "In merge_decisions.json; the next sweep writes it into the store." },
         `${{ accepted: "merge with", rejected: "keep apart from", cleared: "clear the decision on" }[p.decision]} ${p.label} · applies at next sweep`));
     }
+    const named = stored ? d.names[g.key] : null;
+    if (named && named.name !== null) grp.append(el("span", { className: "via" }, `display name · stored as ${g.key}`));
+    if (named && named.pending) {
+      grp.append(el("span", { className: "badge", title: "In name_decisions.json; the next sweep writes it into the store." },
+        (named.name === null ? "name cleared" : `named “${named.name}”`) + " · applies at next sweep"));
+    }
     const tr = el("tr", {}, grp);
     for (const src of sources) {
       const spellings = g.cells.get(src) || [];
@@ -1882,14 +1891,18 @@ function paintDoctor() {
     if (stored) {
       const b = el("button", { type: "button", className: "plain" }, "Merge with…");
       b.setAttribute("aria-expanded", String(doctor.open === g.key));
-      b.addEventListener("click", () => { doctor.open = doctor.open === g.key ? null : g.key; doctor.hits = []; doctor.at = 0; paintDoctor(); });
-      act.append(b);
+      b.addEventListener("click", () => { doctor.open = doctor.open === g.key ? null : g.key; doctor.renaming = null; doctor.hits = []; doctor.at = 0; paintDoctor(); });
+      const rn = el("button", { type: "button", className: "plain" }, "Rename…");
+      rn.setAttribute("aria-expanded", String(doctor.renaming === g.key));
+      rn.addEventListener("click", () => { doctor.renaming = doctor.renaming === g.key ? null : g.key; doctor.open = null; paintDoctor(); });
+      act.append(b, rn);
     }
     tr.append(act);
     if (g.key === doctor.row) { tr.className = "hl"; hl = tr; }
-    if (doctor.open === g.key) tr.classList.add("open");
+    if (doctor.open === g.key || doctor.renaming === g.key) tr.classList.add("open");
     body.append(tr);
     if (doctor.open === g.key) body.append(el("tr", {}, el("td", { colSpan: sources.length + 2 }, pickRow(g.key, label(g.key)))));
+    if (doctor.renaming === g.key) body.append(el("tr", {}, el("td", { colSpan: sources.length + 2 }, renameRow(g.key, label(g.key), named))));
   }
   const head = el("tr", {}, el("th", {}, "Group"), ...sources.map(s => el("th", {}, s)), el("th", {}, ""));
   const n = d.sources.reduce((sum, s) => sum + s.rows.length, 0);
@@ -1898,7 +1911,51 @@ function paintDoctor() {
     el("div", { className: "meta" }, `${fmt(n)} spelling${n === 1 ? "" : "s"} from ${fmt(sources.length)} source${sources.length === 1 ? "" : "s"}, ${fmt(rows.length)} group${rows.length === 1 ? "" : "s"}`),
     el("div", { id: "dstatus" }),
     sources.length ? el("div", { id: "dgrid" }, el("table", {}, el("thead", {}, head), body)) : el("p", { className: "empty" }, "No source sent a keyword for this title."));
-  if (hl && !doctor.open) hl.scrollIntoView({ block: "center" });
+  if (hl && !doctor.open && !doctor.renaming) hl.scrollIntoView({ block: "center" });
+}
+
+// The display name editor under a group's row: the text to show for stored `keyword` wherever
+// Plex TVX names it. Saving an empty name clears it, and the readable spelling shows again.
+// The box holds the keyword's own name; a group label borrowed from a member is only the
+// placeholder, so saving untouched never copies it onto the keyword.
+function renameRow(keyword, shown, named) {
+  const own = named && named.name !== null ? named.name : "";
+  const input = el("input", { type: "text", id: "doctorname", value: own, placeholder: shown, maxLength: 200, autocomplete: "off" });
+  input.setAttribute("aria-label", `Display name for ${keyword}`);
+  const save = el("button", { type: "button", className: "primary", id: "doctorsavename" }, "Save name");
+  save.addEventListener("click", () => rename(keyword, input.value));
+  const parts = [save];
+  if (named && named.name !== null) {
+    const clear = el("button", { type: "button", className: "plain", id: "doctorclearname" }, "Clear name");
+    clear.addEventListener("click", () => rename(keyword, ""));
+    parts.push(clear);
+  }
+  input.addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); save.click(); }
+    else if (e.key === "Escape") { e.stopPropagation(); doctor.renaming = null; paintDoctor(); }
+  });
+  queueMicrotask(() => { input.focus(); input.select(); });
+  return el("div", { className: "pick" }, el("div", { className: "meta" }, `Display name for ${keyword}`), input,
+    el("div", { className: "acts" }, ...parts),
+    el("div", { className: "meta" }, "Shown only, never used to compare titles. Goes to name_decisions.json; the next sweep applies it."));
+}
+
+async function rename(keyword, name) {
+  if (doctor.busy) return;
+  doctor.busy = true;
+  try {
+    const out = await sendJSON("POST", "/api/names", { keyword, name });
+    // Every tab that labels keywords reloads on its next visit and shows the name.
+    m.ready = false; r.ready = false; map.defaults = {}; map.key = null;
+    doctorCache.clear();
+    doctor.renaming = null; doctor.row = keyword;
+    writeHash();
+    await loadDoctor();
+    dStatus(out.name && out.name.name !== null
+      ? `${keyword} shows as “${out.label}”. It applies at the next sweep.`
+      : `${keyword}: name cleared, shows as “${out.label}”. It applies at the next sweep.`);
+  } catch (err) { dStatus(err.message, true); }
+  finally { doctor.busy = false; }
 }
 
 function pickRow(keyword, shown) {

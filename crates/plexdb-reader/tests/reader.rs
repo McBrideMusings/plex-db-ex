@@ -200,6 +200,21 @@ fn a_keyword_lists_every_spelling_recorded_for_it() {
 }
 
 #[test]
+fn a_named_keyword_reads_back_its_display_name_and_an_unnamed_one_none() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("plexdb.db");
+    common::build_fixture(&path);
+    let reader = Reader::open(&path).expect("open the fixture store");
+
+    assert_eq!(
+        reader.display_name("bank heist").expect("lookup"),
+        Some("Bank job".to_string())
+    );
+    assert_eq!(reader.display_name("heist").expect("lookup"), None);
+    assert_eq!(reader.display_name("Bank job").expect("lookup"), None);
+}
+
+#[test]
 fn edges_are_queryable_in_both_directions_filtered_by_type() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("plexdb.db");

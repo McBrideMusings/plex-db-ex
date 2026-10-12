@@ -258,6 +258,27 @@ impl Reader {
         Ok(rows)
     }
 
+    /// The display name a person gave the stored `keyword` in Plex TVX
+    /// (`keyword_names`, ADR-0021), for showing that keyword to a person in place
+    /// of its spelling. `None`, not an error, for a keyword nobody named.
+    /// `keyword` is matched exactly: it is a stored value, not a spelling.
+    ///
+    /// Only for display: never compare, score or count by it. A merge group's
+    /// label is the reader's to choose, since which pairs count as merged is the
+    /// reader's threshold; Plex TVX shows the kept keyword's name, else the newest
+    /// name any member has.
+    pub fn display_name(&self, keyword: &str) -> Result<Option<String>, ReaderError> {
+        let name = self
+            .conn
+            .query_row(
+                "SELECT name FROM keyword_names WHERE keyword = ?1",
+                (keyword,),
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        Ok(name)
+    }
+
     /// Edges of `edge_type` pointing *out of* `item_id`, ranked ascending.
     pub fn edges_from(&self, item_id: &str, edge_type: &str) -> Result<Vec<Edge>, ReaderError> {
         self.query_edges(

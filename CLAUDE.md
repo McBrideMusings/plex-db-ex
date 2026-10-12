@@ -98,6 +98,7 @@ admin dev judge-keyword-pairs [--limit N]  ask Jev about synonym keyword pairs; 
 admin dev judge-keyword-roles [--limit N]  ask Jev what roles each keyword plays; needs TYPESAFE_API_KEY
 admin dev fold-merge-decisions  apply merge_decisions.json to keyword_pairs (adds decision-only rows)
 admin dev fold-role-decisions   apply role_decisions.json to keyword_role_decisions
+admin dev fold-name-decisions   apply name_decisions.json to keyword_names (display names)
 admin dev prune-keyword-verdicts  delete judge-table rows for keyword values no title carries
 ```
 

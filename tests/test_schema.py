@@ -25,6 +25,7 @@ V12_TABLES = {"keyword_pairs"}
 V14_TABLES = {"keyword_roles", "keyword_role_decisions"}
 V16_TABLES = {"keyword_role_statements"}
 V17_TABLES = {"keyword_surfaces"}
+V19_TABLES = {"keyword_names"}
 #: V4 adds no new table — it only alters the existing `plays` table and adds
 #: an index (issue #9).
 
@@ -188,6 +189,7 @@ def test_a_current_store_carries_every_migrations_tables_and_nothing_else(
         | V14_TABLES
         | V16_TABLES
         | V17_TABLES
+        | V19_TABLES
         | {"reader_shape"}
         | {"schema_version"}
     )

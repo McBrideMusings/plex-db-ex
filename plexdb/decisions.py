@@ -3,9 +3,11 @@
 Plex TVX never writes `plexdb.db` (ADR-0007, ADR-0017), so a decision made on one of
 its review tabs goes into a JSON file beside its saved-queries file, and a sweep step
 folds that file into the store. `merge_decisions.json` (the Merges tab) and
-`role_decisions.json` (the Roles tab) share this shape: a list of entries, each a few
-text fields naming what was decided, plus `decision` (`accepted`, `rejected` or
-`cleared`) and `decided_at`. Entries apply in order, so the last one per key wins.
+`role_decisions.json` (the Roles tab) and `name_decisions.json` (display names) share
+this shape: a list of entries, each a few text fields naming what was decided, plus
+`decision` (`accepted`, `rejected` or `cleared` for a review tab, `named` or `cleared`
+for a name), any value the decision carries (a name), and `decided_at`. Entries apply
+in order, so the last one per key wins.
 
 An entry names a keyword by a raw spelling (`keyword_forms.surface`), never by its
 stored value, and every reader resolves it with the current `normalize_keyword`. A
@@ -29,15 +31,12 @@ from .config import Config
 from .errors import DecisionsFileError
 
 __all__ = [
-    "DECISIONS",
     "EXPLORE_SAVED_PATH_VAR",
     "SAVED_FILE",
     "DecisionsFile",
     "FoldStats",
     "decisions_dir",
 ]
-
-DECISIONS = ("accepted", "rejected", "cleared")
 
 #: Full path to the saved-queries file, set in the container to a dedicated
 #: mount (`/explore-data`, its own bind mount in `[docker_run]`) rather than
@@ -53,8 +52,8 @@ SAVED_FILE = "explore-queries.json"
 
 
 def decisions_dir(config: Config) -> Path:
-    """Where Plex TVX's files sit: the saved queries, `merge_decisions.json` and
-    `role_decisions.json`.
+    """Where Plex TVX's files sit: the saved queries, `merge_decisions.json`,
+    `role_decisions.json` and `name_decisions.json`.
 
     The directory of `PLEXDB_EXPLORE_SAVED_PATH` when set (the container's own
     mount); otherwise beside the published snapshot when one is configured, as the
@@ -86,9 +85,11 @@ class DecisionsFile(ABC):
     applies entries in order), so a write keeps one entry per key and the file's
     size is bounded by the number of rows the store holds.
 
-    A subclass names its key fields (`KEY`), its error type, what else an entry's
-    key must satisfy (`key_problem`), and how an entry's spellings and the stored
-    key they name turn into each other (`resolve`, `spell`).
+    A subclass names its key fields (`KEY`), the decisions an entry may make
+    (`DECISIONS`, `cleared` among them), the text fields every other decision carries
+    (`VALUES`), its error type, what else an entry's key must satisfy
+    (`key_problem`), and how an entry's spellings and the stored key they name turn
+    into each other (`resolve`, `spell`).
     """
 
     MAX_ENTRIES = 50_000
@@ -99,6 +100,9 @@ class DecisionsFile(ABC):
 
     #: The text fields naming what an entry decides, in key order.
     KEY: ClassVar[tuple[str, ...]]
+    DECISIONS: ClassVar[tuple[str, ...]] = ("accepted", "rejected", "cleared")
+    #: Text fields an entry carries unless its decision is `cleared`.
+    VALUES: ClassVar[tuple[str, ...]] = ()
     ERROR: ClassVar[type[DecisionsFileError]]
     #: What the file holds, for messages ("merge decisions").
     NOUN: ClassVar[str]
@@ -114,6 +118,11 @@ class DecisionsFile(ABC):
     @classmethod
     def key_problem(cls, key: tuple[str, ...]) -> str | None:
         """Why `key` cannot be an entry's key, or None."""
+        return None
+
+    @classmethod
+    def values_problem(cls, values: dict[str, str]) -> str | None:
+        """Why an entry's `VALUES` cannot be stored, or None."""
         return None
 
     @classmethod
@@ -155,14 +164,20 @@ class DecisionsFile(ABC):
                 isinstance(entry.get(field), str) for field in fields
             ):
                 raise cls.ERROR(f"{where} needs text {', '.join(fields[:-1])} and {fields[-1]}")
-            if entry["decision"] not in DECISIONS:
+            if entry["decision"] not in cls.DECISIONS:
                 raise cls.ERROR(
-                    f"{where} has decision {entry['decision']!r}, expected one of {DECISIONS}"
+                    f"{where} has decision {entry['decision']!r}, expected one of {cls.DECISIONS}"
                 )
             problem = cls.key_problem(tuple(entry[field] for field in cls.KEY))
             if problem:
                 raise cls.ERROR(f"{where} {problem}")
             if entry["decision"] != "cleared":
+                missing = [f for f in cls.VALUES if not isinstance(entry.get(f), str)]
+                if missing:
+                    raise cls.ERROR(f"{where} needs text {', '.join(missing)}")
+                problem = cls.values_problem({f: entry[f] for f in cls.VALUES})
+                if problem:
+                    raise cls.ERROR(f"{where} {problem}")
                 try:
                     datetime.fromisoformat(entry["decided_at"])
                 except ValueError:
@@ -190,11 +205,11 @@ class DecisionsFile(ABC):
             raise ValueError(f"{name} must be text of 1 to {cls.KEYWORD_MAX} characters")
         return value
 
-    @staticmethod
-    def decision(value: object) -> str:
+    @classmethod
+    def decision(cls, value: object) -> str:
         """`value` as a decision a request may make, or `ValueError`."""
-        if not isinstance(value, str) or value not in DECISIONS:
-            raise ValueError(f"decision must be one of {', '.join(DECISIONS)}")
+        if not isinstance(value, str) or value not in cls.DECISIONS:
+            raise ValueError(f"decision must be one of {', '.join(cls.DECISIONS)}")
         return value
 
     def _write(self, body: str) -> None:
@@ -214,11 +229,15 @@ class DecisionsFile(ABC):
         return {key: e for key, e in self.resolved(entries) if key is not None}
 
     def record(
-        self, key: tuple[str, ...], decision: str, spellings: dict[str, list[str]]
+        self,
+        key: tuple[str, ...],
+        decision: str,
+        spellings: dict[str, list[str]],
+        values: dict[str, str] | None = None,
     ) -> dict[str, str]:
         """Append one decision on stored `key`, spelled by the first of `spellings`
-        (`keyword_spellings`) that resolves back to it, dropping every earlier entry
-        naming the same key; return the entry.
+        (`keyword_spellings`) that resolves back to it, carrying `values` (`VALUES`),
+        dropping every earlier entry naming the same key; return the entry.
 
         The caller has checked the fields and that the store has a row for `key`.
         `ValueError` when no spelling resolves back to `key`, since the fold would then
@@ -229,6 +248,8 @@ class DecisionsFile(ABC):
             raise ValueError(f"no spelling of {key!r} normalizes back to it")
         entry = dict(zip(self.KEY, spelled, strict=True))
         entry["decision"] = decision
+        if decision != "cleared":
+            entry.update({field: (values or {})[field] for field in self.VALUES})
         entry["decided_at"] = datetime.now(UTC).isoformat(timespec="seconds")
         with self._lock:
             entries = self.load(self._path) or []

@@ -389,6 +389,15 @@ _CARRIED = (
 )
 
 
+def is_carried(conn: sqlite3.Connection, keyword: str) -> bool:
+    """Whether some title carries `keyword`, as a keyword or a spoiler keyword — the
+    rule `prune_keyword_verdicts` keeps rows by."""
+    return (
+        conn.execute(f"SELECT 1 FROM ({_CARRIED}) WHERE value = ? LIMIT 1", (keyword,)).fetchone()
+        is not None
+    )
+
+
 @dataclass
 class PruneStats:
     #: Distinct stored keyword values some title carries.
@@ -396,19 +405,20 @@ class PruneStats:
     pairs_deleted: int = 0
     roles_deleted: int = 0
     decisions_deleted: int = 0
+    names_deleted: int = 0
     #: The keyword values whose rows were deleted, sorted.
     keywords_pruned: list[str] = field(default_factory=list)
 
 
 def prune_keyword_verdicts(conn: sqlite3.Connection) -> PruneStats:
-    """Delete every `keyword_pairs`, `keyword_roles` and `keyword_role_decisions`
-    row keyed on a keyword value no `enrichment` row carries.
+    """Delete every `keyword_pairs`, `keyword_roles`, `keyword_role_decisions` and
+    `keyword_names` row keyed on a keyword value no `enrichment` row carries.
 
     A value leaves `enrichment` when a source stops listing it or a change to
     `normalize_keyword` rewrites it on a title's next fetch; the rows keyed on
     it then describe nothing. Jev's scores for a value that returns are asked
-    for again. A person's decision goes with its rows: the decisions file it
-    came from keeps it, and the fold restores it once the value, or the pair,
+    for again. A person's decision or name goes with its rows: the decisions file
+    it came from keeps it, and the fold restores it once the value, or the pair,
     has a verdict again. One transaction.
     """
     stats = PruneStats()
@@ -422,6 +432,7 @@ def prune_keyword_verdicts(conn: sqlite3.Connection) -> PruneStats:
                 "SELECT keyword_a FROM keyword_pairs UNION SELECT keyword_b FROM keyword_pairs "
                 "UNION SELECT keyword FROM keyword_roles "
                 "UNION SELECT keyword FROM keyword_role_decisions "
+                "UNION SELECT keyword FROM keyword_names "
                 f"EXCEPT {_CARRIED} ORDER BY 1"
             )
         ]
@@ -434,6 +445,9 @@ def prune_keyword_verdicts(conn: sqlite3.Connection) -> PruneStats:
         ).rowcount
         stats.decisions_deleted = conn.execute(
             f"DELETE FROM keyword_role_decisions WHERE keyword NOT IN ({_CARRIED})"
+        ).rowcount
+        stats.names_deleted = conn.execute(
+            f"DELETE FROM keyword_names WHERE keyword NOT IN ({_CARRIED})"
         ).rowcount
     return stats
 

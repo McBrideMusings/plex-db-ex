@@ -104,3 +104,7 @@ class MergeDecisionsError(DecisionsFileError):
 
 class RoleDecisionsError(DecisionsFileError):
     """`role_decisions.json` is not valid JSON or does not hold the documented shape."""
+
+
+class NameDecisionsError(DecisionsFileError):
+    """`name_decisions.json` is not valid JSON or does not hold the documented shape."""

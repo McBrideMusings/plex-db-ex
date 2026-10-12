@@ -44,7 +44,7 @@ import httpx
 from .decisions import SAVED_FILE
 from .errors import DecisionsFileError, StoreError
 from .identity import PRIORITY
-from .keywords import keyword_spellings, readable_forms
+from .keywords import is_carried, keyword_spellings, readable_forms
 from .merge_review import (
     MERGE_AT,
     MERGE_DECISIONS_FILE,
@@ -54,6 +54,13 @@ from .merge_review import (
     merge_map,
     require_pair,
     review_rows,
+)
+from .names import (
+    NAME_DECISIONS_FILE,
+    NameDecisions,
+    NoSuchKeyword,
+    display_labels,
+    names_json,
 )
 from .role_review import (
     ROLE_DECISIONS_FILE,
@@ -784,11 +791,12 @@ def title_keywords(conn: sqlite3.Connection, item_id: str) -> list[str]:
     return sorted({into.get(r[0], r[0]) for r in rows})
 
 
-def title_keywords_json(conn: sqlite3.Connection, item_id: str) -> list[dict[str, str]]:
+def title_keywords_json(
+    conn: sqlite3.Connection, item_id: str, labels: dict[str, str]
+) -> list[dict[str, str]]:
     """One title's keywords for the card: the stored form to click, search and
-    count by, and a readable spelling (`readable_forms`) to show a person."""
-    forms = readable_forms(conn)
-    return [{"value": v, "label": forms.get(v, v)} for v in title_keywords(conn, item_id)]
+    count by, and the text to show a person (`labels`, from `names.display_labels`)."""
+    return [{"value": v, "label": labels.get(v, v)} for v in title_keywords(conn, item_id)]
 
 
 #: How many similar titles one card lists, and the longest item id a lookup takes.
@@ -852,9 +860,13 @@ class KeywordSpace:
 
 
 def title_details(
-    conn: sqlite3.Connection, item_id: str, space: KeywordSpace | None = None
+    conn: sqlite3.Connection,
+    item_id: str,
+    labels: dict[str, str],
+    space: KeywordSpace | None = None,
 ) -> dict[str, object]:
-    """What a title's card shows: its facts, its keywords, and its nearest titles.
+    """What a title's card shows: its facts, its keywords labelled by `labels`
+    (`names.display_labels`), and its nearest titles.
 
     The nearest titles are the `SIMILAR_LIMIT` with the highest keyword cosine in
     `space` (the title's own kind), each with its score; none without a space.
@@ -879,7 +891,7 @@ def title_details(
         "year": row["year"],
         "studio": row["studio"],
         "content_rating": row["content_rating"],
-        "keywords": title_keywords_json(conn, item_id),
+        "keywords": title_keywords_json(conn, item_id, labels),
         "similar": [
             {"item_id": other, "title": about[other][0], "year": about[other][1], "score": score}
             for other, score in nearest
@@ -888,19 +900,24 @@ def title_details(
 
 
 def title_doctor(
-    conn: sqlite3.Connection, item_id: str, overlay: dict[tuple[str, ...], dict[str, str]]
+    conn: sqlite3.Connection,
+    item_id: str,
+    overlay: dict[tuple[str, ...], dict[str, str]],
+    labels: dict[str, str],
+    named: dict[str, dict[str, object]],
 ) -> dict[str, object]:
     """What the tag doctor shows for one title: per source, each raw spelling the
     source sent (`keyword_surfaces`), the stored value it normalizes to
     (`keyword_forms`), the keyword its merge group folds into (`merge_map`) with the
     pair that put it there, and any decision in `overlay` (`merge_decisions.json`)
-    naming it that the store has not folded in yet.
+    naming it that the store has not folded in yet. Keywords show as `labels`
+    (`names.display_labels`), and `names` carries each shown keyword's own display
+    name from `named` (`names.names_json`), pending or not.
     """
     row = conn.execute("SELECT title, year FROM items WHERE item_id = ?", (item_id,)).fetchone()
     if row is None:
         raise NoSuchTitle(item_id)
     folded = merge_map(conn)
-    forms = readable_forms(conn)
     groups: defaultdict[str, list[str]] = defaultdict(list)
     for member, head in folded.items():
         groups[head].append(member)
@@ -917,12 +934,12 @@ def title_doctor(
     for key, entry in overlay.items():
         if not carried & set(key) or not decidable(conn, key):
             continue
-        if review_rows(conn, overlay, forms, (key[0], key[1]))[0]["pending"]:
+        if review_rows(conn, overlay, labels, (key[0], key[1]))[0]["pending"]:
             for keyword, other in ((key[0], key[1]), (key[1], key[0])):
                 pending[keyword].append(
                     {
                         "other": other,
-                        "label": forms.get(other, other),
+                        "label": labels.get(other, other),
                         "decision": entry["decision"],
                     }
                 )
@@ -949,19 +966,19 @@ def title_doctor(
                 "spoiler": bool(spoiler),
                 "keyword": keyword,
                 "into": into,
-                "into_label": forms.get(into, into) if into else None,
+                "into_label": labels.get(into, into) if into else None,
                 "via": via(keyword, into) if keyword and into else None,
                 "group": sorted({head, *groups.get(head or "", [])} - {keyword}) if head else [],
                 "pending": pending.get(keyword or "", []),
             }
         )
+    shown = carried | {folded[k] for k in carried if k in folded}
     return {
         "item_id": item_id,
         "title": row["title"],
         "year": row["year"],
-        "forms": {
-            k: forms.get(k, k) for k in carried | {folded[k] for k in carried if k in folded}
-        },
+        "forms": {k: labels.get(k, k) for k in shown},
+        "names": {k: named[k] for k in shown if k in named},
         "sources": [{"source": s, "rows": rows} for s, rows in sources.items()],
     }
 
@@ -971,10 +988,13 @@ KEYWORD_SEARCH_LIMIT = 12
 KEYWORD_SEARCH_MIN = 2
 
 
-def keyword_search(conn: sqlite3.Connection, q: str) -> list[dict[str, object]]:
+def keyword_search(
+    conn: sqlite3.Connection, q: str, labels: dict[str, str]
+) -> list[dict[str, object]]:
     """Stored keywords whose value or any raw spelling contains `q`, for the tag
     doctor's "Merge with…": an exact match first, then those starting with it, then by
-    how many titles carry each, each with the keyword its merge group folds into."""
+    how many titles carry each, each with the keyword its merge group folds into, and
+    each shown as `labels` (`names.display_labels`)."""
     q = q.strip().lower()
     if len(q) < KEYWORD_SEARCH_MIN:
         raise ValueError(f"q must be at least {KEYWORD_SEARCH_MIN} characters")
@@ -988,14 +1008,13 @@ def keyword_search(conn: sqlite3.Connection, q: str) -> list[dict[str, object]]:
     ).fetchall()
     ranked = sorted(rows, key=lambda r: (r[0] != q, not r[0].startswith(q), -r[1], r[0]))
     folded = merge_map(conn)
-    forms = readable_forms(conn)
     return [
         {
             "value": value,
-            "label": forms.get(value, value),
+            "label": labels.get(value, value),
             "titles": titles,
             "into": into,
-            "into_label": forms.get(into, into) if into else None,
+            "into_label": labels.get(into, into) if into else None,
         }
         for value, titles in ranked[:KEYWORD_SEARCH_LIMIT]
         for into in (folded.get(value),)
@@ -1827,6 +1846,8 @@ class PosterProxy:
 MERGE_FIELDS = ("keyword_a", "keyword_b", "decision")
 #: The same for `/api/roles` and `RoleDecisions.check`.
 ROLE_FIELDS = ("keyword", "role", "decision")
+#: The same for `/api/names` and `NameDecisions.check`; a null or blank name clears it.
+NAME_FIELDS = ("keyword", "name")
 
 
 def merges_json(pairs: list[dict[str, object]]) -> dict[str, object]:
@@ -1875,6 +1896,8 @@ def _error_reply(err: Exception, store_path: Path) -> tuple[str, HTTPStatus] | N
         return f"no keyword pair {err.args[0]!r} in the store", HTTPStatus.NOT_FOUND
     if isinstance(err, NoSuchRole):
         return f"no keyword role {err.args[0]!r} in the store", HTTPStatus.NOT_FOUND
+    if isinstance(err, NoSuchKeyword):
+        return f"no title carries the keyword {err.args[0]!r}", HTTPStatus.NOT_FOUND
     if isinstance(err, NoSuchQuery):
         return f"no saved query named {err.args[0]!r}", HTTPStatus.NOT_FOUND
     if isinstance(err, TooManyTitleRequests):
@@ -1952,6 +1975,7 @@ def make_server(
     saved = SavedQueries(saved_file)
     merges = MergeDecisions(saved_file.with_name(MERGE_DECISIONS_FILE))
     roles = RoleDecisions(saved_file.with_name(ROLE_DECISIONS_FILE))
+    names = NameDecisions(saved_file.with_name(NAME_DECISIONS_FILE))
     posters = PosterProxy(store_path, plex_url, plex_token, poster_http)
 
     class Handler(BaseHTTPRequestHandler):
@@ -2006,7 +2030,8 @@ def make_server(
                 with open_readonly(store_path) as conn:
                     require_pair(conn, (a, b))
                     entry = merges.record((a, b), decision, keyword_spellings(conn, (a, b)))
-                    pair = review_rows(conn, {(a, b): entry}, readable_forms(conn), (a, b))[0]
+                    labels = display_labels(conn, names.latest())
+                    pair = review_rows(conn, {(a, b): entry}, labels, (a, b))[0]
                 print(
                     f"explore: merge decision {a!r} {b!r} {decision} -> {merges.path}",
                     file=sys.stderr,
@@ -2021,12 +2046,34 @@ def make_server(
                     require_role(conn, keyword, role)
                     spellings = keyword_spellings(conn, (keyword,))
                     entry = roles.record((keyword, role), decision, spellings)
-                    cell = role_cell(conn, roles.latest(), readable_forms(conn), keyword, role)
+                    labels = display_labels(conn, names.latest())
+                    cell = role_cell(conn, roles.latest(), labels, keyword, role)
                 print(
                     f"explore: role decision {keyword!r} {role} {decision} -> {roles.path}",
                     file=sys.stderr,
                 )
                 self._json({"cell": cell, "entry": entry})
+                return
+            if path == "/api/names":
+                body = self._body()
+                if "name" not in body:
+                    raise ValueError("name is required; a null or blank name clears it")
+                keyword, decision, name = names.check(*(body.get(k) for k in NAME_FIELDS))
+                # Only a keyword some title carries may be named, so an anonymous caller
+                # cannot grow the file with made-up keywords.
+                with open_readonly(store_path) as conn:
+                    if not is_carried(conn, keyword):
+                        raise NoSuchKeyword(keyword)
+                    spellings = keyword_spellings(conn, (keyword,))
+                    entry = names.record((keyword,), decision, spellings, {"name": name})
+                    overlay = names.latest()
+                    shown = names_json(conn, overlay).get(keyword)
+                    label = display_labels(conn, overlay).get(keyword, keyword)
+                print(
+                    f"explore: name decision {keyword!r} {decision} {name!r} -> {names.path}",
+                    file=sys.stderr,
+                )
+                self._json({"keyword": keyword, "label": label, "name": shown, "entry": entry})
                 return
             if path != "/api/query":
                 self._json({"error": f"no route {self.path}"}, HTTPStatus.NOT_FOUND)
@@ -2082,7 +2129,18 @@ def make_server(
             elif url.path == "/api/map":
                 kind = query.get("kind", "movie")
                 _check_kind(kind)
-                self._json(maps.get(kind, frozenset(lists.get("exclude", []))))
+                payload = maps.get(kind, frozenset(lists.get("exclude", [])))
+                # The drawn map is cached; a display name is not part of it, so it is
+                # laid over the cached labels on every request.
+                with open_readonly(store_path) as conn:
+                    labels = display_labels(conn, names.latest())
+                regions = cast(list[RegionLabel], payload["labels"])
+                self._json(
+                    {
+                        **payload,
+                        "labels": [r._replace(text=labels.get(r.tag, r.text)) for r in regions],
+                    }
+                )
             elif url.path == "/api/tagnetwork":
                 kind = query.get("kind", "movie")
                 _check_kind(kind)
@@ -2091,13 +2149,13 @@ def make_server(
                 self._json({"queries": saved.all()})
             elif url.path == "/api/merges":
                 with open_readonly(store_path) as conn:
-                    pairs = review_rows(conn, merges.latest(), readable_forms(conn))
+                    labels = display_labels(conn, names.latest())
+                    pairs = review_rows(conn, merges.latest(), labels)
                 self._json(merges_json(pairs))
             elif url.path == "/api/roles":
                 with open_readonly(store_path) as conn:
-                    self._json(
-                        roles_json(conn, roles.latest(), readable_forms(conn), query.get("q", ""))
-                    )
+                    labels = display_labels(conn, names.latest())
+                    self._json(roles_json(conn, roles.latest(), labels, query.get("q", "")))
             elif url.path == "/api/recipes":
                 self._json({"recipes": list(RECIPES)})
             elif url.path == "/api/title":
@@ -2116,7 +2174,8 @@ def make_server(
                             "SELECT type FROM items WHERE item_id = ?", (item_id,)
                         ).fetchone()
                         space = spaces.get(kind[0]) if kind and kind[0] in KINDS else None
-                        self._json(title_details(conn, item_id, space))
+                        labels = display_labels(conn, names.latest())
+                        self._json(title_details(conn, item_id, labels, space))
                 finally:
                     TITLE_SLOTS.release()
             elif url.path in ("/api/doctor", "/api/keywords", "/api/doctor/titles"):
@@ -2127,8 +2186,11 @@ def make_server(
                     )
                 try:
                     with open_readonly(store_path) as conn:
+                        overlay = names.latest()
+                        labels = display_labels(conn, overlay)
                         if url.path == "/api/keywords":
-                            self._json({"keywords": keyword_search(conn, query.get("q", ""))})
+                            q = query.get("q", "")
+                            self._json({"keywords": keyword_search(conn, q, labels)})
                             return
                         if url.path == "/api/doctor/titles":
                             self._json({"titles": doctor_titles(conn, query.get("q", ""))})
@@ -2138,7 +2200,8 @@ def make_server(
                             raise ValueError("item_id is required")
                         if len(item_id) > MAX_ITEM_ID:
                             raise ValueError(f"item_id is over {MAX_ITEM_ID} characters")
-                        self._json(title_doctor(conn, item_id, merges.latest()))
+                        named = names_json(conn, overlay)
+                        self._json(title_doctor(conn, item_id, merges.latest(), labels, named))
                 finally:
                     slots.release()
             elif url.path == "/api/poster":

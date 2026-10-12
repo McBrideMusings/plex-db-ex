@@ -213,7 +213,7 @@ def _judge(conn: sqlite3.Connection, keyword: str) -> None:
 
 
 def _judged_store(tmp_path: Path) -> Path:
-    """A title carrying `OLD` and `heist`, each judged and decided, and a decided pair."""
+    """A title carrying `OLD` and `heist`, each judged, decided and named, and a decided pair."""
     store = tmp_path / "plexdb.db"
     init_store(store)
     with open_store(store) as conn:
@@ -225,6 +225,7 @@ def _judged_store(tmp_path: Path) -> Path:
                 "INSERT INTO keyword_role_decisions VALUES (?, 'theme', 'accepted', ?)",
                 (keyword, AT),
             )
+            conn.execute("INSERT INTO keyword_names VALUES (?, 'A name', ?)", (keyword, AT))
         conn.execute(
             "INSERT INTO keyword_pairs (keyword_a, keyword_b, jev_score, jev_model, judged_at, "
             "decision, decided_at) VALUES ('heist', ?, 0.8, 'jev-test', ?, 'rejected', ?)",
@@ -249,15 +250,22 @@ def test_a_value_a_refetch_moved_loses_its_rows_and_a_carried_value_keeps_its(
                 ("keyword_pairs", "keyword_a"),
                 ("keyword_roles", "keyword"),
                 ("keyword_role_decisions", "keyword"),
+                ("keyword_names", "keyword"),
             )
         }
     assert keyed == {
         "keyword_pairs": [],
         "keyword_roles": ["heist"],
         "keyword_role_decisions": ["heist"],
+        "keyword_names": ["heist"],
     }
     assert (stats.keywords_pruned, stats.keywords_stored) == ([OLD], 2)
-    assert (stats.pairs_deleted, stats.roles_deleted, stats.decisions_deleted) == (1, 1, 1)
+    assert (
+        stats.pairs_deleted,
+        stats.roles_deleted,
+        stats.decisions_deleted,
+        stats.names_deleted,
+    ) == (1, 1, 1, 1)
 
 
 def test_the_command_prints_the_counts_and_each_pruned_value(
@@ -271,7 +279,7 @@ def test_the_command_prints_the_counts_and_each_pruned_value(
     assert main(["prune-keyword-verdicts"]) == 0
     assert capsys.readouterr().out.splitlines() == [
         "pruned 1 keyword value(s) no title carries (of 1 stored): "
-        "1 pair row(s), 1 role row(s), 1 decision row(s)",
+        "1 pair row(s), 1 role row(s), 1 decision row(s), 1 name row(s)",
         "pruned keyword '\\u200bhidden world'",
     ]
 
