@@ -17,6 +17,7 @@ a (keyword, role) with only a refusal is not listed and cannot be decided.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
 from typing import ClassVar
 
 from .decisions import DecisionsFile
@@ -71,9 +72,11 @@ class RoleDecisions(DecisionsFile):
         return (keyword, role) if keyword else None
 
     @classmethod
-    def spell(cls, key: tuple[str, ...], forms: dict[str, str]) -> tuple[str, ...]:
+    def spell(
+        cls, key: tuple[str, ...], spellings: dict[str, list[str]]
+    ) -> Iterator[tuple[str, ...]]:
         keyword, role = key
-        return forms.get(keyword, keyword), role
+        return ((surface, role) for surface in spellings.get(keyword) or [keyword])
 
     def check(self, keyword: object, role: object, decision: object) -> tuple[str, str, str]:
         """The three fields as text, or `ValueError` saying which is wrong."""

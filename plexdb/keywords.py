@@ -334,6 +334,21 @@ def readable_surfaces(conn: sqlite3.Connection) -> dict[str, str]:
     }
 
 
+def keyword_spellings(conn: sqlite3.Connection, keywords: Iterable[str]) -> dict[str, list[str]]:
+    """Every `keyword_forms` surface of each of `keywords`, shortest first then
+    alphabetical, the order `readable_surfaces` picks from. A keyword with no
+    surface is absent."""
+    wanted = sorted(set(keywords))
+    spellings: dict[str, list[str]] = {}
+    marks = ", ".join("?" * len(wanted))
+    rows = conn.execute(
+        f"SELECT surface, keyword FROM keyword_forms WHERE keyword IN ({marks})", wanted
+    )
+    for surface, keyword in sorted(rows, key=lambda row: (len(row[0]), row[0])):
+        spellings.setdefault(keyword, []).append(surface)
+    return spellings
+
+
 def state_role(
     conn: sqlite3.Connection, keyword: str, role: str, source: str, stated_at: str
 ) -> None:

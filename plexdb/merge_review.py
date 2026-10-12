@@ -16,6 +16,8 @@ decision and `PROPOSE_AT <= jev_score < MERGE_AT`. A decision outranks the score
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
+from itertools import product
 from typing import Any, ClassVar
 
 from .decisions import DecisionsFile
@@ -72,8 +74,10 @@ class MergeDecisions(DecisionsFile):
         return (a, b) if a < b else (b, a)
 
     @classmethod
-    def spell(cls, key: tuple[str, ...], forms: dict[str, str]) -> tuple[str, ...]:
-        return tuple(forms.get(keyword, keyword) for keyword in key)
+    def spell(
+        cls, key: tuple[str, ...], spellings: dict[str, list[str]]
+    ) -> Iterator[tuple[str, ...]]:
+        return product(*(spellings.get(keyword) or [keyword] for keyword in key))
 
     def check(self, keyword_a: object, keyword_b: object, decision: object) -> tuple[str, str, str]:
         """The three fields as text, or `ValueError` saying which is wrong."""

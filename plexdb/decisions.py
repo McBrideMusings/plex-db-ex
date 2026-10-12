@@ -19,6 +19,7 @@ import json
 import os
 import threading
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -124,8 +125,11 @@ class DecisionsFile(ABC):
 
     @classmethod
     @abstractmethod
-    def spell(cls, key: tuple[str, ...], forms: dict[str, str]) -> tuple[str, ...]:
-        """The entry key naming stored `key`, each keyword spelled as `forms` shows it."""
+    def spell(
+        cls, key: tuple[str, ...], spellings: dict[str, list[str]]
+    ) -> Iterator[tuple[str, ...]]:
+        """Each entry key that could name stored `key`, in `spellings` order, each
+        keyword spelled by one of its surfaces; a keyword with none is its own text."""
         raise NotImplementedError
 
     @classmethod
@@ -209,16 +213,19 @@ class DecisionsFile(ABC):
             entries = self.load(self._path) or []
         return {key: e for key, e in self.resolved(entries) if key is not None}
 
-    def record(self, key: tuple[str, ...], decision: str, forms: dict[str, str]) -> dict[str, str]:
-        """Append one decision on stored `key`, spelled through `forms`, dropping every
-        earlier entry naming the same key; return the entry.
+    def record(
+        self, key: tuple[str, ...], decision: str, spellings: dict[str, list[str]]
+    ) -> dict[str, str]:
+        """Append one decision on stored `key`, spelled by the first of `spellings`
+        (`keyword_spellings`) that resolves back to it, dropping every earlier entry
+        naming the same key; return the entry.
 
         The caller has checked the fields and that the store has a row for `key`.
-        `ValueError` when the spelling would not resolve back to `key`, since the fold
-        would then apply the decision to some other row.
+        `ValueError` when no spelling resolves back to `key`, since the fold would then
+        apply the decision to some other row.
         """
-        spelled = self.spell(key, forms)
-        if self.resolve(spelled) != key:
+        spelled = next((s for s in self.spell(key, spellings) if self.resolve(s) == key), None)
+        if spelled is None:
             raise ValueError(f"no spelling of {key!r} normalizes back to it")
         entry = dict(zip(self.KEY, spelled, strict=True))
         entry["decision"] = decision

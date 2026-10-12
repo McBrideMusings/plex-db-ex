@@ -130,6 +130,28 @@ def test_a_decision_round_trips_marked_pending_and_leaves_the_store_alone(
     assert ("bleak", "tone") not in _decisions(store)
 
 
+def test_a_decision_skips_a_surface_naming_another_keyword_and_is_a_400_when_all_do(
+    base_url: str, store: Path
+) -> None:
+    # `tk` is tokyo's shortest surface but normalizes to `tk`; `bleakest` is bleak's only.
+    with open_store(store) as conn:
+        conn.execute(
+            "INSERT INTO keyword_forms (surface, keyword) VALUES ('tk', 'tokyo'), "
+            "('bleakest', 'bleak')"
+        )
+        conn.commit()
+    url = f"{base_url}/api/roles"
+
+    assert (
+        _send("POST", url, {"keyword": "tokyo", "role": "region", "decision": "accepted"})[0] == 200
+    )
+    assert (
+        _send("POST", url, {"keyword": "bleak", "role": "tone", "decision": "accepted"})[0] == 400
+    )
+    entries = json.loads((store.parent / "role_decisions.json").read_text())
+    assert [(e["surface"], e["role"]) for e in entries] == [("Tokyo", "region")]
+
+
 def test_clearing_a_folded_decision_is_pending_until_the_next_fold(base_url: str) -> None:
     url = f"{base_url}/api/roles"
     _, body = _send("POST", url, {"keyword": "grief", "role": "theme", "decision": "cleared"})

@@ -421,8 +421,8 @@ def test_a_write_replaces_every_spelling_of_its_pair_and_refuses_one_naming_anot
     tmp_path: Path,
 ) -> None:
     decisions = MergeDecisions(tmp_path / "merge_decisions.json")
-    decisions.record(("heist", "vault"), "rejected", {"heist": "Heists"})
-    decisions.record(("heist", "vault"), "accepted", {"heist": "heist", "vault": "Vaults"})
+    decisions.record(("heist", "vault"), "rejected", {"heist": ["Heists"]})
+    decisions.record(("heist", "vault"), "accepted", {"heist": ["heist"], "vault": ["Vaults"]})
 
     entries = json.loads(decisions.path.read_text())
     assert [(e["surface_a"], e["surface_b"], e["decision"]) for e in entries] == [
@@ -432,7 +432,29 @@ def test_a_write_replaces_every_spelling_of_its_pair_and_refuses_one_naming_anot
         ("heist", "vault"): "accepted"
     }
     with pytest.raises(ValueError, match="normalizes back"):
-        decisions.record(("heist", "vault"), "accepted", {"vault": "Vault Doors"})
+        decisions.record(("heist", "vault"), "accepted", {"vault": ["Vault Doors"]})
+
+
+def test_an_accept_spells_a_keyword_by_a_longer_surface_when_its_shortest_names_another(
+    base_url: str, store: Path
+) -> None:
+    # `bk` is the shortest surface stored under `bank` but normalizes to `bk`; only
+    # `Banks` resolves back, so the entry must carry `Banks`.
+    with open_store(store) as conn:
+        conn.execute(
+            "INSERT INTO keyword_forms (surface, keyword) VALUES ('bk', 'bank'), ('Banks', 'bank')"
+        )
+        conn.commit()
+
+    status, _ = _send(
+        "POST",
+        f"{base_url}/api/merges",
+        {"keyword_a": "bank", "keyword_b": "vault", "decision": "accepted"},
+    )
+
+    assert status == 200
+    entries = json.loads((store.parent / "merge_decisions.json").read_text())
+    assert [(e["surface_a"], e["surface_b"]) for e in entries] == [("Banks", "vault")]
 
 
 def test_merged_pairs_chain_into_a_group_named_by_its_most_carried_keyword_not_x_film(

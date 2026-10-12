@@ -14,9 +14,9 @@ from plexdb.keywords import (
     FILM_SUFFIX_MODEL,
     ROLES,
     RawKeyword,
+    keyword_spellings,
     normalize_keyword,
     prune_keyword_verdicts,
-    readable_surfaces,
     rederive_keywords,
     state_role,
     upsert_keyword_form,
@@ -312,7 +312,7 @@ def test_an_unfolded_decision_follows_its_keyword_through_a_normalization_change
         write_title_keywords(conn, "imdb:tt1", "tmdb", raw, AT)
         _judge(conn, "documentary film")
         conn.commit()
-        forms = readable_surfaces(conn)
+        forms = keyword_spellings(conn, ("documentary film", "heist"))
     merges = MergeDecisions(tmp_path / "merge_decisions.json")
     roles = RoleDecisions(tmp_path / "role_decisions.json")
     merges.record(("documentary film", "heist"), "accepted", forms)
