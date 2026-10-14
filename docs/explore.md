@@ -4,6 +4,70 @@ Plex TVX is the store's read-only browser page: `plexdb explore`, served by `adm
 on `http://localhost:5194`. Its server is `plexdb/explore.py` and its one page is
 `plexdb/explore.html`; [`file-map.md`](./file-map.md) describes both.
 
+## Related tags
+
+Selecting a tag opens its panel with two tabs, **Related tags** and **Titles**, each with its count.
+The tab last picked stays picked for the next tag. Before any pick, the Tag network opens on Related
+tags and the other views open on Titles.
+
+Related tags lists every tag that shares a title with the selected one, from
+`/api/cotags?kind=&tag=`. The server counts that over the folded keyword rows the tag table was built
+from (`_IndexCache.cotags`), so the counts agree with the table's df and a request never reads the
+store. On the 2026-10 movie store a request takes 13–300 ms; the slowest is science fiction, with
+5,904 co-tags.
+
+Each row the server sends is `[tag, shared, df]`, unfiltered and unranked; the page does the rest,
+so moving the slider never asks the server again.
+
+**Lift** is `shared × N / (df_anchor × df_tag)`: how many times likelier the tag is on the selected
+tag's titles than on any title of the kind. A lift resting on two titles is mostly luck, so the
+table shows a **cautious lift** instead (`cautious_lift` in `explore.py`, `cautiousLift` in the
+page, held to the same numbers by a test). It takes the selected tag's share at the Wilson lower
+bound with `z` standard errors of evidence.
+
+- **The Evidence slider, from weak to strong,** sets `z`, from 0 to 4. At weak, the cautious lift is
+  the plain lift. Toward strong, a lift from few titles shrinks far faster than one from many:
+  heist's 2-title pairs fall from 62.7× to 16.8× at the middle, while jewelry heist (8 titles)
+  keeps 28.1×.
+- **A tag is listed when its cautious lift is above 1×.** Below that, the pairing could be chance.
+  Heist lists 400 tags at weak, 134 at the middle and 61 at strong, at the network's default minimum
+  of 25 titles per tag.
+- **The table sorts by any column.** Its columns are Tag, Lift (the cautious lift) and Shared.
+  Clicking a header sorts by it, and clicking it again reverses the order. Ties go to more shared
+  titles.
+- **The slider and the sort stay where you left them,** from tag to tag and across reloads
+  (`plexdb-explore:co-strength`, `plexdb-explore:co-sort` in localStorage).
+
+The tag table's "Related tags" column shows each tag's five highest cautious lifts at the slider's
+middle (`CO_STRENGTH`, z = 2), as `related` in `/api/tags`.
+
+In the Tag network, the list holds only the tags drawn on the graph. A tag the "Minimum titles per
+tag" slider hides is gone from both the graph and the list, and lowering that slider brings it back
+in both. Every listed tag is lit, so the list and the lit set are always the same tags. The graph
+draws four levels:
+
+| Level | Drawn as |
+|---|---|
+| The selected tag and the tag under the pointer (in the list or on the graph) | centre colour with an ink ring and a bold label; the hovered tag gets an orange spoke |
+| Listed tags | full accent and ringed, labelled where there is room, each joined to the selected tag by a spoke |
+| Tags on a title with it whose pairing could be chance at this evidence | half-strength accent, no label |
+| Tags never on a title with it | small and grey |
+
+The network's stored strongest-six edges stay as a faint texture. The crosshair button beside the
+slider zooms to the selected tag and its listed tags. The note in the corner counts each level among
+the drawn nodes.
+
+A selection always has a way out. Any of these calls `clearTag`, which empties the panel, the
+graph's levels and the `tag` in the URL:
+
+- a click on empty canvas (a drag that pans does not count),
+- Esc, unless focus is in a text field,
+- the panel's × button,
+- a second click on the selected table row,
+- switching between Movies and Shows.
+
+On the title map, a click on empty canvas unpins the pinned card, as Esc already did.
+
 ## Demo and clip modes
 
 Two URL modes play a scripted tour of the movie title map instead of the interactive page. Both

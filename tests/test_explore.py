@@ -102,7 +102,9 @@ def test_counts_idf_and_co_tags_are_per_media_type(store: Path) -> None:
     assert [tag.value for tag in movies.tags][:2] == ["superhero", "stinger"]
     assert by_value["superhero"].df == 3
     assert by_value["stinger"].idf == pytest.approx(1 + math.log(4 / 2))
-    assert by_value["stinger"].co_tags == (("superhero", 2), ("based on comic", 1))
+    # Two titles are too few to trust at the chips' evidence (CO_STRENGTH): stinger's 2 of
+    # 2 with superhero has a cautious lift of 0.44, under chance, so no chip.
+    assert by_value["stinger"].related == ()
     assert "lawyer" not in by_value
 
     assert shows.titles == 1
@@ -334,8 +336,22 @@ def test_server_serves_the_page_and_both_endpoints(base_url: str) -> None:
         "value": "stinger",
         "df": 2,
         "idf": round(1 + math.log(2), 4),
-        "co": [["superhero", 2], ["based on comic", 1]],
+        "related": [],
     }
+
+    # Every tag sharing a movie with superhero (df 3 of N 4), most shared first, each with
+    # its own df: the counts the page's evidence slider computes cautious lifts from.
+    status, body = _get(f"{base_url}/api/cotags?kind=movie&tag=superhero")
+    assert status == 200 and json.loads(body) == {
+        "kind": "movie",
+        "tag": "superhero",
+        "df": 3,
+        "titles": 4,
+        "co": [["stinger", 2, 2], ["based on comic", 1, 1]],
+    }
+    status, body = _get(f"{base_url}/api/cotags?kind=movie&tag=lawyer")
+    assert status == 200 and json.loads(body)["co"] == []
+    assert _get(f"{base_url}/api/cotags?kind=movie")[0] == 400
 
     status, body = _get(f"{base_url}/api/titles?kind=show&tag=superhero")
     assert status == 200 and [t["title"] for t in json.loads(body)["titles"]] == ["Daredevil"]
@@ -1714,3 +1730,31 @@ def test_demo_moves_the_camera_without_a_seek(browser: Browser, store: Path, bas
         })"""
     )
     assert len(set(xs)) > 1, xs
+
+
+# (shared, N, df_anchor, df_other, z) -> cautious lift, for heist on the 2026-10 movie store
+# (184 of 11,533 titles): jewelry heist (8 shared, on 9), a 2-title pair (on 2), and heist and
+# thrilling action (92 shared, on 297).
+CAUTIOUS_CASES = [
+    ((8, 11533, 184, 9, 0.0), 8 * 11533 / (184 * 9)),
+    ((8, 11533, 184, 9, 2.0), 28.063),
+    ((2, 11533, 184, 2, 2.0), 16.823),
+    ((2, 11533, 184, 2, 4.0), 6.338),
+    ((92, 11533, 184, 297, 4.0), 13.924),
+]
+
+
+def test_cautious_lift_marks_down_few_titles_and_the_page_agrees(
+    browser: Browser, base_url: str
+) -> None:
+    """At z = 0 it is the plain lift; more evidence shrinks a 2-title lift far more than an
+    8- or 92-title one. The page's evidence slider computes the same function in
+    `cautiousLift`, so the panel's table and the server's chips can't drift apart."""
+    for args, expected in CAUTIOUS_CASES:
+        assert explore.cautious_lift(*args) == pytest.approx(expected, abs=1e-3), args
+    page = browser.new_page()
+    page.goto(base_url)
+    page.wait_for_function("() => typeof cautiousLift === 'function'")
+    for args, _ in CAUTIOUS_CASES:
+        js = page.evaluate("a => cautiousLift(...a)", list(args))
+        assert js == pytest.approx(explore.cautious_lift(*args), rel=1e-12), args

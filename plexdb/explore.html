@@ -66,6 +66,11 @@
   aside { position: sticky; top: 0; max-height: 100vh; overflow-y: auto; border-left: 1px solid var(--line);
           background: var(--panel); padding: 16px 18px; min-height: 60vh; }
   aside h2 { font-size: 17px; margin: 0 0 4px; overflow-wrap: anywhere; }
+  aside .dhead { display: flex; align-items: flex-start; gap: 8px; }
+  aside .dhead h2 { flex: 1; min-width: 0; }
+  aside .dhead .close { flex: none; width: 26px; height: 26px; padding: 0; cursor: pointer; font: inherit; color: var(--ink);
+                        background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
+  aside .dhead .close:hover { border-color: var(--accent); }
   aside .sub { color: var(--muted); margin-bottom: 12px; font-variant-numeric: tabular-nums; }
   aside h4 { margin: 12px 0 3px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
   aside ol { margin: 0; padding-left: 0; list-style: none; }
@@ -167,6 +172,52 @@
   }
   aside .chips { margin-top: 4px; }
   aside .chip.noise { color: var(--noise); text-decoration: line-through; }
+  /* The tag panel's Related tags tab: an evidence slider over a sortable table of the tags related
+     to the selected one, in its own scrolling box. In the Tag network each listed tag is lit. */
+  .cofloor { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 0 0 6px; color: var(--muted); font-size: 12px; }
+  .cofloor label { color: var(--ink); font-weight: 600; }
+  .cofloor input[type="range"] { flex: 1 1 90px; min-width: 90px; }
+  .cofloor .fitlit { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 26px; padding: 0; }
+  body:not([data-view="graph"]) .cofloor .fitlit { display: none; }
+  .cocap { padding: 0 6px 2px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .cobox { max-height: 45vh; overflow-y: auto; }
+  table.cotable { width: 100%; table-layout: fixed; font-size: 13px; }
+  .cotable th { background: var(--panel); padding: 0; z-index: 1; }
+  .cotable th:first-child { width: auto; }
+  .cotable th.num { width: 4.6em; }
+  .cotable th button { all: unset; box-sizing: border-box; display: block; width: 100%; padding: 4px 6px; cursor: pointer; }
+  .cotable th.num button { text-align: right; }
+  .cotable th button:hover { color: var(--ink); }
+  .cotable th button:focus-visible, .cotable td button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .cotable th .arrow { display: inline-block; width: 1em; }
+  .cotable td { padding: 3px 6px; vertical-align: middle; font-variant-numeric: tabular-nums; }
+  .cotable td.nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cotable td.nm button { all: unset; cursor: pointer; }
+  .cotable tbody tr.hot { background: var(--selected); }
+  .cotable tbody tr.noise td.nm button { color: var(--noise); text-decoration: line-through; }
+  .comore, .costat { color: var(--muted); font-size: 12px; padding: 4px 6px; }
+  /* The panel's two tabs, Related tags and Titles, each with its count. */
+  .ptabs { display: flex; gap: 2px; margin: 10px 0 8px; border-bottom: 1px solid var(--line); }
+  .ptabs button { font: inherit; font-weight: 600; color: var(--muted); background: none; border: 0; border-bottom: 2px solid transparent;
+                  margin-bottom: -1px; padding: 5px 10px; cursor: pointer; }
+  .ptabs button:hover { color: var(--ink); }
+  .ptabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+  .ptabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .ptabs .n { margin-left: 6px; font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
+  body.shell aside#detail { display: flex; flex-direction: column; }
+  body.shell aside#detail > * { flex: none; }
+  body.shell aside#detail > .ptab { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+  body.shell aside#detail .ptab > * { flex: none; }
+  body.shell aside#detail .cobox { flex: 1 1 auto; min-height: 0; max-height: none; }
+  body.shell aside#detail #ptab-titles { overflow-y: auto; }
+  body.shell aside#detail #ptab-titles > ol { flex: none; }
+  .ovnote .lv { display: flex; align-items: center; gap: 7px; }
+  .ovnote .lv i { flex: none; width: 10px; height: 10px; border-radius: 50%; }
+  .ovnote .lv b { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .ovnote .lv0 { background: var(--edge); transform: scale(.6); }
+  .ovnote .lv1 { background: var(--accent); opacity: .4; transform: scale(.8); }
+  .ovnote .lv2 { background: var(--accent); box-shadow: 0 0 0 1.5px var(--panel), 0 0 0 2.5px var(--accent); }
+  .ovnote .lv3 { background: var(--centre); box-shadow: 0 0 0 1.5px var(--panel), 0 0 0 3px var(--ink); }
   .err { color: var(--noise); padding: 12px 20px; }
   /* Graph and Map: the viewport fills everything under the header and the page never scrolls.
      Every control floats over it as a panel; the space between panels belongs to the canvas. */
@@ -474,7 +525,7 @@
         <th class="sortable num" data-sort="df">Titles<span class="arrow"></span></th>
         <th class="num" title="Share of titles of this type that carry any keyword">% of N</th>
         <th class="sortable num" data-sort="idf" title="1 + ln(N / titles)">IDF<span class="arrow"></span></th>
-        <th>Appears with (shared titles)</th>
+        <th title="Each tag's five most related tags at the middle of the evidence slider, with their lift">Related tags</th>
       </tr></thead>
       <tbody id="rows"></tbody>
     </table>
@@ -592,6 +643,8 @@ function setView(view) {
   // Before the first load, loadKind draws it once the tag list is in.
   if (view === "graph" && state.data) loadNetwork();
   if (view === "map" && state.data) drawMap();
+  paintCotags();
+  if (document.querySelector("#detail [data-ptab]")) showPanelTab();
 }
 
 // The world-unit bounding box of a set of points (anything with x and y).
@@ -781,7 +834,8 @@ class Viewport {
       this.gesture = { start: rest, moved: true };
     } else if (!this.ptrs.size) {
       this.gesture = null;
-      if (ok && g && !g.pinch && !g.moved) { const it = this.nearest(p.x, p.y); if (it) this.onSelect(it); }
+      // A click on an item selects it; a click on empty canvas hands `onSelect` null to deselect.
+      if (ok && g && !g.pinch && !g.moved) this.onSelect(this.nearest(p.x, p.y));
     }
   }
 
@@ -1018,7 +1072,7 @@ function mapNote() {
     + (d.unplaced ? `; ${fmt(d.unplaced)} share no tag with anything and are left off` : "")
     + (state.tag ? `; ${fmt(lit)} carrying “${state.tag}” highlighted` : "")
     + (noise.size ? `; ${fmt(noise.size)} noise-marked tags ignored` : "")
-    + ". Labels name each region and get finer as you zoom in. Scroll to zoom, drag to pan, hover a dot for its card, click to pin it.";
+    + ". Labels name each region and get finer as you zoom in. Scroll to zoom, drag to pan, hover a dot for its card, click to pin it, click empty space or press Esc to unpin.";
 }
 
 const HUE_BUCKETS = 72;
@@ -1526,14 +1580,46 @@ function syncNetworkItems() {
 function paintNetwork() {
   if (state.view !== "graph") return;
   syncNetworkItems();
+  // The Related tags table lists only drawn tags, so it re-derives (and re-derives the lit set)
+  // from the nodes just synced, before the graph and its legend read that set.
+  paintCotags();
   netVP.resize();
   netVP.redraw();
-  if (!net.full) return;
-  document.getElementById("gnote").textContent =
-    `${fmt(net.nodes.length)} tags on at least ${fmt(net.min)} ${noun()} each, `
-    + `${fmt(net.edges.length)} lines joining tags on the same ${noun()}, thicker for more; node size is ${noun()} carrying it`
-    + (noise.size ? `; ${fmt(noise.size)} noise-marked tags left out` : "")
-    + ". Scroll to zoom, drag to pan, click a tag for its panel.";
+  paintNetworkNote();
+}
+
+// The note under the network: with a selected tag's co-occurrence loaded, a legend of the four
+// levels and how many tags each holds; otherwise what the network shows and how to drive it.
+function paintNetworkNote() {
+  if (state.view !== "graph" || !net.full) return;
+  const note = document.getElementById("gnote");
+  const live = coLive() && cotags.ranked;
+  if (coPending()) {
+    note.textContent = cotags.error ? `Could not load the tags related to ${state.tag}: ${cotags.error}` : `Loading the tags related to ${state.tag}…`;
+    return;
+  }
+  if (!live) {
+    note.textContent =
+      `${fmt(net.nodes.length)} tags on at least ${fmt(net.min)} ${noun()} each, `
+      + `${fmt(net.edges.length)} lines joining tags on the same ${noun()}, thicker for more; node size is ${noun()} carrying it`
+      + (noise.size ? `; ${fmt(noise.size)} noise-marked tags left out` : "")
+      + ". Scroll to zoom, drag to pan, click a tag for its panel.";
+    return;
+  }
+  let lit = 0, co = 0;
+  for (const it of net.nodes) {
+    if (it.id === state.tag) continue;
+    if (cotags.lit.has(it.id)) lit++;
+    else if (cotags.all.has(it.id)) co++;
+  }
+  const never = net.nodes.length - lit - co - (net.byValue.has(state.tag) ? 1 : 0);
+  const row = (cls, text, n) => el("span", { className: "lv" }, el("i", { className: cls }), el("span", {}, text), n == null ? "" : el("b", {}, n));
+  note.replaceChildren(
+    row("lv3", `${state.tag}${net.byValue.has(state.tag) ? "" : " (not drawn at this minimum)"}, and the tag under the pointer`),
+    row("lv2", "lit: listed in Related tags at this evidence", fmt(lit)),
+    row("lv1", `on a ${noun().slice(0, -1)} with it, could be chance`, fmt(co)),
+    row("lv0", `never on a ${noun().slice(0, -1)} with it`, fmt(never)),
+    el("span", { className: "lv" }, "Click empty space or press Esc to clear."));
 }
 
 // Node radius and the label budget both grow with df and with zoom, so the
@@ -1548,6 +1634,9 @@ function drawNetwork(ctx, vp) {
   const maxDf = Math.max(...net.nodes.map(n => n.df));
   const r = it => nodeRadius(it, maxDf, vp.zoom);
   const near = (x, y, pad) => x > -pad && y > -pad && x < vp.w + pad && y < vp.h + pad;
+  // A selected tag always draws its levels, even while its related tags load (then nothing is lit
+  // yet): falling back to the unselected network for that moment flashes the whole graph bright.
+  if (coLive() || coPending()) { drawCoLevels(ctx, vp, token, r, near); return; }
   const neighbours = vp.selected
     ? new Set(net.edges.filter(([a, b]) => a === vp.selected.id || b === vp.selected.id).flatMap(([a, b]) => [a, b]))
     : null;
@@ -1608,10 +1697,97 @@ function drawNetworkLabels(ctx, vp, token, neighbours, r) {
   ctx.restore();
 }
 
+// The selected tag's co-occurrence on the network, in four levels: tags never on a title with it
+// (small, grey), tags on a title with it but fewer than the slider's floor (half-strength accent),
+// the lit ones — every tag in its Related tags list — (full accent, ringed, labelled where room
+// allows, each joined to it by a spoke), and the selected and hovered tags (centre colour, ink ring). The stored strongest-six
+// edges stay as a faint texture: a hub's edges are mostly other tags' strongest link to it, which
+// says nothing about what is distinctive to it.
+function drawCoLevels(ctx, vp, token, r, near) {
+  const anchor = vp.selected;
+  const hotValue = coHotValue();
+  const hot = hotValue ? net.byValue.get(hotValue) || null : null;
+  const level = it => it === anchor || it === hot ? 3 : cotags.lit.has(it.id) ? 2 : cotags.all.has(it.id) ? 1 : 0;
+  ctx.strokeStyle = token("--edge"); ctx.lineWidth = 1; ctx.globalAlpha = 0.05;
+  for (const [a, b] of net.edges) {
+    const na = net.byValue.get(a), nb = net.byValue.get(b);
+    const x0 = vp.sx(na.x), y0 = vp.sy(na.y), x1 = vp.sx(nb.x), y1 = vp.sy(nb.y);
+    if (!near(x0, y0, 40) && !near(x1, y1, 40)) continue;
+    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+  }
+  if (anchor) {
+    const spoke = it => { ctx.beginPath(); ctx.moveTo(vp.sx(anchor.x), vp.sy(anchor.y)); ctx.lineTo(vp.sx(it.x), vp.sy(it.y)); ctx.stroke(); };
+    ctx.strokeStyle = token("--accent"); ctx.globalAlpha = 0.35;
+    for (const v of cotags.lit) { const it = net.byValue.get(v); if (it) spoke(it); }
+    if (hot && hot !== anchor && cotags.all.has(hot.id)) {
+      ctx.strokeStyle = token("--centre"); ctx.globalAlpha = 0.95; ctx.lineWidth = 2.2;
+      spoke(hot);
+      ctx.lineWidth = 1;
+    }
+  }
+  const byLevel = [[], [], [], []];
+  for (const it of net.nodes) byLevel[level(it)].push(it);
+  const fills = [token("--edge"), token("--accent"), token("--accent"), token("--centre")];
+  const alphas = [0.9, 0.4, 1, 1];
+  byLevel.forEach((items, k) => {
+    ctx.fillStyle = fills[k]; ctx.globalAlpha = alphas[k];
+    for (const it of items) {
+      const x = vp.sx(it.x), y = vp.sy(it.y);
+      if (!near(x, y, 20)) continue;
+      ctx.beginPath(); ctx.arc(x, y, k ? r(it) : Math.max(1.3, r(it) * 0.6), 0, 2 * Math.PI); ctx.fill();
+    }
+  });
+  ctx.globalAlpha = 1;
+  ctx.strokeStyle = token("--accent"); ctx.lineWidth = 1;
+  for (const it of byLevel[2]) { ctx.beginPath(); ctx.arc(vp.sx(it.x), vp.sy(it.y), r(it) + 2.5, 0, 2 * Math.PI); ctx.stroke(); }
+  ctx.strokeStyle = token("--ink");
+  for (const [it, width, extra] of [[hot, 1.8, 4], [anchor, 2.5, 5.5]]) {
+    if (!it) continue;
+    ctx.lineWidth = width;
+    ctx.beginPath(); ctx.arc(vp.sx(it.x), vp.sy(it.y), r(it) + extra, 0, 2 * Math.PI); ctx.stroke();
+  }
+  // Labels: the hovered and selected tags first (never skipped), then the lit ones in list order.
+  ctx.save();
+  ctx.textAlign = "center"; ctx.textBaseline = "top"; ctx.lineJoin = "round";
+  ctx.lineWidth = 3; ctx.strokeStyle = token("--panel"); ctx.fillStyle = token("--ink");
+  const placed = [];
+  const label = (it, bold) => {
+    const x = vp.sx(it.x), y = vp.sy(it.y) + r(it) + 4;
+    if (x < -40 || x > vp.w + 40 || y < -20 || y > vp.h + 20) return;
+    ctx.font = `${bold ? 700 : 600} 11px system-ui, sans-serif`;
+    const w = ctx.measureText(it.id).width;
+    const box = { x0: x - w / 2 - 2, x1: x + w / 2 + 2, y0: y, y1: y + 13 };
+    if (!bold && placed.some(p => box.x0 < p.x1 && box.x1 > p.x0 && box.y0 < p.y1 && box.y1 > p.y0)) return;
+    placed.push(box);
+    ctx.strokeText(it.id, x, y); ctx.fillText(it.id, x, y);
+  };
+  if (hot) label(hot, true);
+  if (anchor && anchor !== hot) label(anchor, true);
+  for (const [v] of cotags.ranked || []) { const it = net.byValue.get(v); if (it && it !== hot) label(it, false); }
+  ctx.restore();
+}
+
+// Zoom to the selected tag and the tags it lights.
+function fitToLit() {
+  const items = [state.tag, ...cotags.lit].map(v => net.byValue.get(v)).filter(Boolean);
+  netVP.focusOn(items, clearOfPanel(netVP.canvas, document.getElementById("rightcol"), { l: 40, t: 60, r: 40, b: 70 }));
+}
+
 const netVP = new Viewport(document.getElementById("network"), {
   draw: drawNetwork,
-  onHover() { netVP.redraw(); },
-  onSelect: item => showTag(item.id),
+  onHover() {
+    netVP.redraw();
+    if (coLive()) markHotRow(true);
+  },
+  onSelect: item => item ? showTag(item.id) : clearTag(),
+});
+
+// Esc in the table or the Tag network clears the selected tag, as a click on empty canvas does.
+// The title map has its own Esc (the pinned card, then a search).
+document.addEventListener("keydown", e => {
+  if (e.key !== "Escape" || state.tab !== "tags" || state.view === "map" || !state.tag) return;
+  if (e.target.closest && e.target.closest("input, textarea, select")) return;
+  clearTag();
 });
 
 const nsearchEl = document.getElementById("nsearch"), nsuggEl = document.getElementById("nsugg");
@@ -1719,8 +1895,8 @@ function render() {
       if (state.view === "graph") loadNetwork();
     });
     const co = el("td");
-    for (const [value, count] of t.co) {
-      const chip = el("span", { className: "chip", title: `${fmt(count)} ${noun()} carry both` }, value, el("span", { className: "n" }, fmt(count)));
+    for (const [value, count, lifted] of t.related) {
+      const chip = el("span", { className: "chip", title: coTitle(value, count, t.value) }, value, el("span", { className: "n" }, `${lifted.toFixed(1)}×`));
       chip.addEventListener("click", e => { e.stopPropagation(); showTag(value); });
       co.append(chip);
     }
@@ -1734,7 +1910,7 @@ function render() {
     tr.dataset.tag = t.value;
     if (noise.has(t.value)) tr.classList.add("noise");
     if (t.value === state.tag) tr.classList.add("selected");
-    tr.addEventListener("click", () => showTag(t.value));
+    tr.addEventListener("click", () => state.tag === t.value ? clearTag() : showTag(t.value));
     body.append(tr);
   }
   const more = document.getElementById("more");
@@ -1749,32 +1925,270 @@ function render() {
   });
 }
 
+// ---- Related tags ----
+// The selected tag's whole co-occurrence from /api/cotags: every tag sharing a title with it, as
+// [tag, shared, df]. The Related tags table lists the ones whose cautious lift (`cautiousLift`) at
+// the evidence slider's `strength` is above chance, as [tag, lift, shared], in the order its
+// headers set. In the Tag network every listed tag is lit and the rest of the co-occurring tags
+// drawn at half strength; `hot` is the tag under the pointer, in the table or on the graph. The
+// slider's position and the sort stay put from tag to tag, and across reloads.
+const CO_STRENGTH_KEY = "plexdb-explore:co-strength", CO_SORT_KEY = "plexdb-explore:co-sort";
+const CO_ROWS = 400;   // rows the table renders; a weak setting can list thousands
+const CO_STRENGTH_MAX = 4;
+function loadPref(key, fallback, ok) {
+  try { const v = JSON.parse(localStorage.getItem(key)); return ok(v) ? v : fallback; } catch { return fallback; }
+}
+function savePref(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* storage off */ } }
+const CO_COLUMNS = { tag: 0, lift: 1, shared: 2 };
+const cotags = {
+  kind: null, tag: null, data: null, error: null, token: 0, hot: null, ranked: null, lit: new Set(), all: new Set(), dropped: 0,
+  strength: loadPref(CO_STRENGTH_KEY, 2, v => typeof v === "number" && v >= 0 && v <= CO_STRENGTH_MAX),
+  sort: loadPref(CO_SORT_KEY, { key: "lift", dir: -1 }, v => v && v.key in CO_COLUMNS && (v.dir === 1 || v.dir === -1)),
+};
+
+// `cautious_lift` in explore.py, which a test holds this to: the lift we can be confident of with
+// `z` standard errors of evidence, the anchor's share taken at its Wilson lower bound. At z = 0 it
+// is the plain lift; a lift resting on few titles shrinks fastest as z grows.
+function cautiousLift(shared, titles, dfAnchor, dfOther, z) {
+  const p = shared / dfAnchor, z2 = z * z;
+  const centre = p + z2 / (2 * dfAnchor);
+  const margin = z * Math.sqrt(p * (1 - p) / dfAnchor + z2 / (4 * dfAnchor * dfAnchor));
+  return (centre - margin) / (1 + z2 / dfAnchor) * titles / dfOther;
+}
+
+function coTitle(value, shared, anchor) {
+  return `${fmt(shared)} ${noun()} carry both ${anchor} and ${value}`;
+}
+
+// The data for the tag the page shows, or null while it loads or after it failed.
+function coLive() {
+  return cotags.data && cotags.tag === state.tag && cotags.kind === state.kind ? cotags.data : null;
+}
+// The tag the page shows is selected but its related tags have not arrived (loading or failed).
+function coPending() {
+  return !!state.tag && cotags.tag === state.tag && cotags.kind === state.kind && !cotags.data;
+}
+
+// The co-tags the list may show: in the Tag network only those drawn on it, so a tag hidden by
+// the minimum-titles slider is gone from both, and dragging the slider fills in both.
+function coPool(d) {
+  return state.view === "graph" ? d.co.filter(r => net.byValue.has(r[0])) : d.co;
+}
+
+// Re-derives the table's rows and the lit and co-occurring sets after any change to the data,
+// the strength, the sort, the view or the network's drawn nodes.
+function coRerank() {
+  const d = coLive();
+  if (!d) { cotags.ranked = null; cotags.lit = new Set(); cotags.all = new Set(); cotags.dropped = 0; return; }
+  const pool = coPool(d);
+  const rows = [];
+  for (const [value, shared, dfOther] of pool) {
+    const lifted = cautiousLift(shared, d.titles, d.df, dfOther, cotags.strength);
+    if (lifted > 1) rows.push([value, lifted, shared]);
+  }
+  const { key, dir } = cotags.sort, col = CO_COLUMNS[key];
+  rows.sort((a, b) => {
+    const c = col === 0 ? a[0].localeCompare(b[0]) : a[col] - b[col];
+    // Ties go to more shared titles, then the name, whichever way the column runs.
+    return c * dir || b[2] - a[2] || a[0].localeCompare(b[0]);
+  });
+  cotags.ranked = rows;
+  cotags.dropped = pool.length - rows.length;
+  cotags.all = new Set(d.co.map(r => r[0]));
+  cotags.lit = new Set(rows.map(r => r[0]));
+}
+
+// A header click sorts by that column; a second click on it reverses the order. Lift and shared
+// start highest first, the tag name A to Z.
+function setCoSort(key) {
+  cotags.sort = cotags.sort.key === key ? { key, dir: -cotags.sort.dir } : { key, dir: key === "tag" ? 1 : -1 };
+  savePref(CO_SORT_KEY, cotags.sort);
+  paintCotags();
+}
+
+async function loadCotags(value) {
+  const kind = state.kind, token = ++cotags.token;
+  Object.assign(cotags, { kind, tag: value, data: null, error: null, hot: null });
+  coRerank();
+  let body;
+  try { body = await getJSON(`/api/cotags?kind=${kind}&tag=${encodeURIComponent(value)}`); }
+  catch (err) {
+    if (token === cotags.token) { cotags.error = err.message; paintCotags(); paintNetworkNote(); }
+    return;
+  }
+  if (token !== cotags.token) return;
+  cotags.data = body;
+  coRerank();
+  paintCotags();
+  netVP.redraw();
+  paintNetworkNote();
+}
+
+// The tag under the pointer, from the list (`cotags.hot`) or else the graph (`netVP.hover`).
+function coHotValue() { return cotags.hot ?? (netVP.hover && netVP.hover.id); }
+
+// Marks the hot row; a hover that came from the graph also scrolls its row into view.
+function markHotRow(fromGraph) {
+  const value = coHotValue();
+  document.querySelectorAll("#cobox tr[data-tag]").forEach(tr => {
+    const on = tr.dataset.tag === value;
+    tr.classList.toggle("hot", on);
+    tr.querySelector("button").setAttribute("aria-current", on ? "true" : "false");
+    if (on && fromGraph) tr.scrollIntoView({ block: "nearest" });
+  });
+}
+
+function setCoHot(value) {
+  if (cotags.hot === value) return;
+  cotags.hot = value;
+  markHotRow(false);
+  netVP.redraw();
+}
+
+// The Related tags tab: its evidence slider and its sortable table, inside the tag panel.
+function paintCotags() {
+  const box = document.getElementById("cobox");
+  if (!box) return;
+  coRerank();
+  const d = coLive();
+  if (!d) {
+    const failed = cotags.error && cotags.tag === state.tag && cotags.kind === state.kind;
+    box.replaceChildren(el("p", { className: "costat" }, failed ? `Could not load: ${cotags.error}` : "Loading…"));
+    if (failed) {
+      const retry = el("button", { type: "button", className: "plain" }, "Try again");
+      retry.addEventListener("click", () => loadCotags(state.tag));
+      box.append(retry);
+    }
+    return;
+  }
+  // Rebuilding the rows removes the one under the pointer or focus without a mouseleave or blur,
+  // so a list hover never outlives the rows it was on; the next pointer move sets it again.
+  cotags.hot = null;
+  const rows = cotags.ranked;
+  const graph = state.view === "graph";
+  const head = el("tr", {}, ...[["tag", "Tag", "Click to sort by tag"],
+    ["lift", "Lift", "How many times likelier on its titles than on any, as far as the evidence slider trusts it"],
+    ["shared", "Shared", `${noun().charAt(0).toUpperCase()}${noun().slice(1)} carrying both tags`]].map(([key, label, tip]) => {
+    const on = cotags.sort.key === key;
+    const th = el("th", { className: key === "tag" ? "" : "num", scope: "col" });
+    th.setAttribute("aria-sort", on ? (cotags.sort.dir > 0 ? "ascending" : "descending") : "none");
+    const b = el("button", { type: "button", title: tip }, label, el("span", { className: "arrow" }, on ? (cotags.sort.dir > 0 ? "↑" : "↓") : ""));
+    b.addEventListener("click", () => setCoSort(key));
+    th.append(b);
+    return th;
+  }));
+  const body = el("tbody");
+  for (const [value, lifted, shared] of rows.slice(0, CO_ROWS)) {
+    const btn = el("button", { type: "button", title: coTitle(value, shared, d.tag) }, value);
+    btn.addEventListener("click", () => showTag(value));
+    const tr = el("tr", {}, el("td", { className: "nm" }, btn),
+      el("td", { className: "num" }, `${lifted.toFixed(1)}×`), el("td", { className: "num" }, fmt(shared)));
+    tr.dataset.tag = value;
+    if (noise.has(value)) tr.classList.add("noise");
+    tr.addEventListener("mouseenter", () => setCoHot(value));
+    tr.addEventListener("mouseleave", () => setCoHot(null));
+    btn.addEventListener("focus", () => setCoHot(value));
+    btn.addEventListener("blur", () => setCoHot(null));
+    body.append(tr);
+  }
+  const parts = rows.length ? [el("table", { className: "cotable" }, el("thead", {}, head), body)] : [];
+  if (!rows.length) {
+    parts.push(el("p", { className: "costat" }, graph && !net.full ? "Loading the network…"
+      : cotags.dropped ? `At this evidence, every tag it shares a ${noun().slice(0, -1)} with could be chance. Slide toward weak to see them.`
+      : d.co.length ? `None of the tags it shares a ${noun().slice(0, -1)} with are on ${fmt(net.min)} or more ${noun()}. Lower "Minimum titles per tag" to draw them.`
+      : `No other tag shares a ${noun().slice(0, -1)} with it.`));
+  }
+  if (rows.length > CO_ROWS) parts.push(el("p", { className: "comore" }, `…and ${fmt(rows.length - CO_ROWS)} more`));
+  box.replaceChildren(...parts);
+  markHotRow(false);
+  document.querySelector("#ptabbtn-related .n").textContent = fmt(rows.length);
+  document.getElementById("costat").textContent = `${fmt(rows.length)} tags`
+    + (graph ? ` on ${fmt(net.min)}+ ${noun()}` : "")
+    + (cotags.dropped ? ` · ${fmt(cotags.dropped)} could be chance` : "");
+}
+
+let panelTab = null;   // the panel tab the person last picked ("related" or "titles"); null follows the view
+
+// No tag selected: the table row, the panel, the graph's four levels and the map's tag
+// highlight all go back to their unselected state.
+function clearTag() {
+  state.tag = null; state.tagIds = new Set();
+  cotags.token++;
+  Object.assign(cotags, { tag: null, data: null, error: null, hot: null });
+  coRerank();
+  writeHash();
+  document.querySelectorAll("#rows tr.selected").forEach(tr => tr.classList.remove("selected"));
+  document.getElementById("detail").replaceChildren(el("p", { className: "empty" }, "Click a tag to list the titles that carry it."));
+  syncNetworkItems();
+  netVP.redraw();
+  paintNetworkNote();
+  if (state.view === "map") paintMap();
+}
+
 async function showTag(value) {
   state.tag = value;
   writeHash();
-  document.querySelectorAll("tbody tr").forEach(tr => tr.classList.toggle("selected", tr.dataset.tag === value));
+  document.querySelectorAll("#rows tr").forEach(tr => tr.classList.toggle("selected", tr.dataset.tag === value));
   syncNetworkItems();
   netVP.redraw();
   const aside = document.getElementById("detail");
   const t = state.data && state.data.tags.find(x => x.value === value);
-  aside.replaceChildren(el("h2", {}, value), el("p", { className: "sub" }, "Loading…"));
+  const sub = t ? `${fmt(t.df)} ${noun()} · IDF ${t.idf.toFixed(2)}` : `not on any ${noun().slice(0, -1)}`;
+  // The one control on the table: how much evidence a pairing needs. Weak lists every tag whose
+  // plain lift beats chance; strong marks down lifts resting on few titles until they could be
+  // chance, and drops them. Its position is the person's, kept from tag to tag.
+  const strengthIn = el("input", { type: "range", id: "costrength", min: 0, max: CO_STRENGTH_MAX, step: 0.1,
+    value: String(cotags.strength), ariaLabel: "Evidence a related tag needs, from weak to strong",
+    title: "Weak: every tag likelier than chance. Strong: only pairings with enough shared titles to trust." });
+  strengthIn.addEventListener("input", () => {
+    cotags.strength = Number(strengthIn.value);
+    savePref(CO_STRENGTH_KEY, cotags.strength);
+    paintCotags(); netVP.redraw(); paintNetworkNote();
+  });
+  const titles = el("div", { className: "ptab", id: "ptab-titles", role: "tabpanel" }, el("p", { className: "costat" }, "Loading…"));
+  // A crosshair (Lucide's "locate-fixed"): zoom the graph to the selection.
+  const fit = el("button", { type: "button", className: "plain fitlit", title: "Zoom to the selected tag and its listed tags",
+    ariaLabel: "Zoom to the selected tag and its listed tags" });
+  fit.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" '
+    + 'stroke-width="2" stroke-linecap="round"><path d="M2 12h3M19 12h3M12 2v3M12 19v3"/>'
+    + '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="3"/></svg>';
+  fit.addEventListener("click", fitToLit);
+  const close = el("button", { type: "button", className: "close", title: "Clear the selection (Esc)", ariaLabel: "Clear the selection" }, "×");
+  close.addEventListener("click", clearTag);
+  const related = el("div", { className: "ptab", id: "ptab-related", role: "tabpanel" },
+    el("div", { className: "cofloor" }, el("label", { htmlFor: "costrength" }, "Evidence"),
+      el("span", { className: "end" }, "weak"), strengthIn, el("span", { className: "end" }, "strong"), fit),
+    el("div", { className: "cocap" }, el("span", { id: "costat" })),
+    el("div", { className: "cobox", id: "cobox" }));
+  const tabs = el("div", { className: "ptabs", role: "tablist", ariaLabel: `About ${value}` },
+    ...[["related", "Related tags"], ["titles", "Titles"]].map(([name, label]) => {
+      const b = el("button", { type: "button", role: "tab", id: `ptabbtn-${name}` }, label, el("span", { className: "n" }));
+      b.dataset.ptab = name;
+      b.setAttribute("aria-controls", `ptab-${name}`);
+      b.addEventListener("click", () => { panelTab = name; showPanelTab(); });
+      return b;
+    }));
+  // Arrow keys move between the two tabs, as a tablist's do.
+  tabs.addEventListener("keydown", e => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    panelTab = document.querySelector("#detail [data-ptab][aria-selected='true']").dataset.ptab === "related" ? "titles" : "related";
+    showPanelTab();
+    document.getElementById(`ptabbtn-${panelTab}`).focus();
+  });
+  aside.replaceChildren(el("div", { className: "dhead" }, el("h2", {}, value), close), el("p", { className: "sub" }, sub),
+    tabs, related, titles);
+  showPanelTab();
+  paintCotags();
+  if (t) loadCotags(value);
+  else { cotags.token++; Object.assign(cotags, { tag: value, kind: state.kind, data: { tag: value, df: 0, titles: 0, co: [] } }); coRerank(); paintCotags(); }
+  paintNetworkNote();
   let body;
   try { body = await getJSON(`/api/titles?kind=${state.kind}&tag=${encodeURIComponent(value)}`); }
-  catch (err) { aside.querySelector(".sub").textContent = `Could not load: ${err.message}`; return; }
+  catch (err) { titles.replaceChildren(el("p", { className: "costat" }, `Could not load: ${err.message}`)); return; }
   if (state.tag !== value) return;
   state.tagIds = new Set(body.titles.map(x => x.item_id));
   if (state.view === "map") paintMap();
-  const sub = t ? `${fmt(t.df)} ${noun()} · IDF ${t.idf.toFixed(2)}` : `not on any ${noun().slice(0, -1)}`;
-  const parts = [el("h2", {}, value), el("p", { className: "sub" }, sub)];
-  if (t && t.co.length) {
-    const co = el("div", { className: "chips" });
-    for (const [coValue, count] of t.co) {
-      const chip = el("span", { className: "chip", title: `${fmt(count)} ${noun()} carry both` }, coValue, el("span", { className: "n" }, fmt(count)));
-      chip.addEventListener("click", () => showTag(coValue));
-      co.append(chip);
-    }
-    parts.push(el("h4", {}, "Appears with"), co);
-  }
   const list = el("ol");
   for (const x of body.titles) {
     const row = el("div", { className: "trow" }, posterThumb(x.item_id, x.title, "small"),
@@ -1782,16 +2196,28 @@ async function showTag(value) {
     list.append(el("li", {}, row,
       el("span", { className: "kw", title: "keywords this title carries" }, `${fmt(x.keywords)} kw`)));
   }
-  parts.push(el("h4", {}, `Titles (${fmt(body.titles.length)})`), list);
-  aside.replaceChildren(...parts);
+  titles.replaceChildren(list);
+  document.querySelector("#ptabbtn-titles .n").textContent = fmt(body.titles.length);
+}
+
+// Which of the panel's two tabs shows; the person's last pick wins, else Related tags in the Tag
+// network and Titles elsewhere.
+function showPanelTab() {
+  const name = panelTab ?? (state.view === "graph" ? "related" : "titles");
+  document.querySelectorAll("#detail [data-ptab]").forEach(b => {
+    const on = b.dataset.ptab === name;
+    b.setAttribute("aria-selected", String(on));
+    b.tabIndex = on ? 0 : -1;
+    document.getElementById(`ptab-${b.dataset.ptab}`).hidden = !on;
+  });
 }
 
 document.querySelectorAll(".seg button[data-view]").forEach(b => b.addEventListener("click", () => setView(b.dataset.view)));
 document.querySelectorAll(".seg button[data-kind]").forEach(b => b.addEventListener("click", () => {
   if (state.kind === b.dataset.kind) return;
-  state.kind = b.dataset.kind; state.tag = null; state.tagIds = new Set();
+  state.kind = b.dataset.kind;
+  clearTag();
   clearSearch();
-  document.getElementById("detail").replaceChildren(el("p", { className: "empty" }, "Click a tag to list the titles that carry it."));
   loadKind();
 }));
 document.querySelectorAll("th.sortable").forEach(th => th.addEventListener("click", () => {
