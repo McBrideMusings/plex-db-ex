@@ -124,11 +124,6 @@ _Avoid_: shot, transition
 The stretch of a title's video between two adjacent Cuts. The unit a search returns.
 _Avoid_: clip, scene, cut
 
-**Clip**:
-A window inside one title's video — `item_id`, an in time and an out time — that a person
-accepted, with a label and tags. A window a person rejected is a rejected window, not a Clip.
-_Avoid_: segment, highlight, bumper
-
 **Phrase**:
 Text a Reader searches the Frame index with, compared by the keyword spelling rule.
 _Avoid_: query, prompt
