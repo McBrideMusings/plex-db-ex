@@ -4,11 +4,13 @@ Plex DB-EX never writes `plexdb.db` (ADR-0007, ADR-0017), so a decision made on 
 Lists tab, or by `plexdb list-decide`, goes into `list_decisions.json` beside the other
 decisions files (`decisions.py`), and `plexdb fold-list-decisions` folds it into
 `list_decision` at the next sweep. The list harvest reads that table
-(`collections.refresh_mdblist`); this module only records and folds.
+(`collections.refresh_mdblist`, `letterboxd_lists.refresh_letterboxd_lists`); this module
+only records and folds.
 
 An entry names a list by URL. The URL is canonical (`canonical_list_url`), so
 `https://www.mdblist.com/lists/Lina/Top-Watched/` and the stored
 `https://mdblist.com/lists/lina/top-watched` are one key, and the last entry per key wins.
+A Letterboxd list is keyed `https://letterboxd.com/<user>/list/<slug>`.
 
 `list_decision.added` outlives the entry that set it. The file keeps one entry per URL, so a
 `refetch` or `retry` on an added list replaces its `added` entry; the table keeps the fact
@@ -34,35 +36,87 @@ __all__ = [
     "canonical_list_url",
     "fold_list_decisions",
     "is_before",
+    "letterboxd_list_parts",
     "list_decisions_path",
+    "list_source",
     "list_url_parts",
 ]
 
 LIST_DECISIONS_FILE = "list_decisions.json"
 
-_HOSTS = frozenset({"mdblist.com", "www.mdblist.com"})
+MDBLIST = "mdblist"
+LETTERBOXD = "letterboxd"
+
+_MDBLIST_HOSTS = frozenset({"mdblist.com", "www.mdblist.com"})
+_LETTERBOXD_HOSTS = frozenset({"letterboxd.com", "www.letterboxd.com"})
+
+
+def _path_parts(raw: str, hosts: frozenset[str]) -> list[str] | None:
+    try:
+        url = urlparse(raw.strip())
+    except ValueError:
+        return None
+    if url.scheme not in ("http", "https") or (url.hostname or "") not in hosts:
+        return None
+    return [unquote(part) for part in url.path.split("/") if part]
 
 
 def list_url_parts(raw: str) -> tuple[str, str] | None:
     """`(user, slug)`, lowercased, of an MDBList list URL
     (`https://mdblist.com/lists/<user>/<slug>`), or None for any other text."""
-    try:
-        url = urlparse(raw.strip())
-    except ValueError:
-        return None
-    if url.scheme not in ("http", "https") or (url.hostname or "") not in _HOSTS:
-        return None
-    parts = [unquote(part) for part in url.path.split("/") if part]
-    if len(parts) != 3 or parts[0].lower() != "lists" or not parts[1] or not parts[2]:
+    parts = _path_parts(raw, _MDBLIST_HOSTS)
+    if (
+        parts is None
+        or len(parts) != 3
+        or parts[0].lower() != "lists"
+        or not parts[1]
+        or not parts[2]
+    ):
         return None
     return parts[1].lower(), parts[2].lower()
 
 
+def letterboxd_list_parts(raw: str) -> tuple[str, str] | None:
+    """`(user, slug)`, lowercased, of a Letterboxd list URL
+    (`https://letterboxd.com/<user>/list/<slug>/`, a `/page/N/` suffix allowed), or None
+    for any other text."""
+    parts = _path_parts(raw, _LETTERBOXD_HOSTS)
+    if (
+        parts is None
+        or len(parts) < 3
+        or parts[1].lower() != "list"
+        or not parts[0]
+        or not parts[2]
+    ):
+        return None
+    rest = parts[3:]
+    if rest and not (
+        len(rest) == 2 and rest[0].lower() == "page" and rest[1].isascii() and rest[1].isdigit()
+    ):
+        return None
+    return parts[0].lower(), parts[2].lower()
+
+
 def canonical_list_url(raw: str) -> str | None:
-    """The one spelling of an MDBList list URL a store keys on, or None for text that is
-    not one."""
+    """The one spelling of a list URL a store keys on — MDBList's or Letterboxd's — or
+    None for text that is neither."""
     parts = list_url_parts(raw)
-    return None if parts is None else f"https://mdblist.com/lists/{parts[0]}/{parts[1]}"
+    if parts is not None:
+        return f"https://mdblist.com/lists/{parts[0]}/{parts[1]}"
+    parts = letterboxd_list_parts(raw)
+    if parts is not None:
+        return f"https://letterboxd.com/{parts[0]}/list/{parts[1]}"
+    return None
+
+
+def list_source(raw: str) -> str | None:
+    """`collection.source` of the list a URL names — `mdblist` or `letterboxd` — or None
+    for text that is neither."""
+    if list_url_parts(raw) is not None:
+        return MDBLIST
+    if letterboxd_list_parts(raw) is not None:
+        return LETTERBOXD
+    return None
 
 
 def is_before(earlier: str, later: str) -> bool:
@@ -89,7 +143,11 @@ class ListDecisions(DecisionsFile):
 
     @classmethod
     def key_problem(cls, key: tuple[str, ...]) -> str | None:
-        return None if canonical_list_url(key[0]) else "has a url that is not an MDBList list"
+        return (
+            None
+            if canonical_list_url(key[0])
+            else "has a url that is not an MDBList or Letterboxd list"
+        )
 
     @classmethod
     def resolve(cls, key: tuple[str, ...]) -> tuple[str, ...] | None:
@@ -109,7 +167,8 @@ class ListDecisions(DecisionsFile):
         canonical = canonical_list_url(url)
         if canonical is None:
             raise ValueError(
-                "url must be an MDBList list, like https://mdblist.com/lists/<user>/<list>"
+                "url must be an MDBList list, like https://mdblist.com/lists/<user>/<list>, "
+                "or a Letterboxd list, like https://letterboxd.com/<user>/list/<list>/"
             )
         return canonical, self.decision(decision)
 
@@ -180,8 +239,8 @@ def decide(
 ) -> dict[str, str]:
     """Append one decision to the file and return its entry.
 
-    Anyone may add or exclude any MDBList list URL. A refetch, retry or removal must name
-    a list the store (or the file) already knows, so a caller cannot grow the file with
+    Anyone may add or exclude any MDBList or Letterboxd list URL. A refetch, retry or removal
+    must name a list the store (or the file) already knows, so a caller cannot grow the file with
     made-up lists. `ValueError` for a bad field, `UnknownList` for an unknown list.
     """
     canonical, verdict = decisions.check(url, decision)

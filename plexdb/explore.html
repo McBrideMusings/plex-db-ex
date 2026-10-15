@@ -464,7 +464,7 @@
 <div id="listwrap" hidden>
   <section id="lmain">
     <form id="laddbar" autocomplete="off">
-      <input type="text" id="laddurl" placeholder="https://mdblist.com/lists/user/list" aria-label="MDBList list URL to add">
+      <input type="text" id="laddurl" placeholder="An MDBList or Letterboxd list URL" aria-label="MDBList or Letterboxd list URL to add">
       <button type="submit" class="primary" id="ladd">Add a list</button>
       <span id="laddstatus" role="status"></span>
     </form>
@@ -477,7 +477,7 @@
     <div id="ltable" hidden></div>
     <div id="lempty" hidden>
       <h2>No lists stored yet</h2>
-      <p class="mnote">The MDBList harvest fills this tab. It needs <code>MDBLIST_API_KEY</code> in the environment; run <code>plexdb harvest-mdblist</code>.</p>
+      <p class="mnote">The MDBList harvest fills this tab. It needs <code>MDBLIST_API_KEY</code> in the environment; run <code>plexdb harvest-mdblist</code>. A Letterboxd list added above is fetched by <code>plexdb harvest-letterboxd-lists</code>, which needs no key.</p>
     </div>
   </section>
   <section id="linspect"></section>

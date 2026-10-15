@@ -2,7 +2,8 @@
 
 Appends to `list_decisions.json`, the file the explorer's Lists tab writes, and never
 touches the store: `plexdb fold-list-decisions` folds the file at the next sweep, and the
-next `harvest-mdblist` acts on it. Opens the store read-only to check the list is known.
+next `harvest-mdblist` or `harvest-letterboxd-lists` acts on it. Opens the store read-only
+to check the list is known.
 """
 
 from __future__ import annotations
@@ -46,6 +47,10 @@ def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
         help="record a decision about a crowd list in list_decisions.json; applied at the "
         "next sweep",
     )
-    parser.add_argument("url", help="an MDBList list URL, e.g. https://mdblist.com/lists/lina/top")
+    parser.add_argument(
+        "url",
+        help="an MDBList or Letterboxd list URL, e.g. https://mdblist.com/lists/lina/top "
+        "or https://letterboxd.com/lina/list/top/",
+    )
     parser.add_argument("decision", choices=ListDecisions.DECISIONS)
     parser.set_defaults(func=_cmd_list_decide)

@@ -84,7 +84,7 @@ def test_the_last_decision_per_list_wins_and_the_file_keeps_one_entry_per_list(
 
 def test_a_file_naming_something_that_is_not_a_list_is_refused(tmp_path: Path) -> None:
     path = _write(tmp_path / "list_decisions.json", ("https://example.com/x", "added", AT))
-    with pytest.raises(ListDecisionsError, match="not an MDBList list"):
+    with pytest.raises(ListDecisionsError, match="not an MDBList or Letterboxd list"):
         ListDecisions.load(path)
 
 

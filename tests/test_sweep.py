@@ -38,6 +38,7 @@ EXPECTED_SWEEP = [
     ("enrich-wikidata", Step.BEST_EFFORT),
     ("enrich-mdblist-ratings", Step.BEST_EFFORT),
     ("harvest-mdblist", Step.BEST_EFFORT),
+    ("harvest-letterboxd-lists", Step.BEST_EFFORT),
     ("prune-keyword-verdicts", Step.BEST_EFFORT),
     ("film-suffix-verdicts", Step.BEST_EFFORT),
     ("judge-keyword-pairs", Step.BEST_EFFORT),

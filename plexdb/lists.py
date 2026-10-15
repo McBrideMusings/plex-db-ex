@@ -25,7 +25,7 @@ from urllib.parse import urlparse
 
 from . import keywords
 from .collections import MAX_FAILURES
-from .list_decisions import canonical_list_url, is_before
+from .list_decisions import canonical_list_url, is_before, letterboxd_list_parts, list_source
 
 #: A keyword is reported for a list when at least this many of the list's owned
 #: titles carry it …
@@ -59,10 +59,14 @@ _WATCHED = (
 
 def _author(url: str | None) -> str | None:
     """The list's owner as the URL names it — `lina` for
-    `https://mdblist.com/lists/lina/top-watched` — or `None` for a URL that does
-    not follow that shape."""
+    `https://mdblist.com/lists/lina/top-watched` or
+    `https://letterboxd.com/lina/list/top` — or `None` for a URL that does not follow
+    either shape."""
     if not url:
         return None
+    letterboxd = letterboxd_list_parts(url)
+    if letterboxd is not None:
+        return letterboxd[0]
     parts = [part for part in urlparse(url).path.split("/") if part]
     if len(parts) >= 3 and parts[0] == "lists":
         return parts[1]
@@ -157,7 +161,7 @@ def _unfetched_row(
     """The table row of a list a person added that the store holds nothing of yet."""
     return {
         "collection_id": None,
-        "source": "mdblist",
+        "source": list_source(key) or "mdblist",
         "author": _author(key),
         "name": None,
         "url": key,
@@ -271,9 +275,8 @@ def list_table(conn: sqlite3.Connection, *, source: str | None = None) -> list[d
     fetches are failing (`failure`, `state`); a list added or failing before it was ever
     stored comes last, with no `collection_id` (`_annotate`).
     """
-    return _table_rows(
-        conn, source=source, collection_id=None, with_unfetched=source in (None, "mdblist")
-    )
+    rows = _table_rows(conn, source=source, collection_id=None, with_unfetched=True)
+    return rows if source is None else [row for row in rows if row["source"] == source]
 
 
 def find_list(conn: sqlite3.Connection, ref: str) -> str | None:

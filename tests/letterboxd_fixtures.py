@@ -12,7 +12,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from plexdb.errors import LetterboxdError
-from plexdb.letterboxd_client import Lookup, Outcome, parse_film_page
+from plexdb.letterboxd_client import (
+    FilmIds,
+    ListContents,
+    ListFilm,
+    Lookup,
+    Outcome,
+    parse_film_page,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures" / "letterboxd"
 INCEPTION_TMDB = "27205"
@@ -50,3 +57,56 @@ class RecordedLetterboxdSource:
         if html is None:
             return Lookup(Outcome.NOT_LISTED)
         return parse_film_page(html, tmdb_id, f"/film/{tmdb_id}/")
+
+
+LIST_USER = "adaydreaming"
+LIST_SLUG = "feeling-lost-in-your-20s"
+LIST_URL = f"https://letterboxd.com/{LIST_USER}/list/{LIST_SLUG}"
+#: The five films `list_page_1.html` (3) and `list_page_2.html` (2) hold, in list order.
+LIST_FILMS = (
+    ("scott-pilgrim-vs-the-world", "Scott Pilgrim vs. the World", 2010),
+    ("millennium-mambo", "Millennium Mambo", 2001),
+    ("the-devil-probably", "The Devil, Probably", 1977),
+    ("me-and-earl-and-the-dying-girl", "Me and Earl and the Dying Girl", 2015),
+    ("juno", "Juno", 2007),
+)
+
+
+def film_page(media_type: str = "movie", tmdb_id: str | None = INCEPTION_TMDB) -> str:
+    """The recorded film page with its `<body>` identity replaced."""
+    page = load("film_inception.html")
+    marker = f'data-tmdb-type="movie" data-tmdb-id="{INCEPTION_TMDB}"'
+    assert marker in page
+    ids = f'data-tmdb-type="{media_type}"' + (f' data-tmdb-id="{tmdb_id}"' if tmdb_id else "")
+    return page.replace(marker, ids)
+
+
+@dataclass
+class RecordedListSource:
+    """A `LetterboxdListSource` over the recorded list pages.
+
+    `ids` maps a film slug to its identity (a slug not in it fails like an unloadable film
+    page). `failing` makes `list_contents` raise this error. `list_calls` and `film_calls`
+    hold every ask in order.
+    """
+
+    ids: dict[str, FilmIds] = field(default_factory=dict)
+    failing: LetterboxdError | None = None
+    size: int | None = 5
+    films: int = 5
+    list_calls: list[tuple[str, str]] = field(default_factory=list)
+    film_calls: list[str] = field(default_factory=list)
+
+    def list_contents(self, user: str, slug: str) -> ListContents:
+        self.list_calls.append((user, slug))
+        if self.failing is not None:
+            raise self.failing
+        entries = tuple(ListFilm(s, t, y) for s, t, y in LIST_FILMS[: self.films])
+        return ListContents("feeling lost in your 20's", self.size, entries, pages=2)
+
+    def film_ids(self, slug: str) -> FilmIds:
+        self.film_calls.append(slug)
+        found = self.ids.get(slug)
+        if found is None:
+            raise LetterboxdError(f"/film/{slug}/ did not load")
+        return found

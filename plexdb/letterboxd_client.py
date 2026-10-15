@@ -21,6 +21,17 @@ Two requests per title, checked against the live site on 2026-10-04:
   behind them (`/film/<slug>/themes/`) answers a Cloudflare challenge (403) to a
   client that runs no JavaScript, so the film page's subset is what there is.
 
+Lists are read from the list page, checked against the live site on 2026-10-15
+(`docs/roadmap.md` records the probe): `GET /<user>/list/<slug>/` answers 200 with up
+to 100 entries per page and `/page/N/` for the rest. The `<body>` carries the class
+`list-page`, the list's name is the `h1` with class `title-1`, each entry is an element
+with `data-item-slug` and `data-item-name` (`Title (Year)`), a link with class `next`
+leads to the next page, and the description meta tag opens "A list of N films". An entry
+carries no TMDB id: its film page's `<body>` does, with `data-tmdb-type` (`movie` or
+`tv`) beside it. A page without the `list-page` body class, or without the `title-1`
+heading, is not a list page — a Cloudflare challenge looks like one (`403`, or a `200`
+page without those markers) — and fails the list.
+
 Every request path is checked against the `Disallow` rules robots.txt gives
 `User-agent: *`, fetched once per client, and a disallowed path raises before
 anything is sent. The theme links themselves end in `/by/best-match/`, which
@@ -72,6 +83,36 @@ _FILM_PATH = re.compile(r"^/film/[^/?#]+/$")
 _THEME_HREF = re.compile(r"^/films/(?:theme|mini-theme)/")
 
 
+@dataclass(frozen=True)
+class ListFilm:
+    """One entry of a Letterboxd list as its page shows it: the film's slug, and the
+    title and year from `data-item-name` (`Title (Year)`)."""
+
+    slug: str
+    title: str
+    year: int | None
+
+
+@dataclass(frozen=True)
+class ListContents:
+    """A whole Letterboxd list, every page read: its name, the size its description
+    states (`None` where it states none), and the entries in list order."""
+
+    name: str
+    size: int | None
+    entries: tuple[ListFilm, ...]
+    pages: int
+
+
+@dataclass(frozen=True)
+class FilmIds:
+    """The TMDB identity a film page carries: `media_type` is `movie` or `show`
+    (Letterboxd's `tv`), `tmdb_id` is `None` for a film with no TMDB match."""
+
+    media_type: str
+    tmdb_id: str | None
+
+
 class Outcome(Enum):
     """What one title's lookup found."""
 
@@ -101,6 +142,27 @@ class LetterboxdSource(Protocol):
         `LetterboxdError` when a request fails; a missing film or a page
         without the marker is an outcome, not an error."""
         ...
+
+
+class LetterboxdListSource(Protocol):
+    """The read surface the Letterboxd list harvest needs — real or recorded."""
+
+    def list_contents(self, user: str, slug: str) -> ListContents:
+        """Every page of `/<user>/list/<slug>/`. Raises `LetterboxdError` for a challenge,
+        a status other than 200, or a page without the list marker."""
+        ...
+
+    def film_ids(self, slug: str) -> FilmIds:
+        """The TMDB identity on `/film/<slug>/`. Raises `LetterboxdError` when the page
+        does not load or carries no film marker."""
+        ...
+
+
+_SEGMENT = re.compile(r"^[a-z0-9_.-]+$")
+_ITEM_NAME = re.compile(r"^(.*) \((\d{4})\)$", re.DOTALL)
+_LIST_SIZE = re.compile(r"\bA list of ([\d,]+) films?\b")
+#: Pages read for one list at most. At 100 entries a page this is 10,000 entries.
+_MAX_LIST_PAGES = 100
 
 
 def is_tmdb_id(value: str) -> bool:
@@ -145,6 +207,95 @@ def is_disallowed(path: str, patterns: list[str]) -> bool:
         if re.match(regex + ("$" if anchored else ""), path):
             return True
     return False
+
+
+class _ListPageParser(HTMLParser):
+    """Collects a list page's body marker, name, entries, next link and stated size."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.is_list_page = False
+        self.name: str | None = None
+        self.entries: list[ListFilm] = []
+        self.next_href: str | None = None
+        self.size: int | None = None
+        self._h1_text: list[str] | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attr = dict(attrs)
+        classes = (attr.get("class") or "").split()
+        if tag == "body":
+            self.is_list_page = "list-page" in classes
+        elif tag == "h1" and "title-1" in classes and self.name is None:
+            self._h1_text = []
+        elif tag == "a" and "next" in classes and attr.get("href"):
+            self.next_href = attr["href"]
+        elif tag == "meta" and attr.get("name") == "description":
+            found = _LIST_SIZE.search(attr.get("content") or "")
+            if found:
+                self.size = int(found.group(1).replace(",", ""))
+        slug, label = attr.get("data-item-slug"), attr.get("data-item-name")
+        if slug and label:
+            named = _ITEM_NAME.match(label)
+            title, year = (named.group(1), int(named.group(2))) if named else (label, None)
+            self.entries.append(ListFilm(slug, title, year))
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "h1" and self._h1_text is not None:
+            self.name = " ".join("".join(self._h1_text).split())
+            self._h1_text = None
+
+    def handle_data(self, data: str) -> None:
+        if self._h1_text is not None:
+            self._h1_text.append(data)
+
+
+@dataclass(frozen=True)
+class ListPage:
+    name: str
+    size: int | None
+    entries: tuple[ListFilm, ...]
+    next_path: str | None
+
+
+def parse_list_page(html: str) -> ListPage | None:
+    """One list page → its name, stated size, entries and next-page link, or `None` when
+    the page is not a list page (no `list-page` body class or no `title-1` heading)."""
+    parser = _ListPageParser()
+    parser.feed(html)
+    parser.close()
+    if not parser.is_list_page or not parser.name:
+        return None
+    return ListPage(parser.name, parser.size, tuple(parser.entries), parser.next_href)
+
+
+class _FilmIdsParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.is_film = False
+        self.tmdb_type: str | None = None
+        self.tmdb_id: str | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "body":
+            attr = dict(attrs)
+            self.is_film = attr.get("data-type") == "film"
+            self.tmdb_type = attr.get("data-tmdb-type")
+            self.tmdb_id = attr.get("data-tmdb-id")
+
+
+def parse_film_ids(html: str) -> FilmIds | None:
+    """A film page → its TMDB identity, or `None` when the `<body>` is not a film's. A film
+    Letterboxd has not matched to TMDB has no id (`tmdb_id` is `None`) and counts as a movie."""
+    parser = _FilmIdsParser()
+    parser.feed(html)
+    parser.close()
+    if not parser.is_film:
+        return None
+    if parser.tmdb_id and not is_tmdb_id(parser.tmdb_id):
+        return None
+    media_type = "show" if parser.tmdb_type == "tv" else "movie"
+    return FilmIds(media_type, parser.tmdb_id or None)
 
 
 class _FilmPageParser(HTMLParser):
@@ -272,6 +423,65 @@ class LiveLetterboxdClient:
             f"letterboxd: tmdb {tmdb_id} -> {path} {detail} in {time.monotonic() - started:.1f} s",
             flush=True,
         )
+        return found
+
+    def list_contents(self, user: str, slug: str) -> ListContents:
+        if not (_SEGMENT.match(user) and _SEGMENT.match(slug)):
+            raise LetterboxdError(f"not a Letterboxd list: {user!r} {slug!r}")
+        first = f"/{user}/list/{slug}/"
+        follow = re.compile(rf"^{re.escape(first)}page/\d+/$")
+        path: str | None = first
+        entries: list[ListFilm] = []
+        name: str | None = None
+        size: int | None = None
+        pages = 0
+        while path is not None:
+            if pages >= _MAX_LIST_PAGES:
+                raise LetterboxdError(f"{first} runs past {_MAX_LIST_PAGES} pages; giving up")
+            resp = self._get(path)
+            if resp.status_code != 200:
+                raise LetterboxdError(f"Letterboxd returned {resp.status_code} for {path}")
+            page = parse_list_page(resp.text)
+            if page is None:
+                raise LetterboxdError(
+                    f"{path} is not a Letterboxd list page (no list marker; a challenge page "
+                    "or a changed layout)"
+                )
+            pages += 1
+            print(
+                f"letterboxd: {path} -> HTTP 200, {len(page.entries)} entries on page {pages}",
+                flush=True,
+            )
+            name = name or page.name
+            size = size if size is not None else page.size
+            entries.extend(page.entries)
+            nxt = page.next_path
+            if nxt is not None and not follow.match(nxt):
+                raise LetterboxdError(f"{path} links to {nxt!r}, not the next page of the list")
+            path = nxt
+        assert name is not None
+        return ListContents(name, size, tuple(entries), pages)
+
+    def film_ids(self, slug: str) -> FilmIds:
+        if not _SEGMENT.match(slug):
+            raise LetterboxdError(f"not a film slug: {slug!r}")
+        path = f"/film/{slug}/"
+        resp = self._get(path)
+        if resp.status_code in (301, 302, 303, 307, 308):
+            location = resp.headers.get("Location", "")
+            target = httpx.URL(BASE_URL).join(location)
+            moved = target.path if target.host == _HOST else location
+            if not _FILM_PATH.match(moved):
+                raise LetterboxdError(f"Letterboxd redirected {path} to {location!r}")
+            path = moved
+            resp = self._get(path)
+        if resp.status_code != 200:
+            raise LetterboxdError(f"Letterboxd returned {resp.status_code} for {path}")
+        found = parse_film_ids(resp.text)
+        if found is None:
+            raise LetterboxdError(
+                f"{path} has no film marker (a challenge page or a changed layout)"
+            )
         return found
 
     def _robots(self) -> list[str]:

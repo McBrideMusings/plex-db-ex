@@ -701,7 +701,7 @@ distinguishable from rank 1 and a missing `likes` from zero likes. A reader that
 collection, not one title's place in it; carrying them per membership would repeat them thousands
 of times and let two rows disagree about the same list.
 
-**Sources in use:** `mdblist` (`harvest-mdblist`). Plex's own collections are deliberately not
+**Sources in use:** `mdblist` (`harvest-mdblist`) and `letterboxd` (`harvest-letterboxd-lists`). Plex's own collections are deliberately not
 one — see the edges section above. Each source replaces its own rows wholesale on re-pull.
 
 **Membership is a snapshot, not a fact**, the same as edges. On re-pull the whole
@@ -724,14 +724,14 @@ harvest joins its lists with nothing rewritten. `(ns, value, kind)` is the first
 `size` records the list's full length, so `size` against the stored entry count shows whether the
 source returned every entry.
 
-**A list's entries and memberships are replaced together.** `harvest-mdblist` deletes both for the
-list and writes both, with the `collection` row, in one transaction, so the three never describe two
+**A list's entries and memberships are replaced together.** `harvest-mdblist` and `harvest-letterboxd-lists` delete both for the
+list and write both, with the `collection` row, in one transaction, so the three never describe two
 different fetches. A list counts as cached only when `observed_at` is inside the staleness window
 *and* it has `collection_entry` rows; a list stored before v21 has none, so the first harvest after
 the migration fetches it again.
 
 **`provenance` says how a list arrived**: `feed` for a source's own top lists (everything
-`harvest-mdblist` writes, and every list stored before v21), `added` for a list a person named
+`harvest-mdblist` writes from MDBList's feed, and every list stored before v21), `added` for a list a person named
 ([Version 22](#version-22-a-person-s-decisions-about-crowd-lists)), and `search` for a list found
 from a seed of titles, with `seed_count` the number of seed titles. `feed` and `added` are written
 today.
@@ -1267,7 +1267,8 @@ did, and the reason. A fetch that succeeds deletes the row. It is bookkeeping, n
 
 **Refresh rule.** Only `plexdb fold-list-decisions` writes `list_decision`, from
 [`list_decisions.json`](#list-decisions-json), as the sweep step after `fold-name-decisions`. Only
-`harvest-mdblist` acts on it and writes `list_attempt`:
+`harvest-mdblist` (MDBList URLs) and `harvest-letterboxd-lists` (Letterboxd URLs) act on it and write
+`list_attempt`, each ignoring the other's lists:
 
 - `excluded` — every stored list with that URL is wiped (entries, memberships, row) whatever its
   provenance, and the list is never fetched again, whether it comes from the feed or was added.
@@ -1288,6 +1289,23 @@ on to the next list. After 3 failed fetches in a row the harvest leaves the list
 no answer at all) ends the run instead and is recorded against no list. `plexdb check` and the list
 table report a list in a failed state, with the reason.
 
+### Letterboxd lists
+
+`harvest-letterboxd-lists` (sweep step 61, keyless, best-effort) fetches only the Letterboxd lists a
+person added, and the Letterboxd lists already stored; Letterboxd has no list feed. A list is
+`collection_id = letterboxd:<user>/<list>`, `source = 'letterboxd'`, `url` its canonical URL, `likes`
+`NULL`, `size` the count the list's description states. It reads `/<user>/list/<list>/` and each
+`/page/N/` (100 entries a page), then every entry's film page, whose `<body>` carries the TMDB id and
+`data-tmdb-type`: `movie` stays `movie`, `tv` becomes `show`, and the entry is stored as
+`('tmdb', <id>, <kind>)`. A film Letterboxd has not matched to TMDB is stored as
+`('letterboxd', <slug>, 'movie')` and never resolves to a library title. A film shared between
+lists is read once per run. The staleness window is `LETTERBOXD_LISTS_STALE_DAYS` (default 45).
+
+A fetch that fails writes nothing and adds one to the list's `attempts`: a Cloudflare challenge
+(403), a page without the `list-page` body class and `title-1` heading, a film page that does not
+load, fewer entries read than the description states, or a list over 2,000 entries. The stored list,
+if any, stays as it was.
+
 The migration only adds, so `reader_shape` stays 10.
 
 ### `list_decisions.json`
@@ -1305,13 +1323,15 @@ list:
 ]
 ```
 
-`url` is any spelling of an MDBList list URL; the store keys on its canonical form. `decision` is
+`url` is any spelling of an MDBList list URL (`https://mdblist.com/lists/<user>/<list>`) or a Letterboxd
+list URL (`https://letterboxd.com/<user>/list/<list>/`); the store keys on its canonical form,
+`https://letterboxd.com/<user>/list/<list>` for Letterboxd. `decision` is
 `added`, `excluded`, `refetch`, `retry` or `removed`; `decided_at` is a UTC time. Entries apply in
 list order, so the last entry for a list wins, and a write keeps one entry per list. A file with a
-URL that is not an MDBList list is refused whole. Letterboxd URLs are not accepted yet.
+URL that is neither is refused whole.
 
 Plex DB-EX writes the file with `POST /api/list-decisions` (`{url, decision}`; `added` and `excluded`
-take any MDBList list URL, the other three need a list the store, its decisions or its failures
+take any MDBList or Letterboxd list URL, the other three need a list the store, its decisions or its failures
 already name, else 404) and lays it over the list table, so a decision shows at once with a dashed
 outline and a badge (`Waiting for sweep`, `Excluded · next sweep removes it`) until the sweep acts.
 

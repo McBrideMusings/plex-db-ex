@@ -27,7 +27,7 @@ def describe(stats: FoldStats, path: str) -> str:
         return f"list decisions: no file at {path}"
     return (
         f"list decisions: {stats.entries:,} entr(ies) in {path}, "
-        f"{stats.matched:,} named an MDBList list, {stats.unmatched:,} named none"
+        f"{stats.matched:,} named an MDBList or Letterboxd list, {stats.unmatched:,} named none"
     )
 
 
