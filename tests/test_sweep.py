@@ -29,6 +29,7 @@ EXPECTED_SWEEP = [
     ("fold-name-decisions", Step.BEST_EFFORT),
     ("fold-list-decisions", Step.BEST_EFFORT),
     ("walk", Step.REQUIRED),
+    ("prune-frames", Step.BEST_EFFORT),
     ("ingest-plays", Step.REQUIRED),
     ("enrich-tautulli-plays", Step.BEST_EFFORT),
     ("enrich-tmdb-keywords", Step.BEST_EFFORT),
@@ -51,7 +52,7 @@ EXPECTED_SWEEP = [
 
 # Commands that exist and are deliberately not in a sweep. `schedule` wraps a
 # whole run rather than taking part in one, and `check` only reads.
-NOT_IN_A_SWEEP = {"sweep", "check", "schedule", "repair-identities", "latent-users"}
+NOT_IN_A_SWEEP = {"sweep", "check", "schedule", "repair-identities", "latent-users", "frames"}
 
 
 def test_the_sweep_runs_these_steps_in_this_order() -> None:

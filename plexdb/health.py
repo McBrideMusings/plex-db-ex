@@ -23,7 +23,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import backup, schema, store
+from . import backup, frames, schema, store
+from .errors import StoreError
 from .lists import list_table
 
 #: Reported in this order — the three guarded tables first, since they are the
@@ -116,6 +117,53 @@ class Backups:
 
 
 @dataclass(frozen=True)
+class FramesHealth:
+    """What one look at `frames.db` found (ADR-0024)."""
+
+    path: Path
+    #: A missing frames.db is normal before the harvester's first run, and
+    #: reported without failing the check.
+    exists: bool
+    #: `None` when the file is missing or could not be read at all.
+    version: int | None
+    expected_version: int
+    #: `"ok"`, SQLite's first complaint, or the error that stopped the read.
+    #: Empty when the file is missing.
+    quick_check: str
+
+    @property
+    def current(self) -> bool:
+        return self.version == self.expected_version
+
+    @property
+    def sound(self) -> bool:
+        return self.quick_check == "ok"
+
+    @property
+    def behind(self) -> bool:
+        """The one state a startup migration is about to change."""
+        return self.version is not None and self.version < self.expected_version
+
+    @property
+    def healthy(self) -> bool:
+        return not self.exists or (self.current and self.sound)
+
+
+def inspect_frames(path: Path) -> FramesHealth:
+    """Open `frames.db` read-only and report on it. Writes nothing, and loads no
+    extension: `quick_check` and the version row need none."""
+    if not path.exists():
+        return FramesHealth(path.resolve(), False, None, frames.SCHEMA_VERSION, "")
+    try:
+        with store.open_readonly(path) as conn:
+            check = store.quick_check(conn)
+            version = schema.current_version(conn)
+    except (sqlite3.DatabaseError, StoreError) as err:
+        return FramesHealth(path.resolve(), True, None, frames.SCHEMA_VERSION, str(err))
+    return FramesHealth(path.resolve(), True, version, frames.SCHEMA_VERSION, check)
+
+
+@dataclass(frozen=True)
 class Report:
     """What one look at a store found. Printed by `plexdb check`."""
 
@@ -145,10 +193,19 @@ class Report:
     #: Crowd lists per source. Empty on a store older than schema v21, which has
     #: no `collection_entry` to count.
     lists: tuple[SourceLists, ...]
+    #: `None` when `PLEXDB_FRAMES_DIR` is unset — the Frame index is optional.
+    frames: FramesHealth | None = None
 
     @property
     def current(self) -> bool:
         return self.version == self.expected_version
+
+    @property
+    def behind(self) -> bool:
+        """Whether either file is behind this build — what `check --wait` waits out."""
+        return self.version < self.expected_version or (
+            self.frames is not None and self.frames.behind
+        )
 
     @property
     def sound(self) -> bool:
@@ -164,8 +221,12 @@ class Report:
         Nine-day-old plays and a rising `fs:` count are things to look at, not
         things to fail on — a non-zero exit for them would make the command
         useless as a gate the day an enrichment source is down.
+
+        A configured `frames.db` that is damaged or at another version fails it
+        too; a missing one does not.
         """
-        return self.current and self.sound and self.legacy_tmdb_keywords == 0
+        frames_ok = self.frames is None or self.frames.healthy
+        return self.current and self.sound and self.legacy_tmdb_keywords == 0 and frames_ok
 
 
 def _tables(conn: sqlite3.Connection) -> set[str]:
@@ -350,9 +411,17 @@ def _backups(directory: Path) -> Backups | None:
     return Backups(count=len(files), size=sum(f.stat().st_size for f in files))
 
 
-def inspect(path: Path, backup_dir: Path, *, now: datetime | None = None) -> Report:
-    """Open the store read-only and report on it. Writes nothing."""
+def inspect(
+    path: Path,
+    backup_dir: Path,
+    *,
+    frames_path: Path | None = None,
+    now: datetime | None = None,
+) -> Report:
+    """Open the store read-only and report on it, and on `frames_path` when the
+    Frame index is configured. Writes nothing."""
     now = now or datetime.now(tz=UTC)
+    frames_health = None if frames_path is None else inspect_frames(frames_path)
     with store.open_readonly(path) as conn:
         tables = _tables(conn)
         return Report(
@@ -370,4 +439,5 @@ def inspect(path: Path, backup_dir: Path, *, now: datetime | None = None) -> Rep
             keyword_forms_count=_keyword_forms_count(conn, tables),
             legacy_tmdb_keywords=_legacy_tmdb_keywords(conn, tables),
             lists=_lists(conn, tables),
+            frames=frames_health,
         )

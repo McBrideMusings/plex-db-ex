@@ -105,6 +105,19 @@ class Config:
     #: migrations are forward-only, so a copy is the only route back past its
     #: own migration.
     backup_dir: Path
+    #: The directory holding the Frame index, `frames.db` (ADR-0024). `None`
+    #: when `PLEXDB_FRAMES_DIR` is unset: the Frame index is optional, so every
+    #: frames command refuses with a `ConfigError` and `plexdb check` reports it
+    #: as not configured.
+    frames_dir: Path | None
+    #: `PLEXDB_FRAME_HOURS` as written, e.g. `01:00-07:00`, read in the
+    #: process's TZ. Empty when unset. `frames.parse_hours` reads it.
+    frame_hours: str
+
+    @property
+    def frames_path(self) -> Path | None:
+        """`frames.db` inside `frames_dir`, or `None` when that is unset."""
+        return None if self.frames_dir is None else self.frames_dir / "frames.db"
 
     @classmethod
     def from_env(cls, *, env_file: Path | None = None) -> Config:
@@ -124,6 +137,7 @@ class Config:
         store_path = Path(raw).expanduser()
         backup_raw = os.environ.get("PLEXDB_BACKUP_DIR", "").strip()
         backup_dir = Path(backup_raw).expanduser() if backup_raw else store_path.parent / "backups"
+        frames_raw = os.environ.get("PLEXDB_FRAMES_DIR", "").strip()
         return cls(
             store_path=store_path,
             snapshot_path=snapshot_path,
@@ -134,4 +148,6 @@ class Config:
             tautulli_url=os.environ.get("TAUTULLI_URL", "").strip(),
             tautulli_api_key=os.environ.get("TAUTULLI_API_KEY", "").strip(),
             backup_dir=backup_dir,
+            frames_dir=Path(frames_raw).expanduser() if frames_raw else None,
+            frame_hours=os.environ.get("PLEXDB_FRAME_HOURS", "").strip(),
         )

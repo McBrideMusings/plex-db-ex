@@ -1106,17 +1106,13 @@ def test_every_collection_query_in_schema_md_returns_what_it_says(tmp_path: Path
     assert ratings == [("imdb", "8.3", "mdblist")]
 
 
-def test_v21_keeps_every_stored_list_and_marks_it_as_a_feed_list(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_v21_keeps_every_stored_list_and_marks_it_as_a_feed_list(tmp_path: Path) -> None:
     """The migration that added `collection_entry` and `collection.provenance`
     (ADR-0027): a list stored before it is still there, and it came from the
     source's own top lists."""
     path = tmp_path / "plexdb.db"
     with sqlite3.connect(path) as conn:
-        with monkeypatch.context() as before:
-            before.setattr(schema, "SCHEMA_VERSION", 20)
-            schema.apply(conn)
+        schema.apply(conn, schema.MIGRATIONS[:20])
         conn.execute(
             "INSERT INTO collection (collection_id, source, name, observed_at) "
             "VALUES ('mdblist:1', 'mdblist', 'Old', '2026-01-01T00:00:00+00:00')"

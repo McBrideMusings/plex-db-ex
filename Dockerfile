@@ -40,13 +40,16 @@ ENV PATH="/app/.venv/bin:$PATH" \
 # never `/snapshot` — Plex DB-EX has no login, so anyone who reaches the
 # port could otherwise write into the directory the station reads
 # (plex-db-ex-oyg.3; `SavedQueries` additionally caps entry count and total
-# size). Credentials arrive from the host environment and appear in no
-# committed file.
+# size). `/frames` holds the Frame index, frames.db (ADR-0024): tens of
+# gigabytes at full library, rebuildable, so it sits on its own mount rather
+# than beside the store whose backups it must stay out of. Credentials arrive
+# from the host environment and appear in no committed file.
 ENV PLEXDB_PATH=/data/plexdb.db \
     PLEXDB_SNAPSHOT_PATH=/snapshot/plexdb.snapshot.db \
-    PLEXDB_EXPLORE_SAVED_PATH=/explore-data/explore-queries.json
+    PLEXDB_EXPLORE_SAVED_PATH=/explore-data/explore-queries.json \
+    PLEXDB_FRAMES_DIR=/frames
 
-VOLUME ["/data", "/snapshot", "/explore-data"]
+VOLUME ["/data", "/snapshot", "/explore-data", "/frames"]
 
 # The read-only Plex DB-EX page `plexdb schedule` serves beside the sweep when
 # PLEXDB_EXPLORE_PORT is set, reading the snapshot. Documentation only: whether

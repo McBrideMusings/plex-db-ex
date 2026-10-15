@@ -1062,9 +1062,15 @@ def current_version(conn: sqlite3.Connection) -> int:
     return int(version[0])
 
 
-def apply(conn: sqlite3.Connection) -> tuple[int, int, DeclaredShrinks]:
-    """Bring a store up to `SCHEMA_VERSION`, and report where it started and
-    ended, plus any guarded-table shrink a step declared as intended.
+def apply(
+    conn: sqlite3.Connection, migrations: tuple[Migration, ...] | None = None
+) -> tuple[int, int, DeclaredShrinks]:
+    """Bring a store up to the last of `migrations`, and report where it started
+    and ended, plus any guarded-table shrink a step declared as intended.
+
+    `migrations` is this file's `MIGRATIONS` when omitted, read at call time.
+    The Frame index passes its own (`plexdb/frames.py`, ADR-0024): a second file
+    with its own version, run by this same procedure.
 
     Applying an already-current store is a no-op, so this is safe to run on
     every startup — which is what makes `plexdb migrate` re-runnable.
@@ -1079,13 +1085,15 @@ def apply(conn: sqlite3.Connection) -> tuple[int, int, DeclaredShrinks]:
             newer writer has touched it, and proceeding could corrupt rows this
             version cannot see.
     """
+    migrations = MIGRATIONS if migrations is None else migrations
+    target = len(migrations)
     start = current_version(conn)
-    if start > SCHEMA_VERSION:
+    if start > target:
         raise StoreError(
             f"store is at schema version {start}, but this build only understands "
-            f"{SCHEMA_VERSION} — upgrade plex-db-ex rather than writing with an older one"
+            f"{target} — upgrade plex-db-ex rather than writing with an older one"
         )
-    if start == SCHEMA_VERSION:
+    if start == target:
         return start, start, {}
 
     conn.executescript(
@@ -1101,8 +1109,8 @@ def apply(conn: sqlite3.Connection) -> tuple[int, int, DeclaredShrinks]:
     # commits any open transaction before it runs, so wrapping the call in
     # `with conn:` would not cover the DDL); a Python step gets it via an
     # explicit BEGIN/COMMIT around the call, rolled back on any exception.
-    for index in range(start, SCHEMA_VERSION):
-        migration = MIGRATIONS[index]
+    for index in range(start, target):
+        migration = migrations[index]
         version = index + 1
         if isinstance(migration, str):
             conn.executescript(
@@ -1125,4 +1133,4 @@ def apply(conn: sqlite3.Connection) -> tuple[int, int, DeclaredShrinks]:
             conn.execute("INSERT INTO schema_version (version) VALUES (?)", (version,))
             conn.execute("COMMIT")
 
-    return start, SCHEMA_VERSION, declared_shrinks
+    return start, target, declared_shrinks

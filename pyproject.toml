@@ -13,6 +13,7 @@ dependencies = [
     # Pinned: stored keyword values come from its dictionary, so a new version
     # is a migration that re-derives them (keywords.rederive_keywords).
     "simplemma==2.0.0",
+    "sqlite-vec==0.1.9",
 ]
 
 [project.scripts]
@@ -50,4 +51,9 @@ testpaths = ["tests"]
 # that calls them, through a handful of documented functions.
 [[tool.mypy.overrides]]
 module = ["sklearn.*", "scipy.*", "umap.*"]
+ignore_missing_imports = true
+
+# sqlite-vec ships no type information either; `frames._connect` makes its one call.
+[[tool.mypy.overrides]]
+module = ["sqlite_vec"]
 ignore_missing_imports = true

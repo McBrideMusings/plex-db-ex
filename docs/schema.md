@@ -1358,6 +1358,123 @@ take any MDBList or Letterboxd list URL, the other three need a list the store, 
 already name, else 404) and lays it over the list table, so a decision shows at once with a dashed
 outline and a badge (`Waiting for sweep`, `Excluded · next sweep removes it`) until the sweep acts.
 
+## frames.db — the Frame index
+
+A second SQLite file, `frames.db`, in the directory `PLEXDB_FRAMES_DIR` names (`/frames` in the
+container) ([ADR-0024](./adr/0024-the-frame-index-is-a-second-file-readers-attach-in-place)). The
+same `plexdb` package is its only writer. It is a public interface like `plexdb.db`: a reader opens
+it read-only where it lies and `ATTACH`es it to the Snapshot.
+
+- **Its own version.** `frames.db` carries its own `schema_version` row and its own append-only
+  migration chain (`plexdb/frames.py`), applied by the same `schema.apply`. Version 1 is below.
+  `plexdb frames migrate` applies it, as does every frames command and the container's start.
+  `plexdb migrate` does not: it is a required sweep step, and the optional Frame index must not
+  be able to stop a sweep.
+- **Rollback-journal mode, not WAL.** No `-wal` or `-shm` sidecar, so a reader with a read-only
+  mount can open it. A writer commits once per title.
+- **Never snapshotted or backed up.** It is derived from the media through Plex and runs to tens of
+  gigabytes at full library; a lost file is rebuilt by the frame harvester. No migration copy is
+  taken.
+- **No transaction touches both files.** Whatever a frames write needs from `plexdb.db` is read
+  first, over a separate read-only connection.
+- **No foreign keys.** `item_id` is the store's `items.item_id`, but SQLite cannot enforce a key
+  across files. `plexdb prune-frames` (sweep step 27, best-effort, skipped when
+  `PLEXDB_FRAMES_DIR` is unset) deletes every row whose `item_id` is no longer in `items`, one
+  transaction per title, and prints the count per table.
+- **Loading sqlite-vec.** `frame_vec` is a [sqlite-vec](https://github.com/asg017/sqlite-vec)
+  `vec0` virtual table (version 0.1.9). Reading it needs the extension loaded; the ordinary tables,
+  `PRAGMA quick_check` and the version row do not.
+
+### Version 1 — tables
+
+```sql
+CREATE TABLE frame_index_state (
+    item_id       TEXT PRIMARY KEY,
+    part_id       INTEGER,     -- the Plex media part read
+    model         TEXT,        -- the encoder model that produced frame_vec
+    model_version TEXT,
+    dims          INTEGER,     -- vector width
+    quant         TEXT,        -- how a vector is stored, e.g. int8
+    duration_ms   INTEGER,
+    bytes         INTEGER,     -- bytes read through Plex
+    file_hash     TEXT,        -- size + mtime + first MiB; a change re-indexes the title
+    shots         INTEGER,
+    vectors       INTEGER,
+    indexed_at    TEXT NOT NULL,  -- ISO-8601, when the last attempt finished
+    error         TEXT         -- the last attempt's failure; NULL once it indexed cleanly
+);
+
+CREATE VIRTUAL TABLE frame_vec USING vec0(
+    item_id TEXT PARTITION KEY,
+    t_ms    INTEGER,           -- the sampled frame's offset into the title
+    shot_ix INTEGER,           -- which Shot it belongs to, counted from 0
+    vec     int8[768]          -- CLIP ViT-L/14 (ADR-0025)
+);
+
+CREATE TABLE cuts (
+    item_id TEXT NOT NULL,
+    t_ms    INTEGER NOT NULL,
+    score   REAL,              -- scdet's scene-change score; NULL for a chapter mark
+    source  TEXT NOT NULL CHECK (source IN ('scdet', 'chapter')),
+    PRIMARY KEY (item_id, source, t_ms)
+);
+
+CREATE TABLE frame_queue (
+    item_id   TEXT PRIMARY KEY,
+    queued_at TEXT NOT NULL,   -- ISO-8601; the harvester takes the oldest first
+    queued_by TEXT NOT NULL    -- who asked; `plexdb frames queue` writes `cli` unless --by says otherwise
+);
+```
+
+A title is **indexed** when its `frame_index_state` row has `error IS NULL`, and **failed** when
+it has one with an error. `frame_vec`'s width is fixed when the table is created, so a model of
+another width is a migration.
+
+### `plexdb frames status`
+
+Prints one JSON object on stdout and exits 0. It creates `frames.db` at the current version if
+the directory holds none, so on a fresh directory every count is zero.
+
+```json
+{
+  "frames_db": "/frames/frames.db",
+  "schema_version": 1,
+  "bytes": 77824,
+  "sections": [
+    {"section_id": "1", "indexed": 0, "total": 11754},
+    {"section_id": "2", "indexed": 0, "total": 75951}
+  ],
+  "queued": 0,
+  "frame_hours": "01:00-07:00",
+  "inside_hours": false,
+  "indexing": null,
+  "encoder_reachable": null,
+  "failed": [
+    {"item_id": "imdb:tt0113277", "error": "ffmpeg exited 1", "at": "2026-10-15T02:14:09-04:00"}
+  ]
+}
+```
+
+| Key | Meaning |
+|---|---|
+| `frames_db` | Absolute path of the file read. |
+| `schema_version` | `frames.db`'s own version. |
+| `bytes` | The file's size on disk. |
+| `sections` | One entry per Plex section, ordered by section id as a number: `total` is the movies and episodes `plex_items` places there, `indexed` how many of those are indexed. A show has no file and is not counted. |
+| `queued` | Rows in `frame_queue`. |
+| `frame_hours` | `PLEXDB_FRAME_HOURS` as set — `HH:MM-HH:MM` in the process's TZ, an end earlier than the start running past midnight — or `null` when unset. |
+| `inside_hours` | Whether the current time is inside that window; `false` when it is unset. |
+| `indexing` | The item_id the harvester is indexing now. `null` until the harvester exists. |
+| `encoder_reachable` | Whether the encoder answered. `null` until the encoder client exists. |
+| `failed` | Every failed title, newest attempt first: its item_id, the error, and when. |
+
+`plexdb frames queue <item_id>` adds a `frame_queue` row and exits non-zero for an item_id not in
+`items`; a title already queued keeps its place.
+
+`plexdb check` also reads `frames.db` read-only when `PLEXDB_FRAMES_DIR` is set: it runs
+`quick_check` and compares the version with this build's. A damaged file, or one at another
+version, makes the check exit non-zero. A missing file is reported and does not.
+
 ## Reading the store to build collections
 
 Each query below was run against a migrated copy of the real store. Parameters are written as

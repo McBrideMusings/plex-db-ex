@@ -14,7 +14,7 @@ import time
 from collections.abc import Callable
 
 from ..config import Config
-from ..health import STALE_DAYS, Freshness, Report, inspect
+from ..health import STALE_DAYS, FramesHealth, Freshness, Report, inspect
 from ..store import outside_migration
 
 NAME = "check"
@@ -57,6 +57,37 @@ def _version_line(report: Report) -> str:
         f"store is at v{report.version}; this build expects "
         f"v{report.expected_version} — run plexdb migrate"
     )
+
+
+def _frames_lines(health: FramesHealth | None) -> list[str]:
+    """The Frame index's lines. Missing is a state, not a failure: the file
+    appears with the first frames command or harvest."""
+    if health is None:
+        return ["frames.db: not configured (PLEXDB_FRAMES_DIR is unset)"]
+    if not health.exists:
+        return [f"frames.db: none yet at {health.path}"]
+    lines = [f"frames.db: {health.path}"]
+    if health.version is None:
+        lines.append(f"frames.db FAILED: {health.quick_check}")
+        return lines
+    if health.current:
+        lines.append(f"frames.db is at schema v{health.version}; this build understands it")
+    elif health.version > health.expected_version:
+        lines.append(
+            f"frames.db FAILED: at v{health.version}; this build only understands "
+            f"v{health.expected_version} — upgrade plex-db-ex"
+        )
+    else:
+        lines.append(
+            f"frames.db FAILED: at v{health.version}; this build expects "
+            f"v{health.expected_version} — run plexdb frames migrate"
+        )
+    lines.append(
+        "frames.db quick_check: ok"
+        if health.sound
+        else f"frames.db quick_check FAILED: {health.quick_check}"
+    )
+    return lines
 
 
 def render(report: Report) -> list[str]:
@@ -120,6 +151,8 @@ def render(report: Report) -> list[str]:
     else:
         lines.append("identities with more than one rating key: none")
 
+    lines.extend(_frames_lines(report.frames))
+
     where = report.backup_dir
     if report.backups is None:
         lines.append(f"backups: no directory at {where}")
@@ -136,7 +169,9 @@ def _look(config: Config) -> Report | None:
     """One report on the store, or `None` while a migration holds it — a read
     taken then could see a version that a failed verify is about to roll back."""
     with outside_migration(config.store_path) as clear:
-        return inspect(config.store_path, config.backup_dir) if clear else None
+        if not clear:
+            return None
+        return inspect(config.store_path, config.backup_dir, frames_path=config.frames_path)
 
 
 def await_current(
@@ -146,25 +181,28 @@ def await_current(
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
 ) -> Report | None:
-    """Re-read the store until no migration holds it and it is at this build's
-    schema version, or until `wait` seconds pass. Returns the last report, or
-    `None` if a migration held the store every time it looked.
+    """Re-read the store until no migration holds it and it and `frames.db` are
+    at this build's schema versions, or until `wait` seconds pass. Returns the
+    last report, or `None` if a migration held the store every time it looked.
 
     This is how a deploy's last step waits out the container's startup
-    migration. A store behind the build, or one being migrated, is the only
-    state waiting can change; a store newer than the build, or a damaged one at
-    the right version, is returned at once.
+    migration, which migrates `frames.db` straight after the store. A file
+    behind the build, or one being migrated, is the only state waiting can
+    change; a file newer than the build, or a damaged one at the right version,
+    is returned at once.
     """
     deadline = clock() + wait
     report = look()
-    while (report is None or report.version < report.expected_version) and clock() < deadline:
+    while (report is None or report.behind) and clock() < deadline:
         if report is None:
             print("a migration is running; waiting", flush=True)
-        else:
+        elif report.version < report.expected_version:
             print(
                 f"store is at v{report.version}; waiting for v{report.expected_version}",
                 flush=True,
             )
+        else:
+            print("frames.db is behind this build; waiting", flush=True)
         sleep(POLL_SECONDS)
         report = look()
     return report

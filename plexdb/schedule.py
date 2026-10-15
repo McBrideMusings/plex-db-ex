@@ -29,12 +29,13 @@ environment is what decides when "03:30" is. A container with no `TZ` runs UTC.
 from __future__ import annotations
 
 import os
+import sqlite3
 import time
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from .errors import ConfigError
+from .errors import ConfigError, PlexdbError
 
 __all__ = ["SCHEDULE_VAR", "next_fire", "parse_schedule", "run_scheduler"]
 
@@ -87,6 +88,7 @@ def _migrate_store() -> None:
     against the wrong shape.
     """
     from .config import Config
+    from .frames import migrate_configured
     from .store import migrate
 
     config = Config.from_env()
@@ -98,6 +100,13 @@ def _migrate_store() -> None:
         print(f"migrated store v{result.was} -> v{result.now}", flush=True)
     else:
         print(f"store already current at schema v{result.now}", flush=True)
+    # The Frame index is optional (ADR-0024), so its failure is printed and the
+    # container stays up to sweep the store; `plexdb check`, which a deploy
+    # runs last, fails on a frames.db left damaged or behind.
+    try:
+        print(migrate_configured(config), flush=True)
+    except (PlexdbError, OSError, sqlite3.Error) as err:
+        print(f"frames.db FAILED to migrate: {err}", flush=True)
 
 
 def _start_explorer() -> None:

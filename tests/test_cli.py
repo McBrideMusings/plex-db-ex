@@ -65,6 +65,8 @@ EXPECTED_COMMANDS = {
     "explore",
     "repair-identities",
     "repair-fs-identities",
+    "prune-frames",
+    "frames",
     "schedule",
 }
 
@@ -88,6 +90,7 @@ EXPECTED_COMMAND_ORDER = [
     "walk",
     "repair-identities",
     "repair-fs-identities",
+    "prune-frames",
     "ingest-plays",
     "enrich-tautulli-plays",
     "enrich-tmdb-keywords",
@@ -112,6 +115,8 @@ EXPECTED_COMMAND_ORDER = [
     "list",
     # Records a decision about one of them (`plexdb/commands/list_decide.py`).
     "list-decide",
+    # The Frame index's status, queue and migration (`plexdb/commands/frames.py`).
+    "frames",
     # Not a step of the sweep: a read-only browser view of what the steps above
     # wrote (`plexdb/commands/explore.py`).
     "explore",
