@@ -731,9 +731,10 @@ different fetches. A list counts as cached only when `observed_at` is inside the
 the migration fetches it again.
 
 **`provenance` says how a list arrived**: `feed` for a source's own top lists (everything
-`harvest-mdblist` writes, and every list stored before v21), `added` for a list a person named, and
-`search` for a list found from a seed of titles, with `seed_count` the number of seed titles. Only
-`feed` is written today.
+`harvest-mdblist` writes, and every list stored before v21), `added` for a list a person named
+([Version 22](#version-22-a-person-s-decisions-about-crowd-lists)), and `search` for a list found
+from a seed of titles, with `seed_count` the number of seed titles. `feed` and `added` are written
+today.
 
 **Nothing derived is stored** (ADR-0012). `plexdb lists` and `plexdb list` (`plexdb/lists.py`, the
 functions the explorer's Lists tab calls) work out the owned count, owned share, watched count (owned
@@ -743,7 +744,10 @@ harvest wrote a membership at the same rank, because the harvest tries every id 
 and the entry row keeps only the strongest. A keyword is named for a list when at least 3 of its
 owned titles carry it and its share of them is at least 3 times its share of the library's titles of
 the list's most common type. `plexdb check` prints, per source, the lists, the entries stored and the
-owned share.
+owned share, and the lists whose fetch is failing. The list table also carries each list's last
+`decision`, its `failure` (`attempts`, `attempted_at`, `reason`, `stopped`) and a `state` of `ok`,
+`failed` or `waiting`; a list added or failing before it was ever stored has a row of its own with no
+`collection_id`.
 
 **A list entry resolves through the strongest id it carries** — `imdb`, then `tmdb`, then `tvdb`,
 the same priority order `derive_item_id` uses, and always scoped by media type. Resolving without
@@ -1235,6 +1239,81 @@ stale, always carries the labels drawn with it. The drawing recipe in `title_map
 names the labelling too, so every map stored before this version reads as stale until the next
 `refresh-map` redraws it with labels; until then Plex DB-EX shows it dimmed with no labels and draws
 the fresh one live. The migration only adds, so `reader_shape` stays 10.
+
+## Version 22 — a person's decisions about crowd lists
+
+```
+list_decision  url TEXT PK, decision TEXT NOT NULL, decided_at TEXT NOT NULL, added INTEGER NOT NULL
+list_attempt   list_key TEXT PK, attempts INTEGER NOT NULL, attempted_at TEXT NOT NULL, reason TEXT NOT NULL
+```
+
+Which lists the store holds is no longer decided only by MDBList's top-lists feed. A person can add
+a list by URL, keep one out, force a refetch, retry a failed fetch, or remove an added list, from
+Plex DB-EX's Lists tab or `plexdb list-decide <url> <added|excluded|refetch|retry|removed>`.
+
+`list_decision` holds the last decision per list. `url` is the canonical MDBList list URL
+(`https://mdblist.com/lists/<user>/<list>`, lowercase, no trailing slash); `decision` is one of the
+five above; `added` is 1 while a person's `added` decision stands. The file keeps one entry per
+list, so a later `refetch` replaces the `added` entry; `added` keeps the fact that the list is a
+person's until an `excluded` or `removed` decision ends it.
+
+`list_attempt` is a failing list's fetch bookkeeping, keyed by the list's `url`, or by its
+`collection_id` where the source gave no URL: how many fetches in a row failed, when the last one
+did, and the reason. A fetch that succeeds deletes the row. It is bookkeeping, never a fact
+([ADR-0013](./adr/0013-bookkeeping-never-shares-a-table-with-facts)), and it is not an
+`enrichment_cursor` row because that table is keyed by `items`, and a list is not an item
+([ADR-0023](./adr/0023-the-store-holds-facts-about-plex-library-items-and-nothing-else),
+[ADR-0028](./adr/0028-list-decisions-and-fetch-attempts-are-keyed-by-list-url)).
+
+**Refresh rule.** Only `plexdb fold-list-decisions` writes `list_decision`, from
+[`list_decisions.json`](#list-decisions-json), as the sweep step after `fold-name-decisions`. Only
+`harvest-mdblist` acts on it and writes `list_attempt`:
+
+- `excluded` — every stored list with that URL is wiped (entries, memberships, row) whatever its
+  provenance, and the list is never fetched again, whether it comes from the feed or was added.
+- `added` — the URL is fetched even when the feed does not carry it, with provenance `added`. A list
+  that is also in the feed is fetched once, as `added`.
+- `refetch` — ignores the staleness window for one fetch: it is pending while the list's
+  `observed_at` is before the decision's `decided_at`, and the fetch moves `observed_at` past it.
+- `retry` — clears the failure count of a list whose last attempt is before the decision's
+  `decided_at`, then fetches it.
+- `removed` — drops a stored list a person added and forgets its failures. On a feed list it does
+  nothing: the feed names it again at the next harvest, and `excluded` is the decision that keeps it
+  out.
+
+A fetch that fails because MDBList answered something other than the list (a 404 for a URL that
+names no list, a 5xx, a body that is not JSON) adds one to the list's `attempts` and the harvest goes
+on to the next list. After 3 failed fetches in a row the harvest leaves the list alone until a
+`retry` decision. A failure that says nothing about one list (the daily quota spent, a refused key,
+no answer at all) ends the run instead and is recorded against no list. `plexdb check` and the list
+table report a list in a failed state, with the reason.
+
+The migration only adds, so `reader_shape` stays 10.
+
+### `list_decisions.json`
+
+A decision reaches `list_decision` only through this file, for the same reason as
+[`merge_decisions.json`](#merge-decisions-json), and it sits in the same directory. It is a JSON
+list:
+
+```json
+[
+  {"url": "https://mdblist.com/lists/pierce/horror-picks", "decision": "added",
+   "decided_at": "2026-10-15T12:00:00+00:00"},
+  {"url": "https://mdblist.com/lists/lina/top-watched", "decision": "excluded",
+   "decided_at": "2026-10-15T12:05:00+00:00"}
+]
+```
+
+`url` is any spelling of an MDBList list URL; the store keys on its canonical form. `decision` is
+`added`, `excluded`, `refetch`, `retry` or `removed`; `decided_at` is a UTC time. Entries apply in
+list order, so the last entry for a list wins, and a write keeps one entry per list. A file with a
+URL that is not an MDBList list is refused whole. Letterboxd URLs are not accepted yet.
+
+Plex DB-EX writes the file with `POST /api/list-decisions` (`{url, decision}`; `added` and `excluded`
+take any MDBList list URL, the other three need a list the store, its decisions or its failures
+already name, else 404) and lays it over the list table, so a decision shows at once with a dashed
+outline and a badge (`Waiting for sweep`, `Excluded · next sweep removes it`) until the sweep acts.
 
 ## Reading the store to build collections
 

@@ -18,7 +18,7 @@ import pytest
 from mdblist_fixtures import FakeMDBListSource, a_list, an_entry
 
 from plexdb.collections import MDBLIST_SOURCE, refresh_mdblist, wipe_source
-from plexdb.errors import MDBListError
+from plexdb.errors import MDBListError, MDBListQuotaError
 from plexdb.store import init as init_store
 from plexdb.store import open_store
 
@@ -408,18 +408,194 @@ def test_each_list_logs_one_line_with_url_status_counts_and_outcome(
     assert lines[1].startswith("mdblist: https://mdblist.com/lists/lina/top-watched -> cached")
 
 
-def test_a_failed_fetch_logs_its_status_and_reason_and_raises(
+def test_a_failed_fetch_logs_its_status_and_reason_and_is_recorded(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    class Failing(FakeMDBListSource):
-        def list_entries(self, list_id: int) -> Any:
-            raise MDBListError("MDBList returned 503 for https://api.mdblist.com/x", 503)
-
+    source = FakeMDBListSource(
+        lists=[a_list(14, slug="s", user_name="u"), a_list(15, slug="t", user_name="u")],
+        failing={14: MDBListError("MDBList returned 503 for https://api.mdblist.com/x", 503)},
+        entries_by_list={15: [an_entry(imdb="tt9999999")]},
+    )
     with _open(tmp_path / "plexdb.db") as conn:
-        with pytest.raises(MDBListError):
-            refresh_mdblist(conn, Failing(lists=[a_list(14, slug="s", user_name="u")]))
+        stats = refresh_mdblist(conn, source)
+        row = conn.execute("SELECT * FROM list_attempt").fetchone()
 
-    assert capsys.readouterr().out.splitlines() == [
+    assert (stats.lists_failed, stats.lists_fetched) == (1, 1)
+    assert tuple(row)[:2] == ("https://mdblist.com/lists/u/s", 1)
+    assert row["reason"] == "MDBList returned 503 for https://api.mdblist.com/x"
+    assert capsys.readouterr().out.splitlines()[0] == (
         "mdblist: https://mdblist.com/lists/u/s -> HTTP 503, "
         "failed: MDBList returned 503 for https://api.mdblist.com/x"
+    )
+
+
+# ---- list decisions (plex-db-ex-k1q.5) ----
+
+SLUG_URL = "https://mdblist.com/lists/lina/top-watched"
+
+
+def _decide(conn: sqlite3.Connection, url: str, decision: str, *, added: int = 0) -> None:
+    conn.execute(
+        "INSERT INTO list_decision (url, decision, decided_at, added) VALUES (?, ?, ?, ?) "
+        "ON CONFLICT (url) DO UPDATE SET decision = excluded.decision, "
+        "decided_at = excluded.decided_at, added = excluded.added",
+        (url, decision, datetime.now(UTC).isoformat(timespec="seconds"), added),
+    )
+    conn.commit()
+
+
+def _lists_stored(conn: sqlite3.Connection) -> list[tuple[str, str]]:
+    return [
+        tuple(r)
+        for r in conn.execute("SELECT collection_id, provenance FROM collection ORDER BY 1")
     ]
+
+
+def _top(list_id: int = 14, **kw: Any) -> FakeMDBListSource:
+    return FakeMDBListSource(
+        lists=[a_list(list_id, slug="top-watched", user_name="lina")],
+        entries_by_list={list_id: [an_entry(imdb="tt9999999")]},
+        **kw,
+    )
+
+
+def test_an_excluded_list_is_wiped_and_never_fetched_again(tmp_path: Path) -> None:
+    with _open(tmp_path / "plexdb.db") as conn:
+        refresh_mdblist(conn, _top())
+        assert _lists_stored(conn) == [("mdblist:14", "feed")]
+        _decide(conn, SLUG_URL, "excluded")
+        source = _top()
+
+        stats = refresh_mdblist(conn, source, stale_days=0)
+
+        assert _lists_stored(conn) == []
+        assert conn.execute("SELECT COUNT(*) FROM collection_entry").fetchone()[0] == 0
+        assert source.entry_calls == []
+        assert (stats.lists_excluded, stats.lists_removed) == (1, 1)
+
+
+def test_an_added_url_is_fetched_with_provenance_added(tmp_path: Path) -> None:
+    named = a_list(77, name="Mine", slug="mine", user_name="pierce")
+    source = FakeMDBListSource(
+        named={("pierce", "mine"): named}, entries_by_list={77: [an_entry(imdb="tt9999999")]}
+    )
+    with _open(tmp_path / "plexdb.db") as conn:
+        _decide(conn, "https://mdblist.com/lists/pierce/mine", "added", added=1)
+
+        refresh_mdblist(conn, source)
+
+        assert _lists_stored(conn) == [("mdblist:77", "added")]
+        url = conn.execute("SELECT url FROM collection").fetchone()[0]
+        assert url == "https://mdblist.com/lists/pierce/mine"
+        assert source.find_calls == [("pierce", "mine")]
+
+
+def test_an_added_list_that_is_also_in_the_feed_is_fetched_once_as_added(tmp_path: Path) -> None:
+    source = _top()
+    with _open(tmp_path / "plexdb.db") as conn:
+        _decide(conn, SLUG_URL, "added", added=1)
+
+        refresh_mdblist(conn, source)
+
+        assert source.entry_calls == [14]
+        assert source.find_calls == []
+        assert _lists_stored(conn) == [("mdblist:14", "added")]
+
+
+def test_refetch_ignores_staleness_once(tmp_path: Path) -> None:
+    source = _top()
+    with _open(tmp_path / "plexdb.db") as conn:
+        refresh_mdblist(conn, source)
+        conn.execute("UPDATE collection SET observed_at = '2000-01-01T00:00:00+00:00'")
+        _decide(conn, SLUG_URL, "refetch")
+
+        refresh_mdblist(conn, source)
+        assert source.entry_calls == [14, 14]
+
+        stats = refresh_mdblist(conn, source)
+        assert source.entry_calls == [14, 14]
+        assert stats.lists_cached == 1
+
+
+def test_removing_an_added_list_drops_it_but_not_a_feed_list(tmp_path: Path) -> None:
+    named = a_list(77, slug="mine", user_name="pierce")
+    source = FakeMDBListSource(
+        lists=[a_list(14, slug="top-watched", user_name="lina")],
+        named={("pierce", "mine"): named},
+        entries_by_list={14: [an_entry(imdb="tt9999999")], 77: [an_entry(imdb="tt9999999")]},
+    )
+    mine = "https://mdblist.com/lists/pierce/mine"
+    with _open(tmp_path / "plexdb.db") as conn:
+        _decide(conn, mine, "added", added=1)
+        refresh_mdblist(conn, source)
+        assert _lists_stored(conn) == [("mdblist:14", "feed"), ("mdblist:77", "added")]
+
+        _decide(conn, mine, "removed")
+        _decide(conn, SLUG_URL, "removed")
+        refresh_mdblist(conn, source)
+
+        assert _lists_stored(conn) == [("mdblist:14", "feed")]
+
+
+def test_three_failures_in_a_row_stop_a_list_until_a_retry_decision(tmp_path: Path) -> None:
+    failing = {14: MDBListError("MDBList returned 503 for u", 503)}
+    source = _top(failing=failing)
+    with _open(tmp_path / "plexdb.db") as conn:
+        for _ in range(3):
+            refresh_mdblist(conn, source)
+        assert source.entry_calls == [14, 14, 14]
+        assert conn.execute("SELECT attempts FROM list_attempt").fetchone()[0] == 3
+
+        stats = refresh_mdblist(conn, source)
+        assert source.entry_calls == [14, 14, 14]
+        assert stats.lists_stopped == 1
+
+        conn.execute("UPDATE list_attempt SET attempted_at = '2000-01-01T00:00:00+00:00'")
+        _decide(conn, SLUG_URL, "retry")
+        source.failing.clear()
+        refresh_mdblist(conn, source)
+
+        assert source.entry_calls == [14, 14, 14, 14]
+        assert conn.execute("SELECT COUNT(*) FROM list_attempt").fetchone()[0] == 0
+        assert _lists_stored(conn) == [("mdblist:14", "feed")]
+
+
+def test_a_retry_that_fails_again_counts_from_one(tmp_path: Path) -> None:
+    source = _top(failing={14: MDBListError("MDBList returned 503 for u", 503)})
+    with _open(tmp_path / "plexdb.db") as conn:
+        conn.execute(
+            "INSERT INTO list_attempt (list_key, attempts, attempted_at, reason) "
+            "VALUES (?, 3, '2000-01-01T00:00:00+00:00', 'old')",
+            (SLUG_URL,),
+        )
+        _decide(conn, SLUG_URL, "retry")
+
+        refresh_mdblist(conn, source)
+
+        assert conn.execute("SELECT attempts FROM list_attempt").fetchone()[0] == 1
+
+
+def test_a_list_url_that_does_not_exist_is_a_recorded_failure(tmp_path: Path) -> None:
+    source = FakeMDBListSource()
+    with _open(tmp_path / "plexdb.db") as conn:
+        _decide(conn, "https://mdblist.com/lists/pierce/gone", "added", added=1)
+
+        stats = refresh_mdblist(conn, source)
+
+        assert stats.lists_failed == 1
+        row = conn.execute("SELECT list_key, attempts FROM list_attempt").fetchone()
+        assert tuple(row) == ("https://mdblist.com/lists/pierce/gone", 1)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [MDBListQuotaError("quota", 429), MDBListError("refused", 403)],
+)
+def test_a_failure_about_no_one_list_stops_the_run_and_records_nothing(
+    tmp_path: Path, error: MDBListError
+) -> None:
+    source = _top(failing={14: error})
+    with _open(tmp_path / "plexdb.db") as conn:
+        with pytest.raises(MDBListError):
+            refresh_mdblist(conn, source)
+        assert conn.execute("SELECT COUNT(*) FROM list_attempt").fetchone()[0] == 0

@@ -50,6 +50,7 @@ EXPECTED_COMMANDS = {
     "fold-merge-decisions",
     "fold-role-decisions",
     "fold-name-decisions",
+    "fold-list-decisions",
     "prune-keyword-verdicts",
     "judge-keyword-pairs",
     "judge-keyword-roles",
@@ -58,6 +59,7 @@ EXPECTED_COMMANDS = {
     "latent-users",
     "lists",
     "list",
+    "list-decide",
     "explore",
     "repair-identities",
     "repair-fs-identities",
@@ -80,6 +82,7 @@ EXPECTED_COMMAND_ORDER = [
     "fold-merge-decisions",
     "fold-role-decisions",
     "fold-name-decisions",
+    "fold-list-decisions",
     "walk",
     "repair-identities",
     "repair-fs-identities",
@@ -103,6 +106,8 @@ EXPECTED_COMMAND_ORDER = [
     # (`plexdb/commands/lists.py`, `plexdb/commands/list_one.py`).
     "lists",
     "list",
+    # Records a decision about one of them (`plexdb/commands/list_decide.py`).
+    "list-decide",
     # Not a step of the sweep: a read-only browser view of what the steps above
     # wrote (`plexdb/commands/explore.py`).
     "explore",

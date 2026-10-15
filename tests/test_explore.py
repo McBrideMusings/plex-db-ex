@@ -1874,3 +1874,92 @@ def test_lists_tab_names_the_empty_state(browser: Browser, store: Path, base_url
     page.wait_for_selector("#lempty:not([hidden])")
     assert "No lists stored yet" in page.locator("#lempty").inner_text()
     page.close()
+
+
+# ---- curating lists (plex-db-ex-k1q.5) ----
+
+
+def test_list_decisions_route_records_a_decision_and_the_table_shows_it_pending(
+    store: Path, base_url: str
+) -> None:
+    _add_lists(store)
+    url = "https://mdblist.com/lists/lina/mf"
+    status, out = _send(
+        "POST", f"{base_url}/api/list-decisions", {"url": url, "decision": "refetch"}
+    )
+    assert status == 200 and out["entry"]["decision"] == "refetch"  # type: ignore[index]
+    status, out = _send(
+        "POST",
+        f"{base_url}/api/list-decisions",
+        {"url": "https://www.mdblist.com/lists/Pierce/New/", "decision": "added"},
+    )
+    assert status == 200
+    _, table = _send("GET", f"{base_url}/api/lists")
+    rows = {r["url"]: r for r in cast(list[dict[str, Any]], table["lists"])}
+    assert rows[url]["pending"] == "Waiting for sweep"
+    new = rows["https://mdblist.com/lists/pierce/new"]
+    assert (new["collection_id"], new["state"], new["pending"]) == (
+        None,
+        "waiting",
+        "Waiting for sweep",
+    )
+
+
+def test_list_decisions_route_refuses_what_it_cannot_apply(store: Path, base_url: str) -> None:
+    _add_lists(store)
+    for body, expected in [
+        ({"url": "https://example.com/x", "decision": "added"}, 400),
+        ({"url": "https://mdblist.com/lists/lina/mf", "decision": "deleted"}, 400),
+        ({"url": "https://mdblist.com/lists/nobody/none", "decision": "retry"}, 404),
+    ]:
+        status, _ = _send("POST", f"{base_url}/api/list-decisions", body)
+        assert status == expected, body
+
+
+def test_lists_tab_adds_excludes_and_shows_a_failed_list(
+    browser: Browser, store: Path, base_url: str
+) -> None:
+    _add_lists(store)
+    with open_store(store) as conn:
+        conn.execute(
+            "INSERT INTO list_attempt (list_key, attempts, attempted_at, reason) VALUES "
+            "('https://mdblist.com/lists/pierce/gone', 3, '2026-10-14T03:30:00+00:00', "
+            "'MDBList returned 404')"
+        )
+        conn.execute(
+            "INSERT INTO list_decision (url, decision, decided_at, added) VALUES "
+            "('https://mdblist.com/lists/pierce/gone', 'added', '2026-10-13T00:00:00+00:00', 1)"
+        )
+        conn.commit()
+    page = browser.new_page(viewport={"width": 1280, "height": 800})
+    page.goto(f"{base_url}/#tab=lists")
+    page.wait_for_selector("#ltable tbody tr")
+
+    page.fill("#laddurl", "https://mdblist.com/lists/pierce/new")
+    page.click("#ladd")
+    page.wait_for_selector("#ltable tr.waiting")
+    assert "Waiting for sweep" in page.locator("#ltable tr.waiting").inner_text()
+    page.wait_for_function("document.querySelector('#laddurl').value === ''")
+    assert "The next sweep fetches it" in page.locator("#laddstatus").inner_text()
+
+    page.fill("#laddurl", "https://example.com/x")
+    page.click("#ladd")
+    page.wait_for_function("document.querySelector('#laddstatus').classList.contains('bad')")
+
+    page.locator("#ltable tbody tr", has_text="pierce/gone").click()
+    inspector = page.locator("#linspect")
+    inspector.get_by_text("Fetch failed 3 times in a row").wait_for()
+    assert "MDBList returned 404" in inspector.inner_text()
+    assert "stopped trying until you retry" in inspector.inner_text()
+    assert inspector.get_by_role("button").all_text_contents().count("Retry") == 1
+    inspector.get_by_role("button", name="Retry").click()
+    page.wait_for_selector("#linspect .lpending")
+    assert "Waiting for sweep" in inspector.inner_text()
+
+    page.locator("#ltable tbody tr", has_text="Mindfuck Movies").click()
+    page.wait_for_selector("#linspect .lentries li")
+    inspector.get_by_role("button", name="Exclude").click()
+    page.wait_for_selector("#linspect .lpending")
+    assert "Excluded · next sweep removes it" in inspector.inner_text()
+    assert inspector.get_by_role("button", name="Retry").count() == 0
+    page.close()

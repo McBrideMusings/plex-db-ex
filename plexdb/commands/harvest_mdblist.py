@@ -33,6 +33,8 @@ def _report(stats: HarvestStats) -> list[str]:
     return [
         f"mdblist: {stats.lists_seen} list(s) seen, {stats.lists_fetched} fetched, "
         f"{stats.lists_cached} already cached, "
+        f"{stats.lists_failed} failed, {stats.lists_stopped} stopped after repeated failures, "
+        f"{stats.lists_excluded} excluded, {stats.lists_removed} dropped, "
         f"{stats.entries_stored} entry(s) stored, "
         f"{stats.memberships_written} membership(s) written, "
         f"{stats.entries_not_in_library} entry(s) skipped (not in library), "

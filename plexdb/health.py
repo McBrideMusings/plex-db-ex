@@ -78,6 +78,17 @@ class Duplicate:
 
 
 @dataclass(frozen=True)
+class FailedList:
+    """A crowd list whose fetch failed: which, how many times in a row, when last, why."""
+
+    url: str
+    attempts: int
+    attempted_at: str
+    reason: str
+    stopped: bool
+
+
+@dataclass(frozen=True)
 class SourceLists:
     """The crowd lists one source contributed: how many, how many entries are
     stored, and how many of those entries name a title the library owns."""
@@ -86,6 +97,8 @@ class SourceLists:
     lists: int
     entries: int
     owned: int
+    #: Lists whose latest fetches failed, with the reason (`lists.list_table`'s `failure`).
+    failed: tuple[FailedList, ...] = ()
 
     @property
     def owned_share(self) -> float | None:
@@ -302,12 +315,27 @@ def _lists(conn: sqlite3.Connection, tables: set[str]) -> tuple[SourceLists, ...
     if "collection_entry" not in tables or not _has(conn, "collection", "provenance", tables):
         return ()
     totals: dict[str, list[int]] = {}
+    failed: dict[str, list[FailedList]] = {}
     for row in list_table(conn):
         total = totals.setdefault(row["source"], [0, 0, 0])
         total[0] += 1
         total[1] += row["entry_count"]
         total[2] += row["owned"]
-    return tuple(SourceLists(source, *total) for source, total in sorted(totals.items()))
+        if row["failure"]:
+            failure = row["failure"]
+            failed.setdefault(row["source"], []).append(
+                FailedList(
+                    row["url"] or str(row["collection_id"]),
+                    failure["attempts"],
+                    failure["attempted_at"],
+                    failure["reason"],
+                    failure["stopped"],
+                )
+            )
+    return tuple(
+        SourceLists(source, total[0], total[1], total[2], tuple(failed.get(source, ())))
+        for source, total in sorted(totals.items())
+    )
 
 
 def _backups(directory: Path) -> Backups | None:

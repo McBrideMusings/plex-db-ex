@@ -45,7 +45,8 @@ from .decisions import SAVED_FILE
 from .errors import DecisionsFileError, StoreError
 from .identity import PRIORITY
 from .keywords import is_carried, keyword_spellings
-from .lists import list_detail, list_table
+from .list_decisions import LIST_DECISIONS_FILE, ListDecisions, UnknownList, decide
+from .lists import list_detail, list_table, with_pending
 from .merge_review import (
     MERGE_AT,
     MERGE_DECISIONS_FILE,
@@ -2150,6 +2151,7 @@ def make_server(
     merges = MergeDecisions(saved_file.with_name(MERGE_DECISIONS_FILE))
     roles = RoleDecisions(saved_file.with_name(ROLE_DECISIONS_FILE))
     names = NameDecisions(saved_file.with_name(NAME_DECISIONS_FILE))
+    list_decisions = ListDecisions(saved_file.with_name(LIST_DECISIONS_FILE))
     posters = PosterProxy(store_path, plex_url, plex_token, poster_http)
 
     class Handler(BaseHTTPRequestHandler):
@@ -2227,6 +2229,21 @@ def make_server(
                     file=sys.stderr,
                 )
                 self._json({"cell": cell, "entry": entry})
+                return
+            if path == "/api/list-decisions":
+                body = self._body()
+                try:
+                    with open_readonly(store_path) as conn:
+                        entry = decide(conn, list_decisions, body.get("url"), body.get("decision"))
+                except UnknownList as err:
+                    self._json({"error": f"no stored list has the URL {err}"}, HTTPStatus.NOT_FOUND)
+                    return
+                print(
+                    f"explore: list decision {entry['url']!r} {entry['decision']} "
+                    f"-> {list_decisions.path}",
+                    file=sys.stderr,
+                )
+                self._json({"entry": entry})
                 return
             if path == "/api/names":
                 body = self._body()
@@ -2351,7 +2368,8 @@ def make_server(
                     self._json(roles_json(conn, roles.latest(), labels, query.get("q", "")))
             elif url.path == "/api/lists":
                 with open_readonly(store_path) as conn:
-                    self._json({"lists": list_table(conn, source=query.get("source") or None)})
+                    rows = list_table(conn, source=query.get("source") or None)
+                self._json({"lists": with_pending(rows, list_decisions.latest())})
             elif url.path == "/api/list":
                 ref = query.get("ref")
                 if not ref:

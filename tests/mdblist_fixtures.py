@@ -18,6 +18,7 @@ from typing import Any
 
 import httpx
 
+from plexdb.errors import MDBListError
 from plexdb.mdblist_client import (
     LiveMDBListClient,
     MDBListContents,
@@ -45,12 +46,27 @@ class FakeMDBListSource:
     lists: list[MDBListList] = field(default_factory=list)
     entries_by_list: dict[int, list[MDBListEntry]] = field(default_factory=dict)
     entry_calls: list[int] = field(default_factory=list)
+    #: Lists a URL can name that the top lists do not carry, by `(user, slug)`.
+    named: dict[tuple[str, str], MDBListList] = field(default_factory=dict)
+    #: The `(user, slug)` of every `find_list` asked, in order.
+    find_calls: list[tuple[str, str]] = field(default_factory=list)
+    #: List ids whose entries fail with this error when asked for.
+    failing: dict[int, MDBListError] = field(default_factory=dict)
 
     def top_lists(self) -> list[MDBListList]:
         return list(self.lists)
 
+    def find_list(self, user_name: str, slug: str) -> MDBListList:
+        self.find_calls.append((user_name, slug))
+        found = self.named.get((user_name, slug))
+        if found is None:
+            raise MDBListError(f"MDBList returned 404 for /lists/{user_name}/{slug}", 404)
+        return found
+
     def list_entries(self, list_id: int) -> MDBListContents:
         self.entry_calls.append(list_id)
+        if list_id in self.failing:
+            raise self.failing[list_id]
         return MDBListContents(
             status=200,
             entries=list(self.entries_by_list.get(list_id, [])),

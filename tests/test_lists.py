@@ -110,6 +110,9 @@ def test_the_list_table_counts_owned_and_watched_entries_at_read_time(store: Pat
             "watched": 2,
             "likes": None,
             "fetched_at": rows[0]["fetched_at"],
+            "decision": None,
+            "failure": None,
+            "state": "ok",
         }
     ]
     with open_store(store) as conn:

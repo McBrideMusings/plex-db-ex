@@ -36,9 +36,10 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from .errors import MDBListError
+from .errors import MDBListError, MDBListQuotaError, MDBListUnreachable
 from .identity import PRIORITY
-from .mdblist_client import MDBListSource
+from .list_decisions import canonical_list_url, is_before, list_url_parts
+from .mdblist_client import MDBListList, MDBListSource
 
 # Re-exported (redundant `as` alias) so tests can check that every sweep binds
 # the exact same function/constant object rather than a drifted copy — see
@@ -52,6 +53,15 @@ MDBLIST_SOURCE = "mdblist"
 #: `collection.provenance` of a list that arrived from a source's own top lists.
 FEED = "feed"
 
+#: `collection.provenance` of a list a person added by URL (`list_decisions.json`).
+ADDED = "added"
+
+#: Failures in a row after which a list is not fetched again until a `retry` decision.
+MAX_FAILURES = 3
+
+#: The longest failure reason kept in `list_attempt`.
+REASON_MAX = 300
+
 
 @dataclass
 class HarvestStats:
@@ -60,6 +70,13 @@ class HarvestStats:
     lists_seen: int = 0
     lists_fetched: int = 0
     lists_cached: int = 0
+    #: Lists whose fetch failed this run (recorded in `list_attempt`), lists left alone
+    #: because they have failed `MAX_FAILURES` times in a row, and lists a person
+    #: excluded or removed.
+    lists_failed: int = 0
+    lists_stopped: int = 0
+    lists_excluded: int = 0
+    lists_removed: int = 0
     #: Entries the source returned, and the distinct `(ns, value, kind)` rows
     #: kept in `collection_entry` (an id listed twice is stored once).
     entries_parsed: int = 0
@@ -132,14 +149,118 @@ def _resolve(
     return None
 
 
+def _drop_lists(conn: sqlite3.Connection, collection_ids: list[str]) -> None:
+    """Delete these lists' entries, memberships and collection rows (explicitly, not by
+    cascade: `PRAGMA foreign_keys` is not guaranteed on)."""
+    with conn:
+        for collection_id in collection_ids:
+            for table in ("collection_membership", "collection_entry", "collection"):
+                conn.execute(f"DELETE FROM {table} WHERE collection_id = ?", (collection_id,))  # noqa: S608
+
+
+def _apply_removals(
+    conn: sqlite3.Connection, decisions: dict[str, sqlite3.Row], stats: HarvestStats
+) -> set[str]:
+    """Act on the `excluded` and `removed` decisions: wipe an excluded list whatever its
+    provenance, drop a removed list only if a person added it, and forget either's failed
+    fetches. Returns the URLs that must not be fetched."""
+    kept: set[str] = set()
+    stored = conn.execute(
+        "SELECT collection_id, url, provenance FROM collection WHERE source = ?",
+        (MDBLIST_SOURCE,),
+    ).fetchall()
+    for url, decision in decisions.items():
+        verdict = decision["decision"]
+        if verdict not in ("excluded", "removed"):
+            continue
+        if verdict == "excluded":
+            kept.add(url)
+        doomed = [
+            row["collection_id"]
+            for row in stored
+            if canonical_list_url(row["url"] or "") == url
+            and (verdict == "excluded" or row["provenance"] == ADDED)
+        ]
+        if doomed:
+            _drop_lists(conn, doomed)
+            stats.lists_removed += len(doomed)
+            print(f"mdblist: {url} -> {verdict}, dropped {len(doomed)} stored list(s)", flush=True)
+        with conn:
+            conn.execute("DELETE FROM list_attempt WHERE list_key = ?", (url,))
+    return kept
+
+
+def _systemic(err: MDBListError) -> bool:
+    """A failure that says nothing about one list: the quota is spent, the key is refused,
+    or MDBList never answered. The run stops instead of charging it to every list."""
+    return isinstance(err, MDBListQuotaError | MDBListUnreachable) or err.status in (401, 403)
+
+
+def _record_failure(
+    conn: sqlite3.Connection, key: str, held: sqlite3.Row | None, now_iso: str, reason: str
+) -> int:
+    attempts = 1 if held is None else held["attempts"] + 1
+    with conn:
+        conn.execute(
+            "INSERT INTO list_attempt (list_key, attempts, attempted_at, reason) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT (list_key) DO UPDATE SET "
+            "attempts = excluded.attempts, attempted_at = excluded.attempted_at, "
+            "reason = excluded.reason",
+            (key, attempts, now_iso, reason[:REASON_MAX]),
+        )
+    return attempts
+
+
+@dataclass
+class _Unit:
+    """One list to consider: the key its decisions and failures are filed under, the URL
+    to show, what the feed already said about it (`None` for a list known only by URL),
+    and how it arrived."""
+
+    key: str
+    url: str | None
+    meta: MDBListList | None
+    provenance: str
+
+
+def _units(
+    source: MDBListSource,
+    decisions: dict[str, sqlite3.Row],
+    excluded: set[str],
+    stats: HarvestStats,
+) -> list[_Unit]:
+    """The feed's lists, then every list a person added that the feed did not name. An
+    excluded list is counted and left out; an added list that is also in the feed is
+    fetched once, as added."""
+    added = {url for url, row in decisions.items() if row["added"]}
+    units: list[_Unit] = []
+    seen: set[str] = set()
+    for meta in source.top_lists():
+        url = (
+            f"https://mdblist.com/lists/{meta.user_name}/{meta.slug}"
+            if meta.user_name and meta.slug
+            else None
+        )
+        key = canonical_list_url(url) if url else None
+        key = key or f"{MDBLIST_SOURCE}:{meta.list_id}"
+        seen.add(key)
+        if key in excluded:
+            stats.lists_excluded += 1
+            continue
+        units.append(_Unit(key, url, meta, ADDED if key in added else FEED))
+    for url in sorted(added - seen - excluded):
+        units.append(_Unit(url, url, None, ADDED))
+    return units
+
+
 def refresh_mdblist(
     conn: sqlite3.Connection,
     source: MDBListSource,
     *,
     stale_days: int = DEFAULT_STALE_DAYS,
 ) -> HarvestStats:
-    """Refresh every MDBList top list into `collection`, `collection_entry` and
-    `collection_membership`.
+    """Refresh every MDBList top list, and every list a person added by URL, into
+    `collection`, `collection_entry` and `collection_membership`.
 
     A list whose `collection` row is inside the staleness window and already
     holds entries is not re-fetched, so a re-run costs one request rather than
@@ -149,14 +270,27 @@ def refresh_mdblist(
     A list stored before entries were kept has a fresh row and no entries, so it
     is fetched once more.
 
+    `list_decision` (folded from `list_decisions.json`) steers the run. An excluded list is
+    wiped and never fetched; a removed list a person added is dropped; an added URL is
+    fetched with provenance `added`; a `refetch` decided after a list was last fetched
+    ignores staleness for that fetch. A list whose fetch fails — MDBList answered, but not
+    with the list — records the attempt in `list_attempt` and the run goes on; after
+    `MAX_FAILURES` failures in a row the list is left alone until a `retry` decided after
+    the last attempt clears the count. A failure that says nothing about one list (the quota,
+    a refused key, no answer) stops the run instead.
+
     Every list prints one log line: its URL, the HTTP status, the entries
     parsed and resolved to the library, and the outcome — `written`, `cached`,
-    or `failed` with the reason, after which the error propagates.
+    `stopped`, or `failed` with the reason.
     """
     now = datetime.now(UTC)
     cutoff = now - timedelta(days=stale_days)
     now_iso = now.isoformat(timespec="seconds")
     stats = HarvestStats()
+
+    decisions = {row["url"]: row for row in conn.execute("SELECT * FROM list_decision")}
+    excluded = _apply_removals(conn, decisions, stats)
+    attempts = {row["list_key"]: row for row in conn.execute("SELECT * FROM list_attempt")}
 
     index = _resolve_index(conn)
     stocked = {
@@ -170,33 +304,83 @@ def refresh_mdblist(
             (MDBLIST_SOURCE,),
         )
     }
+    by_url: dict[str, str] = {}
+    for row in conn.execute(
+        "SELECT collection_id, url FROM collection WHERE source = ? AND url IS NOT NULL",
+        (MDBLIST_SOURCE,),
+    ):
+        canonical = canonical_list_url(row["url"])
+        if canonical:
+            by_url[canonical] = row["collection_id"]
 
-    for meta in source.top_lists():
+    for unit in _units(source, decisions, excluded, stats):
         stats.lists_seen += 1
-        collection_id = f"{MDBLIST_SOURCE}:{meta.list_id}"
+        label = unit.url or unit.key
+        collection_id = (
+            f"{MDBLIST_SOURCE}:{unit.meta.list_id}" if unit.meta else by_url.get(unit.key)
+        )
+        seen_at = observed.get(collection_id) if collection_id else None
+        decision = decisions.get(unit.key)
+        held = attempts.get(unit.key)
 
+        if (
+            held is not None
+            and decision is not None
+            and decision["decision"] == "retry"
+            and is_before(held["attempted_at"], decision["decided_at"])
+        ):
+            with conn:
+                conn.execute("DELETE FROM list_attempt WHERE list_key = ?", (unit.key,))
+            held = None
+        if held is not None and held["attempts"] >= MAX_FAILURES:
+            stats.lists_stopped += 1
+            print(
+                f"mdblist: {label} -> stopped after {held['attempts']} failed fetches "
+                f"(last {held['attempted_at']}: {held['reason']}); decide retry to try again",
+                flush=True,
+            )
+            continue
+
+        refetch = (
+            decision is not None
+            and decision["decision"] == "refetch"
+            and (seen_at is None or is_before(seen_at, decision["decided_at"]))
+        )
+        if (
+            not refetch
+            and seen_at is not None
+            and not is_stale(seen_at, cutoff)
+            and collection_id in stocked
+        ):
+            stats.lists_cached += 1
+            print(f"mdblist: {label} -> cached (fetched {seen_at})", flush=True)
+            continue
+
+        meta = unit.meta
+        try:
+            if meta is None:
+                parts = list_url_parts(unit.key)
+                if parts is None:
+                    raise MDBListError(f"{unit.key} is not an MDBList list URL")
+                meta = source.find_list(*parts)
+            contents = source.list_entries(meta.list_id)
+        except MDBListError as err:
+            print(
+                f"mdblist: {label} -> HTTP {err.status or 'none'}, failed: {err}",
+                flush=True,
+            )
+            if _systemic(err):
+                raise
+            _record_failure(conn, unit.key, held, now_iso, str(err))
+            stats.lists_failed += 1
+            continue
+        collection_id = f"{MDBLIST_SOURCE}:{meta.list_id}"
         url = (
             f"https://mdblist.com/lists/{meta.user_name}/{meta.slug}"
             if meta.user_name and meta.slug
             else None
         )
-
-        seen_at = observed.get(collection_id)
-        if seen_at is not None and not is_stale(seen_at, cutoff) and collection_id in stocked:
-            stats.lists_cached += 1
-            print(f"mdblist: {url or collection_id} -> cached (fetched {seen_at})", flush=True)
-            continue
-
-        try:
-            contents = source.list_entries(meta.list_id)
-        except MDBListError as err:
-            print(
-                f"mdblist: {url or collection_id} -> HTTP {err.status or 'none'}, failed: {err}",
-                flush=True,
-            )
-            raise
         entries = contents.entries
-
         # Array position is the rank the list presents, 1-indexed. MDBList's
         # own `rank` field is a different ordering entirely and is ignored —
         # see `mdblist_client`'s docstring. A title outside the library is
@@ -244,7 +428,7 @@ def refresh_mdblist(
                     meta.size,
                     meta.likes,
                     now_iso,
-                    FEED,
+                    unit.provenance,
                 ),
             )
             conn.executemany(
@@ -259,6 +443,8 @@ def refresh_mdblist(
                     "VALUES (?, ?, ?, NULL, ?)",
                     (collection_id, item_id, rank, now_iso),
                 )
+
+            conn.execute("DELETE FROM list_attempt WHERE list_key = ?", (unit.key,))
 
         stats.lists_fetched += 1
         stats.entries_parsed += len(entries)

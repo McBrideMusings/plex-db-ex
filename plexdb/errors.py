@@ -87,6 +87,11 @@ class MDBListQuotaError(MDBListError):
     request would get the same answer, so a run stops rather than retrying."""
 
 
+class MDBListUnreachable(MDBListError):
+    """MDBList never answered. Every list would fail the same way, so a harvest stops
+    rather than recording the failure against each list."""
+
+
 class EmbeddingError(PlexdbError):
     """The embedding server could not be reached, or returned something unusable."""
 
@@ -115,3 +120,7 @@ class RoleDecisionsError(DecisionsFileError):
 
 class NameDecisionsError(DecisionsFileError):
     """`name_decisions.json` is not valid JSON or does not hold the documented shape."""
+
+
+class ListDecisionsError(DecisionsFileError):
+    """`list_decisions.json` is not valid JSON or does not hold the documented shape."""

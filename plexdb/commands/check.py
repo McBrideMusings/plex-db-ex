@@ -99,6 +99,17 @@ def render(report: Report) -> list[str]:
                 f"  {source_lists.source}: {source_lists.lists:,} list(s), "
                 f"{source_lists.entries:,} entries stored, {share}"
             )
+            if source_lists.failed:
+                lines.append(
+                    f"lists FAILED: {len(source_lists.failed):,} {source_lists.source} list(s) "
+                    "failed to fetch"
+                )
+                for failed in source_lists.failed:
+                    waiting = " — stopped until a retry decision" if failed.stopped else ""
+                    lines.append(
+                        f"  {failed.url}: {failed.attempts} failed fetch(es), last "
+                        f"{failed.attempted_at}: {failed.reason}{waiting}"
+                    )
 
     if report.duplicates:
         lines.append(f"identities with more than one rating key: {len(report.duplicates)}")

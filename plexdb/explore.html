@@ -384,6 +384,15 @@
   .lbar { display: block; height: 4px; margin-top: 3px; background: var(--chip); border-radius: 2px; overflow: hidden; min-width: 5em; }
   .lbar i { display: block; height: 100%; background: var(--accent); }
   .lstate { color: var(--muted); }
+  .lstate.failed { color: var(--noise); }
+  #ltable tr.waiting td:first-child { outline: 2px dashed var(--ink); outline-offset: -2px; }
+  #laddbar { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-bottom: 10px; }
+  #laddbar input[type="text"] { width: 28em; max-width: 100%; }
+  #laddstatus, #lactstatus { color: var(--muted); }
+  #laddstatus.bad, #lactstatus.bad, .lfail { color: var(--noise); }
+  .lpending { display: inline-block; margin-top: 4px; padding: 1px 8px; border-radius: 5px; font-size: 12px; background: var(--chip); color: var(--ink); outline: 2px dashed var(--ink); outline-offset: 1px; }
+  .lacts { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; }
+  .lfail { margin: 12px 0 0; overflow-wrap: anywhere; }
   #linspect h2 { font-size: 17px; margin: 0; overflow-wrap: anywhere; }
   #linspect h3 { font-size: 13px; margin: 16px 0 6px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
   .lhead { display: flex; gap: 8px; align-items: center; }
@@ -454,6 +463,11 @@
 <div id="error" class="err" hidden></div>
 <div id="listwrap" hidden>
   <section id="lmain">
+    <form id="laddbar" autocomplete="off">
+      <input type="text" id="laddurl" placeholder="https://mdblist.com/lists/user/list" aria-label="MDBList list URL to add">
+      <button type="submit" class="primary" id="ladd">Add a list</button>
+      <span id="laddstatus" role="status"></span>
+    </form>
     <p id="lsummary"></p>
     <div class="mtools">
       <input type="search" id="lfilter" placeholder="list name contains…" autocomplete="off" aria-label="Filter lists">
@@ -2589,7 +2603,10 @@ const SOURCES = {
   mdblist: { name: "MDBList", icon: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAERlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAAIKADAAQAAAABAAAAIAAAAACshmLzAAADG0lEQVRYCe1X3UsUURT/3bujbq7brmZUGpkKZUJYPdiLQRgY9CX+BUHhU9BbYhJFYfaQ1D9QT/0BKSQ9VQ9BoQQmEpWyKlimQq2fm6vz0Tkz7jous7uzS2s+dGBn7t455/x+59xzz50RgCHOdA00G5C3oenHIQRyKoYBeOSggH7vVUd9r2js7G+hqadSeIoNQ88pdsy5EBK6oYUp1KuSJu9IqWwZOJPgQBnTxAZEnaFrPL+lYmGKOs7AP5X/BFxnQNNpr7gU1nWrrTj5ZAcnDvrR2njAfLy4ouLZ2ykMTy7SFk7dJzTayTVlPlw+VYagL99sK0/efMOHsXlHW0cC3Ct2Fio4Uu6L86vY5cXDvnH0hxaQ5xFworGqEvFKP9ouVKK8xBu3DZAv9ukkSZcg0WBPsADtl6rRcChIzjanmH3rNHeyOoCbpGMHZ9BEX3YiSQnYlWLjUn8e2purcLq2BBrlmoH5p9K44XAxOlqqsTeYH1N3dXdFgOtvei5qOgzsUHDjfCXOHdsNWglwSTQdLUXbxSqU+KwVnZmP0rHC1NKLKwLs7PHLCXyZWjY9FhZ4cK2pArX7i1Czz4frZyvg93rMZ6PTETzqm0BUdXeuuCLAUX79EcGD3jF8mlwygYoIMEjFFaCoeczCBFnnM93TbBZTny+uCLAiV/7YbAT3e0P4OLHAU1YBUKYloQ0Tsc7nIYxOL5u6lkL6q2sC7EohEt/DUXRRlO9G5uhNwgJ4PzqHrp4QJn+ukE5GLuHYB1LxVija2YVVdFNP4DGXWveLcfxaWjMJuqy9OETGBNiSu2F4eY2akZUC7gq8DNlIVgQYSNpe3WJEsiGQ2YJlg5DGZvsSsGXY8RRLE9gmG7uvRDvnGqB6WlrREZqJmCeJSqWtaVzv7gqNj+QRalxehaqDinPxt5rUlF7LB5I2bTtcUqXEkNb/x21pkOo0dM7AupNMQe1c4rbxgf3pxnj7FuEGx9yOtkMGjCEhreM0t7Fu9m5hGkOcgbu6rob5g3GrxPw4JUzGlq9v1fdIiSuGMAZT7pe/xY5faAmLMRn7DzOkA7XltkInAAAAAElFTkSuQmCC" },
   letterboxd: { name: "Letterboxd", icon: "data:image/png;base64,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" },
 };
-const lst = { ready: false, lists: [], source: "", selected: null, detail: null, loading: 0 };
+const lst = { ready: false, lists: [], source: "", selected: null, detail: null, loading: 0, busy: false };
+// A row with no collection_id is a list added or failing before it was ever stored; its URL names it.
+const rowId = l => l.collection_id ?? l.url;
+const rowOf = id => lst.lists.find(l => rowId(l) === id);
 const srcName = s => SOURCES[s]?.name ?? s;
 function srcIcon(s, cls = "") {
   const icon = SOURCES[s]?.icon;
@@ -2602,7 +2619,11 @@ function howItGotHere(l) {
   return `${srcName(l.source)} top lists`;
 }
 // `size` is what the source says the list holds, so fewer stored entries than that is a partial fetch.
-const listState = l => (l.size && l.entry_count < l.size ? "Partial" : "Complete");
+function listState(l) {
+  if (l.failure) return l.failure.stopped ? "Failed · stopped" : `Failed · attempt ${l.failure.attempts}`;
+  if (l.collection_id === null) return "Not fetched yet";
+  return l.size && l.entry_count < l.size ? "Partial" : "Complete";
+}
 
 function lStatus(text, bad = false) { const n = qEl("lstatus"); n.className = bad ? "bad" : ""; n.textContent = text; }
 
@@ -2638,9 +2659,9 @@ function paintListTable() {
   if (!all.length) return;
   const rows = listRows().map(l => {
     const share = l.size ? Math.min(100, Math.round(100 * l.owned / l.size)) : 0;
-    const tr = el("tr", { className: l.collection_id === lst.selected ? "selected" : "" },
+    const tr = el("tr", { className: [rowId(l) === lst.selected ? "selected" : "", l.pending ? "waiting" : ""].join(" ").trim() },
       el("td", { className: "lname" }, el("div", { className: "lsrc" }, srcIcon(l.source),
-        el("div", {}, el("strong", {}, l.name || l.collection_id),
+        el("div", {}, el("strong", {}, l.name || l.collection_id || l.url),
           el("div", { className: "by" }, [srcName(l.source), l.author].filter(Boolean).join(" · "))))),
       el("td", { className: "nowrap" }, howItGotHere(l)),
       el("td", { className: "num" }, `${fmt(l.owned)} / ${l.size == null ? "?" : fmt(l.size)}`,
@@ -2648,9 +2669,10 @@ function paintListTable() {
       el("td", { className: "num" }, fmt(l.watched)),
       el("td", { className: "num" }, l.likes == null ? "—" : fmt(l.likes)),
       el("td", { className: "nowrap" }, dateOf(l.fetched_at)),
-      el("td", { className: "lstate nowrap" }, listState(l)));
+      el("td", { className: "lstate nowrap" + (l.failure ? " failed" : "") }, listState(l),
+        l.pending ? el("div", { className: "lpending" }, l.pending) : ""));
     tr.tabIndex = 0;
-    const toggle = () => selectList(l.collection_id === lst.selected ? null : l.collection_id);
+    const toggle = () => selectList(rowId(l) === lst.selected ? null : rowId(l));
     tr.addEventListener("click", toggle);
     tr.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
     return tr;
@@ -2667,7 +2689,7 @@ function paintInspector() {
   qEl("listwrap").classList.toggle("sel", Boolean(lst.selected));
   const back = el("button", { type: "button", className: "plain", id: "lback" }, "← All lists");
   back.addEventListener("click", () => selectList(null));
-  if (!lst.selected) { box.replaceChildren(el("p", { className: "empty" }, "Select a list to see its entries.")); return; }
+  if (!lst.selected) { box.replaceChildren(el("p", { className: "empty" }, "Select a list to see its entries, or add one by URL.")); return; }
   const d = lst.detail;
   if (!d) { box.replaceChildren(back, el("p", { className: "empty" }, "Loading…")); return; }
   if (d.error) { box.replaceChildren(back, el("p", { className: "bad" }, d.error)); return; }
@@ -2680,8 +2702,16 @@ function paintInspector() {
     ...fact("Watched", fmt(d.watched)),
     ...fact("Likes", d.likes == null ? "—" : fmt(d.likes)),
     ...fact("Fetched", dateOf(d.fetched_at)),
-    ...fact("Collection id", d.collection_id));
-  const parts = [back, el("div", { className: "lhead" }, srcIcon(d.source), el("h2", {}, d.name || d.collection_id)), link, facts];
+    ...fact("Collection id", d.collection_id ?? "—"));
+  const row = rowOf(lst.selected) || d;
+  const parts = [back, el("div", { className: "lhead" }, srcIcon(d.source), el("h2", {}, d.name || d.collection_id || d.url)), link, facts];
+  if (row.pending) parts.push(el("div", { className: "lpending" }, row.pending));
+  if (row.failure) {
+    const f = row.failure;
+    parts.push(el("p", { className: "lfail" }, `Fetch failed ${f.attempts} ${f.attempts === 1 ? "time" : "times"} in a row, last at ${f.attempted_at.replace("T", " ")}: ${f.reason}.` +
+      (f.stopped ? " The sweep has stopped trying until you retry." : "")));
+  }
+  parts.push(listActions(row));
   if (d.keywords.length) {
     parts.push(el("h3", {}, "Keywords its titles carry far more often than your library does"),
       el("div", { className: "lkw" }, ...d.keywords.map(k => el("span", {
@@ -2704,6 +2734,8 @@ async function selectList(id) {
   lst.selected = id; lst.detail = null;
   paintListTable(); paintInspector();
   if (!id) return;
+  const row = rowOf(id);
+  if (row && row.collection_id === null) { lst.detail = { ...row, entries: [], keywords: [] }; paintInspector(); return; }
   const token = ++lst.loading;
   let detail;
   try { detail = await getJSON(`/api/list?ref=${encodeURIComponent(id)}`); }
@@ -2712,6 +2744,52 @@ async function selectList(id) {
   lst.detail = detail;
   paintInspector();
 }
+
+// The buttons the inspector offers: Exclude and Refetch on a stored list, Retry and Remove on a
+// failed or never-stored one. Each appends to list_decisions.json; the next sweep acts on it.
+function listActions(row) {
+  const mk = (label, decision) => {
+    const b = el("button", { type: "button", className: "plain" }, label);
+    b.disabled = lst.busy;
+    b.addEventListener("click", () => decideList(row.url, decision, label));
+    return b;
+  };
+  const buttons = [];
+  if (row.url) {
+    if (row.failure) buttons.push(mk("Retry", "retry"));
+    if (row.provenance === "added") buttons.push(mk("Remove", "removed"));
+    if (row.collection_id !== null) buttons.push(mk("Refetch", "refetch"));
+    if (row.decision?.decision !== "excluded") buttons.push(mk("Exclude", "excluded"));
+  }
+  return el("div", { className: "lacts" }, ...buttons, el("span", { id: "lactstatus", role: "status" }));
+}
+
+async function decideList(url, decision, label, status = qEl("lactstatus")) {
+  if (lst.busy) return;
+  lst.busy = true;
+  try {
+    await sendJSON("POST", "/api/list-decisions", { url, decision });
+    lst.lists = (await getJSON("/api/lists")).lists;
+    lst.busy = false;
+    paintListSources(); paintListTable(); paintInspector();
+    return true;
+  } catch (err) {
+    status.className = "bad"; status.textContent = `${label}: ${err.message}`;
+    lst.busy = false;
+    return false;
+  }
+}
+
+document.getElementById("laddbar").addEventListener("submit", async e => {
+  e.preventDefault();
+  const input = qEl("laddurl");
+  const url = input.value.trim();
+  if (!url) return;
+  const status = qEl("laddstatus");
+  status.className = ""; status.textContent = "";
+  const ok = await decideList(url, "added", "Add a list", status);
+  if (ok) { input.value = ""; status.textContent = "Added. The next sweep fetches it."; }
+});
 
 async function initLists() {
   if (lst.ready) { paintInspector(); return; }

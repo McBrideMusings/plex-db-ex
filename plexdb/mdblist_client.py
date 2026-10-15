@@ -68,10 +68,11 @@ import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
+from urllib.parse import quote
 
 import httpx
 
-from .errors import MDBListError, MDBListQuotaError
+from .errors import MDBListError, MDBListQuotaError, MDBListUnreachable
 
 _BASE = "https://api.mdblist.com"
 _DEFAULT_TIMEOUT = 30.0
@@ -165,6 +166,11 @@ class MDBListSource(Protocol):
         """The lists MDBList currently ranks as top, in the order it returns them."""
         ...
 
+    def find_list(self, user_name: str, slug: str) -> MDBListList:
+        """One list by the user and slug its URL names. Raises `MDBListError` (status 404
+        for a list that does not exist or is private) when the request fails."""
+        ...
+
     def list_entries(self, list_id: int) -> MDBListContents:
         """Every entry on one list, in the order the list presents them.
 
@@ -202,22 +208,15 @@ class LiveMDBListClient:
             raise MDBListError(
                 f"MDBList /lists/top returned {type(body).__name__}, expected a list of lists"
             )
-        lists: list[MDBListList] = []
-        for entry in body:
-            list_id = entry.get("id")
-            if list_id is None:
-                continue
-            lists.append(
-                MDBListList(
-                    list_id=int(list_id),
-                    name=str(entry.get("name") or f"MDBList {list_id}"),
-                    slug=str(entry.get("slug") or ""),
-                    user_name=str(entry.get("user_name") or entry.get("user") or ""),
-                    size=_optional_int(entry.get("items")),
-                    likes=_optional_int(entry.get("likes")),
-                )
-            )
-        return lists
+        return [_list_from(entry) for entry in body if entry.get("id") is not None]
+
+    def find_list(self, user_name: str, slug: str) -> MDBListList:
+        path = f"/lists/{quote(user_name, safe='')}/{quote(slug, safe='')}"
+        body = self._get(path)
+        found = body[0] if isinstance(body, list) and body else body
+        if not isinstance(found, dict) or found.get("id") is None:
+            raise MDBListError(f"MDBList {path} returned no list")
+        return _list_from(found)
 
     def list_entries(self, list_id: int) -> MDBListContents:
         entries: list[MDBListEntry] = []
@@ -303,7 +302,9 @@ class LiveMDBListClient:
         try:
             resp = self._http.request(method, url, params=params, json=body)
         except httpx.HTTPError as err:
-            raise MDBListError(f"cannot reach MDBList at {url}: {type(err).__name__}") from None
+            raise MDBListUnreachable(
+                f"cannot reach MDBList at {url}: {type(err).__name__}"
+            ) from None
         self.last_status = resp.status_code
         if resp.status_code == 403:
             raise MDBListError(
@@ -330,6 +331,18 @@ class LiveMDBListClient:
             return resp.json()
         except ValueError:
             raise MDBListError(f"MDBList returned a response that is not JSON for {url}") from None
+
+
+def _list_from(entry: dict[str, Any]) -> MDBListList:
+    list_id = entry["id"]
+    return MDBListList(
+        list_id=int(list_id),
+        name=str(entry.get("name") or f"MDBList {list_id}"),
+        slug=str(entry.get("slug") or ""),
+        user_name=str(entry.get("user_name") or entry.get("user") or ""),
+        size=_optional_int(entry.get("items")),
+        likes=_optional_int(entry.get("likes")),
+    )
 
 
 def _optional_int(value: Any) -> int | None:
