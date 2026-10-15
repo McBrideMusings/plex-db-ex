@@ -30,7 +30,7 @@ import threading
 import time
 import traceback
 from collections import Counter, OrderedDict, defaultdict
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -81,9 +81,48 @@ EXPLORE_PORT_VAR = "PLEXDB_EXPLORE_PORT"
 #: (`enrich_tmdb_keywords` enriches movies and shows only).
 KINDS = ("movie", "show")
 
-#: How many co-occurring tags each row names. Five is enough to show what a tag
-#: travels with; the drill-down carries the rest.
+#: How many related tags each table row names. Five is enough to show what a tag
+#: travels with; `/api/cotags` carries the rest.
 CO_TAGS = 5
+
+#: The evidence the table's related-tag chips demand, as a z in `cautious_lift`: the
+#: middle of the page's weak-to-strong slider (0 to 4), which is also where it starts.
+CO_STRENGTH = 2.0
+
+
+def cautious_lift(shared: int, titles: int, df_anchor: int, df_other: int, z: float) -> float:
+    """The lift we can be confident of with `z` standard errors of evidence: the share
+    of the anchor's titles carrying `other` taken at the Wilson lower bound instead of
+    `shared / df_anchor`, over `other`'s share of all titles.
+
+    At `z = 0` it is the plain lift, `shared × N / (df_anchor × df_other)`, where 1.0 is
+    chance. A larger `z` marks down a lift resting on few titles far more than one
+    resting on many: heist's 2-title pairs at 62.7× fall to 16.8× at z = 2 and 6.3× at
+    z = 4, while jewelry heist (8 titles, 55.7×) keeps 28.1× at z = 2. Below 1.0 the
+    pairing could be chance.
+
+    The page's Related tags table computes the same value in `cautiousLift`
+    (`explore.html`); a test holds the two to the same numbers.
+    """
+    p = shared / df_anchor
+    z2 = z * z
+    centre = p + z2 / (2 * df_anchor)
+    margin = z * math.sqrt(p * (1 - p) / df_anchor + z2 / (4 * df_anchor * df_anchor))
+    lower = (centre - margin) / (1 + z2 / df_anchor)
+    return lower * titles / df_other
+
+
+def rank_related(
+    pairs: Iterable[tuple[str, int]], df: Mapping[str, int], titles: int, df_anchor: int, z: float
+) -> list[tuple[str, int, float]]:
+    """Every `(other, shared)` whose `cautious_lift` at `z` is above chance, as
+    `(other, shared, cautious lift)`, highest first, then most shared, then by name."""
+    ranked = [
+        (other, shared, cautious_lift(shared, titles, df_anchor, df[other], z))
+        for other, shared in pairs
+    ]
+    return sorted((r for r in ranked if r[2] > 1.0), key=lambda r: (-r[2], -r[1], r[0]))
+
 
 #: Renamed from the TMDB-specific `tmdb_keywords` by ADR-0016, which moved the
 #: source into its own column — Plex TVX reads across every source.
@@ -97,9 +136,9 @@ class Tag:
     #: Titles of this type carrying the tag.
     df: int
     idf: float
-    #: The tags it most often shares a title with, most frequent first, each
-    #: with the number of titles the two share.
-    co_tags: tuple[tuple[str, int], ...]
+    #: Its top related tags (`rank_related` at `CO_STRENGTH`), each with the titles the
+    #: two share and its cautious lift.
+    related: tuple[tuple[str, int, float], ...]
 
 
 @dataclass(frozen=True)
@@ -147,14 +186,21 @@ def keyword_rows(
     return list(dict.fromkeys((item_id, into.get(value, value)) for item_id, value in rows))
 
 
-def build_index(conn: sqlite3.Connection, kind: str, co_tags: int = CO_TAGS) -> TagIndex:
-    """Every keyword on titles of `kind`, with its count, IDF and co-tags.
+def build_index(
+    conn: sqlite3.Connection,
+    kind: str,
+    co_tags: int = CO_TAGS,
+    rows: list[tuple[str, str]] | None = None,
+) -> TagIndex:
+    """Every keyword on titles of `kind`, with its count, IDF and co-tags; `rows` is
+    `keyword_rows(conn, kind)`, read here when the caller has not already.
 
     Co-occurrence is counted in Python rather than as a SQL self-join: the
     movie side is about three million tag pairs, which a `Counter` walks in
     half a second and a `GROUP BY` over a self-join does not.
     """
-    rows = keyword_rows(conn, kind)
+    if rows is None:
+        rows = keyword_rows(conn, kind)
 
     by_title: defaultdict[str, list[str]] = defaultdict(list)
     for item_id, value in rows:
@@ -170,14 +216,12 @@ def build_index(conn: sqlite3.Connection, kind: str, co_tags: int = CO_TAGS) -> 
                 if a != b:
                     counts[b] += 1
 
-    def co(value: str) -> tuple[tuple[str, int], ...]:
-        # most_common keeps insertion order among ties, which depends on row
-        # order; sorting by name as well makes the answer the same every time.
-        ranked = sorted(together[value].items(), key=lambda kv: (-kv[1], kv[0]))
+    def related(value: str) -> tuple[tuple[str, int, float], ...]:
+        ranked = rank_related(together[value].items(), df, n, df[value], CO_STRENGTH)
         return tuple(ranked[:co_tags])
 
     tags = tuple(
-        Tag(value=value, df=count, idf=1.0 + math.log(n / count), co_tags=co(value))
+        Tag(value=value, df=count, idf=1.0 + math.log(n / count), related=related(value))
         for value, count in sorted(df.items(), key=lambda kv: (-kv[1], kv[0]))
     )
     return TagIndex(kind=kind, titles=n, tags=tags)
@@ -205,6 +249,66 @@ def titles_tagged(conn: sqlite3.Connection, kind: str, value: str) -> list[Title
     ):
         carried[item_id].add(into.get(value, value))
     return [Title(item_id=r[0], title=r[1], year=r[2], keywords=len(carried[r[0]])) for r in found]
+
+
+@dataclass(frozen=True)
+class KeywordSets:
+    """`keyword_rows` both ways round: each title's keywords, and each keyword's titles."""
+
+    by_title: dict[str, frozenset[str]]
+    by_keyword: dict[str, tuple[str, ...]]
+
+
+def keyword_sets(rows: list[tuple[str, str]]) -> KeywordSets:
+    by_title: defaultdict[str, set[str]] = defaultdict(set)
+    by_keyword: defaultdict[str, list[str]] = defaultdict(list)
+    for item_id, value in rows:
+        by_title[item_id].add(value)
+        by_keyword[value].append(item_id)
+    return KeywordSets(
+        by_title={item_id: frozenset(values) for item_id, values in by_title.items()},
+        by_keyword={value: tuple(ids) for value, ids in by_keyword.items()},
+    )
+
+
+def co_occurrence(sets: KeywordSets, value: str) -> list[tuple[str, int]]:
+    """Every keyword sharing a title with `value`, each with the number of titles the
+    two share, most first — folded as the tag table folds, so the counts agree with
+    its df.
+
+    The table keeps only `CO_TAGS` per tag and the stored network
+    `NETWORK_EDGES_PER_NODE`, so the whole neighbourhood of one tag is counted here,
+    over its own titles alone: science fiction's 1,227 movies, not all 11,533.
+    """
+    shared = Counter(
+        other
+        for item_id in sets.by_keyword.get(value, ())
+        for other in sets.by_title[item_id]
+        if other != value
+    )
+    return sorted(shared.items(), key=lambda kv: (-kv[1], kv[0]))
+
+
+def cotags_json(
+    index: dict[str, object], value: str, pairs: list[tuple[str, int]]
+) -> dict[str, object]:
+    """`/api/cotags`: every tag sharing a title with `value`, most shared first, each as
+    `[tag, shared, df]` — the counts `cautious_lift` needs, with `df` (the anchor's) and
+    `titles` (N), all from `index` so they agree with the table.
+
+    Nothing is filtered or ranked here: the page's weak-to-strong slider sets the `z`
+    and its table the order, so a slider drag never asks the server again.
+    """
+    tags = cast(list[dict[str, Any]], index["tags"])
+    df = {t["value"]: t["df"] for t in tags}
+    anchor = df.get(value, 0)
+    return {
+        "kind": index["kind"],
+        "tag": value,
+        "df": anchor,
+        "titles": cast(int, index["titles"]),
+        "co": [[other, s, df[other]] for other, s in pairs] if anchor else [],
+    }
 
 
 #: A tag on fewer titles than this cannot place a title near any other, so it
@@ -1083,7 +1187,9 @@ def index_json(index: TagIndex) -> dict[str, object]:
                 "value": tag.value,
                 "df": tag.df,
                 "idf": round(tag.idf, 4),
-                "co": [[value, count] for value, count in tag.co_tags],
+                "related": [
+                    [value, count, round(lifted, 3)] for value, count, lifted in tag.related
+                ],
             }
             for tag in index.tags
         ],
@@ -1193,11 +1299,28 @@ class _IndexCache:
         self._cache = _KeyedCache(self.KEEP)
 
     def get(self, kind: str) -> dict[str, object]:
+        return cast(dict[str, object], self._entry(kind)["index"])
+
+    def cotags(self, kind: str, value: str) -> dict[str, object]:
+        """`/api/cotags` for `value`, counted over the folded rows the index was
+        built from, so it never reads the store again and its df and N are the
+        index's own, from the same file stamp."""
+        entry = self._entry(kind)
+        sets = cast(KeywordSets, entry["sets"])
+        return cotags_json(
+            cast(dict[str, object], entry["index"]), value, co_occurrence(sets, value)
+        )
+
+    def _entry(self, kind: str) -> dict[str, object]:
         stat = self._path.stat()
 
         def compute() -> dict[str, object]:
             with open_readonly(self._path) as conn:
-                return index_json(build_index(conn, kind))
+                rows = keyword_rows(conn, kind)
+                return {
+                    "index": index_json(build_index(conn, kind, rows=rows)),
+                    "sets": keyword_sets(rows),
+                }
 
         return self._cache.get(kind, (stat.st_mtime_ns, stat.st_size), compute)
 
@@ -2176,6 +2299,13 @@ def make_server(
                         self._json(titles_json(kind, tag, titles_tagged(conn, kind, tag)))
                 finally:
                     TITLE_SLOTS.release()
+            elif url.path == "/api/cotags":
+                kind = query.get("kind", "movie")
+                _check_kind(kind)
+                tag = query.get("tag")
+                if not tag:
+                    raise ValueError("tag is required")
+                self._json(cache.cotags(kind, tag))
             elif url.path == "/api/map":
                 kind = query.get("kind", "movie")
                 _check_kind(kind)
