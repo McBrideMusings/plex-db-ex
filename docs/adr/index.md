@@ -26,3 +26,8 @@ ADR wins; [the PRD](../PRD) already reflects them.
 | [0019](./0019-keyword-roles-are-verdicts-beside-enrichment) | Keyword roles are verdicts beside `enrichment` |
 | [0020](./0020-a-person-may-decide-a-pair-no-judge-saw) | A person may decide a pair no judge saw |
 | [0021](./0021-a-keyword-display-name-is-a-persons-label-beside-enrichment) | A keyword's display name is a person's label beside `enrichment` |
+| [0022](./0022-the-store-depends-on-no-consumer) | The store depends on no consumer |
+| [0023](./0023-the-store-holds-facts-about-plex-library-items-and-nothing-else) | The store holds facts about Plex library items, and nothing else |
+| [0024](./0024-the-frame-index-is-a-second-file-readers-attach-in-place) | The frame index is a second file that readers attach in place |
+| [0025](./0025-model-calls-go-to-a-configured-openai-compatible-endpoint) | Model calls go to a configured OpenAI-compatible endpoint |
+| [0026](./0026-the-reader-embeds-a-new-phrase-and-caches-it-beside-its-caller) | The reader embeds a new phrase and caches it beside its caller |

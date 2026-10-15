@@ -106,6 +106,24 @@ The one-way, booleanized, prefix-namespaced write-back of enrichment into Plex l
 for the benefit of tools that only speak Plex. Never a round trip.
 _Avoid_: sync, export, write-back
 
+**Cut**:
+A point in a title's video where one shot ends and the next begins — detected by scene-change
+analysis, or a chapter start Plex reports.
+_Avoid_: shot, transition
+
+**Shot**:
+The stretch of a title's video between two adjacent Cuts. The unit a search returns.
+_Avoid_: clip, scene, cut
+
+**Clip**:
+A window inside one title's video — `item_id`, an in time and an out time — that a person
+accepted, with a label and tags. A window a person rejected is a rejected window, not a Clip.
+_Avoid_: segment, highlight, bumper
+
+**Phrase**:
+Text a Reader searches the Frame index with, compared by the keyword spelling rule.
+_Avoid_: query, prompt
+
 ### Architecture
 
 **Writer**:
@@ -117,7 +135,8 @@ every Reader. Readers never touch the live Store.
 _Avoid_: replica, backup, export
 
 **Reader**:
-Any process that opens the Snapshot read-only. Readers never write.
+Any process that opens the Snapshot and the Frame index read-only. A Reader writes no file of
+the Store's; its Phrase cache belongs to its caller.
 
 **Consumer**:
 A project that uses the Store — today `etv-station` (via plugin only) and `curator`.
@@ -140,6 +159,20 @@ request, because the daily quota counts requests.
 `enrich-tautulli-plays` reads an external thing and is *not* this — it
 gates on staleness.
 _Avoid_: cache, provider
+
+**Frame index**:
+Every title's Cuts and the vectors of its sampled frames — one per Shot, and one every 2 s
+inside longer ones — held in `frames.db` and rebuilt from the media through Plex.
+_Avoid_: embeddings, frame cache
+
+**Frame harvester**:
+The long-running `plexdb harvest-frames` run that fills the Frame index during configured
+hours, a person's queued titles first.
+_Avoid_: walker, indexer, scanner
+
+**Phrase cache**:
+A Reader's own file of Phrase vectors, filled on first use and pruned after 90 days unused.
+_Avoid_: query cache
 
 ## Relationships
 
