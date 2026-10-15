@@ -362,6 +362,45 @@
   #rrows li { display: flex; gap: 10px; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--line); }
   #rrows .pair { min-width: 0; overflow-wrap: anywhere; }
   #rrows .sub { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  #listwrap { display: grid; grid-template-columns: minmax(0, 1fr) 420px; align-items: start; }
+  #lmain { padding: 16px 20px 24px; min-width: 0; }
+  #linspect { border-left: 1px solid var(--line); background: var(--panel); padding: 16px 20px 24px; min-width: 0; min-height: 60vh; align-self: stretch; }
+  #ltable td.nowrap { white-space: nowrap; }
+  @media (max-width: 900px) {
+    #listwrap { grid-template-columns: 1fr; }
+    #linspect { border-left: 0; }
+    #listwrap.sel #lmain, #listwrap:not(.sel) #linspect { display: none; }
+  }
+  #lsummary { color: var(--muted); margin: 0 0 10px; }
+  #ltable { overflow-x: auto; }
+  #ltable table { min-width: 44em; }
+  #ltable th { background: var(--bg); }
+  #ltable td.lname { min-width: 12em; }
+  .lsrc { display: flex; gap: 8px; align-items: center; }
+  .lsrc img, .lfacts img.favicon, .lhead img { width: 16px; height: 16px; flex: none; }
+  .lnoicon { display: inline-block; width: 16px; height: 16px; flex: none; }
+  .lsrc .by { color: var(--muted); font-size: 12px; }
+  .lsrc strong { font-weight: 550; overflow-wrap: anywhere; }
+  .lbar { display: block; height: 4px; margin-top: 3px; background: var(--chip); border-radius: 2px; overflow: hidden; min-width: 5em; }
+  .lbar i { display: block; height: 100%; background: var(--accent); }
+  .lstate { color: var(--muted); }
+  #linspect h2 { font-size: 17px; margin: 0; overflow-wrap: anywhere; }
+  #linspect h3 { font-size: 13px; margin: 16px 0 6px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .lhead { display: flex; gap: 8px; align-items: center; }
+  .lhead img { width: 20px; height: 20px; }
+  .llink { display: inline-block; margin: 4px 0 0; color: var(--accent); overflow-wrap: anywhere; }
+  .lfacts { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 12px 0 0; }
+  .lfacts dt { color: var(--muted); }
+  .lfacts dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+  .lkw .chip { cursor: default; }
+  .lkw .chip:hover { outline: 0; }
+  ol.lentries { list-style: none; margin: 0; padding: 0; }
+  ol.lentries li { display: flex; gap: 10px; padding: 4px 0; border-bottom: 1px solid var(--line); }
+  ol.lentries .rank { flex: none; width: 2.5em; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+  ol.lentries li.unowned { color: var(--muted); }
+  ol.lentries li.gap { color: var(--muted); font-style: italic; }
+  #lback { margin-bottom: 12px; }
+  @media (min-width: 901px) { #lback { display: none; } }
   /* ?demo: the map alone, with a caption naming the tag being lit. Nothing in it takes input. */
   body.demo .controls, body.demo .ovtl, body.demo .ovnote, body.demo .vpctl, body.demo #rightcol,
   body.demo .seg:not([aria-label="View"]) { display: none !important; }
@@ -380,6 +419,7 @@
   <h1>Plex DB-EX</h1>
   <div class="seg" role="group" aria-label="Section">
     <button type="button" data-tab="tags" aria-pressed="true">Tags</button>
+    <button type="button" data-tab="lists" aria-pressed="false">Lists</button>
     <button type="button" data-tab="query" aria-pressed="false">Query</button>
     <button type="button" data-tab="merges" aria-pressed="false">Merges</button>
     <button type="button" data-tab="roles" aria-pressed="false">Roles</button>
@@ -412,6 +452,22 @@
 </div>
 <textarea id="copyout" readonly hidden aria-label="Noise list as JSON"></textarea>
 <div id="error" class="err" hidden></div>
+<div id="listwrap" hidden>
+  <section id="lmain">
+    <p id="lsummary"></p>
+    <div class="mtools">
+      <input type="search" id="lfilter" placeholder="list name contains…" autocomplete="off" aria-label="Filter lists">
+      <div class="seg" role="group" aria-label="Source" id="lsources"></div>
+    </div>
+    <div id="lstatus"></div>
+    <div id="ltable" hidden></div>
+    <div id="lempty" hidden>
+      <h2>No lists stored yet</h2>
+      <p class="mnote">The MDBList harvest fills this tab. It needs <code>MDBLIST_API_KEY</code> in the environment; run <code>plexdb harvest-mdblist</code>.</p>
+    </div>
+  </section>
+  <section id="linspect"></section>
+</div>
 <div id="querywrap" hidden>
   <div id="qmain">
     <textarea id="sql" spellcheck="false" aria-label="SQL"
@@ -585,7 +641,7 @@ function readHash() {
   const p = new URLSearchParams(location.hash.slice(1));
   if (p.get("kind") === "show" || p.get("kind") === "movie") state.kind = p.get("kind");
   if (VIEWS.includes(p.get("view"))) state.view = p.get("view");
-  if (["query", "merges", "roles", "doctor"].includes(p.get("tab"))) state.tab = p.get("tab");
+  if (["lists", "query", "merges", "roles", "doctor"].includes(p.get("tab"))) state.tab = p.get("tab");
   state.tag = p.get("tag");
   doctor.itemId = p.get("item"); doctor.row = p.get("row");
 }
@@ -2525,6 +2581,154 @@ dsearchEl.addEventListener("keydown", e => {
 });
 dsearchEl.addEventListener("blur", closeDoctorSuggestions);
 
+// ---- Lists tab ----
+// Read-only. /api/lists is the list table, /api/list the entries of one list; both come from the
+// functions `plexdb lists` and `plexdb list` call. The favicons are the sites' own icons inlined
+// here, so rendering the tab makes no request to MDBList or Letterboxd.
+const SOURCES = {
+  mdblist: { name: "MDBList", icon: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAERlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAAIKADAAQAAAABAAAAIAAAAACshmLzAAADG0lEQVRYCe1X3UsUURT/3bujbq7brmZUGpkKZUJYPdiLQRgY9CX+BUHhU9BbYhJFYfaQ1D9QT/0BKSQ9VQ9BoQQmEpWyKlimQq2fm6vz0Tkz7jous7uzS2s+dGBn7t455/x+59xzz50RgCHOdA00G5C3oenHIQRyKoYBeOSggH7vVUd9r2js7G+hqadSeIoNQ88pdsy5EBK6oYUp1KuSJu9IqWwZOJPgQBnTxAZEnaFrPL+lYmGKOs7AP5X/BFxnQNNpr7gU1nWrrTj5ZAcnDvrR2njAfLy4ouLZ2ykMTy7SFk7dJzTayTVlPlw+VYagL99sK0/efMOHsXlHW0cC3Ct2Fio4Uu6L86vY5cXDvnH0hxaQ5xFworGqEvFKP9ouVKK8xBu3DZAv9ukkSZcg0WBPsADtl6rRcChIzjanmH3rNHeyOoCbpGMHZ9BEX3YiSQnYlWLjUn8e2purcLq2BBrlmoH5p9K44XAxOlqqsTeYH1N3dXdFgOtvei5qOgzsUHDjfCXOHdsNWglwSTQdLUXbxSqU+KwVnZmP0rHC1NKLKwLs7PHLCXyZWjY9FhZ4cK2pArX7i1Czz4frZyvg93rMZ6PTETzqm0BUdXeuuCLAUX79EcGD3jF8mlwygYoIMEjFFaCoeczCBFnnM93TbBZTny+uCLAiV/7YbAT3e0P4OLHAU1YBUKYloQ0Tsc7nIYxOL5u6lkL6q2sC7EohEt/DUXRRlO9G5uhNwgJ4PzqHrp4QJn+ukE5GLuHYB1LxVija2YVVdFNP4DGXWveLcfxaWjMJuqy9OETGBNiSu2F4eY2akZUC7gq8DNlIVgQYSNpe3WJEsiGQ2YJlg5DGZvsSsGXY8RRLE9gmG7uvRDvnGqB6WlrREZqJmCeJSqWtaVzv7gqNj+QRalxehaqDinPxt5rUlF7LB5I2bTtcUqXEkNb/x21pkOo0dM7AupNMQe1c4rbxgf3pxnj7FuEGx9yOtkMGjCEhreM0t7Fu9m5hGkOcgbu6rob5g3GrxPw4JUzGlq9v1fdIiSuGMAZT7pe/xY5faAmLMRn7DzOkA7XltkInAAAAAElFTkSuQmCC" },
+  letterboxd: { name: "Letterboxd", icon: "data:image/png;base64,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" },
+};
+const lst = { ready: false, lists: [], source: "", selected: null, detail: null, loading: 0 };
+const srcName = s => SOURCES[s]?.name ?? s;
+function srcIcon(s, cls = "") {
+  const icon = SOURCES[s]?.icon;
+  return icon ? el("img", { src: icon, alt: "", width: 16, height: 16, className: cls }) : el("span", { className: "lnoicon" });
+}
+const dateOf = iso => (iso || "").slice(0, 10) || "—";
+function howItGotHere(l) {
+  if (l.provenance === "added") return "Added by hand";
+  if (l.provenance === "search") return l.seed_count ? `Found from ${fmt(l.seed_count)} titles` : "Found from a seed of titles";
+  return `${srcName(l.source)} top lists`;
+}
+// `size` is what the source says the list holds, so fewer stored entries than that is a partial fetch.
+const listState = l => (l.size && l.entry_count < l.size ? "Partial" : "Complete");
+
+function lStatus(text, bad = false) { const n = qEl("lstatus"); n.className = bad ? "bad" : ""; n.textContent = text; }
+
+function paintListSources() {
+  const present = [...new Set(lst.lists.map(l => l.source))].sort();
+  const choices = [["", "All"], ...present.map(s => [s, srcName(s)])];
+  qEl("lsources").replaceChildren(...choices.map(([value, label]) => {
+    const b = el("button", { type: "button" });
+    b.setAttribute("aria-pressed", String(lst.source === value));
+    if (value) b.append(srcIcon(value));
+    b.append(label);
+    b.addEventListener("click", () => { lst.source = value; paintListSources(); paintListTable(); });
+    return b;
+  }));
+}
+
+function listRows() {
+  const needle = qEl("lfilter").value.trim().toLowerCase();
+  return lst.lists.filter(l => (!lst.source || l.source === lst.source) && (!needle || (l.name || "").toLowerCase().includes(needle)));
+}
+
+function paintListTable() {
+  const all = lst.lists;
+  const bySource = {};
+  for (const l of all) bySource[l.source] = (bySource[l.source] || 0) + 1;
+  const owned = all.reduce((sum, l) => sum + l.owned, 0);
+  qEl("lsummary").textContent = all.length
+    ? `${fmt(all.length)} lists · ${fmt(owned)} entries in your library · sources: ${Object.entries(bySource).sort().map(([s, n]) => `${srcName(s)} ${fmt(n)}`).join(", ")}`
+    : "";
+  qEl("lempty").hidden = all.length > 0;
+  qEl("ltable").hidden = all.length === 0;
+  document.querySelector("#lmain .mtools").hidden = all.length === 0;
+  if (!all.length) return;
+  const rows = listRows().map(l => {
+    const share = l.size ? Math.min(100, Math.round(100 * l.owned / l.size)) : 0;
+    const tr = el("tr", { className: l.collection_id === lst.selected ? "selected" : "" },
+      el("td", { className: "lname" }, el("div", { className: "lsrc" }, srcIcon(l.source),
+        el("div", {}, el("strong", {}, l.name || l.collection_id),
+          el("div", { className: "by" }, [srcName(l.source), l.author].filter(Boolean).join(" · "))))),
+      el("td", { className: "nowrap" }, howItGotHere(l)),
+      el("td", { className: "num" }, `${fmt(l.owned)} / ${l.size == null ? "?" : fmt(l.size)}`,
+        el("span", { className: "lbar" }, el("i", { style: `width:${share}%` }))),
+      el("td", { className: "num" }, fmt(l.watched)),
+      el("td", { className: "num" }, l.likes == null ? "—" : fmt(l.likes)),
+      el("td", { className: "nowrap" }, dateOf(l.fetched_at)),
+      el("td", { className: "lstate nowrap" }, listState(l)));
+    tr.tabIndex = 0;
+    const toggle = () => selectList(l.collection_id === lst.selected ? null : l.collection_id);
+    tr.addEventListener("click", toggle);
+    tr.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
+    return tr;
+  });
+  const head = el("tr", {}, ...[["List", ""], ["How it got here", ""], ["In library", "num"], ["Watched", "num"], ["Likes", "num"], ["Fetched", ""], ["State", ""]]
+    .map(([t, c]) => el("th", { className: c }, t)));
+  const body = el("tbody", {}, ...rows);
+  if (!rows.length) body.append(el("tr", {}, el("td", { colSpan: 7, className: "empty" }, "No list matches.")));
+  qEl("ltable").replaceChildren(el("table", {}, el("thead", {}, head), body));
+}
+
+function paintInspector() {
+  const box = qEl("linspect");
+  qEl("listwrap").classList.toggle("sel", Boolean(lst.selected));
+  const back = el("button", { type: "button", className: "plain", id: "lback" }, "← All lists");
+  back.addEventListener("click", () => selectList(null));
+  if (!lst.selected) { box.replaceChildren(el("p", { className: "empty" }, "Select a list to see its entries.")); return; }
+  const d = lst.detail;
+  if (!d) { box.replaceChildren(back, el("p", { className: "empty" }, "Loading…")); return; }
+  if (d.error) { box.replaceChildren(back, el("p", { className: "bad" }, d.error)); return; }
+  const fact = (k, v) => [el("dt", {}, k), el("dd", {}, v)];
+  const link = /^https?:\/\//i.test(d.url || "") ? el("a", { href: d.url, className: "llink", target: "_blank", rel: "noopener noreferrer" }, d.url) : "";
+  const facts = el("dl", { className: "lfacts" },
+    ...fact("Source", srcName(d.source)),
+    ...fact("How it got here", howItGotHere(d)),
+    ...fact("In your library", `${fmt(d.owned)} of ${d.size == null ? "?" : fmt(d.size)}`),
+    ...fact("Watched", fmt(d.watched)),
+    ...fact("Likes", d.likes == null ? "—" : fmt(d.likes)),
+    ...fact("Fetched", dateOf(d.fetched_at)),
+    ...fact("Collection id", d.collection_id));
+  const parts = [back, el("div", { className: "lhead" }, srcIcon(d.source), el("h2", {}, d.name || d.collection_id)), link, facts];
+  if (d.keywords.length) {
+    parts.push(el("h3", {}, "Keywords its titles carry far more often than your library does"),
+      el("div", { className: "lkw" }, ...d.keywords.map(k => el("span", {
+        className: "chip", title: `${k.in_list} of ${d.keyword_titles_in_list} titles in the list, ${k.in_library} of ${d.keyword_titles_in_library} in your library`,
+      }, k.keyword, el("span", { className: "n" }, `${fmt(k.in_list)}/${fmt(k.in_library)}`)))));
+  }
+  parts.push(el("h3", {}, "Entries, in the list's order"));
+  const nameless = d.entries.filter(e => !e.owned && !e.title).length;
+  const items = d.entries.filter(e => e.owned || e.title).map(e => {
+    const label = e.title ? (e.year ? `${e.title} (${e.year})` : e.title) : e.item_id || `${e.ns}:${e.value}`;
+    return el("li", { className: e.owned ? "" : "unowned" }, el("span", { className: "rank" }, e.rank == null ? "·" : String(e.rank)), el("span", {}, label));
+  });
+  if (nameless) items.push(el("li", { className: "gap" }, `${fmt(nameless)} ${nameless === 1 ? "entry" : "entries"} not in your library`));
+  parts.push(items.length ? el("ol", { className: "lentries" }, ...items) : el("p", { className: "empty" }, "No entries stored."));
+  box.replaceChildren(...parts);
+  box.scrollTop = 0;
+}
+
+async function selectList(id) {
+  lst.selected = id; lst.detail = null;
+  paintListTable(); paintInspector();
+  if (!id) return;
+  const token = ++lst.loading;
+  let detail;
+  try { detail = await getJSON(`/api/list?ref=${encodeURIComponent(id)}`); }
+  catch (err) { detail = { error: err.message }; }
+  if (token !== lst.loading) return;
+  lst.detail = detail;
+  paintInspector();
+}
+
+async function initLists() {
+  if (lst.ready) { paintInspector(); return; }
+  lst.ready = true;
+  lStatus("Loading…");
+  try {
+    lst.lists = (await getJSON("/api/lists")).lists;
+    lStatus("");
+    paintListSources(); paintListTable(); paintInspector();
+  } catch (err) { lst.ready = false; lStatus(`Could not load: ${err.message}`, true); }
+}
+
+document.getElementById("lfilter").addEventListener("input", paintListTable);
+document.addEventListener("keydown", e => {
+  if (state.tab === "lists" && e.key === "Escape" && lst.selected) selectList(null);
+});
+
 // ---- Query tab ----
 // The server holds the guards (read-only, one statement, 5 s, 500 rows). Saved queries live in a
 // JSON file beside the store, so they follow the server rather than this browser.
@@ -2536,6 +2740,7 @@ function setTab(tab) {
   document.querySelectorAll(".seg button[data-tab]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.tab === tab)));
   document.querySelectorAll(".tagsonly").forEach(n => { n.hidden = tab !== "tags"; });
   qEl("tagsmain").hidden = tab !== "tags";
+  qEl("listwrap").hidden = tab !== "lists";
   qEl("querywrap").hidden = tab !== "query";
   qEl("mergewrap").hidden = tab !== "merges";
   qEl("rolewrap").hidden = tab !== "roles";
@@ -2543,7 +2748,7 @@ function setTab(tab) {
   if (tab === "tags") { document.getElementById("error").hidden = !document.getElementById("error").textContent; setView(state.view); }
   else {
     document.body.classList.remove("shell"); document.getElementById("error").hidden = true; writeHash();
-    if (tab === "query") initQuery(); else if (tab === "merges") initMerges(); else if (tab === "roles") initRoles(); else initDoctor();
+    if (tab === "lists") initLists(); else if (tab === "query") initQuery(); else if (tab === "merges") initMerges(); else if (tab === "roles") initRoles(); else initDoctor();
   }
 }
 

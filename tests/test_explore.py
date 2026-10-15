@@ -1758,3 +1758,119 @@ def test_cautious_lift_marks_down_few_titles_and_the_page_agrees(
     for args, _ in CAUTIOUS_CASES:
         js = page.evaluate("a => cautiousLift(...a)", list(args))
         assert js == pytest.approx(explore.cautious_lift(*args), rel=1e-12), args
+
+
+# ---- the Lists tab ----
+
+
+def _add_lists(store: Path) -> None:
+    """Two lists: one MDBList list holding Iron Man (owned) and a film the library lacks, and
+    an empty Letterboxd one."""
+    with open_store(store) as conn:
+        conn.executemany(
+            "INSERT INTO collection (collection_id, source, name, url, size, likes, observed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    "mdblist:1",
+                    "mdblist",
+                    "Mindfuck Movies",
+                    "https://mdblist.com/lists/lina/mf",
+                    5,
+                    9,
+                    FETCHED,
+                ),
+                (
+                    "letterboxd:2",
+                    "letterboxd",
+                    "Heist Night",
+                    "https://letterboxd.com/x/list/h/",
+                    2,
+                    3,
+                    FETCHED,
+                ),
+            ],
+        )
+        conn.execute(
+            "INSERT INTO external_ids (item_id, ns, value, kind, last_seen) "
+            "VALUES ('imdb:tt1', 'imdb', 'tt1', 'movie', ?)",
+            (FETCHED,),
+        )
+        conn.executemany(
+            "INSERT INTO collection_entry (collection_id, rank, ns, value, kind, title, year) "
+            "VALUES ('mdblist:1', ?, 'imdb', ?, 'movie', ?, ?)",
+            [(1, "tt1", "Iron Man", 2008), (2, "tt99", "Primer", 2004)],
+        )
+        conn.commit()
+
+
+def test_lists_routes_answer_the_table_and_one_lists_detail(store: Path, base_url: str) -> None:
+    _add_lists(store)
+    status, table = _send("GET", f"{base_url}/api/lists")
+    assert status == 200
+    rows = cast(list[dict[str, Any]], table["lists"])
+    assert {r["collection_id"]: (r["owned"], r["entry_count"]) for r in rows} == {
+        "mdblist:1": (1, 2),
+        "letterboxd:2": (0, 0),
+    }
+    status, only = _send("GET", f"{base_url}/api/lists?source=letterboxd")
+    assert [r["collection_id"] for r in only["lists"]] == ["letterboxd:2"]  # type: ignore[attr-defined]
+    status, detail = _send("GET", f"{base_url}/api/list?ref=mdblist:1")
+    assert status == 200
+    entries = cast(list[dict[str, Any]], detail["entries"])
+    assert [(e["title"], e["owned"]) for e in entries] == [("Iron Man", True), ("Primer", False)]
+    status, _ = _send("GET", f"{base_url}/api/list?ref=nope")
+    assert status == 404
+    status, _ = _send("GET", f"{base_url}/api/list")
+    assert status == 400
+
+
+def test_lists_tab_selects_clears_and_makes_no_outside_request(
+    browser: Browser, store: Path, base_url: str
+) -> None:
+    _add_lists(store)
+    page = browser.new_page(viewport={"width": 1280, "height": 800})
+    outside: list[str] = []
+    page.on(
+        "request",
+        lambda r: (
+            outside.append(r.url)
+            if not r.url.startswith(base_url) and not r.url.startswith("data:")
+            else None
+        ),
+    )
+    page.goto(f"{base_url}/#tab=lists")
+    page.wait_for_selector("#ltable tbody tr")
+    assert page.locator("#ltable tbody tr").count() == 2
+    page.locator("#ltable tbody tr", has_text="Mindfuck Movies").click()
+    page.wait_for_selector("#linspect .lentries li")
+    assert page.locator("#linspect .lentries li").all_text_contents() == [
+        "1Iron Man (2008)",
+        "2Primer (2004)",
+    ]
+    assert page.locator("#linspect .lentries li.unowned").count() == 1
+    page.locator("#ltable tbody tr", has_text="Mindfuck Movies").click()
+    assert page.locator("#ltable tr.selected").count() == 0
+    page.locator("#ltable tbody tr", has_text="Mindfuck Movies").click()
+    page.wait_for_selector("#linspect .lentries li")
+    srcs = page.eval_on_selector_all("#ltable img", "els => els.map(e => e.src.slice(0, 22))")
+    assert srcs == ["data:image/png;base64,"] * 2, srcs
+    page.keyboard.press("Escape")
+    assert page.locator("#ltable tr.selected").count() == 0
+    assert "Select a list" in page.locator("#linspect").inner_text()
+    page.set_viewport_size({"width": 720, "height": 800})
+    page.locator("#ltable tbody tr", has_text="Mindfuck Movies").click()
+    page.wait_for_selector("#lback")
+    assert not page.locator("#ltable").is_visible()
+    page.click("#lback")
+    assert page.locator("#ltable").is_visible()
+    assert outside == []
+    page.close()
+
+
+def test_lists_tab_names_the_empty_state(browser: Browser, store: Path, base_url: str) -> None:
+    page = browser.new_page(viewport={"width": 1280, "height": 800})
+    page.goto(f"{base_url}/#tab=lists")
+    page.wait_for_selector("#lempty:not([hidden])")
+    assert "No lists stored yet" in page.locator("#lempty").inner_text()
+    page.close()

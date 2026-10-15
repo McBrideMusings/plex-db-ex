@@ -45,6 +45,7 @@ from .decisions import SAVED_FILE
 from .errors import DecisionsFileError, StoreError
 from .identity import PRIORITY
 from .keywords import is_carried, keyword_spellings
+from .lists import list_detail, list_table
 from .merge_review import (
     MERGE_AT,
     MERGE_DECISIONS_FILE,
@@ -2348,6 +2349,21 @@ def make_server(
                 with open_readonly(store_path) as conn:
                     labels = display_labels(conn, names.latest())
                     self._json(roles_json(conn, roles.latest(), labels, query.get("q", "")))
+            elif url.path == "/api/lists":
+                with open_readonly(store_path) as conn:
+                    self._json({"lists": list_table(conn, source=query.get("source") or None)})
+            elif url.path == "/api/list":
+                ref = query.get("ref")
+                if not ref:
+                    raise ValueError("ref is required")
+                if len(ref) > MAX_ITEM_ID:
+                    raise ValueError(f"ref is over {MAX_ITEM_ID} characters")
+                with open_readonly(store_path) as conn:
+                    detail = list_detail(conn, ref)
+                if detail is None:
+                    self._json({"error": f"no list {ref}"}, HTTPStatus.NOT_FOUND)
+                else:
+                    self._json(detail)
             elif url.path == "/api/recipes":
                 self._json({"recipes": list(RECIPES)})
             elif url.path == "/api/title":
