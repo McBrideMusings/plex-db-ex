@@ -285,7 +285,6 @@ def refresh_mdblist(
     """
     now = datetime.now(UTC)
     cutoff = now - timedelta(days=stale_days)
-    now_iso = now.isoformat(timespec="seconds")
     stats = HarvestStats()
 
     decisions = {row["url"]: row for row in conn.execute("SELECT * FROM list_decision")}
@@ -371,15 +370,18 @@ def refresh_mdblist(
             )
             if _systemic(err):
                 raise
-            _record_failure(conn, unit.key, held, now_iso, str(err))
+            _record_failure(
+                conn, unit.key, held, datetime.now(UTC).isoformat(timespec="seconds"), str(err)
+            )
             stats.lists_failed += 1
             continue
         collection_id = f"{MDBLIST_SOURCE}:{meta.list_id}"
         url = (
             f"https://mdblist.com/lists/{meta.user_name}/{meta.slug}"
             if meta.user_name and meta.slug
-            else None
+            else unit.url
         )
+        fetched_iso = datetime.now(UTC).isoformat(timespec="seconds")
         entries = contents.entries
         # Array position is the rank the list presents, 1-indexed. MDBList's
         # own `rank` field is a different ordering entirely and is ignored —
@@ -427,7 +429,7 @@ def refresh_mdblist(
                     url,
                     meta.size,
                     meta.likes,
-                    now_iso,
+                    fetched_iso,
                     unit.provenance,
                 ),
             )
@@ -441,7 +443,7 @@ def refresh_mdblist(
                     "INSERT INTO collection_membership "
                     "(collection_id, item_id, rank, mentions, observed_at) "
                     "VALUES (?, ?, ?, NULL, ?)",
-                    (collection_id, item_id, rank, now_iso),
+                    (collection_id, item_id, rank, fetched_iso),
                 )
 
             conn.execute("DELETE FROM list_attempt WHERE list_key = ?", (unit.key,))

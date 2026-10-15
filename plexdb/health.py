@@ -318,9 +318,11 @@ def _lists(conn: sqlite3.Connection, tables: set[str]) -> tuple[SourceLists, ...
     failed: dict[str, list[FailedList]] = {}
     for row in list_table(conn):
         total = totals.setdefault(row["source"], [0, 0, 0])
-        total[0] += 1
-        total[1] += row["entry_count"]
-        total[2] += row["owned"]
+        # A list added or failing before it was ever stored has no entries to count.
+        if row["collection_id"] is not None:
+            total[0] += 1
+            total[1] += row["entry_count"]
+            total[2] += row["owned"]
         if row["failure"]:
             failure = row["failure"]
             failed.setdefault(row["source"], []).append(

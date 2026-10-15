@@ -126,7 +126,7 @@ def test_deciding_a_list_the_store_never_heard_of_is_refused_except_to_add_or_ex
         for verdict in ("refetch", "retry", "removed"):
             with pytest.raises(UnknownList):
                 decide(conn, decisions, other, verdict)
-        assert decide(conn, decisions, other, "added")["decision"] == "added"
+        assert decide(conn, decisions, other, "excluded")["decision"] == "excluded"
         assert decide(conn, decisions, MINE.upper(), "refetch")["url"] == MINE
         assert decide(conn, decisions, other, "refetch")["decision"] == "refetch"
         with pytest.raises(ValueError, match="MDBList list"):
@@ -211,3 +211,15 @@ def test_the_file_is_laid_over_the_table_until_the_sweep_acts_on_it(store: Path)
             with_pending(list_table(conn), excluded)[0]["pending"]
             == "Excluded · next sweep removes it"
         )
+
+
+def test_a_refetch_cannot_replace_an_add_the_sweep_has_not_folded(
+    store: Path, tmp_path: Path
+) -> None:
+    decisions = ListDecisions(tmp_path / "list_decisions.json")
+    new = "https://mdblist.com/lists/pierce/new"
+    with open_readonly(store) as conn:
+        decide(conn, decisions, new, "added")
+        with pytest.raises(ValueError, match="no sweep has folded the add"):
+            decide(conn, decisions, new, "refetch")
+    assert decisions.latest()[(new,)]["decision"] == "added"

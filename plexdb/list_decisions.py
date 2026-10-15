@@ -189,4 +189,17 @@ def decide(
         canonical not in known_list_urls(conn) and (canonical,) not in decisions.latest()
     ):
         raise UnknownList(canonical)
+    pending = decisions.latest().get((canonical,))
+    if (
+        verdict in ("refetch", "retry")
+        and pending is not None
+        and pending["decision"] == "added"
+        and not conn.execute(
+            "SELECT 1 FROM list_decision WHERE url = ? AND added = 1", (canonical,)
+        ).fetchone()
+    ):
+        raise ValueError(
+            f"{canonical} was added but no sweep has folded the add yet; "
+            f"a {verdict} now would replace it"
+        )
     return decisions.record((canonical,), verdict, {})
