@@ -72,7 +72,14 @@ class MDBListError(PlexdbError):
     A list entry naming a title this store has never walked is not this — the
     harvest counts it as unresolved and drops it, so a list that mostly sits
     outside the library is an ordinary result rather than a failure.
+
+    `status` is the HTTP status the service answered, or `None` where it never
+    answered.
     """
+
+    def __init__(self, message: str, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 class MDBListQuotaError(MDBListError):

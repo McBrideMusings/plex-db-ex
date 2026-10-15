@@ -10,12 +10,15 @@ rather than invented, and a re-pull replaces rather than appends.
 from __future__ import annotations
 
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import pytest
 from mdblist_fixtures import FakeMDBListSource, a_list, an_entry
 
 from plexdb.collections import MDBLIST_SOURCE, refresh_mdblist, wipe_source
+from plexdb.errors import MDBListError
 from plexdb.store import init as init_store
 from plexdb.store import open_store
 
@@ -275,9 +278,16 @@ def test_wiping_one_source_leaves_another_untouched(tmp_path: Path) -> None:
         )
         conn.commit()
 
-        memberships, collections = wipe_source(conn, MDBLIST_SOURCE)
+        conn.execute(
+            "INSERT INTO collection_entry (collection_id, rank, ns, value, kind) "
+            "VALUES ('letterboxd:x', 1, 'imdb', 'tt0468569', 'movie')"
+        )
+        conn.commit()
 
-        assert (memberships, collections) == (1, 1)
+        memberships, entries, collections = wipe_source(conn, MDBLIST_SOURCE)
+
+        assert (memberships, entries, collections) == (1, 1, 1)
+        assert conn.execute("SELECT COUNT(*) FROM collection_entry").fetchone()[0] == 1
         assert _memberships(conn) == [("letterboxd:x", DARK_KNIGHT, 1, None)]
 
 
@@ -291,3 +301,125 @@ def test_no_weight_column_exists(tmp_path: Path) -> None:
 
         assert "weight" not in columns
         assert {"rank", "mentions"} <= columns
+
+
+def _entries(conn: sqlite3.Connection) -> list[tuple[Any, ...]]:
+    return [
+        tuple(row)
+        for row in conn.execute(
+            "SELECT collection_id, rank, ns, value, kind, title, year FROM collection_entry "
+            "ORDER BY collection_id, rank"
+        )
+    ]
+
+
+def test_every_entry_is_stored_and_only_owned_ones_become_memberships(tmp_path: Path) -> None:
+    with _open(tmp_path / "plexdb.db") as conn:
+        _seed(
+            conn, item_id=DARK_KNIGHT, item_type="movie", title="The Dark Knight", imdb="tt0468569"
+        )
+        source = FakeMDBListSource(
+            lists=[a_list(14, size=3)],
+            entries_by_list={
+                14: [
+                    an_entry(imdb="tt9999999", title="Unowned Film", year=1999),
+                    an_entry(imdb="tt0468569", title="The Dark Knight", year=2008),
+                    an_entry("show", tvdb="81189", title="Breaking Bad", year=2008),
+                ],
+            },
+        )
+
+        stats = refresh_mdblist(conn, source)
+
+        assert _entries(conn) == [
+            ("mdblist:14", 1, "imdb", "tt9999999", "movie", "Unowned Film", 1999),
+            ("mdblist:14", 2, "imdb", "tt0468569", "movie", "The Dark Knight", 2008),
+            ("mdblist:14", 3, "tvdb", "81189", "show", "Breaking Bad", 2008),
+        ]
+        assert _memberships(conn) == [("mdblist:14", DARK_KNIGHT, 2, None)]
+        assert stats.entries_stored == 3
+        assert conn.execute("SELECT provenance, seed_count FROM collection").fetchone()[:] == (
+            "feed",
+            None,
+        )
+
+
+def test_a_re_pull_that_drops_an_entry_removes_it_from_entries_and_memberships(
+    tmp_path: Path,
+) -> None:
+    with _open(tmp_path / "plexdb.db") as conn:
+        _seed(
+            conn, item_id=DARK_KNIGHT, item_type="movie", title="The Dark Knight", imdb="tt0468569"
+        )
+        source = FakeMDBListSource(
+            lists=[a_list(14)],
+            entries_by_list={14: [an_entry(imdb="tt0468569"), an_entry(imdb="tt9999999")]},
+        )
+        refresh_mdblist(conn, source)
+
+        source.entries_by_list[14] = [an_entry(imdb="tt9999999")]
+        refresh_mdblist(conn, source, stale_days=0)
+
+        assert [row[3] for row in _entries(conn)] == ["tt9999999"]
+        assert _memberships(conn) == []
+
+
+def test_a_fresh_list_stored_without_entries_is_fetched_once_more(tmp_path: Path) -> None:
+    """A list harvested before entries were kept has a fresh `collection` row and
+    nothing in `collection_entry`; the staleness window alone would leave it so."""
+    with _open(tmp_path / "plexdb.db") as conn:
+        conn.execute(
+            "INSERT INTO collection (collection_id, source, name, observed_at) "
+            "VALUES ('mdblist:14', 'mdblist', 'Old', ?)",
+            (datetime.now(UTC).isoformat(timespec="seconds"),),
+        )
+        conn.commit()
+        source = FakeMDBListSource(
+            lists=[a_list(14)], entries_by_list={14: [an_entry(imdb="tt9999999")]}
+        )
+
+        refresh_mdblist(conn, source)
+        refresh_mdblist(conn, source)
+
+        assert source.entry_calls == [14]
+        assert len(_entries(conn)) == 1
+
+
+def test_each_list_logs_one_line_with_url_status_counts_and_outcome(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with _open(tmp_path / "plexdb.db") as conn:
+        _seed(
+            conn, item_id=DARK_KNIGHT, item_type="movie", title="The Dark Knight", imdb="tt0468569"
+        )
+        source = FakeMDBListSource(
+            lists=[a_list(14, slug="top-watched", user_name="lina")],
+            entries_by_list={14: [an_entry(imdb="tt0468569"), an_entry(imdb="tt9999999")]},
+        )
+
+        refresh_mdblist(conn, source)
+        refresh_mdblist(conn, source)
+
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0] == (
+        "mdblist: https://mdblist.com/lists/lina/top-watched -> HTTP 200, "
+        "2 entries parsed, 1 resolved to the library, written"
+    )
+    assert lines[1].startswith("mdblist: https://mdblist.com/lists/lina/top-watched -> cached")
+
+
+def test_a_failed_fetch_logs_its_status_and_reason_and_raises(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    class Failing(FakeMDBListSource):
+        def list_entries(self, list_id: int) -> Any:
+            raise MDBListError("MDBList returned 503 for https://api.mdblist.com/x", 503)
+
+    with _open(tmp_path / "plexdb.db") as conn:
+        with pytest.raises(MDBListError):
+            refresh_mdblist(conn, Failing(lists=[a_list(14, slug="s", user_name="u")]))
+
+    assert capsys.readouterr().out.splitlines() == [
+        "mdblist: https://mdblist.com/lists/u/s -> HTTP 503, "
+        "failed: MDBList returned 503 for https://api.mdblist.com/x"
+    ]

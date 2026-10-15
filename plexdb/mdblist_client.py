@@ -128,6 +128,20 @@ class MDBListEntry:
 
     external_ids: tuple[tuple[str, str], ...]
     media_type: str
+    #: The source's own title and release year for the entry, `None` where it
+    #: sent none. Kept so an entry naming a title the library does not own can
+    #: still be named (ADR-0027).
+    title: str | None = None
+    year: int | None = None
+
+
+@dataclass(frozen=True)
+class MDBListContents:
+    """Everything one list fetch returned: its entries in list order and the
+    HTTP status of the last page."""
+
+    status: int
+    entries: list[MDBListEntry]
 
 
 @dataclass(frozen=True)
@@ -151,11 +165,12 @@ class MDBListSource(Protocol):
         """The lists MDBList currently ranks as top, in the order it returns them."""
         ...
 
-    def list_entries(self, list_id: int) -> list[MDBListEntry]:
+    def list_entries(self, list_id: int) -> MDBListContents:
         """Every entry on one list, in the order the list presents them.
 
         Order is load-bearing: the caller turns array position into the stored
         `rank`. Paging is resolved here, so a caller never sees a partial list.
+        Raises `MDBListError` when a request fails.
         """
         ...
 
@@ -175,6 +190,8 @@ class LiveMDBListClient:
 
     def __init__(self, api_key: str, http: httpx.Client | None = None) -> None:
         self._key = api_key
+        #: The HTTP status of the most recent answer, for the harvest's log line.
+        self.last_status = 0
         self._http = http or httpx.Client(
             timeout=_DEFAULT_TIMEOUT, headers={"User-Agent": _USER_AGENT}
         )
@@ -202,7 +219,7 @@ class LiveMDBListClient:
             )
         return lists
 
-    def list_entries(self, list_id: int) -> list[MDBListEntry]:
+    def list_entries(self, list_id: int) -> MDBListContents:
         entries: list[MDBListEntry] = []
         offset = 0
         for _ in range(_MAX_PAGES):
@@ -222,10 +239,17 @@ class LiveMDBListClient:
                 for item in body.get(key) or []:
                     ids = _external_ids(item)
                     if ids:
-                        entries.append(MDBListEntry(external_ids=ids, media_type=media_type))
+                        entries.append(
+                            MDBListEntry(
+                                external_ids=ids,
+                                media_type=media_type,
+                                title=_optional_text(item.get("title")),
+                                year=_optional_int(item.get("release_year")),
+                            )
+                        )
             pagination = body.get("pagination") or {}
             if not pagination.get("has_more"):
-                return entries
+                return MDBListContents(status=self.last_status, entries=entries)
             offset += _PAGE_LIMIT
         raise MDBListError(
             f"MDBList list {list_id} still reported more pages after {_MAX_PAGES} requests — "
@@ -280,23 +304,28 @@ class LiveMDBListClient:
             resp = self._http.request(method, url, params=params, json=body)
         except httpx.HTTPError as err:
             raise MDBListError(f"cannot reach MDBList at {url}: {type(err).__name__}") from None
+        self.last_status = resp.status_code
         if resp.status_code == 403:
             raise MDBListError(
                 f"MDBList returned 403 for {url}. Either MDBLIST_API_KEY is not valid, or the "
                 "request carried no User-Agent — the service answers 403 with body "
-                "'error code: 1010' to an agentless request holding a perfectly good key."
+                "'error code: 1010' to an agentless request holding a perfectly good key.",
+                403,
             )
         if resp.status_code == 429:
             raise MDBListQuotaError(
                 f"MDBList returned 429 for {url}: the daily request quota is spent "
                 f"(x-ratelimit-remaining {resp.headers.get('x-ratelimit-remaining', 'not sent')}, "
                 f"resets at epoch {resp.headers.get('x-ratelimit-reset', 'not sent')}); "
-                "harvest-mdblist and enrich-mdblist-ratings share it"
+                "harvest-mdblist and enrich-mdblist-ratings share it",
+                429,
             )
         try:
             resp.raise_for_status()
         except httpx.HTTPError:
-            raise MDBListError(f"MDBList returned {resp.status_code} for {url}") from None
+            raise MDBListError(
+                f"MDBList returned {resp.status_code} for {url}", resp.status_code
+            ) from None
         try:
             return resp.json()
         except ValueError:
@@ -317,6 +346,12 @@ def _optional_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _optional_text(value: Any) -> str | None:
+    """The text the source supplied, or `None` where it supplied none."""
+    text = str(value).strip() if value is not None else ""
+    return text or None
 
 
 def _title_ratings(title: Any) -> MDBListTitleRatings | None:

@@ -635,6 +635,7 @@ identities forever, dropping their plays on every run.
 
 Which crowd lists a title appears on, and where in them — schema v6, written by
 `plexdb harvest-mdblist` ([issue #34](https://github.com/McBrideMusings/plex-db-ex/issues/34)).
+Schema v21 adds `collection_entry`, every entry of every list, and `collection.provenance`.
 
 ```sql
 collection(
@@ -644,7 +645,20 @@ collection(
     url             TEXT,
     size            INTEGER,            -- entries in the list, NULL where it has no end
     likes           INTEGER,            -- the source's own popularity number, NULL where absent
-    observed_at     TEXT NOT NULL
+    observed_at     TEXT NOT NULL,
+    provenance      TEXT NOT NULL DEFAULT 'feed',  -- how the list arrived: 'feed', 'added', 'search'
+    seed_count      INTEGER             -- seed titles a 'search' list was found from, else NULL
+)
+
+collection_entry(                       -- v21: every entry of the list, owned or not (ADR-0027)
+    collection_id   TEXT NOT NULL REFERENCES collection(collection_id) ON DELETE CASCADE,
+    rank            INTEGER,            -- 1-based position, NULL where the source is unordered
+    ns              TEXT NOT NULL,      -- the strongest external id the source gave: "imdb"
+    value           TEXT NOT NULL,      --   "tt1375666"
+    kind            TEXT NOT NULL,      --   "movie" or "show", scoping the id as in external_ids
+    title           TEXT,               -- the source's own title, NULL where it sent none
+    year            INTEGER,            -- the source's own release year, NULL where it sent none
+    PRIMARY KEY (collection_id, ns, value, kind)
 )
 
 collection_membership(
@@ -696,13 +710,40 @@ list dropped disappears rather than going stale. This is not optional tidiness: 
 of its lists `dynamic`, meaning the source regenerates them, and appending to one of those would
 accumulate every title that had ever passed through it.
 
-**Only titles this store already walked are representable.** `item_id` references `items`, which
-`plexdb walk` alone populates (ADR-0005), so a list entry naming a title nobody walked is dropped
-and counted, never stored under an invented id
-([ADR-0009](./adr/0009-an-edge-only-connects-two-items-this-store-already-knows)). `size` still
-records the list's full length, so a consumer can tell it is seeing a twelfth of a list rather
-than all of it. Measured on the author's library: 50 lists produced 11,896 memberships and
-dropped 15,237 entries as outside it.
+**Membership holds only titles this store already walked.** `item_id` references `items`, which
+`plexdb walk` alone populates (ADR-0005), so a list entry naming a title nobody walked has no
+membership row and is never stored under an invented id
+([ADR-0009](./adr/0009-an-edge-only-connects-two-items-this-store-already-knows)). Measured on the
+author's library: 50 lists produced 11,896 memberships and left 15,237 entries outside the library.
+
+**`collection_entry` keeps every entry, owned or not, and carries no `item_id`**
+([ADR-0027](./adr/0027-an-unowned-list-entry-is-stored-by-external-id)). A reader resolves an entry
+to a title through `external_ids` on `(ns, value, kind)` when it reads, so a title walked after the
+harvest joins its lists with nothing rewritten. `(ns, value, kind)` is the first id the source gave in
+`identity.PRIORITY` order. An id listed twice on one list is stored once, at its first position.
+`size` records the list's full length, so `size` against the stored entry count shows whether the
+source returned every entry.
+
+**A list's entries and memberships are replaced together.** `harvest-mdblist` deletes both for the
+list and writes both, with the `collection` row, in one transaction, so the three never describe two
+different fetches. A list counts as cached only when `observed_at` is inside the staleness window
+*and* it has `collection_entry` rows; a list stored before v21 has none, so the first harvest after
+the migration fetches it again.
+
+**`provenance` says how a list arrived**: `feed` for a source's own top lists (everything
+`harvest-mdblist` writes, and every list stored before v21), `added` for a list a person named, and
+`search` for a list found from a seed of titles, with `seed_count` the number of seed titles. Only
+`feed` is written today.
+
+**Nothing derived is stored** (ADR-0012). `plexdb lists` and `plexdb list` (`plexdb/lists.py`, the
+functions the explorer's Lists tab calls) work out the owned count, owned share, watched count (owned
+entries with at least one play, a show by a play of any of its episodes) and a list's over-represented keywords from these tables at read
+time. An entry is owned when its id resolves through `external_ids`, or failing that when the
+harvest wrote a membership at the same rank, because the harvest tries every id an entry carries
+and the entry row keeps only the strongest. A keyword is named for a list when at least 3 of its
+owned titles carry it and its share of them is at least 3 times its share of the library's titles of
+the list's most common type. `plexdb check` prints, per source, the lists, the entries stored and the
+owned share.
 
 **A list entry resolves through the strongest id it carries** — `imdb`, then `tmdb`, then `tvdb`,
 the same priority order `derive_item_id` uses, and always scoped by media type. Resolving without

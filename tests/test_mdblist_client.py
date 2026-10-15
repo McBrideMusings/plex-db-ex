@@ -80,8 +80,14 @@ def test_entries_read_both_arrays_not_the_objects_keys() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=load("list_2194_items.json"))
 
-    entries = _client(handler).list_entries(2194)
+    contents = _client(handler).list_entries(2194)
+    entries = contents.entries
 
+    assert contents.status == 200
+    assert [(entry.title, entry.year) for entry in entries] == [
+        ("The Shards", 2026),
+        ("Breaking Bad", 2008),
+    ]
     assert [entry.media_type for entry in entries] == ["show", "show"]
     assert dict(entries[1].external_ids) == {
         "imdb": "tt0903747",
@@ -99,10 +105,10 @@ def test_a_list_is_paged_until_has_more_clears() -> None:
         asked.append(offset)
         return httpx.Response(200, json=load(pages[offset]))
 
-    entries = _client(handler).list_entries(14)
+    contents = _client(handler).list_entries(14)
 
     assert asked == [0, 1000]
-    assert [dict(entry.external_ids)["imdb"] for entry in entries] == [
+    assert [dict(entry.external_ids)["imdb"] for entry in contents.entries] == [
         "tt0468569",
         "tt0372784",
     ]

@@ -87,6 +87,19 @@ def render(report: Report) -> list[str]:
             "migrated to the keywords namespace (ADR-0016) — run plexdb migrate"
         )
 
+    if report.lists:
+        lines.append("lists by source:")
+        for source_lists in report.lists:
+            share = (
+                "no entries"
+                if source_lists.owned_share is None
+                else f"{source_lists.owned_share:.1%} owned"
+            )
+            lines.append(
+                f"  {source_lists.source}: {source_lists.lists:,} list(s), "
+                f"{source_lists.entries:,} entries stored, {share}"
+            )
+
     if report.duplicates:
         lines.append(f"identities with more than one rating key: {len(report.duplicates)}")
         for duplicate in report.duplicates:

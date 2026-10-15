@@ -17,6 +17,7 @@ V1_TABLES = {"items", "external_ids", "plex_items", "enrichment"}
 V2_TABLES = {"plays", "plays_ingest_cursor"}
 V3_TABLES = {"edges"}
 V6_TABLES = {"collection", "collection_membership"}
+V21_TABLES = {"collection_entry"}
 V7_TABLES = {"enrichment_cursor"}
 V9_TABLES = {"title_map", "title_map_state"}
 V10_TABLES = {"keyword_forms"}
@@ -192,6 +193,7 @@ def test_a_current_store_carries_every_migrations_tables_and_nothing_else(
         | V17_TABLES
         | V19_TABLES
         | V20_TABLES
+        | V21_TABLES
         | {"reader_shape"}
         | {"schema_version"}
     )
@@ -1100,3 +1102,31 @@ def test_every_collection_query_in_schema_md_returns_what_it_says(tmp_path: Path
     assert sorted(rating_keys) == [("85450", "1"), ("85451", "1")]
     assert roles == [("los angel",), ("paris",), ("tokyo",)]
     assert ratings == [("imdb", "8.3", "mdblist")]
+
+
+def test_v21_keeps_every_stored_list_and_marks_it_as_a_feed_list(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The migration that added `collection_entry` and `collection.provenance`
+    (ADR-0027): a list stored before it is still there, and it came from the
+    source's own top lists."""
+    path = tmp_path / "plexdb.db"
+    with sqlite3.connect(path) as conn:
+        with monkeypatch.context() as before:
+            before.setattr(schema, "SCHEMA_VERSION", 20)
+            schema.apply(conn)
+        conn.execute(
+            "INSERT INTO collection (collection_id, source, name, observed_at) "
+            "VALUES ('mdblist:1', 'mdblist', 'Old', '2026-01-01T00:00:00+00:00')"
+        )
+        conn.commit()
+        assert schema.current_version(conn) == 20
+
+        schema.apply(conn)
+
+        assert schema.current_version(conn) == schema.SCHEMA_VERSION
+        row = conn.execute(
+            "SELECT collection_id, provenance, seed_count FROM collection"
+        ).fetchone()
+        assert tuple(row) == ("mdblist:1", "feed", None)
+        assert conn.execute("SELECT COUNT(*) FROM collection_entry").fetchone()[0] == 0

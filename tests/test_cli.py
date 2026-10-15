@@ -56,6 +56,8 @@ EXPECTED_COMMANDS = {
     "ingest-plays",
     "enrich-tautulli-plays",
     "latent-users",
+    "lists",
+    "list",
     "explore",
     "repair-identities",
     "repair-fs-identities",
@@ -97,6 +99,10 @@ EXPECTED_COMMAND_ORDER = [
     "refresh-map",
     "refresh-tagnetwork",
     "latent-users",
+    # Read-only reports on the crowd lists the harvest stored
+    # (`plexdb/commands/lists.py`, `plexdb/commands/list_one.py`).
+    "lists",
+    "list",
     # Not a step of the sweep: a read-only browser view of what the steps above
     # wrote (`plexdb/commands/explore.py`).
     "explore",

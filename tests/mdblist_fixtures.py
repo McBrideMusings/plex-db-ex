@@ -20,6 +20,7 @@ import httpx
 
 from plexdb.mdblist_client import (
     LiveMDBListClient,
+    MDBListContents,
     MDBListEntry,
     MDBListList,
     MDBListTitleRatings,
@@ -48,9 +49,12 @@ class FakeMDBListSource:
     def top_lists(self) -> list[MDBListList]:
         return list(self.lists)
 
-    def list_entries(self, list_id: int) -> list[MDBListEntry]:
+    def list_entries(self, list_id: int) -> MDBListContents:
         self.entry_calls.append(list_id)
-        return list(self.entries_by_list.get(list_id, []))
+        return MDBListContents(
+            status=200,
+            entries=list(self.entries_by_list.get(list_id, [])),
+        )
 
 
 @dataclass
@@ -107,9 +111,15 @@ def a_list(
     )
 
 
-def an_entry(media_type: str = "movie", **ids: str) -> MDBListEntry:
+def an_entry(
+    media_type: str = "movie", *, title: str | None = None, year: int | None = None, **ids: str
+) -> MDBListEntry:
     """One list entry carrying whatever ids the test names, e.g.
-    `an_entry(imdb="tt0468569")` or `an_entry("show", tvdb="81189")`."""
+    `an_entry(imdb="tt0468569")` or `an_entry("show", tvdb="81189")`, and the
+    source's own `title` and `year` when a test names them."""
     return MDBListEntry(
-        external_ids=tuple((ns, value) for ns, value in ids.items()), media_type=media_type
+        external_ids=tuple((ns, value) for ns, value in ids.items()),
+        media_type=media_type,
+        title=title,
+        year=year,
     )

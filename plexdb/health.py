@@ -24,6 +24,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from . import backup, schema, store
+from .lists import list_table
 
 #: Reported in this order — the three guarded tables first, since they are the
 #: ones no re-run reproduces, then the rest of the shape of the store.
@@ -77,6 +78,23 @@ class Duplicate:
 
 
 @dataclass(frozen=True)
+class SourceLists:
+    """The crowd lists one source contributed: how many, how many entries are
+    stored, and how many of those entries name a title the library owns."""
+
+    source: str
+    lists: int
+    entries: int
+    owned: int
+
+    @property
+    def owned_share(self) -> float | None:
+        """Owned entries over stored entries, or `None` with no entries. Worked
+        out here, never stored (ADR-0012)."""
+        return self.owned / self.entries if self.entries else None
+
+
+@dataclass(frozen=True)
 class Backups:
     """What is sitting in the backups directory, which nothing prunes."""
 
@@ -111,6 +129,9 @@ class Report:
     #: migration ran but left something behind, or something wrote the old
     #: namespace back after it ran.
     legacy_tmdb_keywords: int
+    #: Crowd lists per source. Empty on a store older than schema v21, which has
+    #: no `collection_entry` to count.
+    lists: tuple[SourceLists, ...]
 
     @property
     def current(self) -> bool:
@@ -276,6 +297,19 @@ def _legacy_tmdb_keywords(conn: sqlite3.Connection, tables: set[str]) -> int:
     return int(row[0])
 
 
+def _lists(conn: sqlite3.Connection, tables: set[str]) -> tuple[SourceLists, ...]:
+    """Crowd lists, their stored entries and the owned share, per source."""
+    if "collection_entry" not in tables or not _has(conn, "collection", "provenance", tables):
+        return ()
+    totals: dict[str, list[int]] = {}
+    for row in list_table(conn):
+        total = totals.setdefault(row["source"], [0, 0, 0])
+        total[0] += 1
+        total[1] += row["entry_count"]
+        total[2] += row["owned"]
+    return tuple(SourceLists(source, *total) for source, total in sorted(totals.items()))
+
+
 def _backups(directory: Path) -> Backups | None:
     """What is in the backups directory, or `None` when there is no such
     directory. Nothing prunes the pre-migration copies by design, so the number
@@ -305,4 +339,5 @@ def inspect(path: Path, backup_dir: Path, *, now: datetime | None = None) -> Rep
             keyword_counts=_keyword_counts(conn, tables),
             keyword_forms_count=_keyword_forms_count(conn, tables),
             legacy_tmdb_keywords=_legacy_tmdb_keywords(conn, tables),
+            lists=_lists(conn, tables),
         )
