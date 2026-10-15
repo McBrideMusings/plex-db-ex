@@ -67,9 +67,18 @@ A directed item-to-item relationship carrying a source rank. A snapshot of what 
 source said at one moment, not a fact.
 _Avoid_: link, relation, similarity
 
-**Weighted collection membership**:
-A (title, weight, source) triple recording that some list, subreddit, or local Plex
-collection contained a title.
+**Crowd list**:
+A list of titles someone outside the household published on a list site, as the store last
+fetched it — every entry, owned or not.
+_Avoid_: collection (Plex's word for its own), playlist
+
+**List entry**:
+One title a Crowd list names, at its position, whether or not the library owns it.
+_Avoid_: list item, row
+
+**List membership**:
+A List entry the store resolved to a title in the library.
+_Avoid_: weighted membership
 
 **Play**:
 One recorded watch event — a title, a Plex account, a client, a timestamp, and however much
