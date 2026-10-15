@@ -362,18 +362,18 @@ ALTER TABLE external_ids_v8 RENAME TO external_ids;
 CREATE INDEX idx_external_ids_item ON external_ids(item_id);
 """
 
-#: Version 9 — Plex TVX's default title map, drawn by the writer and
-#: stored, so Plex TVX serves it without drawing anything.
+#: Version 9 — Plex DB-EX's default title map, drawn by the writer and
+#: stored, so Plex DB-EX serves it without drawing anything.
 #:
 #: `title_map` holds one row per placed title and kind: a position in the unit
 #: square, where only distances mean anything. `title_map_state` holds one row
 #: per kind: the fingerprint of the keyword rows the map was drawn from, how
 #: many keyword-carrying titles it left off, and when. Nothing interprets the
-#: fingerprint except Plex TVX's freshness check, which recomputes it from
+#: fingerprint except Plex DB-EX's freshness check, which recomputes it from
 #: the current keyword rows and serves the stored map only when the two match.
 #:
 #: Both tables are derived, so they carry no history and no foreign key: a
-#: title that leaves `items` drops out of Plex TVX's join, and the next
+#: title that leaves `items` drops out of Plex DB-EX's join, and the next
 #: `plexdb refresh-map` redraws the map without it. Purely additive — no rows
 #: in an existing table move, so there is nothing to lose.
 _V9 = """
@@ -537,7 +537,7 @@ def _V10(conn: sqlite3.Connection) -> DeclaredShrinks:
     return {"enrichment": len(merged)}
 
 
-#: Version 11 — Plex TVX's stored tag network, the Graph view's
+#: Version 11 — Plex DB-EX's stored tag network, the Graph view's
 #: counterpart to version 9's stored title map.
 #:
 #: `tag_network` holds one row per node: a tag of `kind` with its document
@@ -860,7 +860,7 @@ def _rekey(conn: sqlite3.Connection, rename: dict[str, str]) -> None:
 #:
 #: No reader reads `keyword_pairs` through `plexdb-reader`, so `READER_SHAPE` stays.
 #:
-#: Plex TVX's tag doctor lets a person merge two stored keywords no judge was
+#: Plex DB-EX's tag doctor lets a person merge two stored keywords no judge was
 #: asked about. The fold writes such a pair as a row with `judged_at`,
 #: `jev_score`, `jev_model` and `jev_error` all NULL and `decision` set, so
 #: `merge_map` and the Merges tab read it from the one table every other merge
@@ -899,7 +899,7 @@ CREATE INDEX idx_keyword_pairs_b ON keyword_pairs(keyword_b);
 #: Version 19 — a person's display name for a keyword (ADR-0021).
 #:
 #: `keyword_names` holds at most one name per stored keyword, written only by
-#: `plexdb fold-name-decisions` from Plex TVX's `name_decisions.json`. A reader
+#: `plexdb fold-name-decisions` from Plex DB-EX's `name_decisions.json`. A reader
 #: shows it in place of the keyword's readable spelling; nothing that computes
 #: reads it. Only adds, so `READER_SHAPE` stays.
 _V19 = """
@@ -915,8 +915,8 @@ CREATE TABLE keyword_names (
 #:
 #: `title_map_label` holds the region labels `plexdb refresh-map` computes with
 #: each kind's default map, written in the same transaction as `title_map`, so
-#: Plex TVX serves a stored map without labelling 11,000 points per request. A
-#: label holds the stored keyword, never display text: Plex TVX applies display
+#: Plex DB-EX serves a stored map without labelling 11,000 points per request. A
+#: label holds the stored keyword, never display text: Plex DB-EX applies display
 #: names (ADR-0021) as it serves. Every map stored before this version is stale
 #: under the new drawing recipe, and the next refresh redraws it with labels.
 #: Only adds, so `READER_SHAPE` stays.

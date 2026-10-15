@@ -1,4 +1,4 @@
-"""Plex TVX — a read-only browser view over the `keywords` namespace.
+"""Plex DB-EX — a read-only browser view over the `keywords` namespace.
 
 It exists to find keywords that describe a title's packaging rather than its
 subject. `duringcreditsstinger` is the case that started it: it tags 383 movies,
@@ -7,10 +7,10 @@ keyword-cosine ranking for a reason that has nothing to do with taste.
 
 Nothing here writes the store. Every request opens it through `open_readonly`, so
 a handler bug meets SQLite's read-only mode rather than the one writer's file
-(ADR-0001). The files Plex TVX does write sit beside each other: the Query
+(ADR-0001). The files Plex DB-EX does write sit beside each other: the Query
 tab's saved queries, `explore-queries.json` (`SavedQueries`), and the Merges and
 Roles tabs' decisions files (`decisions.DecisionsFile`), each capped in count and
-total size since Plex TVX has no login. The noise list the page keeps lives in the
+total size since Plex DB-EX has no login. The noise list the page keeps lives in the
 viewer's browser, never on disk.
 
 The numbers are computed the way `taste-cosine.rhai` computes them for a pool,
@@ -73,7 +73,7 @@ from .role_review import (
 )
 from .store import open_readonly, read_snapshot
 
-#: Set in the container to have `plexdb schedule` serve Plex TVX beside the
+#: Set in the container to have `plexdb schedule` serve Plex DB-EX beside the
 #: sweep, reading the published snapshot. Unset, the scheduler serves nothing.
 EXPLORE_PORT_VAR = "PLEXDB_EXPLORE_PORT"
 
@@ -125,7 +125,7 @@ def rank_related(
 
 
 #: Renamed from the TMDB-specific `tmdb_keywords` by ADR-0016, which moved the
-#: source into its own column — Plex TVX reads across every source.
+#: source into its own column — Plex DB-EX reads across every source.
 _NAMESPACE = "keywords"
 _KEY = "keyword"
 
@@ -171,7 +171,7 @@ def keyword_rows(
     """Every (item_id, keyword) of a title of `kind`, each pair once, with every
     merged keyword folded into the one it merges with (`merge_map`).
 
-    The one read every Plex TVX keyword view goes through — the tag table, a
+    The one read every Plex DB-EX keyword view goes through — the tag table, a
     tag's titles, the title map, its region labels and the tag network — so a
     merge shows the same way in all of them. A keyword two sources both list on a
     title, or two keywords that fold into one, is one row.
@@ -1436,7 +1436,7 @@ class _TagNetworkCache:
         self._cache.get_streaming((kind, exclude), (stat.st_mtime_ns, stat.st_size), stages, emit)
 
 
-#: The Query tab's limits. Plex TVX has no login, locally or deployed, so
+#: The Query tab's limits. Plex DB-EX has no login, locally or deployed, so
 #: these hold for every caller: a statement that runs past `QUERY_SECONDS` is
 #: aborted, and a result past `QUERY_ROWS` rows is cut and says so.
 QUERY_SECONDS = 5.0
@@ -1444,7 +1444,7 @@ QUERY_ROWS = 500
 
 #: Longest string or blob one SQL function may build (`SQLITE_LIMIT_LENGTH`). The
 #: progress handler cannot interrupt a single call such as `randomblob(9e8)`, and
-#: Plex TVX shares a process with the sweep, so an oversize value is refused
+#: Plex DB-EX shares a process with the sweep, so an oversize value is refused
 #: instead of allocated.
 QUERY_VALUE_BYTES = 8 << 20
 
@@ -1468,7 +1468,7 @@ TITLE_SLOTS = threading.BoundedSemaphore(4)
 #: so typing never takes a slot a card or the doctor itself is waiting for.
 KEYWORD_SLOTS = threading.BoundedSemaphore(2)
 
-#: Largest request body Plex TVX reads. A pasted query is a few kilobytes.
+#: Largest request body Plex DB-EX reads. A pasted query is a few kilobytes.
 #: `SavedQueries.MAX_TOTAL_BYTES` shares this literal by coincidence, not by
 #: reference — one bounds a single request, the other the whole persisted
 #: file — so change either without assuming the other should follow.
@@ -1826,7 +1826,7 @@ class SavedQueries:
     """
 
     NAME_MAX = 200
-    #: Plex TVX has no login, so `upsert` bounds what an anonymous caller
+    #: Plex DB-EX has no login, so `upsert` bounds what an anonymous caller
     #: can grow this file to — count and serialized size — independently of
     #: which directory it lives in (plex-db-ex-oyg.3).
     MAX_ENTRIES = 500
@@ -1924,7 +1924,7 @@ POSTER_MAX_BYTES = 4 << 20
 POSTER_SLOTS = threading.BoundedSemaphore(16)
 
 #: Cached posters kept in memory, keyed by rating_key, count-capped rather
-#: than time-capped — a rating_key's image doesn't change, but Plex TVX
+#: than time-capped — a rating_key's image doesn't change, but Plex DB-EX
 #: has no login, so a caller cycling through many item_ids must not grow
 #: this without bound (the same shape as `SavedQueries`'s caps).
 POSTER_CACHE_ENTRIES = 2000
@@ -1952,7 +1952,7 @@ class _PosterCache:
 
 class PosterProxy:
     """One title's Plex thumbnail, proxied so `PLEX_TOKEN` never reaches the
-    browser (plex-db-ex-oyg.2). Plex TVX has no login, so a caller who
+    browser (plex-db-ex-oyg.2). Plex DB-EX has no login, so a caller who
     could read the token directly could spend it against Plex at will;
     proxying keeps it server-side, and `POSTER_SLOTS`/`_PosterCache` bound how
     much of that spending an anonymous caller can cause.
@@ -2133,7 +2133,7 @@ def make_server(
     plex_token: str = "",
     poster_http: httpx.Client | None = None,
 ) -> ThreadingHTTPServer:
-    """An HTTP server for Plex TVX, bound but not yet serving.
+    """An HTTP server for Plex DB-EX, bound but not yet serving.
 
     The caller owns the loop and the shutdown: `plexdb explore` runs
     `serve_forever` in the foreground, and a test runs it on a thread.
@@ -2494,7 +2494,7 @@ def serve_in_background(
     plex_url: str = "",
     plex_token: str = "",
 ) -> ThreadingHTTPServer:
-    """Start Plex TVX on a daemon thread and return its server.
+    """Start Plex DB-EX on a daemon thread and return its server.
 
     This is how the container serves it: a thread inside `plexdb schedule`, so
     one image and one `[docker_run]` carry both. A daemon thread dies with the

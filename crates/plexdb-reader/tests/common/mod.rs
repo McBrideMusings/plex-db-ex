@@ -115,7 +115,7 @@ INSERT INTO keyword_forms (surface, keyword) VALUES
     ('Bank-Heist', 'bank heist'),
     ('bank_heist', 'bank heist');
 
--- A display name a person gave one keyword in Plex TVX (ADR-0021).
+-- A display name a person gave one keyword in Plex DB-EX (ADR-0021).
 INSERT INTO keyword_names (keyword, name, decided_at) VALUES
     ('bank heist', 'Bank job', '2026-10-12T00:00:00+00:00');
 

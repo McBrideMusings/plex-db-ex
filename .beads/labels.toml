@@ -11,7 +11,7 @@ about = "Enrichers that fetch from outside sources: TMDB keywords and edges, Wik
 about = "Keyword cleanup: forms, synonyms and pair judging, roles, names, merge and film-suffix verdicts."
 
 [labels.explore]
-about = "Plex TVX, the explore web UI: map, tags table, tag network graph, query tab, and the refresh jobs that feed them."
+about = "Plex DB-EX, the explore web UI: map, tags table, tag network graph, query tab, and the refresh jobs that feed them."
 
 [labels.reader]
 about = "crates/plexdb-reader, the read-only Rust crate etv-station vendors: taste vectors, enrichment, edges."
@@ -29,10 +29,10 @@ about = "docs/ (PRD, spec, schema, ADRs, CONTEXT.md), CLAUDE.md."
 about = "The complaint is a number: query time, refresh time, memory."
 
 [labels.ui]
-about = "How a Plex TVX screen looks."
+about = "How a Plex DB-EX screen looks."
 
 [labels.ux]
-about = "How a person moves through Plex TVX or the CLI to get something done."
+about = "How a person moves through Plex DB-EX or the CLI to get something done."
 
 [labels.human]
 about = "Needs a person: a decision, a look at the real UI, an account, a manual check."

@@ -1,8 +1,8 @@
-"""What the Plex TVX Roles tab shows and records about keyword roles.
+"""What the Plex DB-EX Roles tab shows and records about keyword roles.
 
 `keyword_roles` holds what each source states and each judge scores about a keyword's
 role, and `keyword_role_decisions` what a person ruled (ADR-0019). A person's accept or
-reject never touches the store, because Plex TVX never writes `plexdb.db` (ADR-0007,
+reject never touches the store, because Plex DB-EX never writes `plexdb.db` (ADR-0007,
 ADR-0017): it goes into `role_decisions.json`, which `plexdb fold-role-decisions`
 applies at the next sweep. Until then this module lays the file's decisions over the
 table, so the page shows a click at once.

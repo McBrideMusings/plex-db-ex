@@ -258,14 +258,14 @@ impl Reader {
         Ok(rows)
     }
 
-    /// The display name a person gave the stored `keyword` in Plex TVX
+    /// The display name a person gave the stored `keyword` in Plex DB-EX
     /// (`keyword_names`, ADR-0021), for showing that keyword to a person in place
     /// of its spelling. `None`, not an error, for a keyword nobody named.
     /// `keyword` is matched exactly: it is a stored value, not a spelling.
     ///
     /// Only for display: never compare, score or count by it. A merge group's
     /// label is the reader's to choose, since which pairs count as merged is the
-    /// reader's threshold; Plex TVX shows the kept keyword's name, else the newest
+    /// reader's threshold; Plex DB-EX shows the kept keyword's name, else the newest
     /// name any member has.
     pub fn display_name(&self, keyword: &str) -> Result<Option<String>, ReaderError> {
         let name = self

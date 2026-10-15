@@ -1,6 +1,6 @@
-"""A Plex TVX decisions file: a person's accepts and rejects, waiting for the sweep.
+"""A Plex DB-EX decisions file: a person's accepts and rejects, waiting for the sweep.
 
-Plex TVX never writes `plexdb.db` (ADR-0007, ADR-0017), so a decision made on one of
+Plex DB-EX never writes `plexdb.db` (ADR-0007, ADR-0017), so a decision made on one of
 its review tabs goes into a JSON file beside its saved-queries file, and a sweep step
 folds that file into the store. `merge_decisions.json` (the Merges tab) and
 `role_decisions.json` (the Roles tab) and `name_decisions.json` (display names) share
@@ -40,7 +40,7 @@ __all__ = [
 
 #: Full path to the saved-queries file, set in the container to a dedicated
 #: mount (`/explore-data`, its own bind mount in `[docker_run]`) rather than
-#: etv-station's `/snapshot` directory — Plex TVX has no login, so anyone
+#: etv-station's `/snapshot` directory — Plex DB-EX has no login, so anyone
 #: who reaches the port could otherwise write into a directory another
 #: consumer reads (plex-db-ex-oyg.3). Unset in dev, where `make_server` falls
 #: back to a file beside the store.
@@ -52,12 +52,12 @@ SAVED_FILE = "explore-queries.json"
 
 
 def decisions_dir(config: Config) -> Path:
-    """Where Plex TVX's files sit: the saved queries, `merge_decisions.json`,
+    """Where Plex DB-EX's files sit: the saved queries, `merge_decisions.json`,
     `role_decisions.json` and `name_decisions.json`.
 
     The directory of `PLEXDB_EXPLORE_SAVED_PATH` when set (the container's own
     mount); otherwise beside the published snapshot when one is configured, as the
-    scheduler's Plex TVX puts it, and beside the store otherwise, as `plexdb
+    scheduler's Plex DB-EX puts it, and beside the store otherwise, as `plexdb
     explore` does.
     """
     raw = os.environ.get(EXPLORE_SAVED_PATH_VAR, "").strip()
@@ -81,7 +81,7 @@ class DecisionsFile(ABC):
     """One decisions file, written the way `SavedQueries` writes its file.
 
     Replaced by rename so a reader never sees half of it, under a lock, and bounded
-    because Plex TVX has no login. Only the last entry per key counts (the fold
+    because Plex DB-EX has no login. Only the last entry per key counts (the fold
     applies entries in order), so a write keeps one entry per key and the file's
     size is bounded by the number of rows the store holds.
 
