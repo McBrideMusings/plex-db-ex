@@ -31,6 +31,7 @@ plex-db-ex/
 │   │   ├── list_decide.py  `plexdb list-decide <url> <decision>`: appends to `list_decisions.json` (the file the Lists tab writes), never the store
 │   │   ├── harvest_mdblist.py
 │   │   ├── harvest_letterboxd_lists.py  the keyless Gated Source for Letterboxd lists a person added; sweep step 61, just after `harvest-mdblist`
+│   │   ├── harvest_mdblist_search.py  the Gated Source for the outward list search, capped per seed (`MDBLIST_SEARCH_MAX_SEEDS`); sweep step 62, after `harvest-letterboxd-lists`
 │   │   ├── idle.py            exit 0 only when no migration and no writer holds the store; read-only. Given a command, it claims both store locks and runs that command under them, which is how `tools/host-exec.sh` runs anything
 │   │   ├── ingest_plays.py
 │   │   ├── film_suffix_verdicts.py  writes a `rule:film-suffix` merge verdict for each stored "X film" whose bare "X" is stored, except `keywords.FILM_SUFFIX_KEEP`; sweep step 64, after the prune and before the judge, needs no service
@@ -85,6 +86,7 @@ plex-db-ex/
 │   ├── list_decisions.py  `ListDecisions` is `list_decisions.json` keyed by canonical MDBList URL (`canonical_list_url`), `fold_list_decisions` applies it to `list_decision` (a `refetch` or `retry` keeps what the row said about `added`), and `decide` is the one procedure `plexdb list-decide` and the explorer's `POST /api/list-decisions` call
 │   ├── lists.py           the list table and one list's detail — the one procedure `plexdb lists`, `plexdb list` and the explorer's Lists tab call; owned count, watched count and over-represented keywords are computed at read time (ADR-0012, ADR-0027)
 │   ├── collections.py     crowd-list harvest into collection/collection_entry/collection_membership: rank is array position, entries and memberships replaced together per collection_id in one transaction, no computed weight (ADR-0012), every entry stored by external id (ADR-0027) and only owned ones become memberships
+│   ├── list_search.py  outward list search: watched titles as seeds, MDBList list-name search, candidates fetched and kept when they hold enough library titles; seed and rejection bookkeeping in `enrichment_cursor`
 │   ├── letterboxd_lists.py  Letterboxd list harvest: the added and stored Letterboxd lists, every page, each film's TMDB id and type read from its film page once per run, written whole or not at all through `collections.py`'s shared gate, removal and snapshot steps
 │   ├── tmdb_edges.py      TMDB recommendations/similar sweep: two edge types, replace-wholesale per (from_id, edge_type), cached via enrichment_cursor rows under the tmdb_edges namespace
 │   ├── repair.py          splits identities that fused two unrelated titles sharing a TMDB/TVDB number (issue #23): deletes them, re-walks Plex, rewinds the play cursor over what went with them

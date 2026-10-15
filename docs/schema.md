@@ -733,8 +733,8 @@ the migration fetches it again.
 **`provenance` says how a list arrived**: `feed` for a source's own top lists (everything
 `harvest-mdblist` writes from MDBList's feed, and every list stored before v21), `added` for a list a person named
 ([Version 22](#version-22-a-person-s-decisions-about-crowd-lists)), and `search` for a list found
-from a seed of titles, with `seed_count` the number of seed titles. `feed` and `added` are written
-today.
+by `harvest-mdblist-search` from watched titles, with `seed_count` the number of the list's library titles that
+have been watched. All three are written.
 
 **Nothing derived is stored** (ADR-0012). `plexdb lists` and `plexdb list` (`plexdb/lists.py`, the
 functions the explorer's Lists tab calls) work out the owned count, owned share, watched count (owned
@@ -1288,6 +1288,29 @@ on to the next list. After 3 failed fetches in a row the harvest leaves the list
 `retry` decision. A failure that says nothing about one list (the daily quota spent, a refused key,
 no answer at all) ends the run instead and is recorded against no list. `plexdb check` and the list
 table report a list in a failed state, with the reason.
+
+### Lists found by search
+
+`harvest-mdblist-search` (sweep step 62, best-effort, needs `MDBLIST_API_KEY`) searches outward from
+what the household watched. Each watched movie, and each show with a watched episode, is a seed,
+searched by title through MDBList's `/lists/search` (one request, matching list *names* only: no
+endpoint answers which lists contain a title). Every list a search returns is a candidate. A candidate
+is fetched like any MDBList list and kept as `provenance = 'search'` only when it holds at least
+`MDBLIST_SEARCH_MIN_TITLES` (default 5) library titles; `seed_count` is how many of those are watched.
+A fetched candidate holding fewer is written nowhere and is not fetched again until it is stale.
+
+A run asks at most `MDBLIST_SEARCH_MAX_SEEDS` seeds (default 25, most-watched first) and fetches at most
+`MDBLIST_SEARCH_MAX_LISTS` candidates (default 10, those surfaced by the most seeds first), so a first
+pass spreads over several sweeps. A seed is asked again only after `MDBLIST_SEARCH_STALE_DAYS` (default
+45). Seed cursors, the lists each seed surfaced (`key = hit:<url>`) and rejected candidates
+(`key = rejected:<url>`) are `enrichment_cursor` rows under namespace `list_search`, source `mdblist`
+(bookkeeping, ADR-0013). Decisions steer it as they do `harvest-mdblist`: an excluded list is never
+fetched, a refetch ignores staleness once, three failed fetches stop a list until a retry. A list
+the feed or a person already placed keeps its provenance.
+
+A name match is a lead, not evidence: short titles ("FROM", "24", "House") surface lists named for
+something else, and the library-title threshold is the only filter. Exclude the noise from the Lists tab.
+The migration is not involved: `provenance` and `seed_count` exist since v21.
 
 ### Letterboxd lists
 

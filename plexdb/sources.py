@@ -40,7 +40,7 @@ from .errors import ConfigError
 from .staleness import DEFAULT_STALE_DAYS
 from .store import open_store
 
-__all__ = ["GatedSource"]
+__all__ = ["GatedSource", "env_int"]
 
 
 @dataclass(frozen=True)
@@ -127,7 +127,7 @@ class GatedSource:
         """
         if override is not None:
             return override
-        return _env_int(self.stale_days_var, DEFAULT_STALE_DAYS, "a whole number of days")
+        return env_int(self.stale_days_var, DEFAULT_STALE_DAYS, "a whole number of days")
 
     def resolve_limit(self, override: int | None) -> int:
         """The flag wins, then `<NAME>_MAX_<UNIT>S`, then `default_limit`; an
@@ -137,7 +137,7 @@ class GatedSource:
         limit = (
             override
             if override is not None
-            else _env_int(
+            else env_int(
                 self.limit_var, self.default_limit, f"a whole number of {self.capped_unit}s"
             )
         )
@@ -202,7 +202,7 @@ class GatedSource:
         parser.set_defaults(func=self.run)
 
 
-def _env_int(var: str, default: int, what: str) -> int:
+def env_int(var: str, default: int, what: str) -> int:
     raw = os.environ.get(var, "").strip()
     if not raw:
         return default

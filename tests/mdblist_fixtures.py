@@ -53,8 +53,21 @@ class FakeMDBListSource:
     #: List ids whose entries fail with this error when asked for.
     failing: dict[int, MDBListError] = field(default_factory=dict)
 
+    #: Lists a search for this exact query returns; any other query returns none.
+    search_results: dict[str, list[MDBListList]] = field(default_factory=dict)
+    #: Every query `search_lists` was asked, in order.
+    search_calls: list[str] = field(default_factory=list)
+    #: Queries that fail with this error when searched.
+    failing_searches: dict[str, MDBListError] = field(default_factory=dict)
+
     def top_lists(self) -> list[MDBListList]:
         return list(self.lists)
+
+    def search_lists(self, query: str) -> list[MDBListList]:
+        self.search_calls.append(query)
+        if query in self.failing_searches:
+            raise self.failing_searches[query]
+        return list(self.search_results.get(query, []))
 
     def find_list(self, user_name: str, slug: str) -> MDBListList:
         self.find_calls.append((user_name, slug))

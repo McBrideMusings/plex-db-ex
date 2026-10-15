@@ -67,6 +67,9 @@ FEED = "feed"
 #: `collection.provenance` of a list a person added by URL (`list_decisions.json`).
 ADDED = "added"
 
+#: `collection.provenance` of a list found by searching outward from watched titles.
+SEARCH = "search"
+
 #: Failures in a row after which a list is not fetched again until a `retry` decision.
 MAX_FAILURES = 3
 
@@ -160,7 +163,7 @@ def _resolve(
     return None
 
 
-def _drop_lists(conn: sqlite3.Connection, collection_ids: list[str]) -> None:
+def drop_lists(conn: sqlite3.Connection, collection_ids: list[str]) -> None:
     """Delete these lists' entries, memberships and collection rows (explicitly, not by
     cascade: `PRAGMA foreign_keys` is not guaranteed on)."""
     with conn:
@@ -204,7 +207,7 @@ def apply_removals(
             and (verdict == "excluded" or row["provenance"] == ADDED)
         ]
         if doomed:
-            _drop_lists(conn, doomed)
+            drop_lists(conn, doomed)
             stats.lists_removed += len(doomed)
             print(f"{source}: {url} -> {verdict}, dropped {len(doomed)} stored list(s)", flush=True)
         with conn:
@@ -212,7 +215,7 @@ def apply_removals(
     return kept
 
 
-def _systemic(err: MDBListError) -> bool:
+def is_systemic(err: MDBListError) -> bool:
     """A failure that says nothing about one list: the quota is spent, the key is refused,
     or MDBList never answered. The run stops instead of charging it to every list."""
     return isinstance(err, MDBListQuotaError | MDBListUnreachable) or err.status in (401, 403)
@@ -339,6 +342,7 @@ def write_snapshot(
     fetched_iso: str,
     stored: Sequence[tuple[int, str, str, str, str | None, int | None]],
     memberships: Sequence[tuple[str, int]],
+    seed_count: int | None = None,
 ) -> None:
     """Replace one list's collection row, entries and memberships in one transaction, and
     forget its failed fetches. A list is written whole or not at all."""
@@ -347,13 +351,14 @@ def write_snapshot(
         conn.execute("DELETE FROM collection_membership WHERE collection_id = ?", (collection_id,))
         conn.execute(
             "INSERT INTO collection "
-            "(collection_id, source, name, url, size, likes, observed_at, provenance) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "(collection_id, source, name, url, size, likes, observed_at, provenance, seed_count) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(collection_id) DO UPDATE SET "
             "source = excluded.source, name = excluded.name, url = excluded.url, "
             "size = excluded.size, likes = excluded.likes, "
-            "observed_at = excluded.observed_at, provenance = excluded.provenance",
-            (collection_id, source, name, url, size, likes, fetched_iso, provenance),
+            "observed_at = excluded.observed_at, provenance = excluded.provenance, "
+            "seed_count = excluded.seed_count",
+            (collection_id, source, name, url, size, likes, fetched_iso, provenance, seed_count),
         )
         conn.executemany(
             "INSERT INTO collection_entry "
@@ -505,7 +510,7 @@ def refresh_mdblist(
                 f"mdblist: {label} -> HTTP {err.status or 'none'}, failed: {err}",
                 flush=True,
             )
-            if _systemic(err):
+            if is_systemic(err):
                 raise
             record_failure(
                 conn, unit.key, held, datetime.now(UTC).isoformat(timespec="seconds"), str(err)

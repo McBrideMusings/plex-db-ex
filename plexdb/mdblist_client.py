@@ -39,6 +39,12 @@ been got wrong in the client this module replaces
   module ignores it and the caller uses array position, which is the ordering
   the list actually presents.
 
+`GET /lists/search?query=` returns the same array shape (verified 2026-10-15 from the plexdb
+image): up to 100 lists whose **name** contains the query, nothing matched on a list's
+description or entries, `[]` for no match, 400 for an empty query. One request each.
+No endpoint answers "which lists contain this title" (`/imdb/movie/<id>/lists` and three
+other spellings answer 404).
+
 `POST /imdb/{movie|show}/` with `{"ids": [...]}` is the batch title endpoint
 (verified 2026-10-05, recorded in `tests/fixtures/mdblist/batch_imdb_*.json`).
 It answers a JSON array with one object per id it knows. An id it does not
@@ -181,6 +187,16 @@ class MDBListSource(Protocol):
         ...
 
 
+class MDBListSearchSource(MDBListSource, Protocol):
+    """What the outward search needs on top of a harvest: MDBList's list search."""
+
+    def search_lists(self, query: str) -> list[MDBListList]:
+        """The lists whose name contains `query`, as MDBList returns them (one page of up
+        to 100). MDBList matches names only, never a list's entries. Raises `MDBListError`
+        when the request fails."""
+        ...
+
+
 class MDBListRatingsSource(Protocol):
     """The read surface the ratings sweep needs from MDBList — real or recorded."""
 
@@ -207,6 +223,14 @@ class LiveMDBListClient:
         if not isinstance(body, list):
             raise MDBListError(
                 f"MDBList /lists/top returned {type(body).__name__}, expected a list of lists"
+            )
+        return [_list_from(entry) for entry in body if entry.get("id") is not None]
+
+    def search_lists(self, query: str) -> list[MDBListList]:
+        body = self._get("/lists/search", extra={"query": query})
+        if not isinstance(body, list):
+            raise MDBListError(
+                f"MDBList /lists/search returned {type(body).__name__}, expected a list of lists"
             )
         return [_list_from(entry) for entry in body if entry.get("id") is not None]
 
