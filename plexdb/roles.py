@@ -18,7 +18,7 @@ every finished batch and the next run asks only about keywords still without a
 row. Nothing here decides whether a keyword *has* a role: that threshold is the
 reader's.
 
-**Decisions.** Plex TVX never writes `plexdb.db` (ADR-0007, ADR-0017), so a
+**Decisions.** Plex DB-EX never writes `plexdb.db` (ADR-0007, ADR-0017), so a
 person's accept or reject reaches `keyword_role_decisions` only through
 `role_decisions.json`, which `fold_role_decisions` applies early in a sweep.
 """
@@ -144,7 +144,7 @@ def _judge_all(judge: RoleJudge, tags: list[str]) -> list[RoleVerdict | JevRejec
 
 
 def role_decisions_path(config: Config) -> Path:
-    """`role_decisions.json`, beside Plex TVX's saved-queries file and `merge_decisions.json`."""
+    """`role_decisions.json`, beside Plex DB-EX's saved-queries file and `merge_decisions.json`."""
     return decisions_dir(config) / ROLE_DECISIONS_FILE
 
 

@@ -101,7 +101,7 @@ def _migrate_store() -> None:
 
 
 def _start_explorer() -> None:
-    """Serve Plex TVX over the published snapshot, if asked to.
+    """Serve Plex DB-EX over the published snapshot, if asked to.
 
     Off unless `PLEXDB_EXPLORE_PORT` is set. It reads the snapshot, never the
     live store: ADR-0007 is where readers look, and the snapshot is a file the
@@ -133,7 +133,7 @@ def _start_explorer() -> None:
     if snapshot is None:
         raise ConfigError(
             f"{EXPLORE_PORT_VAR} is set but PLEXDB_SNAPSHOT_PATH is not; "
-            "Plex TVX reads the published snapshot"
+            "Plex DB-EX reads the published snapshot"
         )
     saved_raw = os.environ.get(EXPLORE_SAVED_PATH_VAR, "").strip()
     saved_path = Path(saved_raw).expanduser() if saved_raw else None
@@ -147,7 +147,7 @@ def _start_explorer() -> None:
     )
     where = saved_path or snapshot.with_name("explore-queries.json")
     print(
-        f"Plex TVX on port {server.server_port}, reading {snapshot}, saved queries at {where}",
+        f"Plex DB-EX on port {server.server_port}, reading {snapshot}, saved queries at {where}",
         flush=True,
     )
 
@@ -169,7 +169,7 @@ def run_scheduler(
     `migrate` and `explore` are injectable for the same reason. Nothing else
     supplies them.
 
-    **Plex TVX starts after the migration**, when `PLEXDB_EXPLORE_PORT`
+    **Plex DB-EX starts after the migration**, when `PLEXDB_EXPLORE_PORT`
     is set, and serves on its own thread for as long as the loop runs.
 
     **The migration runs at startup, once the schedule parses.** It used to

@@ -1,7 +1,7 @@
 """`plexdb fold-role-decisions` — apply `role_decisions.json` to
 `keyword_role_decisions`.
 
-Plex TVX never writes `plexdb.db` (ADR-0007, ADR-0017), so this is the only
+Plex DB-EX never writes `plexdb.db` (ADR-0007, ADR-0017), so this is the only
 way a person's accept, reject or clear of a keyword's role reaches the table.
 """
 

@@ -1,5 +1,5 @@
 """Display names (ADR-0021): `name_decisions.json`, the fold into `keyword_names`, the
-labels Plex TVX shows, and that nothing that computes reads a name."""
+labels Plex DB-EX shows, and that nothing that computes reads a name."""
 
 from __future__ import annotations
 

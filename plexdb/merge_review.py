@@ -1,8 +1,8 @@
-"""What the Plex TVX review page shows and records about synonym keyword pairs.
+"""What the Plex DB-EX review page shows and records about synonym keyword pairs.
 
 `keyword_pairs` holds a judge's score for each pair it was asked about (ADR-0018), and a
 row for each pair only a person decided (ADR-0020). A person's accept or reject from
-the Merges tab or the tag doctor never touches the store, because Plex TVX never writes
+the Merges tab or the tag doctor never touches the store, because Plex DB-EX never writes
 `plexdb.db`
 (ADR-0007, ADR-0017): it goes into `merge_decisions.json`, which `plexdb
 fold-merge-decisions` applies at the next sweep. Until then this module lays the

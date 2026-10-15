@@ -94,7 +94,7 @@ class JevRejected(JevError):
 
 
 class DecisionsFileError(PlexdbError):
-    """A Plex TVX decisions file cannot be read or written, is not valid JSON, or does
+    """A Plex DB-EX decisions file cannot be read or written, is not valid JSON, or does
     not hold the documented shape."""
 
 

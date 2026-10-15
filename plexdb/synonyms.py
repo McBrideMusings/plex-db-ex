@@ -37,7 +37,7 @@ the model that made them. It is derived and disposable: deleting it, or changing
 the model, costs one re-embed. A sweep embeds only the texts the cache lacks, so
 a night with no new keyword makes no embedding request.
 
-**Decisions.** Plex TVX never writes `plexdb.db` (ADR-0007, ADR-0017), so a
+**Decisions.** Plex DB-EX never writes `plexdb.db` (ADR-0007, ADR-0017), so a
 person's accept or reject reaches the table only through `merge_decisions.json`,
 which `fold_merge_decisions` applies at the start of a sweep.
 """
@@ -100,7 +100,7 @@ class JudgeStats:
 
 
 def merge_decisions_path(config: Config) -> Path:
-    """`merge_decisions.json`, beside Plex TVX's saved-queries file."""
+    """`merge_decisions.json`, beside Plex DB-EX's saved-queries file."""
     return decisions_dir(config) / MERGE_DECISIONS_FILE
 
 

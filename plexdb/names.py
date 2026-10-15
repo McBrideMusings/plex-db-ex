@@ -1,6 +1,6 @@
 """A person's display name for a keyword (ADR-0021).
 
-`keyword_names` holds at most one name per stored keyword. Plex TVX never writes
+`keyword_names` holds at most one name per stored keyword. Plex DB-EX never writes
 `plexdb.db` (ADR-0007, ADR-0017), so a name typed there goes into
 `name_decisions.json`, which `plexdb fold-name-decisions` applies at the next sweep;
 until then `display_labels` lays the file over the table, so the page shows a name
@@ -96,7 +96,7 @@ class NameDecisions(DecisionsFile):
 
 
 def name_decisions_path(config: Config) -> Path:
-    """`name_decisions.json`, beside Plex TVX's saved-queries file."""
+    """`name_decisions.json`, beside Plex DB-EX's saved-queries file."""
     return decisions_dir(config) / NAME_DECISIONS_FILE
 
 

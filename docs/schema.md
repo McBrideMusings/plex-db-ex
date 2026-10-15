@@ -732,7 +732,7 @@ that just missed a single fetch — a rate limit, a timeout, a partial index. Tw
 that on their own: an id whose `last_seen` predates the current walk was not in the most recent
 report.
 
-## Version 9 — Plex TVX's stored title map
+## Version 9 — Plex DB-EX's stored title map
 
 `title_map` and `title_map_state`, written by `plexdb refresh-map` together with the map's region
 labels ([Version 20](#version-20-the-stored-title-map-s-region-labels)). All are derived from
@@ -743,11 +743,11 @@ title_map        (kind, item_id) PK, x REAL, y REAL
 title_map_state  kind PK, fingerprint TEXT, unplaced INTEGER, computed_at TEXT
 ```
 
-`title_map` holds the default map of Plex TVX's Map view: each title of `kind`
+`title_map` holds the default map of Plex DB-EX's Map view: each title of `kind`
 (`movie` or `show`) with a position in the unit square. Only distances mean anything. It is the
 map with no noise tag excluded, drawn from the `keywords` rows, merges folded, by IDF-weighted keyword
 vectors laid out whole by UMAP with cosine distance (`min_dist` 0.1). `item_id` carries no
-foreign key: a title that has left `items` drops out of Plex TVX's join, and the next refresh
+foreign key: a title that has left `items` drops out of Plex DB-EX's join, and the next refresh
 redraws the map without it.
 
 `title_map_state` holds one row per kind. `fingerprint` names the drawing recipe, a SHA-256
@@ -762,7 +762,7 @@ whose stored fingerprint differs, replacing the redrawn kinds' rows in both tabl
 `title_map_label` in one transaction. It runs as its own step of the sweep, after every keyword writer, the film-suffix rule
 and both judges, and before `publish`, so the snapshot carries a map of that night's merges. The
 digest is SHA-256 over Python's `repr` of the row tuples, so only the Python package can
-recompute it; Plex TVX compares it and treats a mismatch as no current map, then draws it live,
+recompute it; Plex DB-EX compares it and treats a mismatch as no current map, then draws it live,
 which takes tens of seconds for the movies, showing the stale stored map dimmed until the live
 one lands. A reader in another language reads the stored map as the
 last sweep left it and never recomputes the fingerprint.
@@ -788,7 +788,7 @@ is the point. So this step reports the exact `enrichment` row count it computed 
 shrink, and the guard accepts a drop in that table only when the store lands on that exact number;
 any further loss, from this migration or a future one, still rolls the store back.
 
-## Version 11 — Plex TVX's stored tag network
+## Version 11 — Plex DB-EX's stored tag network
 
 `tag_network`, `tag_network_edge` and `tag_network_state`, written by `plexdb
 refresh-tagnetwork`. All three are derived from `enrichment`, so a consumer that reads the
@@ -800,7 +800,7 @@ tag_network_edge   (kind, a, b) PK, shared INTEGER
 tag_network_state  kind PK, fingerprint TEXT, computed_at TEXT
 ```
 
-`tag_network` holds the default network of Plex TVX's Graph view: each tag of `kind`
+`tag_network` holds the default network of Plex DB-EX's Graph view: each tag of `kind`
 (`movie` or `show`) that clears the Graph view's document-frequency floor, with its document
 frequency and a position in the unit square. Only distances mean anything. It is the network
 with no noise tag excluded, drawn the same way `title_map` is: IDF-weighted vectors — a tag's
@@ -817,7 +817,7 @@ the drawing recipe and a SHA-256 digest of the kind's keyword rows. `computed_at
 only a kind whose stored fingerprint differs, replacing all three tables' rows for the redrawn
 kinds in one transaction. It runs as its own step of the sweep, right after `refresh-map`, so
 the snapshot carries a current network. The digest is built as for
-`title_map_state`, so only the Python package can recompute it; Plex TVX compares it and
+`title_map_state`, so only the Python package can recompute it; Plex DB-EX compares it and
 treats a mismatch as no stored network, then draws it live, which takes tens of seconds for the movies — and only for the
 default (no tag excluded) view, since an excluded-tag combination is never precomputed. A reader
 in another language never recomputes the fingerprint.
@@ -848,7 +848,7 @@ person decided has `judged_at`, `jev_score`, `jev_model` and `jev_error` all NUL
 has. `decided_at` is NULL exactly when `decision` is. A decision outranks the score.
 
 **Which pairs count as merged is the reader's call, not a column.** A reader that wants the
-same rule as the Plex TVX page treats a pair as merged when `decision = 'accepted'`, or when
+same rule as the Plex DB-EX page treats a pair as merged when `decision = 'accepted'`, or when
 `decision IS NULL AND jev_score >= 0.9`, and as proposed when `decision IS NULL AND jev_score >=
 0.5` and below 0.9. A reader that wants 0.7 writes 0.7 over the same rows. Grouping the merged
 pairs into sets of keywords is the reader's too: Jev-confirmed pairs chain (`abusive marriage`
@@ -882,7 +882,7 @@ judge asks about it again.
 
 **What counts as merged, and who applies it.** A pair is merged when `decision = 'accepted'`, or
 `decision` is NULL and `jev_score >= 0.9`. Merged pairs chain into groups, and each group folds into
-the member the most titles carry (`merge_review.merge_map`). Plex TVX's tag table, a tag's
+the member the most titles carry (`merge_review.merge_map`). Plex DB-EX's tag table, a tag's
 titles, the title map, its region labels and the tag network all read keywords through that fold
 (`explore.keyword_rows`); `enrichment` itself never changes.
 
@@ -893,8 +893,8 @@ costs one re-embed of the vocabulary.
 
 ### `merge_decisions.json`
 
-A person's decision reaches `keyword_pairs.decision` only through this file, because Plex TVX
-never writes `plexdb.db` (ADR-0007, ADR-0017). It sits beside Plex TVX's saved-queries file:
+A person's decision reaches `keyword_pairs.decision` only through this file, because Plex DB-EX
+never writes `plexdb.db` (ADR-0007, ADR-0017). It sits beside Plex DB-EX's saved-queries file:
 in the directory of `PLEXDB_EXPLORE_SAVED_PATH` when that is set, else beside the published
 snapshot when `PLEXDB_SNAPSHOT_PATH` is set, else beside the store. It is a JSON list; every
 entry has four text fields:
@@ -925,7 +925,7 @@ decision per pair: a decision whose row `prune-keyword-verdicts` deleted comes b
 fold after the pair is judged again, which happens only if one of its keywords proposes the other
 among its nearest neighbours.
 
-Plex TVX's Merges tab and tag doctor write this file (`POST /api/merges`, one pair per request,
+Plex DB-EX's Merges tab and tag doctor write this file (`POST /api/merges`, one pair per request,
 refused with a 404 for a pair that has no row and names a value no title carries; the request
 names stored values, and the server writes each one's shortest spelling that normalizes back to it, trying
 the longer spellings only when the shortest does not, and refusing with a 400 when none does) and read it back
@@ -948,7 +948,7 @@ NULL is never true. A reader that selects `jev_score` must expect NULL. Other Je
 answered eight times, a 5xx, a rejected key, no connection — write no row and stop the run, because
 they say nothing about the pair. To ask about a refused pair again, delete its row.
 
-Plex TVX's Merges tab lists a refused pair only once a person has decided it, with no score.
+Plex DB-EX's Merges tab lists a refused pair only once a person has decided it, with no score.
 
 `plexdb judge-keyword-pairs` reports the count as `unjudgeable`.
 
@@ -1050,7 +1050,7 @@ counted and ignored. A missing file means no decisions. A file that is not valid
 shape is refused whole, and no row changes. The file is not deleted, so a decision whose row
 `prune-keyword-verdicts` deleted comes back on the first fold after the keyword is judged again.
 
-Plex TVX's Roles tab writes this file (`POST /api/roles`, one (keyword, role) per request,
+Plex DB-EX's Roles tab writes this file (`POST /api/roles`, one (keyword, role) per request,
 refused with a 404 when `keyword_roles` has no verdict for it) and reads it back over the table
 (`GET /api/roles`), so a decision shows at once — the table outlines the pressed button, the
 decisions list marks it "applies at next sweep" — until the
@@ -1099,7 +1099,7 @@ found, and counted, from the index.
 
 ## Version 18 — a pair only a person decided
 
-A person can merge two stored keywords no judge was asked about, from Plex TVX's tag doctor
+A person can merge two stored keywords no judge was asked about, from Plex DB-EX's tag doctor
 ([ADR-0020](./adr/0020-a-person-may-decide-a-pair-no-judge-saw)). `plexdb fold-merge-decisions`
 writes such a pair as a `keyword_pairs` row with `decision` and `decided_at` set and `judged_at`,
 `jev_score`, `jev_model` and `jev_error` all NULL. The table is rebuilt to allow it, every row and
@@ -1121,7 +1121,7 @@ person-only decision deletes the row rather than leaving one with nothing in it.
 keyword_names  keyword TEXT PK, name TEXT NOT NULL, decided_at TEXT NOT NULL
 ```
 
-At most one display name per stored keyword, set by a person in Plex TVX
+At most one display name per stored keyword, set by a person in Plex DB-EX
 ([ADR-0021](./adr/0021-a-keyword-display-name-is-a-persons-label-beside-enrichment)). `keyword` is
 a value as `enrichment.value` holds it; `name` is free text with its whitespace runs collapsed, 1
 to 200 characters, and can be wording no source sent; `decided_at` is UTC.
@@ -1165,7 +1165,7 @@ last entry for a keyword wins. `named` writes the row and `cleared` deletes it. 
 keyword no title carries is counted and ignored. A missing file means no names. A file that is not
 valid JSON or breaks this shape is refused whole, and no row changes.
 
-Plex TVX's Doctor tab ("Rename…" on a group) and Merges tab ("Rename…" beside each side of a pair, which then reloads the pair) write this file through one editor (`POST /api/names` with `{keyword,
+Plex DB-EX's Doctor tab ("Rename…" on a group) and Merges tab ("Rename…" beside each side of a pair, which then reloads the pair) write this file through one editor (`POST /api/names` with `{keyword,
 name}`; a blank or null name clears it; a keyword no title carries is a 404) and lays it over the
 table on every page that labels a keyword, so a name shows at once, marked "applies at next sweep"
 on the Doctor tab, until the fold writes it. A write keeps one entry per resolved keyword.
@@ -1176,7 +1176,7 @@ on the Doctor tab, until the fold writes it. A write keeps one entry per resolve
 title_map_label  (kind, node) PK, x REAL, y REAL, width REAL, height REAL, titles INTEGER, value TEXT
 ```
 
-The region labels of the default map in [`title_map`](#version-9-plex-tvx-s-stored-title-map),
+The region labels of the default map in [`title_map`](#version-9-plex-db-ex-s-stored-title-map),
 one row per labelled region of a k-d split of that map's titles. `node` is the region's heap number
 (the children of `i` are `2i+1` and `2i+2`, so depth is `floor(log2(node + 1))`); `x` and `y` are
 the median position of its titles and `width` and `height` the span of the middle 80% of them, in
@@ -1184,7 +1184,7 @@ map units; `titles` counts them. `value` is the keyword that names the region, a
 holds it after the merge fold: the region's highest count-times-IDF tag that names none of its
 ancestors. Like `title_map`, it is derived from `enrichment` and no consumer has a reason to read it.
 
-**A label holds a keyword, never display text.** Plex TVX shows each label's display name or
+**A label holds a keyword, never display text.** Plex DB-EX shows each label's display name or
 readable spelling ([Version 19](#version-19-a-person-s-display-name-for-a-keyword)) as it serves
 the map, so a rename shows on the next request without redrawing anything.
 
@@ -1192,7 +1192,7 @@ the map, so a rename shows on the next request without redrawing anything.
 `title_map_label` rows in the same transaction as its `title_map` rows, so a stored map, current or
 stale, always carries the labels drawn with it. The drawing recipe in `title_map_state.fingerprint`
 names the labelling too, so every map stored before this version reads as stale until the next
-`refresh-map` redraws it with labels; until then Plex TVX shows it dimmed with no labels and draws
+`refresh-map` redraws it with labels; until then Plex DB-EX shows it dimmed with no labels and draws
 the fresh one live. The migration only adds, so `reader_shape` stays 10.
 
 ## Reading the store to build collections

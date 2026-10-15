@@ -1,6 +1,6 @@
-# Plex TVX
+# Plex DB-EX
 
-Plex TVX is the store's read-only browser page: `plexdb explore`, served by `admin dev explore`
+Plex DB-EX is the store's read-only browser page: `plexdb explore`, served by `admin dev explore`
 on `http://localhost:5194`. Its server is `plexdb/explore.py` and its one page is
 `plexdb/explore.html`; [`file-map.md`](./file-map.md) describes both.
 

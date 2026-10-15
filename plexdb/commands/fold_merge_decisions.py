@@ -1,7 +1,7 @@
 """`plexdb fold-merge-decisions` — apply `merge_decisions.json` to
 `keyword_pairs.decision`.
 
-Plex TVX never writes `plexdb.db` (ADR-0007, ADR-0017), so this is the only
+Plex DB-EX never writes `plexdb.db` (ADR-0007, ADR-0017), so this is the only
 way a person's accept, reject or clear reaches the table.
 """
 

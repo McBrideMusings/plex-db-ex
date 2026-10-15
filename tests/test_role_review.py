@@ -1,4 +1,4 @@
-"""The Plex TVX Roles tab's server side, `role_decisions.json`, and the fold into
+"""The Plex DB-EX Roles tab's server side, `role_decisions.json`, and the fold into
 `keyword_role_decisions`."""
 
 from __future__ import annotations

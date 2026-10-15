@@ -1,6 +1,6 @@
 """`plexdb fold-name-decisions` — apply `name_decisions.json` to `keyword_names`.
 
-Plex TVX never writes `plexdb.db` (ADR-0007, ADR-0017), so this is the only way a
+Plex DB-EX never writes `plexdb.db` (ADR-0007, ADR-0017), so this is the only way a
 display name a person typed there reaches the table (ADR-0021).
 """
 
