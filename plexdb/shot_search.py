@@ -50,6 +50,8 @@ def search_argv(
     frames = frames_path(config)
     if not config.frame_encoder_url:
         raise ConfigError("PLEXDB_FRAME_ENCODER_URL is not set, so a new phrase cannot be embedded")
+    if not config.frame_model:
+        raise ConfigError("PLEXDB_FRAME_MODEL is not set, so a new phrase cannot be embedded")
     argv = [
         reader_binary(config),
         "--snapshot",
@@ -60,6 +62,8 @@ def search_argv(
         str(config.phrase_cache_path),
         "--encoder-url",
         config.frame_encoder_url,
+        "--encoder-model",
+        config.frame_model,
         "search",
         phrase,
         "--pool-file",
