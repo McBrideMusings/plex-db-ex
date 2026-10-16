@@ -12,7 +12,7 @@ fn enrichment_round_trips_filtered_by_namespace() {
     let path = dir.path().join("plexdb.db");
     common::build_fixture(&path);
 
-    let reader = Reader::open(&path).expect("open the fixture store");
+    let reader = Reader::open(&path, None, None).expect("open the fixture store");
     let facts = reader
         .enrichment_for("imdb:tt1", "keywords")
         .expect("query enrichment");
@@ -33,7 +33,7 @@ fn enrichment_for_many_groups_facts_by_id_matching_the_single_item_accessor() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("plexdb.db");
     common::build_fixture(&path);
-    let reader = Reader::open(&path).expect("open the fixture store");
+    let reader = Reader::open(&path, None, None).expect("open the fixture store");
 
     let ids = ["imdb:tt1", "imdb:tt2", "imdb:tt3", "imdb:does-not-exist"];
     let grouped = reader
@@ -69,7 +69,7 @@ fn enrichment_for_many_deduplicates_a_repeated_id() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("plexdb.db");
     common::build_fixture(&path);
-    let reader = Reader::open(&path).expect("open the fixture store");
+    let reader = Reader::open(&path, None, None).expect("open the fixture store");
 
     // imdb:tt1 passed twice must not double its facts in the result.
     let grouped = reader
@@ -90,7 +90,7 @@ fn enrichment_for_many_of_empty_input_is_empty_without_erroring() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("plexdb.db");
     common::build_fixture(&path);
-    let reader = Reader::open(&path).expect("open the fixture store");
+    let reader = Reader::open(&path, None, None).expect("open the fixture store");
 
     let grouped = reader
         .enrichment_for_many(std::iter::empty(), "keywords")
@@ -103,7 +103,7 @@ fn enrichment_for_many_is_stable_across_calls() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("plexdb.db");
     common::build_fixture(&path);
-    let reader = Reader::open(&path).expect("open the fixture store");
+    let reader = Reader::open(&path, None, None).expect("open the fixture store");
 
     let ids = ["imdb:tt1", "imdb:tt2", "imdb:tt3"];
     let first = reader
@@ -123,7 +123,7 @@ fn a_keyword_two_sources_carry_appears_once_and_takes_the_newer_stamp() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("plexdb.db");
     common::build_fixture(&path);
-    let reader = Reader::open(&path).expect("open the fixture store");
+    let reader = Reader::open(&path, None, None).expect("open the fixture store");
 
     // The fixture stores tt1's `heist` twice, once per source.
     let single = reader
@@ -144,7 +144,7 @@ fn a_spelling_resolves_to_its_stored_keyword() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("plexdb.db");
     common::build_fixture(&path);
-    let reader = Reader::open(&path).expect("open the fixture store");
+    let reader = Reader::open(&path, None, None).expect("open the fixture store");
 
     assert_eq!(
         reader.keyword_for_surface("Heists").expect("lookup"),
@@ -167,7 +167,7 @@ fn an_unknown_spelling_resolves_to_none_not_an_error() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("plexdb.db");
     common::build_fixture(&path);
-    let reader = Reader::open(&path).expect("open the fixture store");
+    let reader = Reader::open(&path, None, None).expect("open the fixture store");
 
     assert_eq!(
         reader.keyword_for_surface("no such thing").expect("lookup"),
@@ -181,7 +181,7 @@ fn a_keyword_lists_every_spelling_recorded_for_it() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("plexdb.db");
     common::build_fixture(&path);
-    let reader = Reader::open(&path).expect("open the fixture store");
+    let reader = Reader::open(&path, None, None).expect("open the fixture store");
 
     assert_eq!(
         reader.surfaces_for_keyword("bank heist").expect("lookup"),
@@ -204,7 +204,7 @@ fn a_named_keyword_reads_back_its_display_name_and_an_unnamed_one_none() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("plexdb.db");
     common::build_fixture(&path);
-    let reader = Reader::open(&path).expect("open the fixture store");
+    let reader = Reader::open(&path, None, None).expect("open the fixture store");
 
     assert_eq!(
         reader.display_name("bank heist").expect("lookup"),
@@ -220,7 +220,7 @@ fn edges_are_queryable_in_both_directions_filtered_by_type() {
     let path = dir.path().join("plexdb.db");
     common::build_fixture(&path);
 
-    let reader = Reader::open(&path).expect("open the fixture store");
+    let reader = Reader::open(&path, None, None).expect("open the fixture store");
 
     let outgoing = reader
         .edges_from("imdb:tt1", "tmdb_similar")
@@ -253,7 +253,7 @@ fn collections_for_returns_both_sources_with_their_own_nullable_fields_intact() 
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("plexdb.db");
     common::build_fixture(&path);
-    let reader = Reader::open(&path).expect("open the fixture store");
+    let reader = Reader::open(&path, None, None).expect("open the fixture store");
 
     let memberships = reader
         .collections_for("imdb:tt1")
@@ -307,7 +307,7 @@ fn collections_for_an_unordered_entry_keeps_rank_and_mentions_distinguishable_fr
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("plexdb.db");
     common::build_fixture(&path);
-    let reader = Reader::open(&path).expect("open the fixture store");
+    let reader = Reader::open(&path, None, None).expect("open the fixture store");
 
     let memberships = reader
         .collections_for("imdb:tt2")
@@ -328,7 +328,7 @@ fn collections_for_a_title_on_no_lists_is_empty_not_an_error() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("plexdb.db");
     common::build_fixture(&path);
-    let reader = Reader::open(&path).expect("open the fixture store");
+    let reader = Reader::open(&path, None, None).expect("open the fixture store");
 
     let memberships = reader
         .collections_for("imdb:tt3")
@@ -357,7 +357,7 @@ fn the_taste_vector_is_stable_across_calls() {
     let path = dir.path().join("plexdb.db");
     common::build_fixture(&path);
 
-    let reader = Reader::open(&path).expect("open the fixture store");
+    let reader = Reader::open(&path, None, None).expect("open the fixture store");
     let first = reader
         .taste_vector_for(42)
         .expect("compute the taste vector");
@@ -387,7 +387,7 @@ fn one_film_watched_once_and_one_full_season_both_weigh_one() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("plexdb.db");
     common::build_fixture(&path);
-    let reader = Reader::open(&path).expect("open the fixture store");
+    let reader = Reader::open(&path, None, None).expect("open the fixture store");
     let vector = reader.taste_vector_for(42).expect("taste vector");
 
     // tt2 is a film watched once carrying exactly one keyword: r = 1,
@@ -416,7 +416,7 @@ fn a_title_under_half_a_season_contributes_nothing() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("plexdb.db");
     common::build_fixture(&path);
-    let reader = Reader::open(&path).expect("open the fixture store");
+    let reader = Reader::open(&path, None, None).expect("open the fixture store");
     let vector = reader.taste_vector_for(42).expect("taste vector");
 
     // ttbail: 2 of a 10-episode season is r = 0.2, under the 0.5 floor.
@@ -432,7 +432,7 @@ fn a_heavily_tagged_title_does_not_outvote_a_sparsely_tagged_one() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("plexdb.db");
     common::build_fixture(&path);
-    let reader = Reader::open(&path).expect("open the fixture store");
+    let reader = Reader::open(&path, None, None).expect("open the fixture store");
     let vector = reader.taste_vector_for(42).expect("taste vector");
 
     // ttfin carries two keywords and was watched exactly one season; tt2
@@ -476,7 +476,7 @@ fn nine_seasons_counts_about_three_films_not_nine() {
         .expect("seed the long run's episodes and plays");
     drop(conn);
 
-    let reader = Reader::open(&path).expect("open the fixture store");
+    let reader = Reader::open(&path, None, None).expect("open the fixture store");
     let vector = reader.taste_vector_for(42).expect("taste vector");
     let longrun = weight_of(&vector, "longrun").expect("the long-running show is in the vector");
     let film = weight_of(&vector, "ensemble cast").expect("tt1 is a film in the vector");
@@ -496,7 +496,7 @@ fn a_fetchers_bookkeeping_never_reaches_the_vector() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("plexdb.db");
     common::build_fixture(&path);
-    let reader = Reader::open(&path).expect("open the fixture store");
+    let reader = Reader::open(&path, None, None).expect("open the fixture store");
     let vector = reader.taste_vector_for(42).expect("taste vector");
 
     // The fixture seeds four `enrichment_cursor` rows across two namespaces.
@@ -528,7 +528,7 @@ fn a_show_with_no_season_numbers_is_reported_rather_than_silently_weighed() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("plexdb.db");
     common::build_fixture(&path);
-    let reader = Reader::open(&path).expect("open the fixture store");
+    let reader = Reader::open(&path, None, None).expect("open the fixture store");
     let vector = reader.taste_vector_for(42).expect("taste vector");
 
     assert_eq!(
@@ -544,7 +544,7 @@ fn the_pooled_vector_equals_the_single_account_vector_when_only_one_account_has_
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("plexdb.db");
     common::build_fixture(&path);
-    let reader = Reader::open(&path).expect("open the fixture store");
+    let reader = Reader::open(&path, None, None).expect("open the fixture store");
 
     // The fixture's only plays belong to account 42 (account 43 has none),
     // so pooling across every account must return exactly what one-account
@@ -566,7 +566,7 @@ fn the_pooled_vector_is_stable_across_calls() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("plexdb.db");
     common::build_fixture(&path);
-    let reader = Reader::open(&path).expect("open the fixture store");
+    let reader = Reader::open(&path, None, None).expect("open the fixture store");
 
     let first = reader
         .pooled_taste_vector()
@@ -597,7 +597,7 @@ fn the_pooled_vector_sums_a_second_accounts_plays_rather_than_averaging_or_ignor
     .expect("seed a second account's play");
     drop(conn);
 
-    let reader = Reader::open(&path).expect("open the fixture store");
+    let reader = Reader::open(&path, None, None).expect("open the fixture store");
     let pooled = reader
         .pooled_taste_vector()
         .expect("compute the pooled vector");
@@ -631,7 +631,7 @@ fn the_pooled_vectors_shows_without_seasons_names_a_show_once_not_once_per_accou
     .expect("seed a second account's play on the show with no season numbers");
     drop(conn);
 
-    let reader = Reader::open(&path).expect("open the fixture store");
+    let reader = Reader::open(&path, None, None).expect("open the fixture store");
     let pooled = reader
         .pooled_taste_vector()
         .expect("compute the pooled vector");
@@ -653,7 +653,8 @@ fn opening_a_store_of_an_unknown_reader_shape_fails_naming_both_shapes() {
         .expect("force the store to an unknown shape");
     drop(conn);
 
-    let err = Reader::open(&path).expect_err("a shape this build does not understand must fail");
+    let err = Reader::open(&path, None, None)
+        .expect_err("a shape this build does not understand must fail");
     let message = err.to_string();
     assert!(
         message.contains("99"),
@@ -676,7 +677,7 @@ fn opening_a_store_of_a_newer_schema_version_with_the_same_reader_shape_succeeds
         .expect("force the store to a newer schema version");
     drop(conn);
 
-    Reader::open(&path).expect("a newer schema with the same reader shape must open");
+    Reader::open(&path, None, None).expect("a newer schema with the same reader shape must open");
 }
 
 #[test]
@@ -688,7 +689,8 @@ fn opening_a_store_without_a_reader_shape_table_names_its_schema_version() {
         .expect("make the store look like a v14 one");
     drop(conn);
 
-    let err = Reader::open(&path).expect_err("a store predating reader_shape must not open");
+    let err =
+        Reader::open(&path, None, None).expect_err("a store predating reader_shape must not open");
     assert!(
         matches!(
             err,
@@ -706,7 +708,7 @@ fn opening_a_missing_store_fails_loudly() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("absent.db");
 
-    let err = Reader::open(&path).expect_err("a missing store must not open");
+    let err = Reader::open(&path, None, None).expect_err("a missing store must not open");
     assert!(
         matches!(err, ReaderError::Open { .. }),
         "expected ReaderError::Open, got {err:?}"
@@ -722,7 +724,7 @@ fn opening_a_file_with_no_schema_version_table_says_so() {
         .execute_batch("CREATE TABLE unrelated (id INTEGER);")
         .expect("give it some schema that isn't plexdb's");
 
-    let err = Reader::open(&path).expect_err("a non-plexdb sqlite file must not open");
+    let err = Reader::open(&path, None, None).expect_err("a non-plexdb sqlite file must not open");
     assert!(
         matches!(err, ReaderError::NotAStore { .. }),
         "expected ReaderError::NotAStore, got {err:?}"
@@ -737,7 +739,7 @@ fn watched_units_names_every_unit_an_account_ever_played() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("plexdb.db");
     common::build_fixture(&path);
-    let reader = Reader::open(&path).expect("open the fixture store");
+    let reader = Reader::open(&path, None, None).expect("open the fixture store");
 
     let watched = reader.watched_units_for(42).expect("watched units");
     assert_eq!(
@@ -785,7 +787,7 @@ fn pooled_watched_units_covers_every_account() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("plexdb.db");
     common::build_fixture(&path);
-    let reader = Reader::open(&path).expect("open the fixture store");
+    let reader = Reader::open(&path, None, None).expect("open the fixture store");
 
     // Only account 42 has plays in this fixture, so the house's set and its
     // own are identical — the assertion that pooling is a superset, checked

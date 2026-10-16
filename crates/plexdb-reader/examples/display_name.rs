@@ -15,7 +15,7 @@ fn main() -> ExitCode {
         eprintln!("usage: display_name <store.db> <keyword>...");
         return ExitCode::FAILURE;
     };
-    let reader = match Reader::open(path) {
+    let reader = match Reader::open(path, None, None) {
         Ok(reader) => reader,
         Err(err) => {
             eprintln!("error: {err}");

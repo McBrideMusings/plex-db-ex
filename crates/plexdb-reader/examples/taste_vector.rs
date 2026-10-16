@@ -27,7 +27,7 @@ fn main() -> ExitCode {
     };
     let top_n: usize = args.get(3).and_then(|n| n.parse().ok()).unwrap_or(20);
 
-    let reader = match Reader::open(path) {
+    let reader = match Reader::open(path, None, None) {
         Ok(reader) => reader,
         Err(error) => {
             eprintln!("error: {error}");

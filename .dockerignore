@@ -8,8 +8,8 @@ data/
 .venv/
 tmp/
 
-# Not the writer: the Rust reader crate, the docs site, the tests.
-crates/
+# Not the writer: the docs site, the tests. `crates/` stays in the context for the
+# Dockerfile's `reader` stage; only its binary reaches the final image.
 target/
 docs/
 tests/

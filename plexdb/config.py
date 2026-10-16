@@ -120,6 +120,19 @@ class Config:
     frame_encoder_url: str
     #: `PLEXDB_FRAME_MODEL`, the model name sent in each embeddings request.
     frame_model: str
+    #: `PLEXDB_PHRASE_CACHE`, the file `plexdb search` keeps embedded phrases in
+    #: (ADR-0026). Unset means `phrases.db` inside `frames_dir`.
+    phrase_cache_override: Path | None
+    #: `PLEXDB_READ_BIN`, the `plexdb-read` binary `plexdb search` runs: a path,
+    #: or a name looked up on `PATH`. The container's image carries it.
+    read_bin: str
+
+    @property
+    def phrase_cache_path(self) -> Path | None:
+        """Where `plexdb search` keeps the vectors of phrases it has embedded."""
+        if self.phrase_cache_override is not None:
+            return self.phrase_cache_override
+        return None if self.frames_dir is None else self.frames_dir / "phrases.db"
 
     @property
     def frames_path(self) -> Path | None:
@@ -159,4 +172,10 @@ class Config:
             frame_hours=os.environ.get("PLEXDB_FRAME_HOURS", "").strip(),
             frame_encoder_url=os.environ.get("PLEXDB_FRAME_ENCODER_URL", "").strip(),
             frame_model=os.environ.get("PLEXDB_FRAME_MODEL", "").strip(),
+            phrase_cache_override=(
+                Path(cache_raw).expanduser()
+                if (cache_raw := os.environ.get("PLEXDB_PHRASE_CACHE", "").strip())
+                else None
+            ),
+            read_bin=os.environ.get("PLEXDB_READ_BIN", "").strip() or "plexdb-read",
         )

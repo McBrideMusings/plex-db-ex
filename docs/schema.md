@@ -1529,6 +1529,95 @@ cosine 0.277 with `a red square` and 0.151 with `a dog in a park`. Both files ar
 `quick_check` and compares the version with this build's. A damaged file, or one at another
 version, makes the check exit non-zero. A missing file is reported and does not.
 
+## Searching the Frame index
+
+`Reader::open(snapshot, frames, phrases)` in `plexdb-reader` opens the Snapshot read-only and, when
+given a path, `ATTACH`es `frames.db` as the schema `frames`, also read-only. Both files' versions
+are checked at open: the Snapshot's `reader_shape`, and `frames.db`'s `schema_version`, which must
+be exactly 1. A missing, foreign or other-version `frames.db` fails the open; no file is created.
+`phrases` is a `PhraseCache { path, encoder_url }`. `capabilities().search` is true when both
+`frames` and `phrases` were given.
+
+```text
+search_shots(Search { pool, phrase, negatives, weight, temperature }) -> ShotSearch
+draw(&ShotSearch, n, seed) -> Vec<ShotHit>
+cuts(item_id) -> Vec<u64>        chapters(item_id) -> Vec<u64>
+```
+
+**Shots.** A title's Shots are numbered from 0 in `frame_vec.shot_ix`. Take the title's distinct
+`cuts.t_ms` above 0, scene changes and chapter marks together, sorted. Shot `k` spans
+`[cuts[k-1], cuts[k])`: shot 0 starts at 0, and the last Shot ends at `frame_index_state.duration_ms`
+(the last frame's `t_ms` when that is NULL). The harvester numbers Shots by the same rule.
+`cuts()` returns those times and `chapters()` the ones whose `source` is `chapter`.
+
+**Similarity.** The Phrase's vector is unit length. A stored frame is an int8 vector of whatever
+uniform scale the harvester chose, so a frame's similarity is `dot(phrase, frame) / |frame|`, the
+cosine for any scale. A Shot's `phrase_sim` is its best frame's; its `negative_sims` hold its best
+frame against each negative, in the order given.
+
+**Score.** `score = phrase_sim - weight * max(negative_sims)`; with no negatives it is `phrase_sim`.
+`weight` defaults to 0.5, Midjourney's `--no`. Shots are ordered by `score` descending, ties by
+`(item_id, in_ms)`, so identical inputs give identical output.
+
+**Probabilities and draw.** With a temperature `T > 0`, each returned Shot carries
+`p = exp(score / T) / sum`, summing to 1 over the Shots returned. `draw` takes `n` Shots without
+replacement, weighted by `p`, from a SplitMix64 generator seeded by `seed`: the same results, `n`
+and seed give the same picks, in pick order. Without a temperature `draw` returns the top `n`.
+
+**Counts.** `pool` is the number of distinct item_ids searched. `indexed` is how many of them have a
+`frame_index_state` row. `model` is the one model those rows record; a pool whose rows record two
+models fails with `MixedModels`, and a pool with none returns no Shots, `model` empty, and calls
+no encoder.
+
+**The Phrase cache** (ADR-0026) is a SQLite file at the caller's path, the only file the reader
+writes:
+
+```sql
+CREATE TABLE phrase_cache (
+    phrase        TEXT NOT NULL,   -- lowercased, trimmed, whitespace collapsed
+    model         TEXT NOT NULL,   -- frame_index_state.model
+    model_version TEXT NOT NULL,   -- frame_index_state.model_version
+    vec           BLOB NOT NULL,   -- float32, little-endian, unit length
+    created_at    TEXT NOT NULL,   -- UTC, ISO-8601
+    last_used_at  TEXT NOT NULL,
+    PRIMARY KEY (phrase, model, model_version)
+) WITHOUT ROWID;
+```
+
+Before each search, rows unused for 90 days are deleted. A phrase or negative missing from the cache
+goes in one `POST {encoder_url}/v1/embeddings` (the request in "The encoder request" above, with
+`modality: "text"` and the model the index records), and its answer is stored. A hit sets
+`last_used_at`. A vector under another model, model version or width is never used. A refused or
+unreachable encoder, or a 5xx, is `EncoderUnavailable`; any other non-200 or an unusable body is
+`EncoderFailed`. The reader's HTTP client has no TLS, so an `https://` encoder URL is
+`EncoderUnavailable`.
+
+**`plexdb-read`** is the crate's command line: one subcommand per accessor, JSON on stdout, a
+message on stderr and a non-zero exit on error (2 for a usage error). It reads `--snapshot`,
+`--frames`, `--phrase-cache` and `--encoder-url`, or `PLEXDB_SNAPSHOT_PATH`, `PLEXDB_FRAMES_DIR`,
+`PLEXDB_PHRASE_CACHE` and `PLEXDB_FRAME_ENCODER_URL`. `search` prints a `ShotSearch`:
+
+```text
+plexdb-read search <phrase> (--pool <item_id>... | --pool-file <path|->) [--not <phrase>...]
+                   [--weight w] [--temperature T] [--draw n --seed s]
+```
+
+```json
+{"shots": [{"item_id": "imdb:tt0113277", "in_ms": 0, "out_ms": 3000, "frames": [[0, 0.91]],
+            "phrase_sim": 0.91, "negative_sims": [0.12], "score": 0.85, "p": 0.62}],
+ "indexed": 1, "pool": 2, "model": "openai/clip-vit-large-patch14"}
+```
+
+`p` is absent without a temperature. With `--draw`, `shots` holds the drawn Shots.
+
+**`plexdb search <phrase>`** runs `plexdb-read search` with the files from the environment: the
+Snapshot (`PLEXDB_SNAPSHOT_PATH`, else `PLEXDB_PATH`), `frames.db`, the Phrase cache
+(`PLEXDB_PHRASE_CACHE`, else `phrases.db` in `PLEXDB_FRAMES_DIR`) and `PLEXDB_FRAME_ENCODER_URL`.
+It takes `--pool` or `--pool-file` (item_ids; `-` is standard input), `--not`, `--weight`,
+`--temperature`, `--draw` and `--seed`, and prints what the binary prints. The binary is
+`PLEXDB_READ_BIN`, default `plexdb-read` on `PATH`; the container image carries it. The command
+exits 1 with the build command when it cannot find the binary.
+
 ## Reading the store to build collections
 
 Each query below was run against a migrated copy of the real store. Parameters are written as

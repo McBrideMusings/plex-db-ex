@@ -12,6 +12,16 @@
 # an amd64 host: an image that silently came out arm64 would fail on the host
 # and nowhere before it.
 
+# `plexdb-read` is the reader crate's command line, and the one search
+# implementation `plexdb search` runs (ADR-0026). Built on Debian bookworm so its
+# glibc is no newer than the Python image's.
+FROM --platform=linux/amd64 rust:1.97-slim-bookworm AS reader
+
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+RUN cargo build --release --locked -p plexdb-reader --bin plexdb-read
+
 FROM --platform=linux/amd64 python:3.12-slim
 
 # Pinned to the version the checkout resolves `uv.lock` with, so the image's
@@ -21,8 +31,9 @@ COPY --from=ghcr.io/astral-sh/uv:0.10.10 /uv /usr/local/bin/uv
 
 WORKDIR /app
 
-# The lockfile and the package, and nothing else — no tests, no docs, no Rust
-# crate, no `data/`. `.dockerignore` is what keeps a 75 MB store out of the
+COPY --from=reader /build/target/release/plexdb-read /usr/local/bin/plexdb-read
+
+# The lockfile and the package, and nothing else — no tests, no docs, no `data/`. `.dockerignore` is what keeps a 75 MB store out of the
 # build context by accident.
 COPY pyproject.toml uv.lock ./
 COPY plexdb ./plexdb
