@@ -42,8 +42,8 @@ subcommands:
   cuts <item_id>
   chapters <item_id>
   capabilities
-  search <phrase> (--pool <item_id>... | --pool-file <path|->) [--not <phrase>...]
-         [--weight w] [--temperature T] [--draw n --seed s]
+  search <phrase> (--pool <item_id> [--pool ...] | --pool-file <path|->)
+         [--not <phrase> [--not ...]] [--weight w] [--temperature T] [--draw n --seed s]
 
 --pool and --not take one value each and repeat: --pool a --pool b --not x --not y.
 Flags may come before or after the phrase.
@@ -72,7 +72,7 @@ impl Args {
         let mut args = Args::default();
         let mut tokens = raw.into_iter().peekable();
         while let Some(token) = tokens.next() {
-            if token == "--help" || token == "-h" {
+            if token == "--help" {
                 return Err(Failure::Help);
             }
             if !token.starts_with("--") {
@@ -231,6 +231,11 @@ fn account(args: &Args) -> Result<i64, Failure> {
 }
 
 fn search(reader: &Reader, args: &Args) -> Result<String, Failure> {
+    if let Some(extra) = args.positional.get(2) {
+        return Err(Failure::Usage(format!(
+            "unexpected argument {extra}: --pool and --not take one value each, repeat the flag"
+        )));
+    }
     let pool = pool_ids(args)?;
     let pool: Vec<&str> = pool.iter().map(String::as_str).collect();
     let q = Search {

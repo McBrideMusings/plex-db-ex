@@ -1656,8 +1656,8 @@ message on stderr and a non-zero exit on error (2 for a usage error). It reads `
 `PLEXDB_PHRASE_CACHE` and `PLEXDB_FRAME_ENCODER_URL`. `search` prints a `ShotSearch`:
 
 ```text
-plexdb-read search <phrase> (--pool <item_id>... | --pool-file <path|->) [--not <phrase>...]
-                   [--weight w] [--temperature T] [--draw n --seed s]
+plexdb-read search <phrase> (--pool <item_id> [--pool ...] | --pool-file <path|->)
+                   [--not <phrase> [--not ...]] [--weight w] [--temperature T] [--draw n --seed s]
 ```
 
 `--pool` and `--not` take one value each and repeat (`--pool a --pool b`), so flags and the phrase
