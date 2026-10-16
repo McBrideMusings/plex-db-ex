@@ -332,8 +332,12 @@ def harvest_lock(path: Path) -> Iterator[None]:
 
 def _title_in_hand(path: Path) -> str:
     try:
-        with open_frames(path) as conn:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=1)
+        conn.row_factory = sqlite3.Row
+        try:
             indexing = _indexing(conn)
+        finally:
+            conn.close()
     except (sqlite3.Error, OSError):
         return "title unknown"
     return "between titles" if indexing is None else f"indexing {indexing['item_id']}"
