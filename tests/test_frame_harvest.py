@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
 from collections.abc import Sequence
@@ -16,7 +17,7 @@ import pytest
 
 from plexdb import frame_harvest, frames
 from plexdb.config import Config
-from plexdb.errors import MediaError
+from plexdb.errors import HarvesterBusy, MediaError
 from plexdb.frame_encoder import EncoderClient
 from plexdb.frame_harvest import Cut, Scan
 from plexdb.plex_client import Section
@@ -202,6 +203,22 @@ def test_a_title_writes_cuts_one_vector_per_sampled_frame_and_its_state(config: 
         item,
     )[0]
     assert tuple(state) == (3, len(vec), 768, "int8", None, 10_000)
+
+
+def test_a_second_harvester_refuses_and_names_the_first(config: Config) -> None:
+    refusals: list[str] = []
+
+    class Rival(FakeMedia):
+        def scan(self, part_id: int) -> Scan:
+            if not refusals:
+                with pytest.raises(HarvesterBusy) as busy:
+                    run(config, FakeMedia(), encoder_with(), limit=1)
+                refusals.append(str(busy.value))
+            return super().scan(part_id)
+
+    run(config, Rival(), encoder_with(), limit=1)
+    assert refusals == [f"another harvester is running (pid {os.getpid()}, indexing imdb:new)"]
+    assert run(config, FakeMedia(), encoder_with(), limit=1).indexed == 1
 
 
 def test_sample_times_and_shots() -> None:

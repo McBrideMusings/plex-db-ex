@@ -723,8 +723,35 @@ def harvest(
     limit: int | None = None,
     log: Callable[[str], None] = print,
 ) -> HarvestResult:
-    """One harvest run over the configured Frame index."""
+    """One harvest run over the configured Frame index. Raises `HarvesterBusy` when
+    another harvester, in this process or another, holds the slot."""
     path = frames.frames_path(config)
+    with frames.harvest_lock(path):
+        return _harvest_locked(
+            config,
+            path,
+            plex=plex,
+            media=media,
+            encoder=encoder,
+            now_fn=now_fn,
+            ignore_hours=ignore_hours,
+            limit=limit,
+            log=log,
+        )
+
+
+def _harvest_locked(
+    config: Config,
+    path: Path,
+    *,
+    plex: PlexSource,
+    media: MediaReader,
+    encoder: EncoderClient,
+    now_fn: Callable[[], datetime],
+    ignore_hours: bool,
+    limit: int | None,
+    log: Callable[[str], None],
+) -> HarvestResult:
     window = frames.parse_hours(config.frame_hours)
     result = HarvestResult()
     with open_readonly(config.store_path) as store_conn:

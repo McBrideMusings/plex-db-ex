@@ -18,6 +18,8 @@ Two rules shape every write here:
 
 from __future__ import annotations
 
+import fcntl
+import os
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -30,7 +32,7 @@ import sqlite_vec
 
 from . import schema
 from .config import Config
-from .errors import ConfigError, PlexdbError, StoreError
+from .errors import ConfigError, HarvesterBusy, PlexdbError, StoreError
 from .store import BUSY_TIMEOUT_MS
 
 __all__ = [
@@ -345,6 +347,46 @@ def status(
 def _indexing(frames_conn: sqlite3.Connection) -> dict[str, str] | None:
     row = frames_conn.execute("SELECT item_id, since FROM frame_harvest").fetchone()
     return None if row is None else {"item_id": row["item_id"], "since": row["since"]}
+
+
+@contextmanager
+def harvest_lock(path: Path) -> Iterator[None]:
+    """Hold the one harvester slot, or raise `HarvesterBusy` naming the holder.
+
+    The lock is an `flock` on `harvest.lock` beside `frames.db`; the operating
+    system drops it when the holder exits, however it exits, so a crash leaves
+    nothing to clear. The file carries the holder's pid, and the title in hand
+    comes from the `frame_harvest` row.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.parent / "harvest.lock"
+    with open(lock_path, "a+") as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            handle.seek(0)
+            pid = handle.read().strip() or "unknown"
+            raise HarvesterBusy(
+                f"another harvester is running (pid {pid}, {_title_in_hand(path)})"
+            ) from None
+        handle.seek(0)
+        handle.truncate()
+        handle.write(str(os.getpid()))
+        handle.flush()
+        yield
+
+
+def _title_in_hand(path: Path) -> str:
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=1)
+        conn.row_factory = sqlite3.Row
+        try:
+            indexing = _indexing(conn)
+        finally:
+            conn.close()
+    except (sqlite3.Error, OSError):
+        return "title unknown"
+    return "between titles" if indexing is None else f"indexing {indexing['item_id']}"
 
 
 def set_indexing(frames_conn: sqlite3.Connection, item_id: str | None, *, now: datetime) -> None:

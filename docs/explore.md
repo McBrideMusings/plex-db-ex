@@ -88,11 +88,12 @@ page shows a banner for every one that is missing.
   token, so a word the tokenizer splits is two adjacent boxes. The counter reads `N / 75`. Past 75 it
   turns red, the tokens past the limit are struck through, and the search cuts the text after the 75th
   token before the encoder sees it, so the "not searched" line is true.
-- **Tokenizer file.** `PLEXDB_FRAME_TOKENIZER` names a `tokenizer.json`. Unset, the server keeps a
-  copy named `tokenizer-<model>.json` in the explorer's data directory (`/explore-data` in the
-  container), fetched once from the Hugging Face hub by model name. That first fetch is the one
-  outbound call the tab makes besides Plex and the encoder; the tab says so in its banner when it
-  fails.
+- **Tokenizer file.** `PLEXDB_FRAME_TOKENIZER` names a `tokenizer.json`. Unset, the server reads
+  `tokenizer-<model>.json` from the explorer's data directory (`/explore-data` in the container),
+  with `/` in the model name written as `--`. It never fetches one: the tab makes no outbound call
+  besides Plex and the encoder. With neither file present, `/api/search/status` lists
+  `problems.tokenizer`, which names the setting and the path to fill. Download the model's `tokenizer.json` from its Hugging Face
+  page once and place it there; a container already holding that file keeps working offline.
 - **Advanced.** Closed by default. Open, it holds one negative field (each comma-separated part is its
   own negative, with its own boxes and count), a negative-weight slider, a temperature slider (0 is
   off) and a draw control (count, seed, Draw). Closed while any is set, its summary names them, for

@@ -124,7 +124,7 @@ class Config:
     #: (ADR-0026). Unset means `phrases.db` inside `frames_dir`.
     phrase_cache_override: Path | None
     #: `PLEXDB_FRAME_TOKENIZER`, a `tokenizer.json` for `frame_model`. Unset means
-    #: the Search tab keeps a copy it fetches once by model name (`PhraseTokenizer`).
+    #: the Search tab reads `tokenizer-<model>.json` from its data directory (`PhraseTokenizer`).
     frame_tokenizer: Path | None
     #: `PLEXDB_READ_BIN`, the `plexdb-read` binary `plexdb search` runs: a path,
     #: or a name looked up on `PATH`. The container's image carries it.

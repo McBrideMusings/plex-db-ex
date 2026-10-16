@@ -95,23 +95,15 @@ class NoFrame(LookupError):
 class PhraseTokenizer:
     """The tokenizer for `PLEXDB_FRAME_MODEL`, loaded on first use.
 
-    Loaded from `explicit` when that file is set; otherwise from a copy of the
-    model's `tokenizer.json` kept in `cache_dir`; otherwise fetched once from the
-    Hugging Face hub by model name and saved there. `fetch` is the seam a test
-    replaces.
+    Loaded from `explicit` when that file is set; otherwise from the model's
+    `tokenizer-<model>.json` in `cache_dir`. Nothing is fetched: a missing file is
+    reported by `status`, so the container needs no outside network.
     """
 
-    def __init__(
-        self,
-        model: str,
-        cache_dir: Path,
-        explicit: Path | None = None,
-        fetch: Callable[[str], Any] | None = None,
-    ) -> None:
+    def __init__(self, model: str, cache_dir: Path, explicit: Path | None = None) -> None:
         self.model = model
         self._cache_dir = cache_dir
         self._explicit = explicit
-        self._fetch = fetch
         self._lock = threading.Lock()
         self._tokenizer: Any = None
         self._failure: tuple[float, SearchUnavailable] | None = None
@@ -131,7 +123,7 @@ class PhraseTokenizer:
         with self._lock:
             if self._tokenizer is not None:
                 return self._tokenizer
-            # A failed fetch is not retried on every keystroke of every client.
+            # A failed load is not retried on every keystroke of every client.
             if self._failure and time.monotonic() - self._failure[0] < RETRY_SECONDS:
                 raise self._failure[1]
             from tokenizers import Tokenizer
@@ -139,18 +131,10 @@ class PhraseTokenizer:
             try:
                 if self._explicit is not None:
                     self._tokenizer = Tokenizer.from_file(str(self._explicit))
-                elif self._cache_file().exists():
-                    self._tokenizer = Tokenizer.from_file(str(self._cache_file()))
                 else:
                     if not self.model:
                         raise SearchUnavailable("PLEXDB_FRAME_MODEL is not set")
-                    fetch = self._fetch or Tokenizer.from_pretrained
-                    self._tokenizer = fetch(self.model)
-                    try:
-                        self._cache_dir.mkdir(parents=True, exist_ok=True)
-                        self._tokenizer.save(str(self._cache_file()))
-                    except OSError:
-                        pass  # the next process fetches again; this one has it
+                    self._tokenizer = Tokenizer.from_file(str(self._cache_file()))
             except SearchUnavailable as err:
                 self._failure = (time.monotonic(), err)
                 raise
@@ -158,7 +142,7 @@ class PhraseTokenizer:
                 where = self._explicit or self._cache_file()
                 failure = SearchUnavailable(
                     f"no tokenizer for {self.model or 'the encoder model'}: {err}. "
-                    f"Set PLEXDB_FRAME_TOKENIZER to its tokenizer.json (looked in {where})"
+                    f"Set PLEXDB_FRAME_TOKENIZER to its tokenizer.json, or put it at {where}"
                 )
                 self._failure = (time.monotonic(), failure)
                 raise failure from err
