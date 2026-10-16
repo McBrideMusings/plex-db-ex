@@ -33,7 +33,7 @@ pub struct PhraseCache {
     /// An OpenAI-compatible base URL; the Reader POSTs to `<encoder_url>/v1/embeddings`.
     pub encoder_url: Url,
     /// The model name the encoder accepts (`PLEXDB_FRAME_MODEL`). It is sent as the
-    /// request's `model`; the answer must name the model the Frame index recorded.
+    /// request's `model` (empty means unset: a phrase that needs the encoder fails); the answer must name the model the Frame index recorded.
     pub request_model: String,
 }
 
@@ -166,6 +166,11 @@ impl PhraseCache {
         phrases: &[&str],
         index: &IndexModel<'_>,
     ) -> Result<Vec<Vec<f32>>, ReaderError> {
+        if self.request_model.is_empty() {
+            return Err(ReaderError::InvalidSearch(
+                "no encoder model: pass --encoder-model or set PLEXDB_FRAME_MODEL".into(),
+            ));
+        }
         let url = format!(
             "{}/v1/embeddings",
             self.encoder_url.as_str().trim_end_matches('/')

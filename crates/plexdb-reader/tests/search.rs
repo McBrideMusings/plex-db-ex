@@ -867,3 +867,30 @@ fn an_encoder_answering_as_another_model_is_refused_and_caches_nothing() {
         .expect("count");
     assert_eq!(kept, 0);
 }
+
+#[test]
+fn no_configured_model_fails_only_a_phrase_that_needs_the_encoder() {
+    let fx = fixture();
+    let enc = FakeEncoder::start();
+    let err = fx
+        .reader_as(&enc.url, "")
+        .search_shots(&search(&POOL, "cat"))
+        .expect_err("no model to send");
+    assert!(matches!(err, ReaderError::InvalidSearch(_)), "{err}");
+    assert_eq!(enc.calls(), 0);
+    fx.reader(&enc.url)
+        .search_shots(&search(&POOL, "cat"))
+        .expect("seed the cache");
+    fx.reader_as(&enc.url, "")
+        .search_shots(&search(&POOL, "cat"))
+        .expect("a cached phrase needs no model");
+}
+
+#[test]
+fn an_answer_naming_no_model_is_accepted() {
+    let fx = fixture();
+    let enc = FakeEncoder::aliased(MODEL, "");
+    fx.reader(&enc.url)
+        .search_shots(&search(&POOL, "cat"))
+        .expect("an unnamed model is not a mismatch");
+}

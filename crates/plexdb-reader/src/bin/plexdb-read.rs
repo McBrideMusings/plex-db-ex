@@ -156,11 +156,7 @@ fn open(args: &Args) -> Result<Reader, Failure> {
             path,
             encoder_url: Url::parse(&url)
                 .map_err(|e| Failure::Usage(format!("encoder URL {url}: {e}")))?,
-            request_model: model.ok_or_else(|| {
-                Failure::Usage(
-                    "no encoder model: pass --encoder-model or set PLEXDB_FRAME_MODEL".into(),
-                )
-            })?,
+            request_model: model.unwrap_or_default(),
         }),
         _ => None,
     };
