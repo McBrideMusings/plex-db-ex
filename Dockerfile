@@ -29,6 +29,14 @@ FROM --platform=linux/amd64 python:3.12-slim
 # meant on build day.
 COPY --from=ghcr.io/astral-sh/uv:0.10.10 /uv /usr/local/bin/uv
 
+# ffmpeg and ffprobe, from Debian: the frame harvester cuts and samples a title's
+# video with them, reading it over HTTP from Plex (no media mount). The paths can
+# be overridden with PLEXDB_FFMPEG and PLEXDB_FFPROBE; `plexdb frames status`
+# reports `ffmpeg_found`.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 COPY --from=reader /build/target/release/plexdb-read /usr/local/bin/plexdb-read

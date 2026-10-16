@@ -1,11 +1,11 @@
 //! Shot search over the Frame index (ADR-0024, ADR-0026).
 //!
-//! A **Shot** is the stretch of a title between two adjacent Cuts. The index
-//! numbers a title's Shots from 0 in `frame_vec.shot_ix`; Shot `k` spans
-//! `[cuts[k-1], cuts[k])`, where `cuts` is the title's distinct `cuts.t_ms`
-//! above zero, scene changes and chapter marks together, sorted. Shot 0 starts
-//! at 0 and the last Shot ends at the title's `duration_ms` (the last frame's
-//! offset when the title records none).
+//! A **Shot** is the stretch of a title between two adjacent boundaries. The
+//! index numbers a title's Shots from 0 in `frame_vec.shot_ix`. The boundaries
+//! are 0, then each distinct `cuts.t_ms` in order that lies at least
+//! [`MIN_SHOT_MS`] after the boundary before it and before the end, then the
+//! end: the title's `duration_ms` (the last frame's offset when it records
+//! none). Shot `k` spans boundary `k` to boundary `k + 1`.
 //!
 //! A frame's similarity to a phrase is `dot(phrase, frame) / |frame|`. The
 //! phrase is a unit vector; the stored frame is an int8 vector of whatever
@@ -20,6 +20,10 @@ use serde::Serialize;
 use crate::Reader;
 use crate::error::ReaderError;
 use crate::phrase::IndexModel;
+
+/// A Cut within this many ms of the boundary before it makes no Shot
+/// (`plexdb/frame_harvest.py::MIN_SHOT_MS`).
+const MIN_SHOT_MS: u64 = 500;
 
 /// Midjourney's `--no` weight: what a negative subtracts when the caller gives none.
 const DEFAULT_WEIGHT: f32 = 0.5;
@@ -290,30 +294,33 @@ impl Reader {
             .collect::<Result<Vec<_>, _>>()?;
         frames.sort_by_key(|(shot_ix, t_ms, _)| (*shot_ix, *t_ms));
 
+        // The harvester's own boundaries (`plexdb/frame_harvest.py::shots`).
+        let end = row
+            .duration_ms
+            .unwrap_or_else(|| frames.iter().map(|f| f.1).max().unwrap_or(0));
+        let mut bounds = vec![0u64];
+        for &cut in &cuts {
+            if MIN_SHOT_MS <= cut - bounds[bounds.len() - 1] && cut < end {
+                bounds.push(cut);
+            }
+        }
+        bounds.push(end);
+
         let mut hits: Vec<ShotHit> = Vec::new();
         let mut current: Option<i64> = None;
-        let mut last_t = 0;
         for (shot_ix, t_ms, vec) in &frames {
             if current != Some(*shot_ix) {
                 let ix = usize::try_from(*shot_ix)
                     .ok()
-                    .filter(|ix| *ix <= cuts.len())
+                    .filter(|ix| *ix + 1 < bounds.len())
                     .ok_or_else(|| ReaderError::InconsistentIndex {
                         item_id: row.item_id.clone(),
-                        detail: format!("shot_ix {shot_ix} but {} cut(s)", cuts.len()),
+                        detail: format!("shot_ix {shot_ix} but {} shot(s)", bounds.len() - 1),
                     })?;
-                let in_ms = match ix {
-                    0 => 0,
-                    _ => cuts
-                        .get(ix - 1)
-                        .or_else(|| cuts.last())
-                        .copied()
-                        .unwrap_or(0),
-                };
                 hits.push(ShotHit {
                     item_id: row.item_id.clone(),
-                    in_ms,
-                    out_ms: cuts.get(ix).copied().unwrap_or(0),
+                    in_ms: bounds[ix],
+                    out_ms: bounds[ix + 1],
                     frames: Vec::new(),
                     phrase_sim: f32::NEG_INFINITY,
                     negative_sims: vec![f32::NEG_INFINITY; vectors.len() - 1],
@@ -328,7 +335,6 @@ impl Reader {
                     detail: format!("a {}-wide vector, index records {}", vec.len(), row.dims),
                 });
             }
-            last_t = *t_ms;
             let hit = hits.last_mut().expect("a shot was just pushed");
             let norm = vec
                 .iter()
@@ -350,13 +356,6 @@ impl Reader {
             hit.phrase_sim = hit.phrase_sim.max(phrase_sim);
             for (slot, q) in hit.negative_sims.iter_mut().zip(&vectors[1..]) {
                 *slot = slot.max(sim(q));
-            }
-        }
-        // The last Shot ends where the title does.
-        let end = row.duration_ms.unwrap_or(last_t).max(last_t);
-        for hit in &mut hits {
-            if hit.out_ms <= hit.in_ms {
-                hit.out_ms = end.max(hit.in_ms);
             }
         }
         Ok(hits)

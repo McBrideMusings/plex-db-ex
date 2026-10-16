@@ -47,6 +47,7 @@ __all__ = [
     "parse_hours",
     "prune_orphans",
     "queue",
+    "set_indexing",
     "status",
 ]
 
@@ -103,8 +104,18 @@ CREATE TABLE frame_queue (
 );
 """
 
+#: Version 2 — the title the harvester is indexing now, so `plexdb frames status`,
+#: a separate process, can say which. At most one row.
+_V2 = """
+CREATE TABLE frame_harvest (
+    id       INTEGER PRIMARY KEY CHECK (id = 1),
+    item_id  TEXT NOT NULL,
+    since    TEXT NOT NULL
+);
+"""
+
 #: Append-only, like `schema.MIGRATIONS`, and versioned separately from it.
-MIGRATIONS: tuple[schema.Migration, ...] = (_V1,)
+MIGRATIONS: tuple[schema.Migration, ...] = (_V1, _V2)
 SCHEMA_VERSION = len(MIGRATIONS)
 
 #: Every frames.db table keyed by item_id, in the order a prune deletes from.
@@ -241,6 +252,7 @@ def status(
     hours: str,
     now: datetime,
     encoder_reachable: bool | None,
+    ffmpeg_found: bool,
 ) -> dict[str, Any]:
     """What `plexdb frames status` prints. Its shape is documented in
     docs/schema.md; a key added here goes there too. `encoder_reachable` is
@@ -274,14 +286,31 @@ def status(
         "queued": queued,
         "frame_hours": hours or None,
         "inside_hours": inside_hours(parse_hours(hours), now),
-        # The harvester arrives in a later slice; until then nothing is being indexed.
-        "indexing": None,
+        "indexing": _indexing(frames_conn),
         "encoder_reachable": encoder_reachable,
+        "ffmpeg_found": ffmpeg_found,
         "failed": [
             {"item_id": row["item_id"], "error": row["error"], "at": row["indexed_at"]}
             for row in failed
         ],
     }
+
+
+def _indexing(frames_conn: sqlite3.Connection) -> dict[str, str] | None:
+    row = frames_conn.execute("SELECT item_id, since FROM frame_harvest").fetchone()
+    return None if row is None else {"item_id": row["item_id"], "since": row["since"]}
+
+
+def set_indexing(frames_conn: sqlite3.Connection, item_id: str | None, *, now: datetime) -> None:
+    """Record the title being indexed, or `None` when none is."""
+    with frames_conn:
+        if item_id is None:
+            frames_conn.execute("DELETE FROM frame_harvest")
+        else:
+            frames_conn.execute(
+                "INSERT OR REPLACE INTO frame_harvest (id, item_id, since) VALUES (1, ?, ?)",
+                (item_id, now.isoformat()),
+            )
 
 
 def queue(
@@ -319,10 +348,14 @@ class PruneStats:
 def _titles_held(frames_conn: sqlite3.Connection) -> set[str]:
     """Every item_id frames.db holds a row for.
 
-    Read from the three ordinary tables, never by scanning `frame_vec`, which
-    at full library is tens of millions of rows. The harvester writes a title's
-    vectors and its `frame_index_state` row in one transaction, so a title with
-    vectors always has a state row.
+    `frame_vec` is read through its shadow table `frame_vec_chunks`, which holds
+    one row per 1024 vectors with the partition key beside it. Selecting from
+    `frame_vec` itself scans every vector row, which at full library is tens of
+    millions.
+
+    A title's vectors and its `frame_index_state` row are written in one
+    transaction, so a title with vectors always has a state row. The chunks are
+    read anyway: a file that broke that rule still gets its vectors pruned.
     """
     held: set[str] = set()
     for table in ("frame_index_state", "cuts", "frame_queue"):
@@ -330,7 +363,33 @@ def _titles_held(frames_conn: sqlite3.Connection) -> set[str]:
             str(row[0])
             for row in frames_conn.execute(f"SELECT DISTINCT item_id FROM {table}")  # noqa: S608
         )
+    held.update(
+        str(row[0])
+        for row in frames_conn.execute("SELECT DISTINCT partition00 FROM frame_vec_chunks")
+    )
     return held
+
+
+def _delete_vectors(frames_conn: sqlite3.Connection, item_id: str) -> int:
+    """Delete one title's vectors by rowid and return how many went.
+
+    `DELETE FROM frame_vec WHERE item_id = ?` scans the whole vec0 table
+    (sqlite-vec 0.1.9); the title's rowids come from the shadow tables by
+    partition key instead, and a rowid delete is a point lookup. Measured on
+    1M vectors of 768 int8 dims (1000 titles of 1000): one title's delete took
+    4.083 s by item_id and 0.142 s by rowid; listing the titles took 3.163 s
+    from `frame_vec` and 0.001 s from `frame_vec_chunks`.
+    """
+    rowids = [
+        int(row[0])
+        for row in frames_conn.execute(
+            "SELECT r.rowid FROM frame_vec_rowids r "
+            "JOIN frame_vec_chunks k ON k.chunk_id = r.chunk_id WHERE k.partition00 = ?",
+            (item_id,),
+        )
+    ]
+    frames_conn.executemany("DELETE FROM frame_vec WHERE rowid = ?", [(r,) for r in rowids])
+    return len(rowids)
 
 
 def prune_orphans(frames_conn: sqlite3.Connection, live: set[str]) -> PruneStats:
@@ -341,7 +400,10 @@ def prune_orphans(frames_conn: sqlite3.Connection, live: set[str]) -> PruneStats
     deleted = dict.fromkeys(_TITLE_TABLES, 0)
     for item_id in orphans:
         with frames_conn:
+            deleted["frame_vec"] += _delete_vectors(frames_conn, item_id)
             for table in _TITLE_TABLES:
+                if table == "frame_vec":
+                    continue
                 cursor = frames_conn.execute(
                     f"DELETE FROM {table} WHERE item_id = ?",  # noqa: S608
                     (item_id,),

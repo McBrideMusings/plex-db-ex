@@ -21,7 +21,7 @@ from ..frames import frames_path
 NAME = "search"
 #: With the other look-and-ask commands, after `frames`. No `SWEEP`: a search is
 #: asked for, never scheduled.
-ORDER = 76
+ORDER = 77
 
 
 def _binary(config: Config) -> str:

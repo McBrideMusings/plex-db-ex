@@ -1366,7 +1366,7 @@ same `plexdb` package is its only writer. It is a public interface like `plexdb.
 it read-only where it lies and `ATTACH`es it to the Snapshot.
 
 - **Its own version.** `frames.db` carries its own `schema_version` row and its own append-only
-  migration chain (`plexdb/frames.py`), applied by the same `schema.apply`. Version 1 is below.
+  migration chain (`plexdb/frames.py`), applied by the same `schema.apply`. Versions 1 and 2 are below.
   `plexdb frames migrate` applies it, as does every frames command and the container's start.
   `plexdb migrate` does not: it is a required sweep step, and the optional Frame index must not
   be able to stop a sweep.
@@ -1426,6 +1426,18 @@ CREATE TABLE frame_queue (
 );
 ```
 
+### Version 2 — the title in hand
+
+```sql
+CREATE TABLE frame_harvest (
+    id       INTEGER PRIMARY KEY CHECK (id = 1),  -- at most one row
+    item_id  TEXT NOT NULL,                       -- the title the harvester is indexing now
+    since    TEXT NOT NULL                        -- ISO-8601, when it started that title
+);
+```
+
+`plexdb frames status` reads it, so a second process can say which title is being indexed.
+
 A title is **indexed** when its `frame_index_state` row has `error IS NULL`, and **failed** when
 it has one with an error. `frame_vec`'s width is fixed when the table is created, so a model of
 another width is a migration.
@@ -1438,7 +1450,7 @@ the directory holds none, so on a fresh directory every count is zero.
 ```json
 {
   "frames_db": "/frames/frames.db",
-  "schema_version": 1,
+  "schema_version": 2,
   "bytes": 77824,
   "sections": [
     {"section_id": "1", "indexed": 0, "total": 11754},
@@ -1447,8 +1459,9 @@ the directory holds none, so on a fresh directory every count is zero.
   "queued": 0,
   "frame_hours": "01:00-07:00",
   "inside_hours": false,
-  "indexing": null,
-  "encoder_reachable": null,
+  "indexing": {"item_id": "imdb:tt0113277", "since": "2026-10-15T02:11:40-04:00"},
+  "encoder_reachable": true,
+  "ffmpeg_found": true,
   "failed": [
     {"item_id": "imdb:tt0113277", "error": "ffmpeg exited 1", "at": "2026-10-15T02:14:09-04:00"}
   ]
@@ -1464,12 +1477,49 @@ the directory holds none, so on a fresh directory every count is zero.
 | `queued` | Rows in `frame_queue`. |
 | `frame_hours` | `PLEXDB_FRAME_HOURS` as set — `HH:MM-HH:MM` in the process's TZ, an end earlier than the start running past midnight — or `null` when unset. |
 | `inside_hours` | Whether the current time is inside that window; `false` when it is unset. |
-| `indexing` | The item_id the harvester is indexing now. `null` until the harvester exists. |
+| `indexing` | The title the harvester is indexing now — `item_id` and `since` — or `null` when none is. A harvester that was killed mid-title leaves its row until the next run starts. |
 | `encoder_reachable` | Whether `GET {PLEXDB_FRAME_ENCODER_URL}/v1/models` answered 2xx within 10 s; `null` when `PLEXDB_FRAME_ENCODER_URL` is unset. Listing models loads none, so this never waits out a cold start. |
+| `ffmpeg_found` | Whether `PLEXDB_FFMPEG` and `PLEXDB_FFPROBE` (default `ffmpeg`, `ffprobe`) are both found. The harvester needs them; the container image ships both. |
 | `failed` | Every failed title, newest attempt first: its item_id, the error, and when. |
 
 `plexdb frames queue <item_id>` adds a `frame_queue` row and exits non-zero for an item_id not in
 `items`; a title already queued keeps its place.
+
+### The harvester (`plexdb harvest-frames`)
+
+`plexdb harvest-frames` fills `frames.db` while the clock is inside `PLEXDB_FRAME_HOURS`; `plexdb
+schedule` starts it when the window opens, and it is a step of no Sweep. `--ignore-hours` runs it
+now and `--limit N` stops after N titles. It writes `frames.db` alone.
+
+- **Order.** Queued titles, oldest `queued_at` first; then titles with no `frame_index_state` row,
+  movies before episodes, newest Plex `addedAt` first; then titles whose `file_hash` differs from
+  the stored one, least recently indexed first. A failed title waits for a new `file_hash` or a
+  new queue row. A title with several Plex copies uses the newest copy's first part.
+- **Reading.** `ffmpeg` reads `{PLEX_URL}/library/parts/<part_id>/file` with the token in an
+  `X-Plex-Token` header. `file_hash` is the sha256 of the part's size, the `Last-Modified` header,
+  and the first MiB. `bytes` is the part's size.
+- **Cuts.** `scdet` (threshold 10) writes `cuts` rows with `source = 'scdet'` and its score;
+  `ffprobe` chapter marks write `source = 'chapter'` with a NULL score.
+- **Shots and frames.** Boundaries are the Cuts, dropping any within 500 ms of the one before. A
+  Shot of 2 s or less gets one frame at its midpoint; a longer Shot gets one every 2 s, the first
+  1 s in. Frames are 224 px tall, JPEG. `shot_ix` counts Shots from 0 and `shots` is their number.
+  A time with no decodable frame is skipped; a title with none fails.
+- **Vectors.** The encoder's unit vectors are stored with sqlite-vec's `vec_quantize_int8(…, 'unit')`;
+  `frame_index_state.quant` is `int8`. Frames go to the encoder 32 per request.
+- **One transaction per title** replaces the title's `frame_vec`, `cuts` and `frame_index_state`
+  rows and deletes its `frame_queue` row.
+- **Failures.** An unreadable part or an ffmpeg error records `error` in `frame_index_state`,
+  keeps the title's earlier rows, drops its queue row, and the run moves on. An encoder that is
+  refused, times out, answers 5xx or answers 429 stops the run with the title untouched; the next
+  window resumes. Three titles in a row refused with another 4xx also stop it.
+- **Stalls.** ffmpeg gives up on a Plex read that delivers nothing for 60 s, and a decode that
+  runs past six hours fails the title. The scan for changed titles reads 1 MiB per indexed title
+  and stops when the window closes.
+- **One harvester at a time.** `plexdb schedule`'s harvester and a hand-run `plexdb harvest-frames`
+  share the `frame_harvest` row and would duplicate work; run the command only while the window
+  is closed or with the scheduler stopped.
+- **The log line**, one per title, to stdout: `frames: <ISO time> item_id=… part=… bytes=…
+  decode_s=… encode_s=… shots=… vectors=… reason=queued|new|changed` and `error='…'` on a failure.
 
 ### The encoder request (ADR-0025)
 
@@ -1528,13 +1578,15 @@ cosine 0.277 with `a red square` and 0.151 with `a dog in a park`. Both files ar
 `plexdb check` also reads `frames.db` read-only when `PLEXDB_FRAMES_DIR` is set: it runs
 `quick_check` and compares the version with this build's. A damaged file, or one at another
 version, makes the check exit non-zero. A missing file is reported and does not.
+`check --wait` polls the version rows only and runs `frames.db`'s `quick_check` once, on the
+report it prints.
 
 ## Searching the Frame index
 
 `Reader::open(snapshot, frames, phrases)` in `plexdb-reader` opens the Snapshot read-only and, when
 given a path, `ATTACH`es `frames.db` as the schema `frames`, also read-only. Both files' versions
 are checked at open: the Snapshot's `reader_shape`, and `frames.db`'s `schema_version`, which must
-be exactly 1. A missing, foreign or other-version `frames.db` fails the open; no file is created.
+be exactly 2, the version this build's search was written against. A missing, foreign or other-version `frames.db` fails the open; no file is created.
 `phrases` is a `PhraseCache { path, encoder_url }`. `capabilities().search` is true when both
 `frames` and `phrases` were given.
 
@@ -1544,11 +1596,14 @@ draw(&ShotSearch, n, seed) -> Vec<ShotHit>
 cuts(item_id) -> Vec<u64>        chapters(item_id) -> Vec<u64>
 ```
 
-**Shots.** A title's Shots are numbered from 0 in `frame_vec.shot_ix`. Take the title's distinct
-`cuts.t_ms` above 0, scene changes and chapter marks together, sorted. Shot `k` spans
-`[cuts[k-1], cuts[k])`: shot 0 starts at 0, and the last Shot ends at `frame_index_state.duration_ms`
-(the last frame's `t_ms` when that is NULL). The harvester numbers Shots by the same rule.
-`cuts()` returns those times and `chapters()` the ones whose `source` is `chapter`.
+**Shots.** A title's Shots are numbered from 0 in `frame_vec.shot_ix`, by the harvester's rule
+(`frame_harvest.shots`). The boundaries are 0; then each distinct `cuts.t_ms`, scene changes and
+chapter marks together in ascending order, that lies at least 500 ms after the boundary before it
+and before the end; then the end, which is `frame_index_state.duration_ms` (the last frame's `t_ms`
+when that is NULL). Shot `k` spans boundary `k` to boundary `k + 1`. A `shot_ix` beyond the Shots
+those boundaries make fails the search with `InconsistentIndex`, as does a frame whose width is not
+`frame_index_state.dims`. `cuts()` returns the stored times and `chapters()` the ones whose `source`
+is `chapter`.
 
 **Similarity.** The Phrase's vector is unit length. A stored frame is an int8 vector of whatever
 uniform scale the harvester chose, so a frame's similarity is `dot(phrase, frame) / |frame|`, the

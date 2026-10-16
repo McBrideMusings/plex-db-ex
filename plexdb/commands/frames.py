@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 from datetime import datetime
 from typing import Any
@@ -46,6 +47,8 @@ def _cmd_status(_args: argparse.Namespace) -> int:
             hours=config.frame_hours,
             now=datetime.now().astimezone(),
             encoder_reachable=reachable,
+            ffmpeg_found=shutil.which(config.ffmpeg) is not None
+            and shutil.which(config.ffprobe) is not None,
         )
     print(json.dumps(report, indent=2))
     return 0

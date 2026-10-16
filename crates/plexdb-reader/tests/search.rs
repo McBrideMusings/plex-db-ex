@@ -276,6 +276,21 @@ fn fixture() -> Fixture {
             model: MODEL,
         },
     );
+    // The 4,200 ms cut is within 500 ms of the 4,000 ms one, so it makes no Shot.
+    add_title(
+        &conn,
+        &Title {
+            id: "imdb:close",
+            duration_ms: Some(10_000),
+            cuts: &[(4_000, "scdet"), (4_200, "scdet"), (8_000, "chapter")],
+            frames: vec![
+                (0, 2_000, int8(&[(0, 100)])),
+                (1, 6_000, int8(&[(0, 100)])),
+                (2, 9_000, int8(&[(0, 100)])),
+            ],
+            model: MODEL,
+        },
+    );
     add_title(
         &conn,
         &Title {
@@ -359,6 +374,18 @@ fn the_last_shot_ends_at_the_titles_duration() {
         .find(|s| s.item_id == "imdb:b")
         .expect("b's shot");
     assert_eq!((only.in_ms, only.out_ms), (0, 50_000));
+}
+
+#[test]
+fn a_cut_within_half_a_second_of_the_one_before_makes_no_shot() {
+    let fx = fixture();
+    let enc = FakeEncoder::start();
+    let reader = fx.reader(&enc.url);
+    let found = reader
+        .search_shots(&search(&["imdb:close"], "cat"))
+        .expect("search");
+    let spans: Vec<(u64, u64)> = found.shots.iter().map(|s| (s.in_ms, s.out_ms)).collect();
+    assert_eq!(spans, vec![(0, 4_000), (4_000, 8_000), (8_000, 10_000)]);
 }
 
 #[test]
@@ -672,16 +699,16 @@ fn cuts_and_chapters_are_the_titles_boundaries() {
 fn a_frames_file_at_another_schema_version_is_refused_at_open() {
     let fx = fixture();
     let conn = Connection::open(&fx.frames).expect("open frames.db");
-    conn.execute("UPDATE schema_version SET version = 2", [])
+    conn.execute("UPDATE schema_version SET version = 3", [])
         .expect("bump");
     drop(conn);
-    let err = Reader::open(&fx.snapshot, Some(&fx.frames), None).expect_err("version 2");
+    let err = Reader::open(&fx.snapshot, Some(&fx.frames), None).expect_err("version 3");
     assert!(
         matches!(
             err,
             ReaderError::UnsupportedFramesVersion {
-                found: 2,
-                supported: 1,
+                found: 3,
+                supported: 2,
                 ..
             }
         ),

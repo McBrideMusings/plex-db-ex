@@ -134,6 +134,12 @@ class Config:
             return self.phrase_cache_override
         return None if self.frames_dir is None else self.frames_dir / "phrases.db"
 
+    #: `PLEXDB_FFMPEG` and `PLEXDB_FFPROBE`: the binaries the frame harvester runs
+    #: to cut and sample a title's video. Default to the names `ffmpeg` and
+    #: `ffprobe`, looked up on PATH; the container image ships both.
+    ffmpeg: str
+    ffprobe: str
+
     @property
     def frames_path(self) -> Path | None:
         """`frames.db` inside `frames_dir`, or `None` when that is unset."""
@@ -178,4 +184,6 @@ class Config:
                 else None
             ),
             read_bin=os.environ.get("PLEXDB_READ_BIN", "").strip() or "plexdb-read",
+            ffmpeg=os.environ.get("PLEXDB_FFMPEG", "").strip() or "ffmpeg",
+            ffprobe=os.environ.get("PLEXDB_FFPROBE", "").strip() or "ffprobe",
         )
