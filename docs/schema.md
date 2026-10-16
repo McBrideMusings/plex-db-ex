@@ -1519,9 +1519,11 @@ now and `--limit N` stops after N titles. It writes `frames.db` alone.
 - **Stalls.** ffmpeg gives up on a Plex read that delivers nothing for 60 s, and a decode that
   runs past six hours fails the title. The scan for changed titles reads 1 MiB per indexed title
   and stops when the window closes.
-- **One harvester at a time.** `plexdb schedule`'s harvester and a hand-run `plexdb harvest-frames`
-  share the `frame_harvest` row and would duplicate work; run the command only while the window
-  is closed or with the scheduler stopped.
+- **One harvester at a time.** A harvest takes an `flock` on `harvest.lock` in `PLEXDB_FRAMES_DIR`
+  and writes its pid there. A second `plexdb harvest-frames` exits 1 with `another harvester is
+  running (pid N, indexing <item_id>)`; `plexdb schedule`'s harvester logs the same refusal and
+  retries in 15 minutes. The operating system drops the lock when its holder exits, so a crash
+  leaves nothing to clear.
 - **The log line**, one per title, to stdout: `frames: <ISO time> item_id=… part=… bytes=…
   decode_s=… encode_s=… shots=… vectors=… reason=queued|new|changed` and `error='…'` on a failure.
 
