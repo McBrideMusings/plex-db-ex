@@ -1590,7 +1590,7 @@ report it prints.
 given a path, `ATTACH`es `frames.db` as the schema `frames`, also read-only. Both files' versions
 are checked at open: the Snapshot's `reader_shape`, and `frames.db`'s `schema_version`, which must
 be exactly 2, the version this build's search was written against. A missing, foreign or other-version `frames.db` fails the open; no file is created.
-`phrases` is a `PhraseCache { path, encoder_url }`. `capabilities().search` is true when both
+`phrases` is a `PhraseCache { path, encoder_url, request_model }`. The Reader sends `request_model` (`PLEXDB_FRAME_MODEL`) as the embeddings request's `model`; an answer naming a model other than the one `frame_index_state` recorded fails the search with `EncoderFailed`, and an answer naming none is accepted, as `probe-encoder` does. `capabilities().search` is true when both
 `frames` and `phrases` were given.
 
 ```text

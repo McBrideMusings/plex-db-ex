@@ -27,6 +27,7 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("PLEXDB_FRAMES_DIR", str(tmp_path / "frames"))
     monkeypatch.setenv("PLEXDB_PHRASE_CACHE", "")
     monkeypatch.setenv("PLEXDB_FRAME_ENCODER_URL", "http://encoder.invalid:1")
+    monkeypatch.setenv("PLEXDB_FRAME_MODEL", "alias-clip")
     monkeypatch.setenv("PLEXDB_READ_BIN", str(script))
     return tmp_path
 
@@ -49,6 +50,7 @@ def test_search_passes_the_files_and_options_to_plexdb_read(
         "--frames", str(env / "frames" / "frames.db"),
         "--phrase-cache", str(env / "frames" / "phrases.db"),
         "--encoder-url", "http://encoder.invalid:1",
+        "--encoder-model", "alias-clip",
         "search", "a cat", "--pool-file", "-",
         "--not", "dog", "night",
         "--weight", "0.8", "--temperature", "0.2", "--draw", "3", "--seed", "9",
