@@ -651,7 +651,7 @@ class SearchTab:
     # -- frames and clips -----------------------------------------------------------------
 
     def _part(self, item_id: str) -> tuple[int, int | None]:
-        """The Plex part the title was indexed from and its length in ms, if known."""
+        """The Plex part the title was indexed from and its last video frame's ms, or None."""
         try:
             with closing(self._frames_conn()) as conn:
                 row = conn.execute(
