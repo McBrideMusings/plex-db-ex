@@ -128,8 +128,8 @@ class FramesHealth:
     version: int | None
     expected_version: int
     #: `"ok"`, SQLite's first complaint, or the error that stopped the read.
-    #: Empty when the file is missing.
-    quick_check: str
+    #: Empty when the file is missing; `None` when the check was not asked for.
+    quick_check: str | None
 
     @property
     def current(self) -> bool:
@@ -149,14 +149,18 @@ class FramesHealth:
         return not self.exists or (self.current and self.sound)
 
 
-def inspect_frames(path: Path) -> FramesHealth:
+def inspect_frames(path: Path, *, deep: bool = True) -> FramesHealth:
     """Open `frames.db` read-only and report on it. Writes nothing, and loads no
-    extension: `quick_check` and the version row need none."""
+    extension: `quick_check` and the version row need none.
+
+    `quick_check` reads the whole file, which is tens of gigabytes at full
+    library (ADR-0024). `deep=False` reads the version row alone and leaves
+    `quick_check` as `None`, for a caller that polls."""
     if not path.exists():
         return FramesHealth(path.resolve(), False, None, frames.SCHEMA_VERSION, "")
     try:
         with store.open_readonly(path) as conn:
-            check = store.quick_check(conn)
+            check = store.quick_check(conn) if deep else None
             version = schema.current_version(conn)
     except (sqlite3.DatabaseError, StoreError) as err:
         return FramesHealth(path.resolve(), True, None, frames.SCHEMA_VERSION, str(err))
@@ -416,12 +420,14 @@ def inspect(
     backup_dir: Path,
     *,
     frames_path: Path | None = None,
+    frames_deep: bool = True,
     now: datetime | None = None,
 ) -> Report:
     """Open the store read-only and report on it, and on `frames_path` when the
-    Frame index is configured. Writes nothing."""
+    Frame index is configured. Writes nothing. `frames_deep=False` skips
+    `frames.db`'s `quick_check` (see `inspect_frames`)."""
     now = now or datetime.now(tz=UTC)
-    frames_health = None if frames_path is None else inspect_frames(frames_path)
+    frames_health = None if frames_path is None else inspect_frames(frames_path, deep=frames_deep)
     with store.open_readonly(path) as conn:
         tables = _tables(conn)
         return Report(

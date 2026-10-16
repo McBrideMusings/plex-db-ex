@@ -10,11 +10,12 @@ what decides whether to deploy at all (issue #59).
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import time
 from collections.abc import Callable
 
 from ..config import Config
-from ..health import STALE_DAYS, FramesHealth, Freshness, Report, inspect
+from ..health import STALE_DAYS, FramesHealth, Freshness, Report, inspect, inspect_frames
 from ..store import outside_migration
 
 NAME = "check"
@@ -82,11 +83,12 @@ def _frames_lines(health: FramesHealth | None) -> list[str]:
             f"frames.db FAILED: at v{health.version}; this build expects "
             f"v{health.expected_version} — run plexdb frames migrate"
         )
-    lines.append(
-        "frames.db quick_check: ok"
-        if health.sound
-        else f"frames.db quick_check FAILED: {health.quick_check}"
-    )
+    if health.quick_check is not None:
+        lines.append(
+            "frames.db quick_check: ok"
+            if health.sound
+            else f"frames.db quick_check FAILED: {health.quick_check}"
+        )
     return lines
 
 
@@ -165,13 +167,32 @@ def render(report: Report) -> list[str]:
     return lines
 
 
-def _look(config: Config) -> Report | None:
+def _look(config: Config, *, frames_deep: bool = False) -> Report | None:
     """One report on the store, or `None` while a migration holds it — a read
-    taken then could see a version that a failed verify is about to roll back."""
+    taken then could see a version that a failed verify is about to roll back.
+
+    `frames.db`'s `quick_check` is skipped unless `frames_deep`: it reads the
+    whole file, and a `--wait` poll only needs the version rows."""
     with outside_migration(config.store_path) as clear:
         if not clear:
             return None
-        return inspect(config.store_path, config.backup_dir, frames_path=config.frames_path)
+        return inspect(
+            config.store_path,
+            config.backup_dir,
+            frames_path=config.frames_path,
+            frames_deep=frames_deep,
+        )
+
+
+def _with_frames_check(config: Config, report: Report) -> Report | None:
+    """`report` with `frames.db`'s `quick_check` run once, for the report that
+    is printed. `None` while a migration holds the store."""
+    if report.frames is None or not report.frames.exists:
+        return report
+    with outside_migration(config.store_path) as clear:
+        if not clear:
+            return None
+        return dataclasses.replace(report, frames=inspect_frames(report.frames.path))
 
 
 def await_current(
@@ -211,6 +232,8 @@ def await_current(
 def _cmd_check(args: argparse.Namespace) -> int:
     config = Config.from_env()
     report = await_current(lambda: _look(config), args.wait)
+    if report is not None:
+        report = _with_frames_check(config, report)
     if report is None:
         print(f"{config.store_path}: a migration is still running — not read")
         return 1
