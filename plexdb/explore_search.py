@@ -459,6 +459,25 @@ class SearchTab:
                     out[r[0]] = (r[1], r[2], r[3])
         return out
 
+    def _parts(self, ids: list[str]) -> dict[str, int]:
+        """The Plex part each title was indexed from; a title outside the Frame index is absent."""
+        out: dict[str, int] = {}
+        try:
+            conn = self._frames_conn()
+        except SearchUnavailable:
+            return out
+        with closing(conn):
+            for start in range(0, len(ids), 500):
+                chunk = ids[start : start + 500]
+                marks = ",".join("?" * len(chunk))
+                for r in conn.execute(
+                    f"SELECT item_id, part_id FROM frame_index_state "
+                    f"WHERE item_id IN ({marks}) AND part_id IS NOT NULL",
+                    chunk,
+                ):
+                    out[r[0]] = int(r[1])
+        return out
+
     def _states(self, ids: list[str]) -> dict[str, str]:
         out: dict[str, str] = {}
         try:
@@ -605,7 +624,9 @@ class SearchTab:
             for rank, shot in enumerate(shots, start=1)
             if rank <= RESULT_ROWS or (shot["item_id"], shot["in_ms"]) in picks
         ]
-        titles = self._titles(sorted({shot["item_id"] for _, shot in keep}))
+        shown = sorted({shot["item_id"] for _, shot in keep})
+        titles = self._titles(shown)
+        parts = self._parts(shown)
         rows = []
         for rank, shot in keep:
             sims = shot.get("negative_sims", [])
@@ -619,6 +640,7 @@ class SearchTab:
                     "title": title,
                     "year": year,
                     "kind": kind,
+                    "part_id": parts.get(shot["item_id"]),
                     "in_ms": shot["in_ms"],
                     "out_ms": shot["out_ms"],
                     "in": _ms(shot["in_ms"]),
@@ -650,8 +672,12 @@ class SearchTab:
 
     # -- frames and clips -----------------------------------------------------------------
 
-    def _part(self, item_id: str) -> tuple[int, int | None]:
-        """The Plex part the title was indexed from and its last video frame's ms, or None."""
+    def _part(self, item_id: str, asked: int) -> tuple[int, int | None]:
+        """The Plex part the title was indexed from and its last video frame's ms, or None.
+
+        `asked` is the part the page's URL names. A replaced file makes it stale, and a stale
+        URL gets no cut, so the browser never files the new file's frame under the old URL.
+        """
         try:
             with closing(self._frames_conn()) as conn:
                 row = conn.execute(
@@ -663,6 +689,8 @@ class SearchTab:
             raise NoFrame(str(err)) from None
         if row is None or row[0] is None:
             raise NoFrame(f"{item_id} is not in the Frame index")
+        if int(row[0]) != asked:
+            raise NoFrame(f"{item_id} was re-indexed from another file; search again")
         return int(row[0]), None if row[1] is None else int(row[1])
 
     def _media(self) -> FfmpegMedia:
@@ -688,8 +716,8 @@ class SearchTab:
 
         return run
 
-    def frame(self, item_id: str, t_ms: int, *, large: bool = False) -> Path:
-        part, length = self._part(item_id)
+    def frame(self, item_id: str, part_id: int, t_ms: int, *, large: bool = False) -> Path:
+        part, length = self._part(item_id, part_id)
         if length is not None and t_ms > length:
             raise ValueError(f"t_ms is past the end of the title ({length} ms)")
         height = LIGHTBOX_HEIGHT if large else FRAME_HEIGHT
@@ -704,8 +732,8 @@ class SearchTab:
             f"frames/{_slug(item_id)}-{part}-{t_ms}-{height}.jpg", self._cut(make)
         )
 
-    def clip(self, item_id: str, in_ms: int, out_ms: int) -> Path:
-        part, length = self._part(item_id)
+    def clip(self, item_id: str, part_id: int, in_ms: int, out_ms: int) -> Path:
+        part, length = self._part(item_id, part_id)
         if not 0 <= in_ms < out_ms:
             raise ValueError("the clip window is empty")
         if out_ms - in_ms > MAX_CLIP_MS or (length is not None and out_ms > length):
