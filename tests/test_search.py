@@ -38,8 +38,8 @@ def test_search_passes_the_files_and_options_to_plexdb_read(
     code = main(
         [
             "search", "a cat",
-            "--pool", "imdb:tt1", "imdb:tt2",
-            "--not", "dog", "night",
+            "--pool", "imdb:tt1", "--pool", "imdb:tt2",
+            "--not", "dog", "--not", "night",
             "--weight", "0.8", "--temperature", "0.2", "--draw", "3", "--seed", "9",
         ]
     )  # fmt: skip
@@ -52,7 +52,7 @@ def test_search_passes_the_files_and_options_to_plexdb_read(
         "--encoder-url", "http://encoder.invalid:1",
         "--encoder-model", "alias-clip",
         "search", "a cat", "--pool-file", "-",
-        "--not", "dog", "night",
+        "--not", "dog", "--not", "night",
         "--weight", "0.8", "--temperature", "0.2", "--draw", "3", "--seed", "9",
     ]  # fmt: skip
     assert printed["stdin"] == "imdb:tt1\nimdb:tt2"

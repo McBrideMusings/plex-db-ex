@@ -787,6 +787,7 @@ fn plexdb_read_prints_the_search_as_json_and_fails_with_a_message() {
             "cat",
             "--pool",
             "imdb:a",
+            "--pool",
             "imdb:b",
             "--not",
             "dog",
@@ -821,6 +822,29 @@ fn plexdb_read_prints_the_search_as_json_and_fails_with_a_message() {
     let expected: Value =
         serde_json::from_str(&serde_json::to_string(&expected).expect("to_string")).expect("parse");
     assert_eq!(json, expected);
+
+    let (ok, out, err) = read_bin(
+        &fx,
+        &enc.url,
+        &[
+            "search", "--pool", "imdb:a", "--pool", "imdb:b", "cat", "--not", "--dog",
+        ],
+    );
+    assert!(ok, "{err}");
+    let flags_first: Value = serde_json::from_str(&out).expect("JSON on stdout");
+    assert_eq!(flags_first["pool"], 2);
+
+    let (ok, _, err) = read_bin(
+        &fx,
+        &enc.url,
+        &["search", "cat", "--pool", "imdb:a", "imdb:b"],
+    );
+    assert!(!ok);
+    assert!(err.contains("unexpected argument imdb:b"), "{err}");
+
+    let (ok, out, _) = read_bin(&fx, &enc.url, &["--help"]);
+    assert!(ok);
+    assert!(out.starts_with("usage: plexdb-read"), "{out}");
 
     let (ok, out, _) = read_bin(&fx, &enc.url, &["cuts", "imdb:a"]);
     assert!(ok);
