@@ -120,6 +120,11 @@ class Config:
     frame_encoder_url: str
     #: `PLEXDB_FRAME_MODEL`, the model name sent in each embeddings request.
     frame_model: str
+    #: `PLEXDB_FFMPEG` and `PLEXDB_FFPROBE`: the binaries the frame harvester runs
+    #: to cut and sample a title's video. Default to the names `ffmpeg` and
+    #: `ffprobe`, looked up on PATH; the container image ships both.
+    ffmpeg: str
+    ffprobe: str
 
     @property
     def frames_path(self) -> Path | None:
@@ -159,4 +164,6 @@ class Config:
             frame_hours=os.environ.get("PLEXDB_FRAME_HOURS", "").strip(),
             frame_encoder_url=os.environ.get("PLEXDB_FRAME_ENCODER_URL", "").strip(),
             frame_model=os.environ.get("PLEXDB_FRAME_MODEL", "").strip(),
+            ffmpeg=os.environ.get("PLEXDB_FFMPEG", "").strip() or "ffmpeg",
+            ffprobe=os.environ.get("PLEXDB_FFPROBE", "").strip() or "ffprobe",
         )

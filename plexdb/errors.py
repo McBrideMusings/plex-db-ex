@@ -106,6 +106,11 @@ class EncoderUnavailable(EncoderError):
     until its next window rather than recording a failure against each title."""
 
 
+class MediaError(PlexdbError):
+    """A title's video could not be read through Plex or decoded: the part is unreadable,
+    ffmpeg or ffprobe exited non-zero, or neither is installed. It fails that title only."""
+
+
 class JevError(PlexdbError):
     """Jev could not be reached, kept answering 429, or returned something unusable."""
 

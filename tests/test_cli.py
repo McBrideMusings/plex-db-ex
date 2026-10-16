@@ -67,6 +67,7 @@ EXPECTED_COMMANDS = {
     "repair-fs-identities",
     "prune-frames",
     "frames",
+    "harvest-frames",
     "schedule",
 }
 
@@ -117,6 +118,9 @@ EXPECTED_COMMAND_ORDER = [
     "list-decide",
     # The Frame index's status, queue and migration (`plexdb/commands/frames.py`).
     "frames",
+    # Fills the Frame index through Plex; not a step of the sweep
+    # (`plexdb/commands/harvest_frames.py`).
+    "harvest-frames",
     # Not a step of the sweep: a read-only browser view of what the steps above
     # wrote (`plexdb/commands/explore.py`).
     "explore",

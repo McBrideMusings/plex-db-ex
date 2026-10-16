@@ -3,7 +3,8 @@
 Every call is a `POST {PLEXDB_FRAME_ENCODER_URL}/v1/embeddings` naming
 `PLEXDB_FRAME_MODEL`. This client loads no model and decides nothing about when
 work runs; whatever serves the URL does. A slow answer is waited out — a broker
-holds a request through a cold start — and a refused one is `EncoderUnavailable`.
+holds a request through a cold start — and one that is down or busy (a refused connection,
+a 5xx, a 429) is `EncoderUnavailable`.
 
 OpenAI's API defines text input only. The image shape below is the one a real
 Infinity server serving a CLIP checkpoint accepted (`plexdb frames
@@ -129,7 +130,9 @@ class EncoderClient:
             f"{len(raw)} bytes, first byte {first_byte_s * 1000:.0f} ms, "
             f"total {total_s * 1000:.0f} ms"
         )
-        if resp.status_code >= 500:
+        # 429 is a busy encoder: every later request would meet the same answer,
+        # so it stops the run like a refused connection does.
+        if resp.status_code >= 500 or resp.status_code == 429:
             raise EncoderUnavailable(
                 f"encoder unavailable at {url}: {resp.status_code}: {raw[:200]!r}"
             )

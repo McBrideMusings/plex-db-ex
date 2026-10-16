@@ -47,6 +47,7 @@ __all__ = [
     "parse_hours",
     "prune_orphans",
     "queue",
+    "set_indexing",
     "status",
 ]
 
@@ -103,8 +104,18 @@ CREATE TABLE frame_queue (
 );
 """
 
+#: Version 2 — the title the harvester is indexing now, so `plexdb frames status`,
+#: a separate process, can say which. At most one row.
+_V2 = """
+CREATE TABLE frame_harvest (
+    id       INTEGER PRIMARY KEY CHECK (id = 1),
+    item_id  TEXT NOT NULL,
+    since    TEXT NOT NULL
+);
+"""
+
 #: Append-only, like `schema.MIGRATIONS`, and versioned separately from it.
-MIGRATIONS: tuple[schema.Migration, ...] = (_V1,)
+MIGRATIONS: tuple[schema.Migration, ...] = (_V1, _V2)
 SCHEMA_VERSION = len(MIGRATIONS)
 
 #: Every frames.db table keyed by item_id, in the order a prune deletes from.
@@ -241,6 +252,7 @@ def status(
     hours: str,
     now: datetime,
     encoder_reachable: bool | None,
+    ffmpeg_found: bool,
 ) -> dict[str, Any]:
     """What `plexdb frames status` prints. Its shape is documented in
     docs/schema.md; a key added here goes there too. `encoder_reachable` is
@@ -274,14 +286,31 @@ def status(
         "queued": queued,
         "frame_hours": hours or None,
         "inside_hours": inside_hours(parse_hours(hours), now),
-        # The harvester arrives in a later slice; until then nothing is being indexed.
-        "indexing": None,
+        "indexing": _indexing(frames_conn),
         "encoder_reachable": encoder_reachable,
+        "ffmpeg_found": ffmpeg_found,
         "failed": [
             {"item_id": row["item_id"], "error": row["error"], "at": row["indexed_at"]}
             for row in failed
         ],
     }
+
+
+def _indexing(frames_conn: sqlite3.Connection) -> dict[str, str] | None:
+    row = frames_conn.execute("SELECT item_id, since FROM frame_harvest").fetchone()
+    return None if row is None else {"item_id": row["item_id"], "since": row["since"]}
+
+
+def set_indexing(frames_conn: sqlite3.Connection, item_id: str | None, *, now: datetime) -> None:
+    """Record the title being indexed, or `None` when none is."""
+    with frames_conn:
+        if item_id is None:
+            frames_conn.execute("DELETE FROM frame_harvest")
+        else:
+            frames_conn.execute(
+                "INSERT OR REPLACE INTO frame_harvest (id, item_id, since) VALUES (1, ?, ?)",
+                (item_id, now.isoformat()),
+            )
 
 
 def queue(

@@ -161,6 +161,67 @@ def _start_explorer() -> None:
     )
 
 
+def _start_frame_harvester() -> None:
+    """Start the frame harvester's window loop on a thread, if it is configured.
+
+    It needs `PLEXDB_FRAMES_DIR`, `PLEXDB_FRAME_HOURS` and `PLEXDB_FRAME_ENCODER_URL`;
+    any one unset leaves it off and says which. The thread is not a Step of any
+    Sweep and writes `frames.db` alone, so the sweep and the harvest never contend
+    for a file (ADR-0024).
+    """
+    import threading
+
+    from .config import Config
+    from .frame_encoder import from_config
+    from .frame_harvest import configured_media, harvest, run_in_windows
+    from .frames import frames_path, parse_hours
+    from .plex_client import LivePlexClient
+
+    config = Config.from_env()
+    missing = [
+        name
+        for name, value in (
+            ("PLEXDB_FRAMES_DIR", config.frames_dir),
+            ("PLEXDB_FRAME_HOURS", config.frame_hours),
+            ("PLEXDB_FRAME_ENCODER_URL", config.frame_encoder_url),
+        )
+        if not value
+    ]
+    if missing:
+        print(f"frame harvester off: {', '.join(missing)} unset", flush=True)
+        return
+    parse_hours(config.frame_hours)
+    frames_path(config)
+
+    def run_once() -> str:
+        media = configured_media(config)
+        encoder = from_config(config)
+        try:
+            result = harvest(
+                config,
+                plex=LivePlexClient(config.plex_url, config.plex_token),
+                media=media,
+                encoder=encoder,
+                log=lambda line: print(line, flush=True),
+            )
+        finally:
+            encoder.close()
+        return result.stopped
+
+    thread = threading.Thread(
+        target=run_in_windows,
+        args=(config, run_once),
+        kwargs={
+            "clock": lambda: datetime.now().astimezone(),
+            "log": lambda line: print(line, flush=True),
+        },
+        name="frame-harvester",
+        daemon=True,
+    )
+    thread.start()
+    print(f"frame harvester on, hours {config.frame_hours}", flush=True)
+
+
 def run_scheduler(
     *,
     sweep: Callable[[], int] | None = None,
@@ -168,6 +229,7 @@ def run_scheduler(
     clock: Callable[[], datetime] | None = None,
     migrate: Callable[[], None] | None = None,
     explore: Callable[[], None] | None = None,
+    frames: Callable[[], None] | None = None,
     iterations: int | None = None,
 ) -> int:
     """Migrate the store, then wait until the next scheduled time, run one sweep,
@@ -175,7 +237,7 @@ def run_scheduler(
 
     Runs forever under a container. `iterations` bounds the loop so a test can
     watch it complete a fixed number of cycles; `sweep`, `sleep`, `clock`,
-    `migrate` and `explore` are injectable for the same reason. Nothing else
+    `migrate`, `explore` and `frames` are injectable for the same reason. Nothing else
     supplies them.
 
     **Plex DB-EX starts after the migration**, when `PLEXDB_EXPLORE_PORT`
@@ -203,6 +265,7 @@ def run_scheduler(
     now_fn = datetime.now if clock is None else clock
     do_migrate = _migrate_store if migrate is None else migrate
     do_explore = _start_explorer if explore is None else explore
+    do_frames = _start_frame_harvester if frames is None else frames
 
     raw = os.environ.get(SCHEDULE_VAR, "").strip()
     if not raw:
@@ -217,6 +280,7 @@ def run_scheduler(
     # it is never going to sweep.
     do_migrate()
     do_explore()
+    do_frames()
 
     completed = 0
     while iterations is None or completed < iterations:
