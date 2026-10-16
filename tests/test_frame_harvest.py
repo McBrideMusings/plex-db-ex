@@ -192,6 +192,10 @@ def test_a_title_writes_cuts_one_vector_per_sampled_frame_and_its_state(config: 
     vec = rows(config, "SELECT t_ms, shot_ix FROM frame_vec WHERE item_id = ? ORDER BY t_ms", item)
     assert [tuple(r) for r in vec] == [(1000, 0), (4000, 1), (6000, 2), (8000, 2)]
     assert media.asked == [1000, 4000, 6000, 8000]
+    shot_rows = rows(
+        config, "SELECT shot_ix, in_ms, out_ms FROM shots WHERE item_id = ? ORDER BY shot_ix", item
+    )
+    assert [tuple(r) for r in shot_rows] == [(0, 0, 3000), (1, 3000, 5000), (2, 5000, 10_000)]
     state = rows(
         config,
         "SELECT shots, vectors, dims, quant, error, duration_ms FROM frame_index_state WHERE item_id = ?",  # noqa: E501

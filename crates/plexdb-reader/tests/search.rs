@@ -193,6 +193,8 @@ fn int8(parts: &[(usize, i8)]) -> Vec<u8> {
 struct Title<'a> {
     id: &'a str,
     duration_ms: Option<i64>,
+    /// `(in_ms, out_ms)` of each Shot, in `shot_ix` order
+    shots: Vec<(i64, i64)>,
     /// `(t_ms, source)`
     cuts: &'a [(i64, &'a str)],
     /// `(shot_ix, t_ms, vector)`
@@ -208,6 +210,13 @@ fn add_title(conn: &Connection, t: &Title<'_>) {
         (t.id, t.model, t.duration_ms, t.frames.len() as i64),
     )
     .expect("state row");
+    for (shot_ix, (in_ms, out_ms)) in t.shots.iter().enumerate() {
+        conn.execute(
+            "INSERT INTO shots (item_id, shot_ix, in_ms, out_ms) VALUES (?1, ?2, ?3, ?4)",
+            (t.id, shot_ix as i64, in_ms, out_ms),
+        )
+        .expect("shot row");
+    }
     for (at, source) in t.cuts {
         conn.execute(
             "INSERT INTO cuts (item_id, t_ms, score, source) VALUES (?1, ?2, NULL, ?3)",
@@ -252,6 +261,7 @@ fn fixture() -> Fixture {
         &Title {
             id: "imdb:a",
             duration_ms: Some(100_000),
+            shots: vec![(0, 10_000), (10_000, 20_000), (20_000, 100_000)],
             cuts: &[(10_000, "scdet"), (20_000, "chapter")],
             frames: vec![
                 (0, 0, int8(&[(0, 100)])),
@@ -267,6 +277,7 @@ fn fixture() -> Fixture {
         &Title {
             id: "imdb:b",
             duration_ms: Some(50_000),
+            shots: vec![(0, 50_000)],
             cuts: &[],
             frames: vec![(0, 0, int8(&[(0, 100)]))],
             model: MODEL,
@@ -281,6 +292,7 @@ fn fixture() -> Fixture {
         &Title {
             id: "imdb:d",
             duration_ms: Some(30_000),
+            shots: (0..6).map(|i| (i * 5_000, (i + 1) * 5_000)).collect(),
             cuts: &near_cuts,
             frames: near,
             model: MODEL,
@@ -292,6 +304,7 @@ fn fixture() -> Fixture {
         &Title {
             id: "imdb:close",
             duration_ms: Some(10_000),
+            shots: vec![(0, 4_000), (4_000, 8_000), (8_000, 10_000)],
             cuts: &[(4_000, "scdet"), (4_200, "scdet"), (8_000, "chapter")],
             frames: vec![
                 (0, 2_000, int8(&[(0, 100)])),
@@ -306,6 +319,7 @@ fn fixture() -> Fixture {
         &Title {
             id: "imdb:old",
             duration_ms: Some(1_000),
+            shots: vec![(0, 1_000)],
             cuts: &[],
             frames: vec![(0, 0, int8(&[(0, 100)]))],
             model: "other-clip",
@@ -728,16 +742,16 @@ fn cuts_and_chapters_are_the_titles_boundaries() {
 fn a_frames_file_at_another_schema_version_is_refused_at_open() {
     let fx = fixture();
     let conn = Connection::open(&fx.frames).expect("open frames.db");
-    conn.execute("UPDATE schema_version SET version = 3", [])
+    conn.execute("UPDATE schema_version SET version = 4", [])
         .expect("bump");
     drop(conn);
-    let err = Reader::open(&fx.snapshot, Some(&fx.frames), None).expect_err("version 3");
+    let err = Reader::open(&fx.snapshot, Some(&fx.frames), None).expect_err("version 4");
     assert!(
         matches!(
             err,
             ReaderError::UnsupportedFramesVersion {
-                found: 3,
-                supported: 2,
+                found: 4,
+                supported: 3,
                 ..
             }
         ),

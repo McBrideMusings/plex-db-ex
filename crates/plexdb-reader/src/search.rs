@@ -1,11 +1,9 @@
 //! Shot search over the Frame index (ADR-0024, ADR-0026).
 //!
 //! A **Shot** is the stretch of a title between two adjacent boundaries. The
-//! index numbers a title's Shots from 0 in `frame_vec.shot_ix`. The boundaries
-//! are 0, then each distinct `cuts.t_ms` in order that lies at least
-//! [`MIN_SHOT_MS`] after the boundary before it and before the end, then the
-//! end: the title's `duration_ms` (the last frame's offset when it records
-//! none). Shot `k` spans boundary `k` to boundary `k + 1`.
+//! index numbers a title's Shots from 0 in `frame_vec.shot_ix` and stores each
+//! Shot's `in_ms` and `out_ms` in `shots`. The harvester owns the rule that draws
+//! the boundaries; this reader only reads what it stored.
 //!
 //! A frame's similarity to a phrase is `dot(phrase, frame) / |frame|`. The
 //! phrase is a unit vector; the stored frame is an int8 vector of whatever
@@ -20,10 +18,6 @@ use serde::Serialize;
 use crate::Reader;
 use crate::error::ReaderError;
 use crate::phrase::IndexModel;
-
-/// A Cut within this many ms of the boundary before it makes no Shot
-/// (`plexdb/frame_harvest.py::MIN_SHOT_MS`).
-const MIN_SHOT_MS: u64 = 500;
 
 /// Midjourney's `--no` weight: what a negative subtracts when the caller gives none.
 const DEFAULT_WEIGHT: f32 = 0.5;
@@ -86,7 +80,6 @@ struct IndexRow {
     model: String,
     model_version: String,
     dims: usize,
-    duration_ms: Option<u64>,
 }
 
 impl Reader {
@@ -255,7 +248,7 @@ impl Reader {
         for chunk in ids.chunks(chunk_size) {
             let placeholders = vec!["?"; chunk.len()].join(",");
             let mut stmt = self.conn.prepare(&format!(
-                "SELECT item_id, model, model_version, dims, duration_ms \
+                "SELECT item_id, model, model_version, dims \
                  FROM frames.frame_index_state \
                  WHERE item_id IN ({placeholders}) AND model IS NOT NULL ORDER BY item_id"
             ))?;
@@ -267,9 +260,6 @@ impl Reader {
                         model_version: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
                         dims: usize::try_from(row.get::<_, Option<i64>>(3)?.unwrap_or(0))
                             .unwrap_or(0),
-                        duration_ms: row
-                            .get::<_, Option<i64>>(4)?
-                            .and_then(|d| u64::try_from(d).ok()),
                     })
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
@@ -278,10 +268,28 @@ impl Reader {
         Ok(rows)
     }
 
+    /// The `(in_ms, out_ms)` of each Shot of a title, indexed by `shot_ix`.
+    fn shot_bounds(&self, item_id: &str) -> Result<Vec<(u64, u64)>, ReaderError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT in_ms, out_ms FROM frames.shots WHERE item_id = ?1 ORDER BY shot_ix",
+        )?;
+        let rows = stmt
+            .query_map((item_id,), |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(|(a, b)| match (u64::try_from(a), u64::try_from(b)) {
+                (Ok(a), Ok(b)) if a <= b => Ok((a, b)),
+                _ => Err(ReaderError::InconsistentIndex {
+                    item_id: item_id.to_string(),
+                    detail: format!("a Shot spanning {a}..{b} ms"),
+                }),
+            })
+            .collect()
+    }
+
     /// Every Shot of one title, scored against the Phrase and each negative.
     /// `vectors[0]` is the Phrase, the rest are the negatives in order.
     fn shots_of(&self, row: &IndexRow, vectors: &[Vec<f32>]) -> Result<Vec<ShotHit>, ReaderError> {
-        let cuts = self.cuts(&row.item_id)?;
         let mut stmt = self
             .conn
             .prepare("SELECT shot_ix, t_ms, vec FROM frames.frame_vec WHERE item_id = ?1")?;
@@ -297,17 +305,7 @@ impl Reader {
             .collect::<Result<Vec<_>, _>>()?;
         frames.sort_by_key(|(shot_ix, t_ms, _)| (*shot_ix, *t_ms));
 
-        // The harvester's own boundaries (`plexdb/frame_harvest.py::shots`).
-        let end = row
-            .duration_ms
-            .unwrap_or_else(|| frames.iter().map(|f| f.1).max().unwrap_or(0));
-        let mut bounds = vec![0u64];
-        for &cut in &cuts {
-            if MIN_SHOT_MS <= cut - bounds[bounds.len() - 1] && cut < end {
-                bounds.push(cut);
-            }
-        }
-        bounds.push(end);
+        let bounds = self.shot_bounds(&row.item_id)?;
 
         let mut hits: Vec<ShotHit> = Vec::new();
         let mut current: Option<i64> = None;
@@ -315,15 +313,15 @@ impl Reader {
             if current != Some(*shot_ix) {
                 let ix = usize::try_from(*shot_ix)
                     .ok()
-                    .filter(|ix| *ix + 1 < bounds.len())
+                    .filter(|ix| *ix < bounds.len())
                     .ok_or_else(|| ReaderError::InconsistentIndex {
                         item_id: row.item_id.clone(),
-                        detail: format!("shot_ix {shot_ix} but {} shot(s)", bounds.len() - 1),
+                        detail: format!("shot_ix {shot_ix} but {} shot(s)", bounds.len()),
                     })?;
                 hits.push(ShotHit {
                     item_id: row.item_id.clone(),
-                    in_ms: bounds[ix],
-                    out_ms: bounds[ix + 1],
+                    in_ms: bounds[ix].0,
+                    out_ms: bounds[ix].1,
                     frames: Vec::new(),
                     phrase_sim: f32::NEG_INFINITY,
                     negative_sims: vec![f32::NEG_INFINITY; vectors.len() - 1],

@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from plexdb import frames
+from plexdb import frames, schema
 from plexdb.cli import main
 from plexdb.store import init, open_store
 
@@ -224,6 +224,10 @@ def test_prune_deletes_every_row_of_a_title_no_longer_in_items_and_keeps_the_res
                 (item_id,),
             )
             conn.execute(
+                "INSERT INTO shots (item_id, shot_ix, in_ms, out_ms) VALUES (?, 0, 0, 5000)",
+                (item_id,),
+            )
+            conn.execute(
                 "INSERT INTO frame_queue (item_id, queued_at, queued_by) VALUES (?, 'now', 'cli')",
                 (item_id,),
             )
@@ -239,7 +243,7 @@ def test_prune_deletes_every_row_of_a_title_no_longer_in_items_and_keeps_the_res
     assert "pruned 1 title(s)" in capsys.readouterr().out
 
     with frames.open_frames(env / "frames.db") as conn:
-        for table in ("frame_index_state", "cuts", "frame_queue", "frame_vec"):
+        for table in ("frame_index_state", "cuts", "shots", "frame_queue", "frame_vec"):
             held = conn.execute(f"SELECT item_id, count(*) FROM {table} GROUP BY item_id")
             expected = 2 if table == "frame_vec" else 1
             assert [tuple(row) for row in held] == [("imdb:tt1", expected)], table
@@ -316,3 +320,51 @@ def test_check_wait_runs_the_frames_quick_check_once_however_many_polls_it_makes
     assert out.count("frames.db is behind this build; waiting") >= 5
     assert checks == 1
     assert "frames.db FAILED: at v0" in out
+
+
+def test_v3_gives_each_title_already_indexed_the_shots_the_harvester_would_have_numbered(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "frames.db"
+    conn = frames._connect(path)
+    try:
+        schema.apply(conn, frames.MIGRATIONS[:2])
+        conn.execute(
+            "INSERT INTO frame_index_state (item_id, model, duration_ms, indexed_at) "
+            "VALUES ('imdb:a', 'm', 10000, 'now')"
+        )
+        # 4,200 is within 500 ms of 4,000; 10,000 is the end, not a boundary.
+        for t_ms, source in (
+            (4000, "scdet"),
+            (4200, "scdet"),
+            (8000, "chapter"),
+            (10_000, "scdet"),
+        ):
+            conn.execute(
+                "INSERT INTO cuts (item_id, t_ms, score, source) VALUES ('imdb:a', ?, NULL, ?)",
+                (t_ms, source),
+            )
+        conn.execute("INSERT INTO frame_index_state (item_id, indexed_at) VALUES ('imdb:f', 'now')")
+        conn.execute(
+            "INSERT INTO frame_index_state (item_id, model, indexed_at) "
+            "VALUES ('imdb:n', 'm', 'now')"
+        )
+        conn.execute(
+            "INSERT INTO frame_vec (item_id, t_ms, shot_ix, vec) "
+            "VALUES ('imdb:n', 7000, 0, vec_int8(?))",
+            (json.dumps([1] * frames.FRAME_DIMS),),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert frames.migrate(path) == (2, 3)
+
+    with sqlite3.connect(path) as conn:
+        held = conn.execute("SELECT item_id, shot_ix, in_ms, out_ms FROM shots ORDER BY 1, 2")
+        assert held.fetchall() == [
+            ("imdb:a", 0, 0, 4000),
+            ("imdb:a", 1, 4000, 8000),
+            ("imdb:a", 2, 8000, 10_000),
+            ("imdb:n", 0, 0, 7000),
+        ]

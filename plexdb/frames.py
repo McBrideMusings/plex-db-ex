@@ -114,12 +114,58 @@ CREATE TABLE frame_harvest (
 );
 """
 
+
+def _V3(conn: sqlite3.Connection) -> None:
+    """Version 3 — each Shot's boundaries, stored by the harvester so a reader
+    never re-derives them from `cuts`. The titles already indexed get their rows
+    here, from the rule the harvester applied when it numbered them: the boundaries
+    are 0, each distinct cut at least 500 ms after the boundary before it and before
+    `duration_ms` (the last frame's offset when that is NULL), then the end. The rule is
+    written out in this step, not imported, so a later change to the harvester's rule
+    leaves this one as it ran."""
+    conn.execute(
+        """
+        CREATE TABLE shots (
+            item_id TEXT NOT NULL,
+            shot_ix INTEGER NOT NULL,
+            in_ms   INTEGER NOT NULL,
+            out_ms  INTEGER NOT NULL,
+            PRIMARY KEY (item_id, shot_ix)
+        ) WITHOUT ROWID
+        """
+    )
+    titles = conn.execute(
+        "SELECT item_id, duration_ms FROM frame_index_state WHERE model IS NOT NULL"
+    ).fetchall()
+    for item_id, duration_ms in titles:
+        if duration_ms is None:
+            duration_ms = conn.execute(
+                "SELECT max(t_ms) FROM frame_vec WHERE item_id = ?", (item_id,)
+            ).fetchone()[0]
+        if duration_ms is None:
+            continue
+        bounds = [0]
+        for (t_ms,) in conn.execute(
+            "SELECT DISTINCT t_ms FROM cuts WHERE item_id = ? ORDER BY t_ms", (item_id,)
+        ):
+            if 500 <= t_ms - bounds[-1] and t_ms < duration_ms:
+                bounds.append(t_ms)
+        bounds.append(duration_ms)
+        conn.executemany(
+            "INSERT INTO shots (item_id, shot_ix, in_ms, out_ms) VALUES (?, ?, ?, ?)",
+            [
+                (item_id, ix, start, end)
+                for ix, (start, end) in enumerate(zip(bounds, bounds[1:], strict=False))
+            ],
+        )
+
+
 #: Append-only, like `schema.MIGRATIONS`, and versioned separately from it.
-MIGRATIONS: tuple[schema.Migration, ...] = (_V1, _V2)
+MIGRATIONS: tuple[schema.Migration, ...] = (_V1, _V2, _V3)
 SCHEMA_VERSION = len(MIGRATIONS)
 
 #: Every frames.db table keyed by item_id, in the order a prune deletes from.
-_TITLE_TABLES = ("frame_vec", "cuts", "frame_queue", "frame_index_state")
+_TITLE_TABLES = ("frame_vec", "cuts", "shots", "frame_queue", "frame_index_state")
 
 
 class UnknownItem(PlexdbError):
@@ -358,7 +404,7 @@ def _titles_held(frames_conn: sqlite3.Connection) -> set[str]:
     read anyway: a file that broke that rule still gets its vectors pruned.
     """
     held: set[str] = set()
-    for table in ("frame_index_state", "cuts", "frame_queue"):
+    for table in ("frame_index_state", "cuts", "shots", "frame_queue"):
         held.update(
             str(row[0])
             for row in frames_conn.execute(f"SELECT DISTINCT item_id FROM {table}")  # noqa: S608

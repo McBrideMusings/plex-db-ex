@@ -1385,6 +1385,10 @@ it read-only where it lies and `ATTACH`es it to the Snapshot.
   `vec0` virtual table (version 0.1.9). Reading it needs the extension loaded; the ordinary tables,
   `PRAGMA quick_check` and the version row do not.
 
+A title is **indexed** when its `frame_index_state` row has `error IS NULL`, and **failed** when
+it has one with an error. `frame_vec`'s width is fixed when the table is created, so a model of
+another width is a migration.
+
 ### Version 1 — tables
 
 ```sql
@@ -1438,9 +1442,23 @@ CREATE TABLE frame_harvest (
 
 `plexdb frames status` reads it, so a second process can say which title is being indexed.
 
-A title is **indexed** when its `frame_index_state` row has `error IS NULL`, and **failed** when
-it has one with an error. `frame_vec`'s width is fixed when the table is created, so a model of
-another width is a migration.
+### Version 3 — each Shot's boundaries
+
+```sql
+CREATE TABLE shots (
+    item_id TEXT NOT NULL,
+    shot_ix INTEGER NOT NULL,  -- the number `frame_vec.shot_ix` carries, from 0
+    in_ms   INTEGER NOT NULL,
+    out_ms  INTEGER NOT NULL,
+    PRIMARY KEY (item_id, shot_ix)
+) WITHOUT ROWID;
+```
+
+The harvester writes a title's rows in the same transaction as its vectors, and it is the only
+writer of the boundaries, by one rule (`frame_harvest.shots`): a Cut closer than 500 ms
+to the boundary before it makes no Shot. Readers read `in_ms` and `out_ms`; none re-derives them.
+The migration numbered the titles already indexed by that same rule, from `cuts` and
+`frame_index_state.duration_ms`.
 
 ### `plexdb frames status`
 
@@ -1590,7 +1608,7 @@ report it prints.
 `Reader::open(snapshot, frames, phrases)` in `plexdb-reader` opens the Snapshot read-only and, when
 given a path, `ATTACH`es `frames.db` as the schema `frames`, also read-only. Both files' versions
 are checked at open: the Snapshot's `reader_shape`, and `frames.db`'s `schema_version`, which must
-be exactly 2, the version this build's search was written against. A missing, foreign or other-version `frames.db` fails the open; no file is created.
+be exactly 3, the version this build's search was written against. A missing, foreign or other-version `frames.db` fails the open; no file is created.
 `phrases` is a `PhraseCache { path, encoder_url, request_model }`. The Reader sends `request_model` (`PLEXDB_FRAME_MODEL`) as the embeddings request's `model`; an answer naming a model other than the one `frame_index_state` recorded fails the search with `EncoderFailed`, and an answer naming none is accepted, as `probe-encoder` does. `capabilities().search` is true when both
 `frames` and `phrases` were given.
 
@@ -1600,14 +1618,11 @@ draw(&ShotSearch, n, seed) -> Vec<ShotHit>
 cuts(item_id) -> Vec<u64>        chapters(item_id) -> Vec<u64>
 ```
 
-**Shots.** A title's Shots are numbered from 0 in `frame_vec.shot_ix`, by the harvester's rule
-(`frame_harvest.shots`). The boundaries are 0; then each distinct `cuts.t_ms`, scene changes and
-chapter marks together in ascending order, that lies at least 500 ms after the boundary before it
-and before the end; then the end, which is `frame_index_state.duration_ms` (the last frame's `t_ms`
-when that is NULL). Shot `k` spans boundary `k` to boundary `k + 1`. A `shot_ix` beyond the Shots
-those boundaries make fails the search with `InconsistentIndex`, as does a frame whose width is not
-`frame_index_state.dims`. `cuts()` returns the stored times and `chapters()` the ones whose `source`
-is `chapter`.
+**Shots.** A title's Shots are numbered from 0 in `frame_vec.shot_ix`, and `shots` holds each
+one's `in_ms` and `out_ms` (the harvester's rule is described under Version 3 of `frames.db`). Shot
+`k` spans the `shots` row `(item_id, k)`. A `shot_ix` with no `shots` row fails the search with
+`InconsistentIndex`, as does a frame whose width is not `frame_index_state.dims`. `cuts()` returns
+the stored times and `chapters()` the ones whose `source` is `chapter`.
 
 **Similarity.** The Phrase's vector is unit length. A stored frame is an int8 vector of whatever
 uniform scale the harvester chose, so a frame's similarity is `dot(phrase, frame) / |frame|`, the

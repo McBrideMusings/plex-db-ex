@@ -16,7 +16,9 @@ indexed first. A title that failed is retried by neither (2) nor (3) until its
 **Sampling.** The title ends at its last video frame, as the scdet pass decodes
 it: a container can carry seconds of audio past the video, and a frame asked
 for there does not exist. The boundaries are the Cuts, ignoring any closer than
-`MIN_SHOT_MS` to the one before. Between two boundaries is a Shot. A Shot of
+`MIN_SHOT_MS` to the one before. Between two boundaries is a Shot, and its
+`(in_ms, out_ms)` is stored in `shots`: this module is the only writer of Shot
+boundaries, and readers read the boundaries it wrote. A Shot of
 `SPAN_MS` or less gets one frame, at its midpoint; a longer Shot gets one frame
 every `SPAN_MS`, starting `SPAN_MS / 2` after its first boundary.
 
@@ -583,6 +585,7 @@ def _write_title(
     file_hash: str,
     cuts: Sequence[Cut],
     duration_ms: int,
+    shot_list: Sequence[tuple[int, int]],
     samples: Sequence[tuple[int, int]],
     vectors: Sequence[Sequence[float]],
     shot_count: int,
@@ -590,11 +593,15 @@ def _write_title(
     now: datetime,
 ) -> None:
     with frames_conn:
-        for table in ("frame_vec", "cuts"):
+        for table in ("frame_vec", "cuts", "shots"):
             frames_conn.execute(f"DELETE FROM {table} WHERE item_id = ?", (cand.item_id,))  # noqa: S608
         frames_conn.executemany(
             "INSERT OR IGNORE INTO cuts (item_id, t_ms, score, source) VALUES (?, ?, ?, ?)",
             [(cand.item_id, c.t_ms, c.score, c.source) for c in cuts],
+        )
+        frames_conn.executemany(
+            "INSERT INTO shots (item_id, shot_ix, in_ms, out_ms) VALUES (?, ?, ?, ?)",
+            [(cand.item_id, ix, start, end) for ix, (start, end) in enumerate(shot_list)],
         )
         frames_conn.executemany(
             "INSERT INTO frame_vec (item_id, t_ms, shot_ix, vec) "
@@ -687,7 +694,7 @@ def _index_title(
         shot_count, vector_count = len(shot_list), len(samples)
         _write_title(
             frames_conn, cand, file_hash=file_hash, cuts=cuts,
-            duration_ms=scan.last_frame_ms, samples=samples,
+            duration_ms=scan.last_frame_ms, shot_list=shot_list, samples=samples,
             vectors=vectors, shot_count=shot_count, model=model, now=now_fn(),
         )  # fmt: skip
     except EncoderUnavailable:
