@@ -13,6 +13,7 @@
 //! | `--frames` | `PLEXDB_FRAMES_DIR` (the file is `frames.db` inside it) |
 //! | `--phrase-cache` | `PLEXDB_PHRASE_CACHE` |
 //! | `--encoder-url` | `PLEXDB_FRAME_ENCODER_URL` |
+//! | `--encoder-model` | `PLEXDB_FRAME_MODEL` |
 
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -23,7 +24,7 @@ use plexdb_reader::{PhraseCache, Reader, Search, Url};
 use serde::Serialize;
 
 const USAGE: &str = "usage: plexdb-read [--snapshot P] [--frames P] [--phrase-cache P] \
-[--encoder-url U] <subcommand> [args]
+[--encoder-url U] [--encoder-model M] <subcommand> [args]
 
 subcommands:
   enrichment-for <item_id> <namespace>
@@ -146,11 +147,20 @@ fn open(args: &Args) -> Result<Reader, Failure> {
         .flag("--encoder-url")
         .map(str::to_string)
         .or_else(|| env("PLEXDB_FRAME_ENCODER_URL"));
+    let model = args
+        .flag("--encoder-model")
+        .map(str::to_string)
+        .or_else(|| env("PLEXDB_FRAME_MODEL"));
     let phrases = match (cache, encoder) {
         (Some(path), Some(url)) => Some(PhraseCache {
             path,
             encoder_url: Url::parse(&url)
                 .map_err(|e| Failure::Usage(format!("encoder URL {url}: {e}")))?,
+            request_model: model.ok_or_else(|| {
+                Failure::Usage(
+                    "no encoder model: pass --encoder-model or set PLEXDB_FRAME_MODEL".into(),
+                )
+            })?,
         }),
         _ => None,
     };

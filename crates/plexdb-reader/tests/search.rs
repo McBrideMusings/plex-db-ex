@@ -48,6 +48,11 @@ struct FakeEncoder {
 
 impl FakeEncoder {
     fn start() -> Self {
+        Self::aliased(MODEL, MODEL)
+    }
+
+    /// An encoder that accepts `accepts` as the request's model and answers as `answers`.
+    fn aliased(accepts: &'static str, answers: &'static str) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind a port");
         let port = listener.local_addr().expect("local addr").port();
         let calls = Arc::new(AtomicUsize::new(0));
@@ -89,7 +94,7 @@ impl FakeEncoder {
                     })
                     .unwrap_or_default();
                 assert_eq!(request["modality"], "text");
-                assert_eq!(request["model"], MODEL);
+                assert_eq!(request["model"], accepts);
                 c.fetch_add(1, Ordering::SeqCst);
                 let data: Vec<Value> = inputs
                     .iter()
@@ -101,7 +106,7 @@ impl FakeEncoder {
                     })
                     .collect();
                 s.lock().expect("lock").push(inputs);
-                let payload = serde_json::json!({"data": data, "model": MODEL}).to_string();
+                let payload = serde_json::json!({"data": data, "model": answers}).to_string();
                 let _ = write!(
                     stream,
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
@@ -141,12 +146,17 @@ impl Fixture {
     }
 
     fn reader(&self, encoder: &Url) -> Reader {
+        self.reader_as(encoder, MODEL)
+    }
+
+    fn reader_as(&self, encoder: &Url, request_model: &str) -> Reader {
         Reader::open(
             &self.snapshot,
             Some(&self.frames),
             Some(PhraseCache {
                 path: self.cache(),
                 encoder_url: encoder.clone(),
+                request_model: request_model.to_string(),
             }),
         )
         .expect("open the reader")
@@ -686,6 +696,7 @@ fn search_needs_frames_and_a_phrase_cache() {
         Some(PhraseCache {
             path: fx.cache(),
             encoder_url: enc.url.clone(),
+            request_model: MODEL.to_string(),
         }),
     )
     .expect("open");
@@ -749,6 +760,7 @@ fn read_bin(fx: &Fixture, encoder: &Url, args: &[&str]) -> (bool, String, String
         .args(["--frames", path_str(&fx.frames)])
         .args(["--phrase-cache", path_str(&fx.cache())])
         .args(["--encoder-url", encoder.as_str()])
+        .args(["--encoder-model", MODEL])
         .args(args)
         .output()
         .expect("run plexdb-read");
@@ -826,4 +838,32 @@ fn plexdb_read_prints_the_search_as_json_and_fails_with_a_message() {
     assert!(!ok);
     assert!(out.is_empty());
     assert!(err.starts_with("error: "), "{err}");
+}
+
+#[test]
+fn an_encoder_that_accepts_an_alias_serves_an_index_recorded_under_the_real_name() {
+    let fx = fixture();
+    let enc = FakeEncoder::aliased("alias-clip", MODEL);
+    let found = fx
+        .reader_as(&enc.url, "alias-clip")
+        .search_shots(&search(&POOL, "cat"))
+        .expect("the alias is sent, the real name is answered");
+    assert_eq!(found.model, MODEL);
+    assert!(!found.shots.is_empty());
+}
+
+#[test]
+fn an_encoder_answering_as_another_model_is_refused_and_caches_nothing() {
+    let fx = fixture();
+    let enc = FakeEncoder::aliased(MODEL, "other-clip");
+    let err = fx
+        .reader(&enc.url)
+        .search_shots(&search(&POOL, "cat"))
+        .expect_err("wrong model answered");
+    assert!(matches!(err, ReaderError::EncoderFailed(_)), "{err}");
+    let kept: i64 = Connection::open(fx.cache())
+        .expect("cache")
+        .query_row("SELECT count(*) FROM phrase_cache", [], |r| r.get(0))
+        .expect("count");
+    assert_eq!(kept, 0);
 }

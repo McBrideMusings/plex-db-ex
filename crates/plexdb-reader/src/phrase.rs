@@ -32,6 +32,9 @@ pub struct PhraseCache {
     pub path: PathBuf,
     /// An OpenAI-compatible base URL; the Reader POSTs to `<encoder_url>/v1/embeddings`.
     pub encoder_url: Url,
+    /// The model name the encoder accepts (`PLEXDB_FRAME_MODEL`). It is sent as the
+    /// request's `model`; the answer must name the model the Frame index recorded.
+    pub request_model: String,
 }
 
 /// The model a vector must come from, as `frame_index_state` records it.
@@ -173,7 +176,7 @@ impl PhraseCache {
             .build()
             .into();
         let body = json!({
-            "model": index.model,
+            "model": self.request_model,
             "input": phrases,
             "modality": "text",
             "encoding_format": "float",
@@ -197,7 +200,7 @@ impl PhraseCache {
                 excerpt(&raw)
             )));
         }
-        parse(&raw, &url, phrases.len(), index.dims)
+        parse(&raw, &url, phrases.len(), index)
     }
 }
 
@@ -206,10 +209,26 @@ fn excerpt(raw: &str) -> String {
 }
 
 /// OpenAI's `data[]` of `{index, embedding}`, scaled to unit length.
-fn parse(raw: &str, url: &str, expected: usize, dims: usize) -> Result<Vec<Vec<f32>>, ReaderError> {
+fn parse(
+    raw: &str,
+    url: &str,
+    expected: usize,
+    index: &IndexModel<'_>,
+) -> Result<Vec<Vec<f32>>, ReaderError> {
+    let dims = index.dims;
     let unusable =
         || ReaderError::EncoderFailed(format!("the encoder at {url} returned an unusable body"));
     let body: Value = serde_json::from_str(raw).map_err(|_| unusable())?;
+    // An answer naming no model is not a mismatch; one naming another model is.
+    if let Some(answered) = body.get("model").and_then(Value::as_str)
+        && !answered.is_empty()
+        && answered != index.model
+    {
+        return Err(ReaderError::EncoderFailed(format!(
+            "the encoder at {url} answered as {answered}; the Frame index holds {}",
+            index.model
+        )));
+    }
     let data = body
         .get("data")
         .and_then(Value::as_array)
