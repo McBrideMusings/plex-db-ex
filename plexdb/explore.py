@@ -2546,12 +2546,18 @@ def make_server(
                 began = time.monotonic()
                 if path == "/api/search/frame":
                     file = tab.frame(
-                        item_id, _query_int(query, "t_ms"), large=query.get("large") == "1"
+                        item_id,
+                        _query_int(query, "part"),
+                        _query_int(query, "t_ms"),
+                        large=query.get("large") == "1",
                     )
                     kind = "image/jpeg"
                 else:
                     file = tab.clip(
-                        item_id, _query_int(query, "in_ms"), _query_int(query, "out_ms")
+                        item_id,
+                        _query_int(query, "part"),
+                        _query_int(query, "in_ms"),
+                        _query_int(query, "out_ms"),
                     )
                     kind = "video/mp4"
                 print(
@@ -2594,7 +2600,8 @@ def make_server(
             self.send_header("Accept-Ranges", "bytes")
             if status == HTTPStatus.PARTIAL_CONTENT:
                 self.send_header("Content-Range", f"bytes {first}-{last}/{len(data)}")
-            # A cut is named by its title, window and size, so it never changes under its URL.
+            # A cut is named by its title, part, window and size, and the page puts the part
+            # in the URL, so it never changes under its URL.
             self.send_header("Cache-Control", "public, max-age=604800, immutable")
             self.end_headers()
             self.wfile.write(body)
