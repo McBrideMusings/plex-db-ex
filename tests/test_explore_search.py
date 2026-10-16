@@ -245,6 +245,7 @@ def test_search_runs_the_reader_with_each_negative_and_names_the_strongest(
     assert first["strongest_negative"] == {"phrase": "futuristic", "sim": 0.33}
     assert second["strongest_negative"] == {"phrase": "gangland execution", "sim": 0.30}
     assert first["thumbs"] == [0, 2000, 3000]
+    assert (first["part_id"], second["part_id"]) == (11, 12)
     assert (out["indexed"], out["pool"], out["total"]) == (2, 3, 3)
 
 
@@ -313,7 +314,7 @@ def test_a_collection_expands_to_its_members_in_rank_order(served: dict[str, Any
 
 
 def test_a_clip_is_cut_once_served_in_ranges_and_found_in_the_cache(served: dict[str, Any]) -> None:
-    url = served["url"] + "/api/search/clip?item_id=imdb:tt1&in_ms=1000&out_ms=7300"
+    url = served["url"] + "/api/search/clip?item_id=imdb:tt1&part=11&in_ms=1000&out_ms=7300"
     for _ in range(2):
         with urllib.request.urlopen(url) as response:
             assert response.headers["Content-Type"] == "video/mp4"
@@ -326,9 +327,25 @@ def test_a_clip_is_cut_once_served_in_ranges_and_found_in_the_cache(served: dict
     assert list((served["tmp"] / "explore-data" / "clips").glob("*.mp4"))
 
 
+def test_a_replaced_file_is_cut_afresh_and_the_stale_url_gets_no_cut(
+    served: dict[str, Any],
+) -> None:
+    old = served["url"] + "/api/search/frame?item_id=imdb:tt1&part=11&t_ms=0"
+    new = served["url"] + "/api/search/frame?item_id=imdb:tt1&part=99&t_ms=0"
+    urllib.request.urlopen(old).read()
+    with open_frames(served["tmp"] / "frames" / "frames.db") as frames:
+        frames.execute("UPDATE frame_index_state SET part_id = 99 WHERE item_id = 'imdb:tt1'")
+        frames.commit()
+    with pytest.raises(urllib.error.HTTPError) as err:
+        urllib.request.urlopen(old)
+    assert err.value.code == 404
+    urllib.request.urlopen(new).read()
+    assert [c[1] for c in served["media"].calls if c[0] == "frames"] == [11, 99]
+
+
 def test_a_frame_for_a_title_outside_the_index_is_not_found(served: dict[str, Any]) -> None:
     with pytest.raises(urllib.error.HTTPError) as err:
-        urllib.request.urlopen(served["url"] + "/api/search/frame?item_id=imdb:tt3&t_ms=0")
+        urllib.request.urlopen(served["url"] + "/api/search/frame?item_id=imdb:tt3&part=13&t_ms=0")
     assert err.value.code == 404
 
 
@@ -423,7 +440,7 @@ def test_a_clip_window_past_the_title_or_longer_than_two_minutes_is_refused(
             "UPDATE frame_index_state SET duration_ms = 60000 WHERE item_id = 'imdb:tt1'"
         )
         frames.commit()
-    base = served["url"] + "/api/search/clip?item_id=imdb:tt1&in_ms=0&out_ms="
+    base = served["url"] + "/api/search/clip?item_id=imdb:tt1&part=11&in_ms=0&out_ms="
     for out_ms in ("999999999", "61000"):
         with pytest.raises(urllib.error.HTTPError) as err:
             urllib.request.urlopen(base + out_ms)

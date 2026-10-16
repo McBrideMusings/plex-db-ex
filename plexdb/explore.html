@@ -2935,7 +2935,8 @@ const srch = { ready: false, pool: [], titles: [], seq: 0, timer: 0, last: null,
 const sEl = id => document.getElementById(id);
 const POOL_KEY = "plexdb-search-pool";
 const pct = p => `${p * 100 < 10 ? (p * 100).toFixed(1) : Math.round(p * 100)}%`;
-const frameUrl = (itemId, t, large) => `/api/search/frame?item_id=${encodeURIComponent(itemId)}&t_ms=${t}${large ? "&large=1" : ""}`;
+// The part id names the file the cut comes from, so a replaced file is a new URL the browser has not cached.
+const frameUrl = (itemId, partId, t, large) => `/api/search/frame?item_id=${encodeURIComponent(itemId)}&part=${partId}&t_ms=${t}${large ? "&large=1" : ""}`;
 
 function sBanner(kind, ...kids) {
   const box = el("div", { className: "sbanner" + (kind === "noise" ? " noise" : "") }, ...kids);
@@ -3170,7 +3171,7 @@ function rowFor(s) {
   const r = srch.last, key = `${s.item_id}|${s.in_ms}`;
   const thumbs = el("div", { className: "thumbs" }, ...s.thumbs.map((t, i) => {
     const b = el("button", { type: "button", ariaLabel: `Open frame ${i + 1}` },
-      el("img", { loading: "lazy", decoding: "async", alt: "", src: frameUrl(s.item_id, t, false) }));
+      el("img", { loading: "lazy", decoding: "async", alt: "", src: frameUrl(s.item_id, s.part_id, t, false) }));
     b.querySelector("img").addEventListener("error", e => e.target.remove(), { once: true });
     b.addEventListener("click", () => openLightbox(s, s.frames.findIndex(f => f.t_ms === t)));
     return b;
@@ -3198,7 +3199,7 @@ function rowFor(s) {
   return li;
 }
 function addClip(li, s) {
-  const src = `/api/search/clip?item_id=${encodeURIComponent(s.item_id)}&in_ms=${s.in_ms}&out_ms=${s.out_ms}`;
+  const src = `/api/search/clip?item_id=${encodeURIComponent(s.item_id)}&part=${s.part_id}&in_ms=${s.in_ms}&out_ms=${s.out_ms}`;
   const video = el("video", { loop: true, muted: true, autoplay: true, controls: true, playsInline: true, src });
   video.muted = true;
   const note = el("div", { className: "sub" }, "Cutting the clip…");
@@ -3227,7 +3228,7 @@ function stepLightbox(by) {
 }
 function paintLightbox() {
   const { shot, index } = srch.lb, f = shot.frames[index];
-  sEl("lbimg").src = frameUrl(shot.item_id, f.t_ms, true);
+  sEl("lbimg").src = frameUrl(shot.item_id, shot.part_id, f.t_ms, true);
   sEl("lbimg").alt = `${shot.title} at ${f.t_ms} ms`;
   sEl("lbcap").textContent = `${shot.title} · frame ${index + 1} of ${shot.frames.length} · ${(f.t_ms / 1000).toFixed(1)} s · phrase similarity ${f.sim.toFixed(3)}`;
 }
