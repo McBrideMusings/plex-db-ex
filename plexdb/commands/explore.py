@@ -12,7 +12,8 @@ import sys
 import webbrowser
 
 from ..config import Config
-from ..explore import make_server
+from ..explore import data_dir, make_server
+from ..explore_search import SearchTab
 
 NAME = "explore"
 #: After the commands that fill the store and before `publish`; a reader of what
@@ -34,6 +35,7 @@ def _cmd_explore(args: argparse.Namespace) -> int:
         args.port,
         plex_url=config.plex_url,
         plex_token=config.plex_token,
+        search=SearchTab(config, config.store_path, data_dir(config.store_path)),
     )
     url = f"http://{args.host}:{server.server_port}/"
     print(

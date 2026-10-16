@@ -14,6 +14,7 @@ dependencies = [
     # is a migration that re-derives them (keywords.rederive_keywords).
     "simplemma==2.0.0",
     "sqlite-vec==0.1.9",
+    "tokenizers>=0.21",
 ]
 
 [project.scripts]

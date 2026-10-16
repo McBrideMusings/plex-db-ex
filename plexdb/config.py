@@ -123,6 +123,9 @@ class Config:
     #: `PLEXDB_PHRASE_CACHE`, the file `plexdb search` keeps embedded phrases in
     #: (ADR-0026). Unset means `phrases.db` inside `frames_dir`.
     phrase_cache_override: Path | None
+    #: `PLEXDB_FRAME_TOKENIZER`, a `tokenizer.json` for `frame_model`. Unset means
+    #: the Search tab keeps a copy it fetches once by model name (`PhraseTokenizer`).
+    frame_tokenizer: Path | None
     #: `PLEXDB_READ_BIN`, the `plexdb-read` binary `plexdb search` runs: a path,
     #: or a name looked up on `PATH`. The container's image carries it.
     read_bin: str
@@ -181,6 +184,11 @@ class Config:
             phrase_cache_override=(
                 Path(cache_raw).expanduser()
                 if (cache_raw := os.environ.get("PLEXDB_PHRASE_CACHE", "").strip())
+                else None
+            ),
+            frame_tokenizer=(
+                Path(tok_raw).expanduser()
+                if (tok_raw := os.environ.get("PLEXDB_FRAME_TOKENIZER", "").strip())
                 else None
             ),
             read_bin=os.environ.get("PLEXDB_READ_BIN", "").strip() or "plexdb-read",

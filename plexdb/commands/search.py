@@ -9,31 +9,18 @@ docs/schema.md under "Searching the Frame index".
 from __future__ import annotations
 
 import argparse
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 from ..config import Config
 from ..errors import ConfigError
-from ..frames import frames_path
+from ..shot_search import search_argv
 
 NAME = "search"
 #: With the other look-and-ask commands, after `frames`. No `SWEEP`: a search is
 #: asked for, never scheduled.
 ORDER = 77
-
-
-def _binary(config: Config) -> str:
-    """The `plexdb-read` binary, or a `ConfigError` saying how to get one."""
-    found = shutil.which(config.read_bin)
-    if found is None:
-        raise ConfigError(
-            f"cannot run {config.read_bin!r}: not found. The container image carries "
-            "plexdb-read; elsewhere build it with `cargo build -p plexdb-reader` and set "
-            "PLEXDB_READ_BIN to target/debug/plexdb-read"
-        )
-    return found
 
 
 def _pool(args: argparse.Namespace) -> str:
@@ -48,36 +35,15 @@ def _pool(args: argparse.Namespace) -> str:
 
 def _cmd_search(args: argparse.Namespace) -> int:
     config = Config.from_env()
-    frames = frames_path(config)
-    cache = config.phrase_cache_path
-    if not config.frame_encoder_url:
-        raise ConfigError("PLEXDB_FRAME_ENCODER_URL is not set, so a new phrase cannot be embedded")
-    snapshot = config.snapshot_path or config.store_path
-    argv = [
-        _binary(config),
-        "--snapshot",
-        str(snapshot),
-        "--frames",
-        str(frames),
-        "--phrase-cache",
-        str(cache),
-        "--encoder-url",
-        config.frame_encoder_url,
-        "search",
+    argv = search_argv(
+        config,
         args.phrase,
-        "--pool-file",
-        "-",
-    ]
-    if args.not_:
-        argv += ["--not", *args.not_]
-    for flag, value in (
-        ("--weight", args.weight),
-        ("--temperature", args.temperature),
-        ("--draw", args.draw),
-        ("--seed", args.seed),
-    ):
-        if value is not None:
-            argv += [flag, str(value)]
+        negatives=args.not_ or (),
+        weight=args.weight,
+        temperature=args.temperature,
+        draw=args.draw,
+        seed=args.seed,
+    )
     # stdout and stderr go straight through: the binary's JSON is the answer, and
     # its exit code is this command's.
     return subprocess.run(argv, input=_pool(args), text=True, check=False).returncode

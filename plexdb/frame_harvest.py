@@ -255,7 +255,9 @@ class FfmpegMedia:
             )
         return parse_chapters(done.stdout)
 
-    def frames(self, part_id: int, times_ms: Sequence[int]) -> list[bytes | None]:
+    def frames(
+        self, part_id: int, times_ms: Sequence[int], *, height: int = 224
+    ) -> list[bytes | None]:
         out: list[bytes | None] = []
         for start in range(0, len(times_ms), _EXTRACT_CHUNK):
             chunk = times_ms[start : start + _EXTRACT_CHUNK]
@@ -265,7 +267,7 @@ class FfmpegMedia:
                     argv += ["-ss", f"{t_ms / 1000:.3f}", *self._input(part_id)]
                 for i in range(len(chunk)):
                     argv += [
-                        "-map", f"{i}:v:0", "-frames:v", "1", "-vf", "scale=-2:224",
+                        "-map", f"{i}:v:0", "-frames:v", "1", "-vf", f"scale=-2:{height}",
                         "-q:v", "3", "-y", str(Path(tmp) / f"{i}.jpg"),
                     ]  # fmt: skip
                 done = self._run(argv, f"part {part_id}: frames")
@@ -277,6 +279,32 @@ class FfmpegMedia:
                     )
                 out += [path.read_bytes() if path.exists() else None for path in got]
         return out
+
+    def clip(self, part_id: int, in_ms: int, out_ms: int, *, width: int = 640) -> bytes:
+        """The part's `[in_ms, out_ms)` window as a silent H.264 MP4 `width` px wide.
+
+        The Search tab plays one Shot as a looping clip. `+faststart` moves the index
+        to the front, so a `<video>` starts before the whole file has arrived.
+        """
+        if out_ms <= in_ms:
+            raise MediaError(f"part {part_id}: clip window {in_ms}-{out_ms} ms is empty")
+        with tempfile.TemporaryDirectory(prefix="plexdb-clip-") as tmp:
+            target = Path(tmp) / "clip.mp4"
+            argv = [
+                self._ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
+                "-ss", f"{in_ms / 1000:.3f}", *self._input(part_id),
+                "-t", f"{(out_ms - in_ms) / 1000:.3f}",
+                "-map", "0:v:0", "-an", "-sn", "-dn",
+                "-vf", f"scale={width}:-2",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
+                "-movflags", "+faststart", "-y", str(target),
+            ]  # fmt: skip
+            done = self._run(argv, f"part {part_id}: clip")
+            if done.returncode != 0 or not target.exists():
+                raise MediaError(
+                    f"part {part_id}: ffmpeg exited {done.returncode}: {done.stderr.strip()[-200:]}"
+                )
+            return target.read_bytes()
 
 
 def parse_scdet(text: str) -> list[Cut]:

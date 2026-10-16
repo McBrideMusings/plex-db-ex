@@ -42,7 +42,8 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 
 from .decisions import SAVED_FILE
-from .errors import DecisionsFileError, StoreError
+from .errors import ConfigError, DecisionsFileError, StoreError
+from .explore_search import EncoderDown, NoFrame, SearchTab, SearchUnavailable
 from .identity import PRIORITY
 from .keywords import is_carried, keyword_spellings
 from .list_decisions import LIST_DECISIONS_FILE, ListDecisions, UnknownList, decide
@@ -2049,6 +2050,19 @@ def merges_json(pairs: list[dict[str, object]]) -> dict[str, object]:
     return {"proposed": proposed, "decided": by_person + by_jev}
 
 
+def data_dir(store_path: Path, saved_path: Path | None = None) -> Path:
+    """The directory holding the explorer's own files: saved queries, decisions and the
+    Search tab's cached clips. In the container it is the `/explore-data` mount."""
+    return (saved_path or store_path.with_name(SAVED_FILE)).parent
+
+
+def _query_int(query: dict[str, str], name: str) -> int:
+    raw = query.get(name, "")
+    if not raw.isdigit() or len(raw) > 12:
+        raise ValueError(f"{name} must be a whole number of milliseconds")
+    return int(raw)
+
+
 def _page() -> bytes:
     return resources.files("plexdb").joinpath("explore.html").read_bytes()
 
@@ -2080,6 +2094,12 @@ def _error_reply(err: Exception, store_path: Path) -> tuple[str, HTTPStatus] | N
     if isinstance(err, NoPoster):
         return f"no Plex rating key on file for {err.args[0]!r}", HTTPStatus.NOT_FOUND
     if isinstance(err, PosterUnavailable):
+        return str(err), HTTPStatus.SERVICE_UNAVAILABLE
+    if isinstance(err, ConfigError):
+        return str(err), HTTPStatus.SERVICE_UNAVAILABLE
+    if isinstance(err, NoFrame):
+        return str(err), HTTPStatus.NOT_FOUND
+    if isinstance(err, SearchUnavailable):
         return str(err), HTTPStatus.SERVICE_UNAVAILABLE
     if isinstance(err, FileNotFoundError):
         # On the host this is the normal state until the first sweep
@@ -2134,13 +2154,15 @@ def make_server(
     plex_url: str = "",
     plex_token: str = "",
     poster_http: httpx.Client | None = None,
+    search: SearchTab | None = None,
 ) -> ThreadingHTTPServer:
     """An HTTP server for Plex DB-EX, bound but not yet serving.
 
     The caller owns the loop and the shutdown: `plexdb explore` runs
     `serve_forever` in the foreground, and a test runs it on a thread.
     `poster_http` is a test-only seam (an `httpx.Client` on a `MockTransport`)
-    for exercising `/api/poster` without a real Plex server.
+    for exercising `/api/poster` without a real Plex server. `search` is the Search
+    tab's backend (`plexdb.explore_search`); without one its routes answer 503.
     """
     cache = _IndexCache(store_path)
     spaces = _SpaceCache(store_path)
@@ -2265,6 +2287,9 @@ def make_server(
                     file=sys.stderr,
                 )
                 self._json({"keyword": keyword, "label": label, "name": shown, "entry": entry})
+                return
+            if path.startswith("/api/search/"):
+                self._search_post(path)
                 return
             if path != "/api/query":
                 self._json({"error": f"no route {self.path}"}, HTTPStatus.NOT_FOUND)
@@ -2445,8 +2470,134 @@ def make_server(
                 self.send_header("Cache-Control", "public, max-age=604800, immutable")
                 self.end_headers()
                 self.wfile.write(data)
+            elif url.path.startswith("/api/search/"):
+                self._search_get(url.path, query)
             else:
                 self._json({"error": f"no route {url.path}"}, HTTPStatus.NOT_FOUND)
+
+        def _search_tab(self) -> SearchTab:
+            if search is None:
+                raise SearchUnavailable("the Search tab is not configured on this server")
+            return search
+
+        def _search_post(self, path: str) -> None:
+            tab = self._search_tab()
+            body = self._body()
+            if path == "/api/search/tokenize":
+                self._json(tab.tokenize(body.get("texts")))
+            elif path == "/api/search/pool":
+                self._json(tab.pool(body.get("item_ids")))
+            elif path == "/api/search/queue":
+                out = tab.queue_missing(body.get("item_ids"))
+                print(
+                    f"explore: search queued {out['queued']} title(s) for frames", file=sys.stderr
+                )
+                self._json(out)
+            elif path == "/api/search/run":
+                began = time.monotonic()
+                try:
+                    out = tab.search(body)
+                except EncoderDown as err:
+                    print(f"explore: search encoder down: {err}", file=sys.stderr)
+                    self._json(
+                        {
+                            "error": str(err),
+                            "encoder_down": {
+                                "url": err.url,
+                                "phrases": err.phrases,
+                                "reason": err.reason,
+                            },
+                        },
+                        HTTPStatus.SERVICE_UNAVAILABLE,
+                    )
+                    return
+                print(
+                    f"explore: search phrase={out['searched']['phrase']!r} "  # type: ignore[index]
+                    f"negatives={out['searched']['negatives']!r} pool={out['pool']} "  # type: ignore[index]
+                    f"shots={out['total']} draw={out['draw']} "
+                    f"ms={(time.monotonic() - began) * 1000:.0f}",
+                    file=sys.stderr,
+                )
+                self._json(out)
+            else:
+                self._json({"error": f"no route {path}"}, HTTPStatus.NOT_FOUND)
+
+        def _search_get(self, path: str, query: dict[str, str]) -> None:
+            if path == "/api/search/status":
+                if search is None:
+                    self._json(
+                        {"ready": False, "problems": {"search": "not configured on this server"}}
+                    )
+                else:
+                    self._json(search.status())
+                return
+            tab = self._search_tab()
+            if path == "/api/search/suggest":
+                self._json(tab.suggest(query.get("q", "")))
+            elif path == "/api/search/collection":
+                ref = query.get("id", "")
+                if not ref or len(ref) > MAX_ITEM_ID:
+                    raise ValueError("id is required")
+                self._json({"item_ids": tab.collection(ref)})
+            elif path in ("/api/search/frame", "/api/search/clip"):
+                item_id = query.get("item_id", "")
+                if not item_id or len(item_id) > MAX_ITEM_ID:
+                    raise ValueError("item_id is required")
+                began = time.monotonic()
+                if path == "/api/search/frame":
+                    file = tab.frame(
+                        item_id, _query_int(query, "t_ms"), large=query.get("large") == "1"
+                    )
+                    kind = "image/jpeg"
+                else:
+                    file = tab.clip(
+                        item_id, _query_int(query, "in_ms"), _query_int(query, "out_ms")
+                    )
+                    kind = "video/mp4"
+                print(
+                    f"explore: {path.rsplit('/', 1)[1]} {item_id!r} {dict(query)} -> {file.name} "
+                    f"ms={(time.monotonic() - began) * 1000:.0f}",
+                    file=sys.stderr,
+                )
+                self._send_file(file, kind)
+            else:
+                self._json({"error": f"no route {path}"}, HTTPStatus.NOT_FOUND)
+
+        def _send_file(self, file: Path, content_type: str) -> None:
+            try:
+                data = file.read_bytes()
+            except FileNotFoundError:
+                raise NoFrame("the cached cut was evicted; ask again") from None
+            status, first, last = HTTPStatus.OK, 0, len(data) - 1
+            ask = self.headers.get("Range", "")
+            if ask.startswith("bytes=") and "," not in ask:
+                lo, _, hi = ask[6:].partition("-")
+                try:
+                    if lo == "":  # the last `hi` bytes
+                        first = max(0, len(data) - int(hi))
+                    else:
+                        first = int(lo)
+                        last = min(last, int(hi)) if hi else last
+                except ValueError:
+                    first, last = 0, len(data) - 1
+                else:
+                    if first > last:
+                        self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+                        self.send_header("Content-Range", f"bytes */{len(data)}")
+                        self.end_headers()
+                        return
+                    status = HTTPStatus.PARTIAL_CONTENT
+            body = data[first : last + 1]
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Accept-Ranges", "bytes")
+            if status == HTTPStatus.PARTIAL_CONTENT:
+                self.send_header("Content-Range", f"bytes {first}-{last}/{len(data)}")
+            # A cut is named by its title, window and size, so it never changes under its URL.
+            self.send_header("Cache-Control", "public, max-age=604800, immutable")
+            self.end_headers()
+            self.wfile.write(body)
 
         def _json(self, body: dict[str, object], status: HTTPStatus = HTTPStatus.OK) -> None:
             data = json.dumps(body, separators=(",", ":")).encode()
@@ -2527,6 +2678,7 @@ def serve_in_background(
     *,
     plex_url: str = "",
     plex_token: str = "",
+    search: SearchTab | None = None,
 ) -> ThreadingHTTPServer:
     """Start Plex DB-EX on a daemon thread and return its server.
 
@@ -2536,7 +2688,7 @@ def serve_in_background(
     in one request stays in that request's own thread.
     """
     server = make_server(
-        store_path, host, port, saved_path, plex_url=plex_url, plex_token=plex_token
+        store_path, host, port, saved_path, plex_url=plex_url, plex_token=plex_token, search=search
     )
     threading.Thread(target=server.serve_forever, name="explore", daemon=True).start()
     return server

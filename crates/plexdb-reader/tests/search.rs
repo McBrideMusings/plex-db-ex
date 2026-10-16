@@ -301,6 +301,12 @@ fn fixture() -> Fixture {
             model: "other-clip",
         },
     );
+    conn.execute(
+        "INSERT INTO frame_index_state (item_id, part_id, indexed_at, error) \
+         VALUES ('imdb:failed', 2, '2026-10-16T00:00:00+00:00', 'ffmpeg exited 234')",
+        (),
+    )
+    .expect("failed row");
     drop(conn);
     Fixture {
         dir,
@@ -532,6 +538,18 @@ fn indexed_and_pool_count_titles_with_and_without_a_state_row() {
     );
     assert_eq!(nothing.model, "");
     assert_eq!(enc.calls(), 1, "an empty index needs no embedding");
+}
+
+#[test]
+fn a_title_whose_indexing_failed_is_not_indexed_and_mixes_no_model() {
+    let fx = fixture();
+    let enc = FakeEncoder::start();
+    let reader = fx.reader(&enc.url);
+    let found = reader
+        .search_shots(&search(&["imdb:a", "imdb:failed"], "cat"))
+        .expect("a failed title is skipped, not refused");
+    assert_eq!((found.pool, found.indexed), (2, 1));
+    assert_eq!(found.model, MODEL);
 }
 
 #[test]

@@ -1620,7 +1620,7 @@ replacement, weighted by `p`, from a SplitMix64 generator seeded by `seed`: the 
 and seed give the same picks, in pick order. Without a temperature `draw` returns the top `n`.
 
 **Counts.** `pool` is the number of distinct item_ids searched. `indexed` is how many of them have a
-`frame_index_state` row. `model` is the one model those rows record; a pool whose rows record two
+`frame_index_state` row that recorded a `model`; a title whose every attempt failed has none and is searched as if absent, while one that failed a re-index keeps its earlier rows and is still searched. `model` is the one model those rows record; a pool whose rows record two
 models fails with `MixedModels`, and a pool with none returns no Shots, `model` empty, and calls
 no encoder.
 

@@ -68,6 +68,48 @@ graph's levels and the `tag` in the URL:
 
 On the title map, a click on empty canvas unpins the pinned card, as Esc already did.
 
+## Search
+
+The Search tab finds Shots in the Frame index by what they look like. It is look-only: it saves,
+accepts and labels nothing. It needs `PLEXDB_FRAMES_DIR`, an encoder (`PLEXDB_FRAME_ENCODER_URL`,
+`PLEXDB_FRAME_MODEL`), the `plexdb-read` binary (`PLEXDB_READ_BIN`), ffmpeg and ffprobe, and `PLEX_URL`
+with `PLEX_TOKEN`; `/api/search/status` reports each one found or missing with its reason, and the
+page shows a banner for every one that is missing.
+
+- **Pool.** The side panel holds the titles a search covers. The add box offers titles and
+  collections (a collection adds its members). Each title shows `indexed`, `not indexed`, `queued` or
+  `failed`. A search whose pool has unindexed titles shows "Only N of M titles in this pool are
+  indexed" and a "Queue the other M−N" link, which writes `frame_queue` rows through
+  `frames.queue`, as `plexdb frames queue` does (`queued_by` is `explore`). The pool lives in the
+  browser's localStorage.
+- **Token boxes.** About 150 ms after typing stops, the page posts the text to
+  `/api/search/tokenize`. The server tokenizes it with the Hugging Face tokenizer for
+  `PLEXDB_FRAME_MODEL` and returns each token with its character offsets; the page draws one box per
+  token, so a word the tokenizer splits is two adjacent boxes. The counter reads `N / 75`. Past 75 it
+  turns red, the tokens past the limit are struck through, and the search cuts the text after the 75th
+  token before the encoder sees it, so the "not searched" line is true.
+- **Tokenizer file.** `PLEXDB_FRAME_TOKENIZER` names a `tokenizer.json`. Unset, the server keeps a
+  copy named `tokenizer-<model>.json` in the explorer's data directory (`/explore-data` in the
+  container), fetched once from the Hugging Face hub by model name. That first fetch is the one
+  outbound call the tab makes besides Plex and the encoder; the tab says so in its banner when it
+  fails.
+- **Advanced.** Closed by default. Open, it holds one negative field (each comma-separated part is its
+  own negative, with its own boxes and count), a negative-weight slider, a temperature slider (0 is
+  off) and a draw control (count, seed, Draw). Closed while any is set, its summary names them, for
+  example `3 negatives, weight 0.5 · temperature 0.010 · draw 1, seed 42`.
+- **Results.** `POST /api/search/run` runs `plexdb-read search` (`plexdb/shot_search.py` builds its
+  command line, the same code `plexdb search` uses) and returns the top 100 Shots by score, with each
+  title, timecodes, three frames, phrase similarity, the strongest negative and its similarity, and
+  with a temperature each Shot's odds. Draw runs the reader's draw a second time with the same
+  inputs and marks the drawn rows, so the picks equal `plexdb search … --draw N --seed S`.
+- **Frames and Play.** The server cuts a frame with ffmpeg from the Plex part URL
+  (`/api/search/frame`), and a Shot's in–out window as a 640 px wide H.264 MP4 without audio
+  (`/api/search/clip`, with range requests). Both are cached under `<explore data>/clips/`, which
+  holds at most 2 GB: past it the least recently used file goes first. The browser asks only the
+  explorer's own server; it never reaches Plex, the encoder or a tokenizer (ADR-0017).
+- **Log.** Each search, queue, frame and clip writes one `explore:` line on stderr with the raw
+  values, and `admin logs live` shows them in the container.
+
 ## Demo and clip modes
 
 Two URL modes play a scripted tour of the movie title map instead of the interactive page. Both

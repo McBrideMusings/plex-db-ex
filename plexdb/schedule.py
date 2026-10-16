@@ -130,7 +130,8 @@ def _start_explorer() -> None:
     """
     from .config import Config
     from .decisions import EXPLORE_SAVED_PATH_VAR
-    from .explore import EXPLORE_PORT_VAR, serve_in_background
+    from .explore import EXPLORE_PORT_VAR, data_dir, serve_in_background
+    from .explore_search import SearchTab
 
     raw = os.environ.get(EXPLORE_PORT_VAR, "").strip()
     if not raw:
@@ -153,6 +154,7 @@ def _start_explorer() -> None:
         saved_path,
         plex_url=cfg.plex_url,
         plex_token=cfg.plex_token,
+        search=SearchTab(cfg, snapshot, data_dir(snapshot, saved_path)),
     )
     where = saved_path or snapshot.with_name("explore-queries.json")
     print(

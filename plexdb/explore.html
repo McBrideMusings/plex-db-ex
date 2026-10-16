@@ -421,6 +421,79 @@
   #democap i { width: 12px; height: 12px; border-radius: 50%; align-self: center; background: var(--centre); }
   #democap span { font-size: 15px; font-weight: 450; color: var(--muted); font-variant-numeric: tabular-nums; }
   #democap:empty { display: none; }
+  #searchwrap { display: grid; grid-template-columns: 230px minmax(0, 1fr); align-items: stretch; min-height: calc(100vh - 60px); }
+  @media (max-width: 900px) { #searchwrap { grid-template-columns: 1fr; } #spool { border-right: 0 !important; border-bottom: 1px solid var(--line); } }
+  #spool { border-right: 1px solid var(--line); background: var(--panel); padding: 14px 12px 20px; min-height: 70vh; min-width: 0; }
+  #spool h2, #smain h2 { font-size: 11px; margin: 0 0 8px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  #spool .searchbox input[type="search"] { width: 100%; }
+  #spool .sugg { min-width: 100%; }
+  #spoollist { list-style: none; margin: 10px 0 0; padding: 0; }
+  #spoollist li { display: flex; gap: 6px; align-items: baseline; justify-content: space-between; padding: 3px 0; font-size: 13px; }
+  #spoollist .name { min-width: 0; overflow-wrap: anywhere; }
+  #spoollist .st { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  #spoollist .st.none, #spoollist .st.failed { color: var(--noise); }
+  #spoollist button.x { border: 0; background: transparent; color: var(--muted); cursor: pointer; font: inherit; padding: 0 2px; }
+  #spoollist button.x:hover { color: var(--noise); }
+  #smain { padding: 14px 20px 24px; min-width: 0; }
+  .sbanner { border: 1px solid var(--line); background: var(--chip); border-radius: 6px; padding: 7px 12px; margin-bottom: 10px; }
+  .sbanner.noise { border-color: var(--noise); background: var(--noise-bg); color: var(--noise); }
+  .sbanner button.link { border: 0; background: transparent; color: var(--accent); cursor: pointer; font: inherit; padding: 0; text-decoration: underline; }
+  .scard { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  .scard label.fl { display: block; color: var(--muted); font-size: 12px; margin: 0 0 4px; }
+  .scard textarea { display: block; width: 100%; font: inherit; line-height: 1.4; color: var(--ink); background: var(--panel); border: 1px solid var(--line);
+                    border-radius: 6px; padding: 7px 8px; resize: vertical; }
+  .scard textarea:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+  .tokbox { position: relative; min-height: 34px; margin-top: 6px; padding: 5px 64px 5px 6px; border: 1px solid var(--line); border-radius: 6px;
+            background: var(--bg); display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+  .tokbox:empty::before { content: attr(data-empty); color: var(--muted); font-size: 12px; }
+  .tok { border: 1px solid var(--edge); background: var(--panel); border-radius: 4px; padding: 0 6px; line-height: 22px; }
+  .tok.over { opacity: 0.45; text-decoration: line-through; }
+  .tokcomma { color: var(--muted); }
+  .tokcount { position: absolute; right: 8px; bottom: 5px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .tokcount.over { color: var(--noise); font-weight: 600; }
+  .toknote { color: var(--noise); font-size: 12px; margin: 4px 0 0; }
+  .toknote:empty { display: none; }
+  .negsum { color: var(--muted); font-size: 12px; margin: 4px 0 0; }
+  .negsum strong { color: var(--ink); font-weight: 550; }
+  .negsum:empty { display: none; }
+  button.link { border: 0; background: transparent; color: var(--accent); cursor: pointer; font: inherit; padding: 0; }
+  #sadvsum { color: var(--muted); font-size: 12px; margin-left: 8px; }
+  #sadv { margin-top: 10px; }
+  #sadv .ctl { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; margin-top: 10px; }
+  #sadv .ctl label { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); }
+  #sadv input[type="range"] { width: 8em; }
+  #sadv output { color: var(--ink); font-variant-numeric: tabular-nums; min-width: 3.2em; }
+  .sbar { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+  button.outline { font: inherit; color: var(--accent); background: var(--panel); border: 1px solid var(--accent); border-radius: 6px; padding: 4px 12px; cursor: pointer; }
+  button.outline:disabled { opacity: 0.6; cursor: progress; }
+  #smeta { color: var(--muted); font-size: 12px; margin: 12px 0 6px; }
+  #sempty { color: var(--muted); padding: 24px 0; }
+  #srows { list-style: none; margin: 0; padding: 0; }
+  #srows > li { display: grid; grid-template-columns: 2.2em 302px minmax(0, 1fr) 7em; gap: 10px; align-items: center; padding: 8px 6px;
+                border-bottom: 1px solid var(--line); border-radius: 6px; }
+  #srows > li.drawn { outline: 2px solid var(--accent); outline-offset: -2px; }
+  #srows .rank { color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; }
+  #srows .thumbs { display: flex; gap: 4px; }
+  #srows .thumbs button { padding: 0; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; width: 98px; height: 56px; cursor: zoom-in; background: var(--chip); }
+  #srows .thumbs img { display: block; width: 100%; height: 100%; object-fit: cover; }
+  #srows .ttl { font-weight: 600; }
+  #srows .sub { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  #srows .sub .neg { color: var(--noise); }
+  #srows .acts { display: flex; gap: 6px; margin-top: 4px; }
+  #srows .acts button { padding: 1px 10px; }
+  #srows .odds { text-align: right; font-variant-numeric: tabular-nums; }
+  #srows .odds .bar { height: 6px; background: var(--chip); border-radius: 3px; margin-top: 4px; overflow: hidden; }
+  #srows .odds .bar i { display: block; height: 100%; background: var(--accent); }
+  #srows .pill { display: inline-block; border-radius: 5px; padding: 0 6px; margin-left: 6px; font-size: 11px; background: var(--accent); color: var(--accent-ink); font-weight: 400; }
+  #srows .clip { grid-column: 1 / -1; }
+  #srows video { display: block; max-width: min(640px, 100%); border-radius: 6px; background: #000; }
+  #lightbox { position: fixed; inset: 0; z-index: 50; background: rgba(0,0,0,.82); display: flex; flex-direction: column;
+              align-items: center; justify-content: center; gap: 10px; padding: 20px; color: #f2f2ee; }
+  #lightbox[hidden] { display: none; }
+  #lightbox img { max-width: 92vw; max-height: 74vh; border-radius: 4px; background: #111; }
+  #lightbox .cap { font-variant-numeric: tabular-nums; }
+  #lightbox .nav { display: flex; gap: 10px; }
+  #lightbox button { font: inherit; padding: 4px 14px; border-radius: 6px; border: 1px solid #888; background: transparent; color: #f2f2ee; cursor: pointer; }
 </style>
 </head>
 <body>
@@ -432,6 +505,7 @@
     <button type="button" data-tab="query" aria-pressed="false">Query</button>
     <button type="button" data-tab="merges" aria-pressed="false">Merges</button>
     <button type="button" data-tab="roles" aria-pressed="false">Roles</button>
+    <button type="button" data-tab="search" aria-pressed="false">Search</button>
     <button type="button" data-tab="doctor" aria-pressed="false">Doctor</button>
   </div>
   <div class="seg tagsonly" role="group" aria-label="Title type">
@@ -547,6 +621,53 @@
     <ul id="rrows"></ul>
   </section>
 </div>
+<section id="searchwrap" hidden>
+  <aside id="spool">
+    <h2>Pool</h2>
+    <div class="searchbox">
+      <input type="search" id="spoolq" placeholder="add a title or collection…" autocomplete="off" aria-label="Add a title or collection to the pool"
+             role="combobox" aria-expanded="false" aria-controls="spoolsugg">
+      <ul class="sugg" id="spoolsugg" role="listbox" hidden></ul>
+    </div>
+    <ul id="spoollist"><li class="empty">No titles yet.</li></ul>
+  </aside>
+  <div id="smain">
+    <div id="sbanners"></div>
+    <div class="scard">
+      <label class="fl" for="sphrase">Describe the shot</label>
+      <textarea id="sphrase" rows="2" placeholder="describe a shot — “car chase at night”" spellcheck="false"></textarea>
+      <div class="tokbox" id="sphrasetok" data-empty="tokens appear here as you type"><span class="tokcount" id="sphrasecount">0 / 75</span></div>
+      <p class="toknote" id="sphrasenote"></p>
+      <div style="margin-top:10px">
+        <button type="button" class="link" id="sadvtoggle" aria-expanded="false" aria-controls="sadv">▶ Advanced</button>
+        <span id="sadvsum"></span>
+      </div>
+      <div id="sadv" hidden>
+        <label class="fl" for="snot">Not (comma-separated — each part is its own negative)</label>
+        <textarea id="snot" rows="1" spellcheck="false"></textarea>
+        <div class="tokbox" id="snottok" data-empty="negatives appear here as you type"><span class="tokcount" id="snotcount"></span></div>
+        <p class="toknote" id="snotnote"></p>
+        <p class="negsum" id="snotsum"></p>
+        <div class="ctl">
+          <label>Negative weight <input type="range" id="sweight" min="0" max="1" step="0.05" value="0.5"><output id="sweightval" for="sweight">0.5</output></label>
+          <label>Temperature <input type="range" id="stemp" min="0" max="0.2" step="0.005" value="0"><output id="stempval" for="stemp">off</output></label>
+          <label>Draw <input type="number" id="sdrawn" min="1" max="100" value="1" aria-label="Shots to draw"></label>
+          <label>seed <input type="number" id="sseed" min="0" value="0" aria-label="Seed"></label>
+          <button type="button" class="outline" id="sdraw">Draw</button>
+        </div>
+      </div>
+      <div class="sbar"><button type="button" class="primary" id="ssearch">Search</button></div>
+    </div>
+    <div id="smeta"></div>
+    <div id="sempty"></div>
+    <ol id="srows"></ol>
+  </div>
+  <div id="lightbox" hidden role="dialog" aria-modal="true" aria-label="Frames of this Shot">
+    <img id="lbimg" alt="">
+    <div class="cap" id="lbcap"></div>
+    <div class="nav"><button type="button" id="lbprev" aria-label="Previous frame">←</button><button type="button" id="lbnext" aria-label="Next frame">→</button><button type="button" id="lbclose">Close</button></div>
+  </div>
+</section>
 <section id="doctorwrap" hidden>
   <h2>Tag doctor</h2>
   <p class="mnote">One title's keywords: a row per merge group, and in each source's column the raw spelling that source sent. A merge you propose goes to merge_decisions.json, the same file the Merges tab writes, and the next sweep applies it.</p>
@@ -655,7 +776,7 @@ function readHash() {
   const p = new URLSearchParams(location.hash.slice(1));
   if (p.get("kind") === "show" || p.get("kind") === "movie") state.kind = p.get("kind");
   if (VIEWS.includes(p.get("view"))) state.view = p.get("view");
-  if (["lists", "query", "merges", "roles", "doctor"].includes(p.get("tab"))) state.tab = p.get("tab");
+  if (["lists", "query", "merges", "roles", "search", "doctor"].includes(p.get("tab"))) state.tab = p.get("tab");
   state.tag = p.get("tag");
   doctor.itemId = p.get("item"); doctor.row = p.get("row");
 }
@@ -2807,6 +2928,320 @@ document.addEventListener("keydown", e => {
   if (state.tab === "lists" && e.key === "Escape" && lst.selected) selectList(null);
 });
 
+// ---- Search tab ----
+// The server tokenizes, searches, cuts frames and clips (ADR-0017): this page only draws what
+// /api/search/* returns and never reaches Plex, the encoder or a tokenizer itself.
+const srch = { ready: false, pool: [], titles: [], seq: 0, timer: 0, last: null, draw: null, lb: null, playing: new Set(), status: null };
+const sEl = id => document.getElementById(id);
+const POOL_KEY = "plexdb-search-pool";
+const pct = p => `${p * 100 < 10 ? (p * 100).toFixed(1) : Math.round(p * 100)}%`;
+const frameUrl = (itemId, t, large) => `/api/search/frame?item_id=${encodeURIComponent(itemId)}&t_ms=${t}${large ? "&large=1" : ""}`;
+
+function sBanner(kind, ...kids) {
+  const box = el("div", { className: "sbanner" + (kind === "noise" ? " noise" : "") }, ...kids);
+  box.dataset.kind = kind;
+  return box;
+}
+function setBanners(list) { sEl("sbanners").replaceChildren(...list); }
+
+async function initSearch() {
+  if (srch.ready) { refreshPool(); return; }
+  srch.ready = true;
+  try { srch.pool = JSON.parse(localStorage.getItem(POOL_KEY) || "[]").filter(x => typeof x === "string"); } catch { srch.pool = []; }
+  try { srch.status = await getJSON("/api/search/status"); } catch (err) { srch.status = { ready: false, problems: { server: err.message }, movies: 0, indexed: 0 }; }
+  paintSearchStatus();
+  await refreshPool();
+  paintEmpty();
+  scheduleTokens(0);
+}
+
+function paintSearchStatus() {
+  const banners = [];
+  for (const [what, why] of Object.entries(srch.status.problems || {})) {
+    banners.push(sBanner("noise", `Search needs ${what}: ${why}`));
+  }
+  setBanners(banners);
+}
+
+function paintEmpty() {
+  const box = sEl("sempty");
+  if (srch.last) { box.textContent = ""; return; }
+  if (!srch.pool.length) {
+    box.replaceChildren(el("p", {}, "Add titles to the pool, then describe a shot."),
+      el("p", { className: "mnote" }, `${fmt(srch.status.movies)} movies · ${fmt(srch.status.indexed)} indexed so far`));
+  } else {
+    box.replaceChildren(el("p", {}, "Describe a shot, then press Search."));
+  }
+}
+
+// ---- the pool ----
+async function refreshPool() {
+  if (!srch.pool.length) { srch.titles = []; paintPool(); return; }
+  try {
+    const out = await sendJSON("POST", "/api/search/pool", { item_ids: srch.pool });
+    srch.titles = out.titles;
+    srch.pool = srch.pool.filter(id => !out.unknown.includes(id));
+  } catch (err) { setBanners([sBanner("noise", err.message)]); return; }
+  persistPool(); paintPool();
+}
+function persistPool() { try { localStorage.setItem(POOL_KEY, JSON.stringify(srch.pool)); } catch {} }
+function paintPool() {
+  const list = sEl("spoollist");
+  if (!srch.titles.length) { list.replaceChildren(el("li", { className: "empty" }, "No titles yet.")); return; }
+  list.replaceChildren(...srch.titles.map(t => {
+    const label = { indexed: "indexed", none: "not indexed", queued: "queued", failed: "failed" }[t.state];
+    const x = el("button", { type: "button", className: "x", title: "Remove from the pool", ariaLabel: `Remove ${t.title}` }, "×");
+    x.addEventListener("click", () => { srch.pool = srch.pool.filter(id => id !== t.item_id); refreshPool(); });
+    return el("li", {}, el("span", { className: "name" }, t.year ? `${t.title} (${t.year})` : t.title),
+      el("span", { className: "st " + t.state }, label), x);
+  }));
+}
+function addToPool(ids) {
+  for (const id of ids) if (!srch.pool.includes(id)) srch.pool.push(id);
+  return refreshPool();
+}
+
+let suggTimer = 0;
+const poolQ = sEl("spoolq"), poolSugg = sEl("spoolsugg");
+poolQ.addEventListener("input", () => {
+  clearTimeout(suggTimer);
+  suggTimer = setTimeout(async () => {
+    const q = poolQ.value.trim();
+    if (q.length < 2) { poolSugg.hidden = true; return; }
+    let out;
+    try { out = await getJSON(`/api/search/suggest?q=${encodeURIComponent(q)}`); } catch { poolSugg.hidden = true; return; }
+    if (poolQ.value.trim() !== q) return;
+    const items = [];
+    if (out.titles.length) items.push(el("li", { className: "grp" }, "Titles"));
+    for (const t of out.titles) {
+      const li = el("li", { className: "opt", role: "option" }, el("span", {}, t.year ? `${t.title} (${t.year})` : t.title), el("span", { className: "n" }, t.kind));
+      li.addEventListener("mousedown", e => { e.preventDefault(); addToPool([t.item_id]); poolQ.value = ""; poolSugg.hidden = true; });
+      items.push(li);
+    }
+    if (out.collections.length) items.push(el("li", { className: "grp" }, "Collections"));
+    for (const c of out.collections) {
+      const li = el("li", { className: "opt", role: "option" }, el("span", {}, c.name || c.collection_id), el("span", { className: "n" }, `${fmt(c.members)} titles`));
+      li.addEventListener("mousedown", async e => {
+        e.preventDefault(); poolQ.value = ""; poolSugg.hidden = true;
+        try { await addToPool((await getJSON(`/api/search/collection?id=${encodeURIComponent(c.collection_id)}`)).item_ids); }
+        catch (err) { setBanners([sBanner("noise", err.message)]); }
+      });
+      items.push(li);
+    }
+    poolSugg.replaceChildren(...items);
+    poolSugg.hidden = items.length === 0;
+  }, 150);
+});
+poolQ.addEventListener("blur", () => { poolSugg.hidden = true; });
+
+// ---- token boxes ----
+function negativeParts() { return sEl("snot").value.split(",").map(s => s.trim()).filter(Boolean); }
+function scheduleTokens(delay = 150) {
+  clearTimeout(srch.timer);
+  srch.timer = setTimeout(paintTokens, delay);
+}
+async function paintTokens() {
+  const mine = ++srch.seq;
+  const parts = negativeParts();
+  let out;
+  try { out = await sendJSON("POST", "/api/search/tokenize", { texts: [sEl("sphrase").value, ...parts] }); }
+  catch (err) { if (mine === srch.seq) { sEl("sphrasenote").textContent = err.message; } return; }
+  if (mine !== srch.seq) return;
+  const [phrase, ...negs] = out.fields;
+  fillBox(sEl("sphrasetok"), sEl("sphrasecount"), [phrase], null);
+  const over = phrase.count - out.limit;
+  sEl("sphrasenote").textContent = over > 0 ? `${over} token${over === 1 ? "" : "s"} past the limit — the struck-through part is not searched.` : "";
+  fillBox(sEl("snottok"), sEl("snotcount"), negs, parts);
+  const longest = negs.map((n, i) => [n.count - out.limit, parts[i]]).filter(([n]) => n > 0);
+  sEl("snotnote").textContent = longest.map(([n, p]) => `“${p}”: ${n} token${n === 1 ? "" : "s"} past the limit — the struck-through part is not searched.`).join(" ");
+  const sum = sEl("snotsum");
+  if (negs.length) {
+    sum.replaceChildren(`${negs.length} negative${negs.length === 1 ? "" : "s"}: `,
+      ...negs.flatMap((n, i) => [i ? " · " : "", el("strong", {}, parts[i]), ` ${n.count} token${n.count === 1 ? "" : "s"}`]),
+      ` — each up to ${out.limit}`);
+  } else sum.textContent = "";
+  paintAdvSummary();
+}
+function fillBox(box, counter, fields, parts) {
+  const kids = [];
+  fields.forEach((f, i) => {
+    if (i) kids.push(el("span", { className: "tokcomma" }, ","));
+    for (const t of f.tokens) kids.push(el("span", { className: "tok" + (t.over ? " over" : "") }, t.text));
+  });
+  counter.className = "tokcount" + (fields.some(f => f.count > f.limit) ? " over" : "");
+  counter.textContent = parts === null ? `${fields[0].count} / ${fields[0].limit}` : fields.map(f => f.count).join(" · ");
+  box.replaceChildren(...kids, counter);
+}
+sEl("sphrase").addEventListener("input", () => scheduleTokens());
+sEl("snot").addEventListener("input", () => scheduleTokens());
+
+// ---- Advanced ----
+function advancedOpen() { return !sEl("sadv").hidden; }
+function paintAdvSummary() {
+  const parts = [], neg = negativeParts().length;
+  if (neg) parts.push(`${neg} negative${neg === 1 ? "" : "s"}, weight ${(+sEl("sweight").value).toString()}`);
+  if (+sEl("stemp").value > 0) parts.push(`temperature ${(+sEl("stemp").value).toFixed(3)}`);
+  if (srch.draw) parts.push(`draw ${srch.draw.n}, seed ${srch.draw.seed}`);
+  sEl("sadvsum").textContent = advancedOpen() ? "" : parts.join(" · ");
+}
+sEl("sadvtoggle").addEventListener("click", () => {
+  const open = !advancedOpen();
+  sEl("sadv").hidden = !open;
+  sEl("sadvtoggle").setAttribute("aria-expanded", String(open));
+  sEl("sadvtoggle").textContent = (open ? "▼" : "▶") + " Advanced";
+  paintAdvSummary();
+});
+sEl("sweight").addEventListener("input", () => { sEl("sweightval").textContent = (+sEl("sweight").value).toString(); paintAdvSummary(); });
+sEl("stemp").addEventListener("input", () => {
+  const t = +sEl("stemp").value;
+  sEl("stempval").textContent = t > 0 ? t.toFixed(3) : "off";
+  paintAdvSummary();
+});
+
+// ---- searching ----
+async function runSearch(draw) {
+  if (!srch.pool.length) { setBanners([sBanner("", "Add titles to the pool first.")]); return; }
+  const phrase = sEl("sphrase").value.trim();
+  if (!phrase) { setBanners([sBanner("", "Describe a shot first.")]); return; }
+  srch.draw = draw;
+  const body = { phrase, pool: srch.pool, negatives: negativeParts(), weight: +sEl("sweight").value };
+  if (+sEl("stemp").value > 0) body.temperature = +sEl("stemp").value;
+  if (draw) body.draw = draw;
+  for (const b of [sEl("ssearch"), sEl("sdraw")]) b.disabled = true;
+  sEl("smeta").textContent = "Searching…";
+  try {
+    srch.last = await sendSearch(body);
+  } catch (err) {
+    srch.last = null; srch.draw = null;
+    sEl("smeta").textContent = ""; sEl("srows").replaceChildren();
+    const down = err.encoderDown;
+    setBanners([sBanner("noise", down
+      ? `The encoder at ${down.url} refused ${down.phrases.map(p => `“${p}”`).join(", ")} (${down.reason}). Phrases searched before still work; a new one needs the encoder.`
+      : err.message)]);
+    paintEmpty(); return;
+  } finally { for (const b of [sEl("ssearch"), sEl("sdraw")]) b.disabled = false; }
+  paintAdvSummary();
+  paintResults();
+  refreshPool();
+}
+// sendJSON throws only a message; the encoder-down banner needs the reply body, so this reads it itself.
+async function sendSearch(body) {
+  const res = await fetch("/api/search/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const out = await res.json();
+  if (!res.ok) { const e = new Error(out.error || res.statusText); e.encoderDown = out.encoder_down; throw e; }
+  return out;
+}
+sEl("ssearch").addEventListener("click", () => runSearch(null));
+sEl("sdraw").addEventListener("click", () => runSearch({ n: Math.max(1, +sEl("sdrawn").value || 1), seed: Math.max(0, +sEl("sseed").value || 0) }));
+sEl("sphrase").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); runSearch(null); } });
+
+function paintResults() {
+  const r = srch.last;
+  paintEmpty();
+  const banners = [];
+  const missing = r.pool - r.indexed;
+  if (missing > 0) {
+    const queue = el("button", { type: "button", className: "link" }, `Queue the other ${missing}`);
+    queue.addEventListener("click", async () => {
+      queue.disabled = true;
+      try {
+        const out = await sendJSON("POST", "/api/search/queue", { item_ids: srch.pool });
+        queue.replaceWith(`Queued ${out.queued}; ${out.waiting} waiting for the harvester.`);
+        refreshPool();
+      } catch (err) { queue.disabled = false; setBanners([sBanner("noise", err.message)]); }
+    });
+    banners.push(sBanner("", `Only ${r.indexed} of ${r.pool} titles in this pool are indexed. Results cover those ${r.indexed}. `, queue));
+  }
+  setBanners(banners);
+  const formula = r.searched.negatives.length ? `score = phrase similarity − ${r.weight} × strongest negative similarity` : "score = phrase similarity";
+  let meta = `${fmt(r.total)} shot${r.total === 1 ? "" : "s"} · ${r.indexed} of ${r.pool} titles indexed · ${r.model || "no model"} · ${formula}`;
+  if (r.temperature) meta += ` · odds = exp(score / ${r.temperature.toFixed(3)}), shares of 100%`;
+  if (r.total > r.shots.filter(s => s.rank <= 100).length) meta += " · top 100 shown";
+  if (r.draw) {
+    const picks = r.shots.filter(s => s.drawn).sort((a, b) => a.drawn - b.drawn).map(s => `#${s.rank}`);
+    meta += ` · Seed ${r.draw.seed} drew ${picks.join(", ")}. etv-station gets the same pick for this phrase, these settings and seed.`;
+  }
+  sEl("smeta").textContent = meta;
+  sEl("srows").replaceChildren(...r.shots.map(rowFor));
+  if (!r.shots.length) sEl("sempty").textContent = r.indexed ? "No shots to rank." : "None of the pool's titles are indexed yet.";
+}
+
+function rowFor(s) {
+  const r = srch.last, key = `${s.item_id}|${s.in_ms}`;
+  const thumbs = el("div", { className: "thumbs" }, ...s.thumbs.map((t, i) => {
+    const b = el("button", { type: "button", ariaLabel: `Open frame ${i + 1}` },
+      el("img", { loading: "lazy", decoding: "async", alt: "", src: frameUrl(s.item_id, t, false) }));
+    b.querySelector("img").addEventListener("error", e => e.target.remove(), { once: true });
+    b.addEventListener("click", () => openLightbox(s, s.frames.findIndex(f => f.t_ms === t)));
+    return b;
+  }));
+  const tuned = r.searched.negatives.length > 0;
+  const sub = [`score ${s.score.toFixed(3)}`];
+  if (tuned) {
+    sub.push(` · phrase ${s.phrase_sim.toFixed(3)} · `);
+    if (s.strongest_negative) sub.push(el("span", { className: "neg" }, `strongest negative ${s.strongest_negative.sim.toFixed(3)} ${s.strongest_negative.phrase}`));
+  }
+  const play = el("button", { type: "button", className: "plain" }, srch.playing.has(key) ? "Stop" : "Play");
+  const frames = el("button", { type: "button", className: "plain" }, "Frames");
+  frames.addEventListener("click", () => openLightbox(s, 0));
+  const title = el("div", { className: "ttl" }, s.year ? `${s.title} (${s.year})` : s.title);
+  if (s.drawn) title.append(el("span", { className: "pill" }, `drawn${r.draw.n > 1 ? " #" + s.drawn : ""}`));
+  const odds = el("div", { className: "odds" }, s.p == null ? "—" : pct(s.p));
+  if (s.p != null) odds.append(el("div", { className: "bar" }, Object.assign(el("i"), { style: `width:${Math.max(2, s.p * 100)}%` })));
+  const li = el("li", { className: s.drawn ? "drawn" : "" },
+    el("span", { className: "rank" }, String(s.rank)), thumbs,
+    el("div", {}, title, el("div", { className: "sub" }, `${s.in} ~ ${s.out} · ${s.seconds} s`), el("div", { className: "sub" }, ...sub),
+      el("div", { className: "acts" }, frames, play)),
+    odds);
+  play.addEventListener("click", () => togglePlay(li, play, s, key));
+  if (srch.playing.has(key)) addClip(li, s);
+  return li;
+}
+function addClip(li, s) {
+  const src = `/api/search/clip?item_id=${encodeURIComponent(s.item_id)}&in_ms=${s.in_ms}&out_ms=${s.out_ms}`;
+  const video = el("video", { loop: true, muted: true, autoplay: true, controls: true, playsInline: true, src });
+  video.muted = true;
+  const note = el("div", { className: "sub" }, "Cutting the clip…");
+  video.addEventListener("loadeddata", () => note.remove(), { once: true });
+  video.addEventListener("error", () => { note.textContent = "The clip could not be cut — see the server log."; note.className = "sub neg"; video.remove(); }, { once: true });
+  li.append(el("div", { className: "clip" }, note, video));
+}
+function togglePlay(li, button, s, key) {
+  if (srch.playing.has(key)) { srch.playing.delete(key); li.querySelector(".clip")?.remove(); button.textContent = "Play"; return; }
+  srch.playing.add(key); button.textContent = "Stop"; addClip(li, s);
+}
+
+// ---- the lightbox ----
+function openLightbox(shot, index) {
+  srch.lb = { shot, index: Math.max(0, index) };
+  sEl("lightbox").hidden = false;
+  paintLightbox();
+  sEl("lbclose").focus();
+}
+function closeLightbox() { srch.lb = null; sEl("lightbox").hidden = true; sEl("lbimg").removeAttribute("src"); }
+function stepLightbox(by) {
+  if (!srch.lb) return;
+  const n = srch.lb.shot.frames.length;
+  srch.lb.index = (srch.lb.index + by + n) % n;
+  paintLightbox();
+}
+function paintLightbox() {
+  const { shot, index } = srch.lb, f = shot.frames[index];
+  sEl("lbimg").src = frameUrl(shot.item_id, f.t_ms, true);
+  sEl("lbimg").alt = `${shot.title} at ${f.t_ms} ms`;
+  sEl("lbcap").textContent = `${shot.title} · frame ${index + 1} of ${shot.frames.length} · ${(f.t_ms / 1000).toFixed(1)} s · phrase similarity ${f.sim.toFixed(3)}`;
+}
+sEl("lbprev").addEventListener("click", () => stepLightbox(-1));
+sEl("lbnext").addEventListener("click", () => stepLightbox(1));
+sEl("lbclose").addEventListener("click", closeLightbox);
+sEl("lightbox").addEventListener("click", e => { if (e.target === sEl("lightbox")) closeLightbox(); });
+document.addEventListener("keydown", e => {
+  if (!srch.lb) return;
+  if (e.key === "Escape") closeLightbox();
+  else if (e.key === "ArrowLeft") { e.preventDefault(); stepLightbox(-1); }
+  else if (e.key === "ArrowRight") { e.preventDefault(); stepLightbox(1); }
+});
+
 // ---- Query tab ----
 // The server holds the guards (read-only, one statement, 5 s, 500 rows). Saved queries live in a
 // JSON file beside the store, so they follow the server rather than this browser.
@@ -2822,11 +3257,12 @@ function setTab(tab) {
   qEl("querywrap").hidden = tab !== "query";
   qEl("mergewrap").hidden = tab !== "merges";
   qEl("rolewrap").hidden = tab !== "roles";
+  qEl("searchwrap").hidden = tab !== "search";
   qEl("doctorwrap").hidden = tab !== "doctor";
   if (tab === "tags") { document.getElementById("error").hidden = !document.getElementById("error").textContent; setView(state.view); }
   else {
     document.body.classList.remove("shell"); document.getElementById("error").hidden = true; writeHash();
-    if (tab === "lists") initLists(); else if (tab === "query") initQuery(); else if (tab === "merges") initMerges(); else if (tab === "roles") initRoles(); else initDoctor();
+    if (tab === "lists") initLists(); else if (tab === "query") initQuery(); else if (tab === "merges") initMerges(); else if (tab === "roles") initRoles(); else if (tab === "search") initSearch(); else initDoctor();
   }
 }
 

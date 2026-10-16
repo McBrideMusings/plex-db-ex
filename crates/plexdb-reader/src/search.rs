@@ -47,7 +47,7 @@ pub struct Search<'a> {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ShotSearch {
     pub shots: Vec<ShotHit>,
-    /// How many pool titles have a `frame_index_state` row.
+    /// How many pool titles have a `frame_index_state` row that recorded a model.
     pub indexed: usize,
     /// How many distinct titles the pool names.
     pub pool: usize,
@@ -242,7 +242,9 @@ impl Reader {
             .collect())
     }
 
-    /// The pool's `frame_index_state` rows, in `item_id` order.
+    /// The pool's `frame_index_state` rows that recorded a model, in `item_id` order: a
+    /// title whose every attempt failed holds no model and no vectors, so it is not indexed.
+    /// A title that failed a re-index keeps its earlier rows and is still searched.
     fn index_rows(&self, pool: &BTreeSet<&str>) -> Result<Vec<IndexRow>, ReaderError> {
         let ids: Vec<&str> = pool.iter().copied().collect();
         let max_vars = self
@@ -254,7 +256,8 @@ impl Reader {
             let placeholders = vec!["?"; chunk.len()].join(",");
             let mut stmt = self.conn.prepare(&format!(
                 "SELECT item_id, model, model_version, dims, duration_ms \
-                 FROM frames.frame_index_state WHERE item_id IN ({placeholders}) ORDER BY item_id"
+                 FROM frames.frame_index_state \
+                 WHERE item_id IN ({placeholders}) AND model IS NOT NULL ORDER BY item_id"
             ))?;
             let found = stmt
                 .query_map(params_from_iter(chunk.iter()), |row| {
