@@ -1495,8 +1495,9 @@ now and `--limit N` stops after N titles. It writes `frames.db` alone.
   movies before episodes, newest Plex `addedAt` first; then titles whose `file_hash` differs from
   the stored one, least recently indexed first. A failed title waits for a new `file_hash` or a
   new queue row. A title with several Plex copies uses the newest copy's first part.
-- **Reading.** `ffmpeg` reads `{PLEX_URL}/library/parts/<part_id>/file` with the token in an
-  `X-Plex-Token` header. `file_hash` is the sha256 of the part's size, the `Last-Modified` header,
+- **Reading.** `ffmpeg` and `ffprobe` read `{PLEX_URL}/library/parts/<part_id>/file` through a
+  loopback relay inside the harvester that adds the `X-Plex-Token` header, so the token is in no
+  command line and no error message. `file_hash` is the sha256 of the part's size, the `Last-Modified` header,
   and the first MiB. `bytes` is the part's size.
 - **Cuts.** `scdet` (threshold 10) writes `cuts` rows with `source = 'scdet'` and its score;
   `ffprobe` chapter marks write `source = 'chapter'` with a NULL score.
