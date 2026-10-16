@@ -250,3 +250,69 @@ def test_prune_deletes_every_row_of_a_title_no_longer_in_items_and_keeps_the_res
     assert main(["prune-frames"]) == 1, "an empty items table is not every title removed"
     with frames.open_frames(env / "frames.db") as conn:
         assert conn.execute("SELECT count(*) FROM frame_vec").fetchone()[0] == 2
+
+
+def test_prune_deletes_vectors_of_a_title_with_no_state_cuts_or_queue_row(
+    env: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    vector = json.dumps([1] * frames.FRAME_DIMS)
+    with frames.open_frames(env / "frames.db") as conn:
+        # 1100 vectors is more than one 1024-vector chunk.
+        for item_id, count in (("imdb:tt1", 3), ("imdb:gone", 1100)):
+            for t_ms in range(count):
+                conn.execute(
+                    "INSERT INTO frame_vec (item_id, t_ms, shot_ix, vec) "
+                    "VALUES (?, ?, 0, vec_int8(?))",
+                    (item_id, t_ms, vector),
+                )
+        conn.commit()
+
+    assert main(["prune-frames"]) == 0
+    assert "pruned 1 title(s)" in capsys.readouterr().out
+
+    with frames.open_frames(env / "frames.db") as conn:
+        held = conn.execute("SELECT item_id, count(*) FROM frame_vec GROUP BY item_id")
+        assert [tuple(row) for row in held] == [("imdb:tt1", 3)]
+        assert conn.execute("SELECT count(*) FROM frame_vec_rowids").fetchone()[0] == 3
+
+
+def test_check_wait_runs_the_frames_quick_check_once_however_many_polls_it_makes(
+    env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from plexdb import store
+    from plexdb.commands import check
+
+    path = env / "frames.db"
+    frames.migrate(path)
+    with sqlite3.connect(path) as conn:
+        conn.execute("UPDATE schema_version SET version = 0")
+
+    checks = 0
+    real = store.quick_check
+
+    def counting(conn: sqlite3.Connection) -> str:
+        nonlocal checks
+        if str(conn.execute("PRAGMA database_list").fetchone()[2]).endswith("frames.db"):
+            checks += 1
+        return real(conn)
+
+    now = 0.0
+
+    def sleep(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    monkeypatch.setattr(store, "quick_check", counting)
+    monkeypatch.setattr(check, "POLL_SECONDS", 5.0)
+    real_await = check.await_current
+    monkeypatch.setattr(
+        check,
+        "await_current",
+        lambda look, wait: real_await(look, wait, sleep=sleep, clock=lambda: now),
+    )
+
+    assert main(["check", "--wait", "30"]) == 1
+    out = capsys.readouterr().out
+    assert out.count("frames.db is behind this build; waiting") >= 5
+    assert checks == 1
+    assert "frames.db FAILED: at v0" in out

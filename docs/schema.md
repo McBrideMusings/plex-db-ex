@@ -1578,6 +1578,8 @@ cosine 0.277 with `a red square` and 0.151 with `a dog in a park`. Both files ar
 `plexdb check` also reads `frames.db` read-only when `PLEXDB_FRAMES_DIR` is set: it runs
 `quick_check` and compares the version with this build's. A damaged file, or one at another
 version, makes the check exit non-zero. A missing file is reported and does not.
+`check --wait` polls the version rows only and runs `frames.db`'s `quick_check` once, on the
+report it prints.
 
 ## Reading the store to build collections
 
