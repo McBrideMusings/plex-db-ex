@@ -10,12 +10,11 @@ what decides whether to deploy at all (issue #59).
 from __future__ import annotations
 
 import argparse
-import dataclasses
 import time
 from collections.abc import Callable
 
 from ..config import Config
-from ..health import STALE_DAYS, FramesHealth, Freshness, Report, inspect, inspect_frames
+from ..health import STALE_DAYS, FramesHealth, Freshness, Report, inspect
 from ..store import outside_migration
 
 NAME = "check"
@@ -184,17 +183,6 @@ def _look(config: Config, *, frames_deep: bool = False) -> Report | None:
         )
 
 
-def _with_frames_check(config: Config, report: Report) -> Report | None:
-    """`report` with `frames.db`'s `quick_check` run once, for the report that
-    is printed. `None` while a migration holds the store."""
-    if report.frames is None or not report.frames.exists:
-        return report
-    with outside_migration(config.store_path) as clear:
-        if not clear:
-            return None
-        return dataclasses.replace(report, frames=inspect_frames(report.frames.path))
-
-
 def await_current(
     look: Callable[[], Report | None],
     wait: float,
@@ -233,7 +221,10 @@ def _cmd_check(args: argparse.Namespace) -> int:
     config = Config.from_env()
     report = await_current(lambda: _look(config), args.wait)
     if report is not None:
-        report = _with_frames_check(config, report)
+        # One full look, taken once the polling is over: the report printed is
+        # a single consistent read, and the only one that runs frames.db's
+        # quick_check.
+        report = _look(config, frames_deep=True)
     if report is None:
         print(f"{config.store_path}: a migration is still running — not read")
         return 1

@@ -1529,9 +1529,7 @@ cosine 0.277 with `a red square` and 0.151 with `a dog in a park`. Both files ar
 `quick_check` and compares the version with this build's. A damaged file, or one at another
 version, makes the check exit non-zero. A missing file is reported and does not.
 `check --wait` polls the version rows only and runs `frames.db`'s `quick_check` once, on the
-report it prints. On a synthetic 10.7 GB file (2 KB blobs, one table, page cache warm from
-building it) `quick_check` took 35.7 s on this machine's SSD; a cold cache on the host's array
-has not been measured.
+report it prints.
 
 ## Reading the store to build collections
 
