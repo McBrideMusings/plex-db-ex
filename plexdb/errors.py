@@ -96,6 +96,16 @@ class EmbeddingError(PlexdbError):
     """The embedding server could not be reached, or returned something unusable."""
 
 
+class EncoderError(PlexdbError):
+    """The Frame encoder refused a request or returned something unusable (ADR-0025)."""
+
+
+class EncoderUnavailable(EncoderError):
+    """The Frame encoder did not answer: the connection was refused or timed out, or it
+    answered 5xx. Every later request would fail the same way, so the harvester stops
+    until its next window rather than recording a failure against each title."""
+
+
 class JevError(PlexdbError):
     """Jev could not be reached, kept answering 429, or returned something unusable."""
 

@@ -1465,11 +1465,65 @@ the directory holds none, so on a fresh directory every count is zero.
 | `frame_hours` | `PLEXDB_FRAME_HOURS` as set — `HH:MM-HH:MM` in the process's TZ, an end earlier than the start running past midnight — or `null` when unset. |
 | `inside_hours` | Whether the current time is inside that window; `false` when it is unset. |
 | `indexing` | The item_id the harvester is indexing now. `null` until the harvester exists. |
-| `encoder_reachable` | Whether the encoder answered. `null` until the encoder client exists. |
+| `encoder_reachable` | Whether `GET {PLEXDB_FRAME_ENCODER_URL}/v1/models` answered 2xx within 10 s; `null` when `PLEXDB_FRAME_ENCODER_URL` is unset. Listing models loads none, so this never waits out a cold start. |
 | `failed` | Every failed title, newest attempt first: its item_id, the error, and when. |
 
 `plexdb frames queue <item_id>` adds a `frame_queue` row and exits non-zero for an item_id not in
 `items`; a title already queued keeps its place.
+
+### The encoder request (ADR-0025)
+
+Every frame and phrase is embedded by `POST {PLEXDB_FRAME_ENCODER_URL}/v1/embeddings` with
+`PLEXDB_FRAME_MODEL` as `model` (`plexdb/frame_encoder.py`). The client waits up to 300 s for an
+answer, so a server holding the request through a cold start is waited out. A refused connection,
+a timeout or a 5xx is `EncoderUnavailable`, naming the URL and the status. Each vector is scaled
+to unit length before it is used.
+
+OpenAI's API defines text input only. This image shape is the one a real Infinity 0.0.77 server
+serving `openai/clip-vit-large-patch14` accepted on 2026-10-16:
+
+```json
+{
+  "model": "openai/clip-vit-large-patch14",
+  "input": ["data:image/jpeg;base64,/9j/4AAQSkZJRg…"],
+  "modality": "image",
+  "encoding_format": "float"
+}
+```
+
+A phrase is the same request with `"modality": "text"` and the phrase itself in `input`. The
+answer is OpenAI's: `data[]` of `{index, embedding}`, 768 floats each.
+
+- **`modality` is required.** Without it, Infinity answers 200 with a 768-wide vector of the data
+  URI read as *text* (cosine 0.206 with the real image vector), so a missing field passes every
+  width check.
+- **Each image is a `data:image/jpeg;base64,` URI.** Bare base64 is a 422.
+
+`plexdb frames probe-encoder` embeds the phrase `a red square`, then a bundled 224 px red square,
+then the phrase again, and prints:
+
+```json
+{
+  "encoder_url": "http://127.0.0.1:7997",
+  "model": "openai/clip-vit-large-patch14",
+  "served_by": "openai/clip-vit-large-patch14",
+  "image": {"dims": 768, "first_byte_ms": 1041, "latency_ms": 1041},
+  "text": {"dims": 768, "first_byte_ms": 45, "latency_ms": 45, "phrase": "a red square"},
+  "cold_start_wait_ms": 11,
+  "frame_dims": 768
+}
+```
+
+`model` is what the request named, and `served_by` is what the answer named. A server holding
+one model can ignore the name: Infinity answered a request for `no-such-model` from
+`openai/clip-vit-large-patch14`. `text` is the second, warm phrase call. `cold_start_wait_ms` is
+the first phrase call's time to first byte minus the second's, floored at 0: the first call pays
+any model load, and the two ask for the same work, so the image's own encode time stays out of
+it. The
+probe exits non-zero when the encoder is unavailable, when the two widths differ, when they are
+not `frame_dims`, or when the answer names a model other than the one requested. It
+writes one `encoder:` line per request on stderr. Against that server the red square scored
+cosine 0.277 with `a red square` and 0.151 with `a dog in a park`. Both files are untouched.
 
 `plexdb check` also reads `frames.db` read-only when `PLEXDB_FRAMES_DIR` is set: it runs
 `quick_check` and compares the version with this build's. A damaged file, or one at another

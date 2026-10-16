@@ -28,7 +28,7 @@ plex-db-ex/
 │   │   ├── fold_role_decisions.py  applies `role_decisions.json` to `keyword_role_decisions`; sweep step 12, right after `fold-merge-decisions`, needs no service
 │   │   ├── fold_name_decisions.py  applies `name_decisions.json` to `keyword_names`; sweep step 13, right after `fold-role-decisions`, needs no service
 │   │   ├── fold_list_decisions.py  applies `list_decisions.json` to `list_decision`; sweep step 14, right after `fold-name-decisions`, needs no service
-│   │   ├── frames.py      `plexdb frames status` (frames.db's coverage per Plex section, size, hours, queue and failures as one JSON object), `plexdb frames queue <item_id>` (refuses an id not in `items`) and `plexdb frames migrate`; in no sweep
+│   │   ├── frames.py      `plexdb frames status` (frames.db's coverage per Plex section, size, hours, queue and failures as one JSON object), `plexdb frames queue <item_id>` (refuses an id not in `items`), `plexdb frames migrate` and `plexdb frames probe-encoder` (one image and one phrase through the encoder: model, widths, latencies, cold-start wait); in no sweep
 │   │   ├── list_decide.py  `plexdb list-decide <url> <decision>`: appends to `list_decisions.json` (the file the Lists tab writes), never the store
 │   │   ├── harvest_mdblist.py
 │   │   ├── harvest_letterboxd_lists.py  the keyless Gated Source for Letterboxd lists a person added; sweep step 61, just after `harvest-mdblist`
@@ -79,6 +79,7 @@ plex-db-ex/
 │   ├── role_review.py     the Plex DB-EX Roles tab's server side: `RoleDecisions` is `role_decisions.json` keyed by (spelling, role), resolved the same way, `require_role` refuses a (keyword, role) with no verdict, and `roles_json` lists up to 200 keywords matching a filter with every source's verdict per role and every decision, the file's pending ones over the table's; Plex DB-EX serves it at `/api/roles`
 │   ├── roles.py           the Jev role judge: every keyword with no `jev` row in `keyword_roles` gets five rows (score and model, or a 400/422 refusal in `error`), written in committed batches of 200 keywords; `fold_role_decisions` applies `role_decisions.json` to `keyword_role_decisions`
 │   ├── embed_client.py    llama-swap embeddings client (`nomic-embed-text`) behind an `Embedder` protocol
+│   ├── frame_encoder.py   the Frame encoder client (ADR-0025): `EncoderClient.embed_images`/`embed_texts` over `/v1/embeddings` with a 300 s timeout, `EncoderUnavailable` on a refused connection or a 5xx, and `reachable` for `frames status`; `probe.jpg` beside it is the image `probe-encoder` sends
 │   ├── jev_client.py      Jev pair judge (`score` and `noul` questions in one request, 429 backoff) behind a `Judge` protocol, and the role judge (one `noul` question per role in one request) behind `RoleJudge`; `judge_all`, the thread fan-out both judges share
 │   ├── tmdb_client.py     read-only TMDB client (keywords, recommendations, similar) behind a TMDbSource protocol
 │   ├── tmdb_common.py     media_type_for / MAX_CONSECUTIVE_FAILURES shared by enrich_tmdb.py and tmdb_edges.py

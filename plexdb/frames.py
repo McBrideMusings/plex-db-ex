@@ -240,9 +240,11 @@ def status(
     path: Path,
     hours: str,
     now: datetime,
+    encoder_reachable: bool | None,
 ) -> dict[str, Any]:
     """What `plexdb frames status` prints. Its shape is documented in
-    docs/schema.md; a key added here goes there too."""
+    docs/schema.md; a key added here goes there too. `encoder_reachable` is
+    `None` when no encoder is configured."""
     indexed = {
         str(row[0])
         for row in frames_conn.execute(
@@ -272,10 +274,9 @@ def status(
         "queued": queued,
         "frame_hours": hours or None,
         "inside_hours": inside_hours(parse_hours(hours), now),
-        # The harvester and the encoder client arrive in later slices; until
-        # then nothing is being indexed and nothing has asked the encoder.
+        # The harvester arrives in a later slice; until then nothing is being indexed.
         "indexing": None,
-        "encoder_reachable": None,
+        "encoder_reachable": encoder_reachable,
         "failed": [
             {"item_id": row["item_id"], "error": row["error"], "at": row["indexed_at"]}
             for row in failed

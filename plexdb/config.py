@@ -113,6 +113,13 @@ class Config:
     #: `PLEXDB_FRAME_HOURS` as written, e.g. `01:00-07:00`, read in the
     #: process's TZ. Empty when unset. `frames.parse_hours` reads it.
     frame_hours: str
+    #: `PLEXDB_FRAME_ENCODER_URL`, an OpenAI-compatible base URL the Frame index
+    #: embeds frames and phrases through (ADR-0025). Empty when unset; the
+    #: encoder is optional, so `frame_encoder.from_config` refuses at the point of
+    #: use and `plexdb frames status` reports `encoder_reachable` as null.
+    frame_encoder_url: str
+    #: `PLEXDB_FRAME_MODEL`, the model name sent in each embeddings request.
+    frame_model: str
 
     @property
     def frames_path(self) -> Path | None:
@@ -150,4 +157,6 @@ class Config:
             backup_dir=backup_dir,
             frames_dir=Path(frames_raw).expanduser() if frames_raw else None,
             frame_hours=os.environ.get("PLEXDB_FRAME_HOURS", "").strip(),
+            frame_encoder_url=os.environ.get("PLEXDB_FRAME_ENCODER_URL", "").strip(),
+            frame_model=os.environ.get("PLEXDB_FRAME_MODEL", "").strip(),
         )

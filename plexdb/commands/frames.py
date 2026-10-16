@@ -4,17 +4,28 @@
 is documented in docs/schema.md. `plexdb frames queue <item_id>` asks the
 harvester to index a title ahead of the backlog. `plexdb frames migrate` brings
 `frames.db` to this build's schema. Each creates `frames.db` and applies its
-migrations when needed, and none writes `plexdb.db`.
+migrations when needed, and none writes `plexdb.db`. `plexdb frames
+probe-encoder` embeds one image and one phrase through the configured encoder
+(ADR-0025) and touches neither file.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import sys
 from datetime import datetime
+from typing import Any
 
 from ..config import Config
-from ..frames import frames_path, migrate_configured, open_frames, queue, status
+from ..frame_encoder import (
+    PROBE_IMAGE,
+    PROBE_PHRASE,
+    Embedded,
+    configured_reachable,
+    from_config,
+)
+from ..frames import FRAME_DIMS, frames_path, migrate_configured, open_frames, queue, status
 from ..store import open_readonly
 
 NAME = "frames"
@@ -26,6 +37,7 @@ ORDER = 75
 def _cmd_status(_args: argparse.Namespace) -> int:
     config = Config.from_env()
     path = frames_path(config)
+    reachable = configured_reachable(config)
     with open_frames(path) as frames_conn, open_readonly(config.store_path) as store_conn:
         report = status(
             frames_conn,
@@ -33,8 +45,58 @@ def _cmd_status(_args: argparse.Namespace) -> int:
             path=path,
             hours=config.frame_hours,
             now=datetime.now().astimezone(),
+            encoder_reachable=reachable,
         )
     print(json.dumps(report, indent=2))
+    return 0
+
+
+def _call(answer: Embedded) -> dict[str, Any]:
+    return {
+        "dims": len(answer.vectors[0]),
+        "first_byte_ms": round(answer.first_byte_s * 1000),
+        "latency_ms": round(answer.total_s * 1000),
+    }
+
+
+def _cmd_probe_encoder(_args: argparse.Namespace) -> int:
+    encoder = from_config(Config.from_env())
+    try:
+        # The phrase goes first and again last: the first call pays any model
+        # load, the last is warm, and the difference is the cold-start wait.
+        cold = encoder.timed_texts([PROBE_PHRASE])
+        image = encoder.timed_images([PROBE_IMAGE.read_bytes()])
+        text = encoder.timed_texts([PROBE_PHRASE])
+    finally:
+        encoder.close()
+    report = {
+        "encoder_url": encoder.base_url,
+        "model": encoder.model,
+        "served_by": image.model,
+        "image": _call(image),
+        "text": {**_call(text), "phrase": PROBE_PHRASE},
+        "cold_start_wait_ms": max(0, round((cold.first_byte_s - text.first_byte_s) * 1000)),
+        "frame_dims": FRAME_DIMS,
+    }
+    print(json.dumps(report, indent=2))
+    widths = {len(image.vectors[0]), len(text.vectors[0])}
+    if len(widths) != 1:
+        print(f"error: image and text vectors differ in width: {sorted(widths)}", file=sys.stderr)
+        return 1
+    if widths != {FRAME_DIMS}:
+        print(
+            f"error: the encoder returns {widths.pop()}-wide vectors; frame_vec holds {FRAME_DIMS}",
+            file=sys.stderr,
+        )
+        return 1
+    # An answer naming no model is not a mismatch; one naming another model is.
+    if {image.model, text.model} - {encoder.model, ""}:
+        print(
+            f"error: asked for {encoder.model}, the encoder answered as "
+            f"{' and '.join(sorted({image.model, text.model}))}",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 
@@ -69,7 +131,8 @@ def _cmd_migrate(_args: argparse.Namespace) -> int:
 
 def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parser = sub.add_parser(
-        NAME, help="report on the Frame index, queue a title for it, or migrate it"
+        NAME,
+        help="report on the Frame index, queue a title for it, migrate it, or probe its encoder",
     )
     actions = parser.add_subparsers(dest="frames_command", required=True)
 
@@ -91,3 +154,10 @@ def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
         "--by", default="cli", help="who asked, stored as queued_by (default: cli)"
     )
     queue_parser.set_defaults(func=_cmd_queue)
+
+    probe_parser = actions.add_parser(
+        "probe-encoder",
+        help="embed one image and one phrase through the configured encoder and print "
+        "the model, vector widths and latencies as JSON",
+    )
+    probe_parser.set_defaults(func=_cmd_probe_encoder)
