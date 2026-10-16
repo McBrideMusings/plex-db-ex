@@ -104,6 +104,8 @@ class EncoderClient:
         self._http.close()
 
     def _post(self, payload: list[str], modality: Modality) -> Embedded:
+        if not payload:
+            return Embedded(vectors=[], model=self.model, first_byte_s=0.0, total_s=0.0)
         url = f"{self.base_url}/v1/embeddings"
         body = {
             "model": self.model,
