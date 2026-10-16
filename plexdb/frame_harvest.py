@@ -30,15 +30,19 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import secrets
 import shutil
 import sqlite3
 import struct
 import subprocess
 import tempfile
+import threading
 import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Protocol
 
@@ -166,9 +170,96 @@ def sample_times(shot_list: Sequence[tuple[int, int]]) -> list[tuple[int, int]]:
 # --- reading through Plex -----------------------------------------------------
 
 
+_PART_PATH = re.compile(r"^/library/parts/\d+/file$")
+_RELAYED_REQUEST_HEADERS = ("Range", "If-Range", "If-Modified-Since", "If-None-Match")
+_RELAYED_RESPONSE_HEADERS = (
+    "Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "Last-Modified", "ETag",
+)  # fmt: skip
+
+
+class _PartRelay:
+    """A loopback HTTP server that forwards a Plex part read with the token attached.
+
+    ffmpeg and ffprobe accept a request header only as a command-line argument, which
+    anyone in the container's process list can read. They read this relay instead, so
+    the token stays in this process and argv carries a loopback URL. The URL's first path
+    segment is a random secret, so another local process cannot borrow the relay.
+    """
+
+    def __init__(self, plex_url: str, token: str) -> None:
+        base = plex_url.rstrip("/")
+        http = httpx.Client(timeout=60.0)
+        self._prefix = f"/{secrets.token_urlsafe(16)}"
+        prefix = self._prefix
+
+        class Handler(BaseHTTPRequestHandler):
+            def _forward(self, method: str) -> None:
+                if not self.path.startswith(prefix) or not _PART_PATH.match(
+                    self.path[len(prefix) :]
+                ):
+                    self.send_error(404)
+                    return
+                path = self.path[len(prefix) :]
+                headers = {"X-Plex-Token": token, "Accept-Encoding": "identity"}
+                for name in _RELAYED_REQUEST_HEADERS:
+                    if name in self.headers:
+                        headers[name] = self.headers[name]
+                started = False
+                try:
+                    with http.stream(method, base + path, headers=headers) as resp:
+                        if "Content-Length" not in resp.headers:
+                            self.close_connection = True
+                        started = True
+                        self.send_response(resp.status_code)
+                        for name in _RELAYED_RESPONSE_HEADERS:
+                            if name in resp.headers:
+                                self.send_header(name, resp.headers[name])
+                        self.end_headers()
+                        if method == "GET":
+                            for chunk in resp.iter_raw():
+                                self.wfile.write(chunk)
+                except httpx.HTTPError:
+                    if started:
+                        self.close_connection = True
+                    else:
+                        self.send_error(502)
+                except OSError:
+                    pass  # the reader closed the connection mid-body
+
+            def do_GET(self) -> None:  # noqa: N802
+                self._forward("GET")
+
+            def do_HEAD(self) -> None:  # noqa: N802
+                self._forward("HEAD")
+
+            def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+                pass
+
+        Handler.protocol_version = "HTTP/1.1"
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self._server.daemon_threads = True
+        threading.Thread(target=self._server.serve_forever, daemon=True).start()
+
+    @property
+    def base(self) -> str:
+        return f"http://127.0.0.1:{self._server.server_address[1]}{self._prefix}"
+
+
+_relays: dict[tuple[str, str], _PartRelay] = {}
+_relays_lock = threading.Lock()
+
+
+def _relay_for(plex_url: str, token: str) -> _PartRelay:
+    with _relays_lock:
+        key = (plex_url.rstrip("/"), token)
+        if key not in _relays:
+            _relays[key] = _PartRelay(plex_url, token)
+        return _relays[key]
+
+
 class FfmpegMedia:
-    """Reads a Plex part with ffmpeg and ffprobe over HTTP. The token travels in a
-    header, never in the URL, so it appears in no log line."""
+    """Reads a Plex part with ffmpeg and ffprobe over HTTP. They read through a loopback
+    relay that holds the token, so it appears in no argv and no error message."""
 
     def __init__(
         self,
@@ -188,12 +279,11 @@ class FfmpegMedia:
     def _url(self, part_id: int) -> str:
         return f"{self._base}/library/parts/{part_id}/file"
 
+    def _relayed_url(self, part_id: int) -> str:
+        return f"{_relay_for(self._base, self._token).base}/library/parts/{part_id}/file"
+
     def _input(self, part_id: int) -> list[str]:
-        return [
-            "-rw_timeout", _IO_TIMEOUT_US,
-            "-headers", f"X-Plex-Token: {self._token}\r\n",
-            "-i", self._url(part_id),
-        ]  # fmt: skip
+        return ["-rw_timeout", _IO_TIMEOUT_US, "-i", self._relayed_url(part_id)]
 
     def file_hash(self, part_id: int, size: int) -> str:
         """sha256 over the part's size, its `Last-Modified`, and its first MiB."""
@@ -264,8 +354,8 @@ class FfmpegMedia:
 
     def _chapters(self, part_id: int) -> list[Cut]:
         argv = [
-            self._ffprobe, "-v", "error", "-headers", f"X-Plex-Token: {self._token}\r\n",
-            "-show_chapters", "-print_format", "json", self._url(part_id),
+            self._ffprobe, "-v", "error",
+            "-show_chapters", "-print_format", "json", self._relayed_url(part_id),
         ]  # fmt: skip
         done = self._run(argv, f"part {part_id}: chapters")
         if done.returncode != 0:

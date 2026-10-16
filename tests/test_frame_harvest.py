@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from collections.abc import Sequence
 from datetime import datetime, timedelta
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -344,3 +346,49 @@ def test_parse_last_frame_takes_the_largest_pts_in_the_time_base() -> None:
 def test_a_stalled_or_unreadable_scdet_answer_fails_the_title_not_the_run() -> None:
     with pytest.raises(MediaError):
         frame_harvest.parse_scdet("lavfi.scd.score=high\n")
+
+
+def test_ffmpeg_reads_through_a_relay_so_the_token_is_in_no_argv() -> None:
+    seen: list[tuple[str, str | None, str | None]] = []
+
+    class FakePlex(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            seen.append((self.path, self.headers["X-Plex-Token"], self.headers["Range"]))
+            self.send_response(206)
+            self.send_header("Content-Length", "4")
+            self.send_header("Content-Range", "bytes 2-5/10")
+            self.end_headers()
+            self.wfile.write(b"data")
+
+        def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+            pass
+
+    plex = ThreadingHTTPServer(("127.0.0.1", 0), FakePlex)
+    threading.Thread(target=plex.serve_forever, daemon=True).start()
+    try:
+        media = frame_harvest.FfmpegMedia(
+            f"http://127.0.0.1:{plex.server_address[1]}", "secret-token",
+            ffmpeg="ffmpeg", ffprobe="ffprobe",
+        )  # fmt: skip
+        argv = media._input(7)
+        assert "secret-token" not in " ".join(argv)
+        assert "-headers" not in argv
+        url = argv[argv.index("-i") + 1]
+        assert url.startswith("http://127.0.0.1:") and url.endswith("/library/parts/7/file")
+
+        got = httpx.get(url, headers={"Range": "bytes=2-5"})
+        assert (got.status_code, got.content) == (206, b"data")
+        assert got.headers["Content-Range"] == "bytes 2-5/10"
+        assert seen == [("/library/parts/7/file", "secret-token", "bytes=2-5")]
+        origin = url.split("/library", 1)[0]
+        assert httpx.get(origin + "/library/sections").status_code == 404
+        assert (
+            httpx.get(
+                "http://127.0.0.1:"
+                + origin.rsplit(":", 1)[1].split("/")[0]
+                + "/library/parts/7/file"
+            ).status_code
+            == 404
+        )
+    finally:
+        plex.shutdown()
