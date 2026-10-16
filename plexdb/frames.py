@@ -198,6 +198,10 @@ def parse_hours(raw: str) -> tuple[time, time] | None:
         start, end = time.fromisoformat(start_raw.strip()), time.fromisoformat(end_raw.strip())
     except ValueError as err:
         raise ConfigError(f"PLEXDB_FRAME_HOURS must look like 01:00-07:00, got {raw!r}") from err
+    if start.tzinfo is not None or end.tzinfo is not None:
+        raise ConfigError(
+            f"PLEXDB_FRAME_HOURS takes wall-clock times in the process's TZ, no offset: {raw!r}"
+        )
     if start == end:
         raise ConfigError(f"PLEXDB_FRAME_HOURS opens and closes at the same time: {raw!r}")
     return start, end
