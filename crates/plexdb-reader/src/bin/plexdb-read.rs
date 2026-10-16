@@ -42,13 +42,15 @@ subcommands:
   cuts <item_id>
   chapters <item_id>
   capabilities
-  search <phrase> (--pool <item_id>... | --pool-file <path|->) [--not <phrase>...]
-         [--weight w] [--temperature T] [--draw n --seed s]";
+  search <phrase> (--pool <item_id> [--pool ...] | --pool-file <path|->)
+         [--not <phrase> [--not ...]] [--weight w] [--temperature T] [--draw n --seed s]
 
-/// Flags that take every value up to the next `--flag`.
-const LIST_FLAGS: [&str; 2] = ["--pool", "--not"];
+--pool and --not take one value each and repeat: --pool a --pool b --not x --not y.
+Flags may come before or after the phrase.
+--help prints this and exits 0.";
 
 enum Failure {
+    Help,
     Usage(String),
     Run(String),
 }
@@ -70,23 +72,19 @@ impl Args {
         let mut args = Args::default();
         let mut tokens = raw.into_iter().peekable();
         while let Some(token) = tokens.next() {
+            if token == "--help" {
+                return Err(Failure::Help);
+            }
             if !token.starts_with("--") {
                 args.positional.push(token);
                 continue;
             }
-            let mut values = Vec::new();
-            if LIST_FLAGS.contains(&token.as_str()) {
-                while let Some(next) = tokens.next_if(|t| !t.starts_with("--")) {
-                    values.push(next);
-                }
-            } else {
-                values.push(
-                    tokens
-                        .next()
-                        .ok_or_else(|| Failure::Usage(format!("{token} needs a value")))?,
-                );
-            }
-            args.flags.entry(token).or_default().extend(values);
+            // Every flag takes exactly one value, whatever it starts with, so a
+            // repeated flag builds a list and a negative may begin with `--`.
+            let value = tokens
+                .next()
+                .ok_or_else(|| Failure::Usage(format!("{token} needs a value")))?;
+            args.flags.entry(token).or_default().push(value);
         }
         Ok(args)
     }
@@ -233,6 +231,11 @@ fn account(args: &Args) -> Result<i64, Failure> {
 }
 
 fn search(reader: &Reader, args: &Args) -> Result<String, Failure> {
+    if let Some(extra) = args.positional.get(2) {
+        return Err(Failure::Usage(format!(
+            "unexpected argument {extra}: --pool and --not take one value each, repeat the flag"
+        )));
+    }
     let pool = pool_ids(args)?;
     let pool: Vec<&str> = pool.iter().map(String::as_str).collect();
     let q = Search {
@@ -258,6 +261,10 @@ fn main() -> ExitCode {
     match run(std::env::args().skip(1).collect()) {
         Ok(value) => {
             println!("{value}");
+            ExitCode::SUCCESS
+        }
+        Err(Failure::Help) => {
+            println!("{USAGE}");
             ExitCode::SUCCESS
         }
         Err(Failure::Usage(message)) => {

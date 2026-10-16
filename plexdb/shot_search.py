@@ -69,8 +69,8 @@ def search_argv(
         "--pool-file",
         "-",
     ]
-    if negatives:
-        argv += ["--not", *negatives]
+    for negative in negatives or ():
+        argv += ["--not", negative]
     for flag, value in (
         ("--weight", weight),
         ("--temperature", temperature),

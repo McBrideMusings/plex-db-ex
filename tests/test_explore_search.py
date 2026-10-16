@@ -42,7 +42,9 @@ def _tokenizer() -> Tokenizer:
 
 @pytest.fixture
 def phrase_tokenizer(tmp_path: Path) -> PhraseTokenizer:
-    return PhraseTokenizer(MODEL, tmp_path / "tok", fetch=lambda _model: _tokenizer())
+    path = tmp_path / "tokenizer.json"
+    _tokenizer().save(str(path))
+    return PhraseTokenizer(MODEL, tmp_path / "tok", path)
 
 
 class FakeMedia:
@@ -209,12 +211,11 @@ def test_a_split_word_is_two_boxes_and_the_phrase_is_cut_at_the_75th_token(
 
 
 def test_a_missing_tokenizer_is_reported_not_guessed(tmp_path: Path) -> None:
-    def refuse(_model: str) -> Tokenizer:
-        raise OSError("offline")
-
-    tokenizer = PhraseTokenizer(MODEL, tmp_path, fetch=refuse)
+    tokenizer = PhraseTokenizer(MODEL, tmp_path)
     problem = tokenizer.status()
-    assert problem is not None and "offline" in problem and "PLEXDB_FRAME_TOKENIZER" in problem
+    assert problem is not None and "PLEXDB_FRAME_TOKENIZER" in problem
+    assert str(tmp_path / "tokenizer-test--clip.json") in problem
+    assert not (tmp_path / "tokenizer-test--clip.json").exists()  # nothing was fetched or written
 
 
 def test_search_runs_the_reader_with_each_negative_and_names_the_strongest(
@@ -234,7 +235,7 @@ def test_search_runs_the_reader_with_each_negative_and_names_the_strongest(
     argv = _calls(served)[0]["argv"]
     assert argv[argv.index("search") :] == [
         "search", "sunny firefight", "--pool-file", "-",
-        "--not", "gangland execution", "futuristic",
+        "--not", "gangland execution", "--not", "futuristic",
         "--weight", "0.5", "--temperature", "0.01",
     ]  # fmt: skip
     assert _calls(served)[0]["stdin"] == "imdb:tt1\nimdb:tt2\nimdb:tt3"
