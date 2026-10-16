@@ -13,7 +13,9 @@ through a separate read-only connection (ADR-0024).
 indexed first. A title that failed is retried by neither (2) nor (3) until its
 `file_hash` changes or it is queued again.
 
-**Sampling.** The boundaries are the Cuts, ignoring any closer than
+**Sampling.** The title ends at its last video frame, as the scdet pass decodes
+it: a container can carry seconds of audio past the video, and a frame asked
+for there does not exist. The boundaries are the Cuts, ignoring any closer than
 `MIN_SHOT_MS` to the one before. Between two boundaries is a Shot. A Shot of
 `SPAN_MS` or less gets one frame, at its midpoint; a longer Shot gets one frame
 every `SPAN_MS`, starting `SPAN_MS / 2` after its first boundary.
@@ -34,7 +36,7 @@ import struct
 import subprocess
 import tempfile
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -58,6 +60,7 @@ __all__ = [
     "FfmpegMedia",
     "HarvestResult",
     "MediaReader",
+    "Scan",
     "harvest",
     "run_in_windows",
     "sample_times",
@@ -101,13 +104,20 @@ class Cut:
 
 
 @dataclass(frozen=True)
+class Scan:
+    """What one decode of a title finds: its Cuts and the offset of its last video frame."""
+
+    cuts: list[Cut]
+    last_frame_ms: int
+
+
+@dataclass(frozen=True)
 class Candidate:
     """One title the harvester may index, as Plex describes it now."""
 
     item_id: str
     part_id: int
     size: int
-    duration_ms: int
     reason: str
     #: Already computed by the discovery of a changed title, so it is not read twice.
     file_hash: str | None = None
@@ -119,7 +129,7 @@ class MediaReader(Protocol):
 
     def file_hash(self, part_id: int, size: int) -> str: ...
 
-    def cuts(self, part_id: int) -> list[Cut]: ...
+    def scan(self, part_id: int) -> Scan: ...
 
     def frames(self, part_id: int, times_ms: Sequence[int]) -> list[bytes | None]:
         """One JPEG per time, `None` where the file has no frame there."""
@@ -223,25 +233,34 @@ class FfmpegMedia:
         except subprocess.TimeoutExpired:
             raise MediaError(f"{what}: {argv[0]} ran past {timeout_s:.0f} s") from None
 
-    def cuts(self, part_id: int) -> list[Cut]:
-        found = self._scdet(part_id) + self._chapters(part_id)
-        return sorted(found, key=lambda cut: (cut.t_ms, cut.source))
+    def scan(self, part_id: int) -> Scan:
+        scdet, last_frame_ms = self._scdet(part_id)
+        found = sorted(scdet + self._chapters(part_id), key=lambda cut: (cut.t_ms, cut.source))
+        return Scan(found, last_frame_ms)
 
-    def _scdet(self, part_id: int) -> list[Cut]:
-        argv = [
-            self._ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
-            *self._input(part_id),
-            "-an", "-sn", "-dn",
-            "-vf", "scale=-2:224,scdet=t=10:s=1,metadata=print:file=-",
-            "-f", "null", "-",
-        ]  # fmt: skip
-        done = self._run(argv, f"part {part_id}: scdet", timeout_s=_DECODE_TIMEOUT_S)
-        if done.returncode != 0:
-            raise MediaError(
-                f"part {part_id}: ffmpeg scdet exited {done.returncode}: "
-                f"{done.stderr.strip()[-200:]}"
-            )
-        return parse_scdet(done.stdout)
+    def _scdet(self, part_id: int) -> tuple[list[Cut], int]:
+        """One decode: scdet's Cuts on one branch, every frame's pts (framecrc) on the other."""
+        with tempfile.TemporaryDirectory(prefix="plexdb-scan-") as tmp:
+            crc = Path(tmp) / "frames.crc"
+            argv = [
+                self._ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
+                *self._input(part_id),
+                "-filter_complex",
+                "[0:v:0]scale=-2:224,split[cut][all];"
+                "[cut]scdet=t=10:s=1,metadata=print:file=-,nullsink",
+                "-map", "[all]", "-fps_mode", "passthrough", "-f", "framecrc", "-y", str(crc),
+            ]  # fmt: skip
+            done = self._run(argv, f"part {part_id}: scdet", timeout_s=_DECODE_TIMEOUT_S)
+            if done.returncode != 0:
+                raise MediaError(
+                    f"part {part_id}: ffmpeg scdet exited {done.returncode}: "
+                    f"{done.stderr.strip()[-200:]}"
+                )
+            with crc.open() as lines:
+                last_frame_ms = parse_last_frame(lines)
+        if last_frame_ms is None:
+            raise MediaError(f"part {part_id}: ffmpeg decoded no video frame")
+        return parse_scdet(done.stdout), last_frame_ms
 
     def _chapters(self, part_id: int) -> list[Cut]:
         argv = [
@@ -328,6 +347,29 @@ def parse_scdet(text: str) -> list[Cut]:
     return cuts
 
 
+def parse_last_frame(lines: Iterable[str]) -> int | None:
+    """The largest frame pts in framecrc output, in whole ms rounded down; `None` with no frame.
+
+    framecrc writes `#tb 0: <num>/<den>` and then one `stream, dts, pts, duration, size, crc`
+    line per frame."""
+    num = den = 0
+    last: int | None = None
+    for line in lines:
+        if line.startswith("#tb 0:"):
+            num, den = (int(part) for part in line.split(":", 1)[1].strip().split("/"))
+        elif line and not line.startswith("#"):
+            try:
+                pts = int(line.split(",")[2])
+            except (IndexError, ValueError):
+                raise MediaError(f"framecrc printed an unreadable line: {line!r}") from None
+            last = pts if last is None else max(last, pts)
+    if last is None:
+        return None
+    if den <= 0:
+        raise MediaError("framecrc printed no time base")
+    return last * num * 1000 // den
+
+
 def parse_chapters(text: str) -> list[Cut]:
     try:
         body = json.loads(text or "{}")
@@ -342,10 +384,9 @@ def parse_chapters(text: str) -> list[Cut]:
 
 def _plex_parts(
     store_conn: sqlite3.Connection, plex: PlexSource
-) -> dict[str, tuple[str, int, int, int, int]]:
-    """`item_id -> (kind, added_at, part_id, size, duration_ms)` for every movie and
-    episode Plex lists with a media part. A title with several Plex copies takes the
-    newest."""
+) -> dict[str, tuple[str, int, int, int]]:
+    """`item_id -> (kind, added_at, part_id, size)` for every movie and episode Plex
+    lists with a media part. A title with several Plex copies takes the newest."""
     wanted: dict[str, tuple[str, str, str]] = {}
     for row in store_conn.execute(
         "SELECT p.rating_key, p.item_id, p.section_id, i.type FROM plex_items p "
@@ -353,7 +394,7 @@ def _plex_parts(
     ):
         wanted[str(row[0])] = (str(row[1]), str(row[2]), str(row[3]))
     section_types = {section.key: section.type for section in plex.sections()}
-    best: dict[str, tuple[str, int, int, int, int]] = {}
+    best: dict[str, tuple[str, int, int, int]] = {}
     for key in sorted({section for _, section, _ in wanted.values()}):
         kind = section_types.get(key)
         if kind not in ("movie", "show"):
@@ -365,15 +406,11 @@ def _plex_parts(
             if hit is None or not parts:
                 continue
             item_id, _, item_type = hit
-            media_duration = record.get("Media", [{}])[0].get("duration") or parts[0].get(
-                "duration"
-            )
             entry = (
                 item_type,
                 int(record.get("addedAt") or 0),
                 int(parts[0]["id"]),
                 int(parts[0].get("size") or 0),
-                int(media_duration or 0),
             )
             if item_id not in best or entry[1] > best[item_id][1]:
                 best[item_id] = entry
@@ -382,7 +419,7 @@ def _plex_parts(
 
 def _candidates(
     frames_conn: sqlite3.Connection,
-    parts: dict[str, tuple[str, int, int, int, int]],
+    parts: dict[str, tuple[str, int, int, int]],
     media: MediaReader,
     log: Callable[[str], None],
     keep_going: Callable[[], bool],
@@ -391,8 +428,8 @@ def _candidates(
     during a run is seen before the backlog resumes."""
 
     def candidate(item_id: str, reason: str, file_hash: str | None = None) -> Candidate:
-        _, _, part_id, size, duration_ms = parts[item_id]
-        return Candidate(item_id, part_id, size, duration_ms, reason, file_hash)
+        _, _, part_id, size = parts[item_id]
+        return Candidate(item_id, part_id, size, reason, file_hash)
 
     seen: set[str] = set()
     while True:
@@ -455,6 +492,7 @@ def _write_title(
     *,
     file_hash: str,
     cuts: Sequence[Cut],
+    duration_ms: int,
     samples: Sequence[tuple[int, int]],
     vectors: Sequence[Sequence[float]],
     shot_count: int,
@@ -481,7 +519,7 @@ def _write_title(
             "dims, quant, duration_ms, bytes, file_hash, shots, vectors, indexed_at, error) "
             "VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
             (
-                cand.item_id, cand.part_id, model, frames.FRAME_DIMS, _QUANT, cand.duration_ms,
+                cand.item_id, cand.part_id, model, frames.FRAME_DIMS, _QUANT, duration_ms,
                 cand.size, file_hash, shot_count, len(samples), now.isoformat(),
             ),
         )  # fmt: skip
@@ -498,8 +536,8 @@ def _record_failure(
     """Keep whatever rows the title had; mark the attempt failed and take it off the queue."""
     with frames_conn:
         frames_conn.execute(
-            "INSERT INTO frame_index_state (item_id, part_id, bytes, duration_ms, file_hash, "
-            "indexed_at, error) VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "INSERT INTO frame_index_state (item_id, part_id, bytes, file_hash, "
+            "indexed_at, error) VALUES (?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(item_id) DO UPDATE SET part_id = excluded.part_id, "
             "bytes = excluded.bytes, file_hash = coalesce(excluded.file_hash, file_hash), "
             "indexed_at = excluded.indexed_at, error = excluded.error",
@@ -507,7 +545,6 @@ def _record_failure(
                 cand.item_id,
                 cand.part_id,
                 cand.size,
-                cand.duration_ms,
                 file_hash,
                 now.isoformat(),
                 error,
@@ -533,12 +570,11 @@ def _index_title(
     error: str | None = None
     outcome = "ok"
     try:
-        if cand.duration_ms <= 0:
-            raise MediaError(f"part {cand.part_id}: Plex reports no duration")
         file_hash = file_hash or media.file_hash(cand.part_id, cand.size)
         started = time.perf_counter()
-        cuts = media.cuts(cand.part_id)
-        shot_list = shots([c.t_ms for c in cuts], cand.duration_ms)
+        scan = media.scan(cand.part_id)
+        cuts = scan.cuts
+        shot_list = shots([c.t_ms for c in cuts], scan.last_frame_ms)
         samples = sample_times(shot_list)
         jpegs = media.frames(cand.part_id, [t_ms for t_ms, _ in samples])
         decode_s = time.perf_counter() - started
@@ -560,7 +596,8 @@ def _index_title(
             )
         shot_count, vector_count = len(shot_list), len(samples)
         _write_title(
-            frames_conn, cand, file_hash=file_hash, cuts=cuts, samples=samples,
+            frames_conn, cand, file_hash=file_hash, cuts=cuts,
+            duration_ms=scan.last_frame_ms, samples=samples,
             vectors=vectors, shot_count=shot_count, model=model, now=now_fn(),
         )  # fmt: skip
     except EncoderUnavailable:

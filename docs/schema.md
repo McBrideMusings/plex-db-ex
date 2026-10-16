@@ -1395,7 +1395,7 @@ CREATE TABLE frame_index_state (
     model_version TEXT,
     dims          INTEGER,     -- vector width
     quant         TEXT,        -- how a vector is stored, e.g. int8
-    duration_ms   INTEGER,
+    duration_ms   INTEGER,     -- the last video frame's offset, as the harvester decoded it
     bytes         INTEGER,     -- bytes read through Plex
     file_hash     TEXT,        -- size + mtime + first MiB; a change re-indexes the title
     shots         INTEGER,
@@ -1500,6 +1500,9 @@ now and `--limit N` stops after N titles. It writes `frames.db` alone.
   and the first MiB. `bytes` is the part's size.
 - **Cuts.** `scdet` (threshold 10) writes `cuts` rows with `source = 'scdet'` and its score;
   `ffprobe` chapter marks write `source = 'chapter'` with a NULL score.
+- **The end.** A title ends at its last video frame, found by the same decode as the Cuts, and
+  `duration_ms` stores that offset. Plex's duration is not used: a container can carry seconds of
+  audio past the last video frame, and a frame asked for there does not exist.
 - **Shots and frames.** Boundaries are the Cuts, dropping any within 500 ms of the one before. A
   Shot of 2 s or less gets one frame at its midpoint; a longer Shot gets one every 2 s, the first
   1 s in. Frames are 224 px tall, JPEG. `shot_ix` counts Shots from 0 and `shots` is their number.

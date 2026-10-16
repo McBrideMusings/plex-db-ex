@@ -16,7 +16,7 @@ from plexdb import frame_harvest, frames
 from plexdb.config import Config
 from plexdb.errors import MediaError
 from plexdb.frame_encoder import EncoderClient
-from plexdb.frame_harvest import Cut
+from plexdb.frame_harvest import Cut, Scan
 from plexdb.plex_client import Section
 from plexdb.store import init, open_store
 
@@ -39,7 +39,7 @@ class FakePlex:
             {
                 "ratingKey": f"rk-{item_id}",
                 "addedAt": added,
-                "Media": [{"duration": 10_000, "Part": [{"id": i + 1, "size": 1000 + i}]}],
+                "Media": [{"duration": 12_000, "Part": [{"id": i + 1, "size": 1000 + i}]}],
             }
             for i, (item_id, _, section, added) in enumerate(TITLES)
             if section == section_key
@@ -47,24 +47,27 @@ class FakePlex:
 
 
 class FakeMedia:
-    """No decoding: every title has a cut at 3 s, so two Shots of 3 s and 7 s."""
+    """No decoding: every title has Cuts at 3 s and 5 s and its last video frame at 10 s,
+    though Plex reports 12 s, as a file with audio past its video does."""
 
     def __init__(self) -> None:
         self.hashes: dict[int, str] = {}
         self.fail_parts: set[int] = set()
         self.read: list[int] = []
+        self.asked: list[int] = []
 
     def file_hash(self, part_id: int, size: int) -> str:
         return self.hashes.get(part_id, f"h{part_id}")
 
-    def cuts(self, part_id: int) -> list[Cut]:
+    def scan(self, part_id: int) -> Scan:
         self.read.append(part_id)
         if part_id in self.fail_parts:
             raise MediaError(f"part {part_id}: ffmpeg scdet exited 1")
-        return [Cut(3000, 22.5, "scdet"), Cut(5000, None, "chapter")]
+        return Scan([Cut(3000, 22.5, "scdet"), Cut(5000, None, "chapter")], 10_000)
 
     def frames(self, part_id: int, times_ms: Sequence[int]) -> list[bytes | None]:
-        return [b"\xff\xd8jpeg" for _ in times_ms]
+        self.asked += times_ms
+        return [b"\xff\xd8jpeg" if t_ms <= 10_000 else None for t_ms in times_ms]
 
 
 @pytest.fixture
@@ -170,7 +173,8 @@ def test_an_unchanged_indexed_title_and_a_failed_one_are_not_visited_again(confi
 
 
 def test_a_title_writes_cuts_one_vector_per_sampled_frame_and_its_state(config: Config) -> None:
-    run(config, FakeMedia(), encoder_with(), limit=1)
+    media = FakeMedia()
+    run(config, media, encoder_with(), limit=1)
     item = "imdb:new"
     assert [
         tuple(r)
@@ -181,21 +185,17 @@ def test_a_title_writes_cuts_one_vector_per_sampled_frame_and_its_state(config: 
         (3000, 22.5, "scdet"),
         (5000, None, "chapter"),
     ]
-    # Shots 0-3 s (> 2 s): one frame 1 s in; 3-5 s: its midpoint; 5-10 s: 6 s and 8 s.
+    # Shots 0-3 s (> 2 s): one frame 1 s in; 3-5 s: its midpoint; 5-10 s: 6 s and 8 s. The
+    # last Shot ends at the last video frame, not at Plex's 12 s, so nothing past it is asked.
     vec = rows(config, "SELECT t_ms, shot_ix FROM frame_vec WHERE item_id = ? ORDER BY t_ms", item)
     assert [tuple(r) for r in vec] == [(1000, 0), (4000, 1), (6000, 2), (8000, 2)]
+    assert media.asked == [1000, 4000, 6000, 8000]
     state = rows(
         config,
-        "SELECT shots, vectors, dims, quant, error, part_id, bytes FROM frame_index_state WHERE item_id = ?",  # noqa: E501
+        "SELECT shots, vectors, dims, quant, error, duration_ms FROM frame_index_state WHERE item_id = ?",  # noqa: E501
         item,
     )[0]
-    assert (state["shots"], state["vectors"], state["dims"], state["quant"], state["error"]) == (
-        3,
-        len(vec),
-        768,
-        "int8",
-        None,
-    )
+    assert tuple(state) == (3, len(vec), 768, "int8", None, 10_000)
 
 
 def test_sample_times_and_shots() -> None:
@@ -288,10 +288,10 @@ def test_status_names_the_title_in_hand_while_it_is_indexed(config: Config) -> N
     seen: list[Any] = []
 
     class Spy(FakeMedia):
-        def cuts(self, part_id: int) -> list[Cut]:
+        def scan(self, part_id: int) -> Scan:
             with frames.open_frames(frames_path(config)) as conn:
                 seen.append(frames._indexing(conn))
-            return super().cuts(part_id)
+            return super().scan(part_id)
 
     run(config, Spy(), encoder_with(), limit=1)
     assert seen[0]["item_id"] == "imdb:new"
@@ -327,6 +327,18 @@ def test_parse_scdet_and_chapters() -> None:
     assert frame_harvest.parse_scdet(text) == [Cut(12500, 14.25, "scdet")]
     chapters = '{"chapters": [{"start_time": "0.000000"}, {"start_time": "301.5"}]}'
     assert frame_harvest.parse_chapters(chapters) == [Cut(301500, None, "chapter")]
+
+
+def test_parse_last_frame_takes_the_largest_pts_in_the_time_base() -> None:
+    crc = ["#software: Lavf", "#tb 0: 1/1000", "#media_type 0: video",
+           "0,          0,          0,       42,   133632, 0x1",
+           "0,      282662,      282662,       42,   133632, 0x2",
+           "0,      282620,      282620,       42,   133632, 0x3"]  # fmt: skip
+    assert frame_harvest.parse_last_frame(crc) == 282_662
+    assert (
+        frame_harvest.parse_last_frame(["#tb 0: 1001/24000", "0, 6779, 6779, 1, 9, 0x1"]) == 282_740
+    )
+    assert frame_harvest.parse_last_frame(["#tb 0: 1/1000"]) is None
 
 
 def test_a_stalled_or_unreadable_scdet_answer_fails_the_title_not_the_run() -> None:
