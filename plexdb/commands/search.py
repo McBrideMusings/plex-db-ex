@@ -56,7 +56,10 @@ def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     )
     parser.add_argument("phrase", help="text to search the Frame index with")
     parser.add_argument(
-        "--pool", nargs="+", metavar="ITEM_ID", help="the item_ids to search (put the phrase first)"
+        "--pool",
+        action="append",
+        metavar="ITEM_ID",
+        help="an item_id to search; repeat for each title",
     )
     parser.add_argument(
         "--pool-file",
@@ -66,9 +69,9 @@ def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parser.add_argument(
         "--not",
         dest="not_",
-        nargs="+",
+        action="append",
         metavar="PHRASE",
-        help="phrases a Shot is penalised for resembling",
+        help="a phrase a Shot is penalised for resembling; repeat for each",
     )
     parser.add_argument(
         "--weight", type=float, help="how much of the strongest negative a Shot loses (default 0.5)"

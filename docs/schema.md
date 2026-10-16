@@ -1660,6 +1660,9 @@ plexdb-read search <phrase> (--pool <item_id>... | --pool-file <path|->) [--not 
                    [--weight w] [--temperature T] [--draw n --seed s]
 ```
 
+`--pool` and `--not` take one value each and repeat (`--pool a --pool b`), so flags and the phrase
+go in any order. `plexdb-read --help` prints the usage and exits 0.
+
 ```json
 {"shots": [{"item_id": "imdb:tt0113277", "in_ms": 0, "out_ms": 3000, "frames": [[0, 0.91]],
             "phrase_sim": 0.91, "negative_sims": [0.12], "score": 0.85, "p": 0.62}],
@@ -1671,7 +1674,7 @@ plexdb-read search <phrase> (--pool <item_id>... | --pool-file <path|->) [--not 
 **`plexdb search <phrase>`** runs `plexdb-read search` with the files from the environment: the
 Snapshot (`PLEXDB_SNAPSHOT_PATH`, else `PLEXDB_PATH`), `frames.db`, the Phrase cache
 (`PLEXDB_PHRASE_CACHE`, else `phrases.db` in `PLEXDB_FRAMES_DIR`) and `PLEXDB_FRAME_ENCODER_URL`.
-It takes `--pool` or `--pool-file` (item_ids; `-` is standard input), `--not`, `--weight`,
+It takes `--pool` or `--pool-file` (item_ids; `-` is standard input), `--not` (both repeat, one value per flag), `--weight`,
 `--temperature`, `--draw` and `--seed`, and prints what the binary prints. The binary is
 `PLEXDB_READ_BIN`, default `plexdb-read` on `PATH`; the container image carries it. The command
 exits 1 with the build command when it cannot find the binary.

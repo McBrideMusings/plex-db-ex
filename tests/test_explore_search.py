@@ -234,7 +234,7 @@ def test_search_runs_the_reader_with_each_negative_and_names_the_strongest(
     argv = _calls(served)[0]["argv"]
     assert argv[argv.index("search") :] == [
         "search", "sunny firefight", "--pool-file", "-",
-        "--not", "gangland execution", "futuristic",
+        "--not", "gangland execution", "--not", "futuristic",
         "--weight", "0.5", "--temperature", "0.01",
     ]  # fmt: skip
     assert _calls(served)[0]["stdin"] == "imdb:tt1\nimdb:tt2\nimdb:tt3"

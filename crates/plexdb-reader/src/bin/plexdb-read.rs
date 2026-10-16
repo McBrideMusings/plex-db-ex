@@ -43,12 +43,14 @@ subcommands:
   chapters <item_id>
   capabilities
   search <phrase> (--pool <item_id>... | --pool-file <path|->) [--not <phrase>...]
-         [--weight w] [--temperature T] [--draw n --seed s]";
+         [--weight w] [--temperature T] [--draw n --seed s]
 
-/// Flags that take every value up to the next `--flag`.
-const LIST_FLAGS: [&str; 2] = ["--pool", "--not"];
+--pool and --not take one value each and repeat: --pool a --pool b --not x --not y.
+Flags may come before or after the phrase.
+--help prints this and exits 0.";
 
 enum Failure {
+    Help,
     Usage(String),
     Run(String),
 }
@@ -70,23 +72,19 @@ impl Args {
         let mut args = Args::default();
         let mut tokens = raw.into_iter().peekable();
         while let Some(token) = tokens.next() {
+            if token == "--help" || token == "-h" {
+                return Err(Failure::Help);
+            }
             if !token.starts_with("--") {
                 args.positional.push(token);
                 continue;
             }
-            let mut values = Vec::new();
-            if LIST_FLAGS.contains(&token.as_str()) {
-                while let Some(next) = tokens.next_if(|t| !t.starts_with("--")) {
-                    values.push(next);
-                }
-            } else {
-                values.push(
-                    tokens
-                        .next()
-                        .ok_or_else(|| Failure::Usage(format!("{token} needs a value")))?,
-                );
-            }
-            args.flags.entry(token).or_default().extend(values);
+            // Every flag takes exactly one value, whatever it starts with, so a
+            // repeated flag builds a list and a negative may begin with `--`.
+            let value = tokens
+                .next()
+                .ok_or_else(|| Failure::Usage(format!("{token} needs a value")))?;
+            args.flags.entry(token).or_default().push(value);
         }
         Ok(args)
     }
@@ -258,6 +256,10 @@ fn main() -> ExitCode {
     match run(std::env::args().skip(1).collect()) {
         Ok(value) => {
             println!("{value}");
+            ExitCode::SUCCESS
+        }
+        Err(Failure::Help) => {
+            println!("{USAGE}");
             ExitCode::SUCCESS
         }
         Err(Failure::Usage(message)) => {
