@@ -1572,6 +1572,9 @@ answer is OpenAI's: `data[]` of `{index, embedding}`, 768 floats each.
   URI read as *text* (cosine 0.206 with the real image vector), so a missing field passes every
   width check.
 - **Each image is a `data:image/jpeg;base64,` URI.** Bare base64 is a 422.
+- **Infinity needs `--url-prefix /v1`.** Infinity 0.0.77 serves `/embeddings` with no prefix, so
+  without the flag `/v1/embeddings` is a 404 `{"detail":"Not Found"}`; `/health` stays unprefixed
+  either way.
 
 `plexdb frames probe-encoder` embeds the phrase `a red square`, then a bundled 224 px red square,
 then the phrase again, and prints:
