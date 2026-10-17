@@ -2968,7 +2968,7 @@ function paintEmpty() {
   const box = sEl("sempty");
   if (srch.last) { box.textContent = ""; return; }
   if (!srch.pool.length) {
-    box.replaceChildren(el("p", {}, "Add titles to the pool, then describe a shot."),
+    box.replaceChildren(el("p", {}, "Describe a shot to search every indexed title. Add titles to the pool to search only those."),
       el("p", { className: "mnote" }, `${fmt(srch.status.movies)} movies · ${fmt(srch.status.indexed)} indexed so far`));
   } else {
     box.replaceChildren(el("p", {}, "Describe a shot, then press Search."));
@@ -3101,7 +3101,6 @@ sEl("stemp").addEventListener("input", () => {
 
 // ---- searching ----
 async function runSearch(draw) {
-  if (!srch.pool.length) { setBanners([sBanner("", "Add titles to the pool first.")]); return; }
   const phrase = sEl("sphrase").value.trim();
   if (!phrase) { setBanners([sBanner("", "Describe a shot first.")]); return; }
   srch.draw = draw;

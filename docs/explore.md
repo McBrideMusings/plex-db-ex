@@ -76,7 +76,8 @@ accepts and labels nothing. It needs `PLEXDB_FRAMES_DIR`, an encoder (`PLEXDB_FR
 with `PLEX_TOKEN`; `/api/search/status` reports each one found or missing with its reason, and the
 page shows a banner for every one that is missing.
 
-- **Pool.** The side panel holds the titles a search covers. The add box offers titles and
+- **Pool.** The side panel holds the titles a search covers; an empty pool searches every title
+  `frame_index_state` holds with a `model`, so a search needs no titles picked. The add box offers titles and
   collections (a collection adds its members). Each title shows `indexed`, `not indexed`, `queued` or
   `failed`. A search whose pool has unindexed titles shows "Only N of M titles in this pool are
   indexed" and a "Queue the other M−N" link, which writes `frame_queue` rows through

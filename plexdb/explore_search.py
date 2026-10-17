@@ -462,6 +462,14 @@ class SearchTab:
                     out[r[0]] = int(r[1])
         return out
 
+    def _indexed(self) -> list[str]:
+        """Every title the Frame index can search: the pool of a search given none."""
+        with closing(self._frames_conn()) as conn:
+            rows = conn.execute(
+                "SELECT item_id FROM frame_index_state WHERE model IS NOT NULL ORDER BY item_id"
+            ).fetchall()
+        return [r[0] for r in rows]
+
     def _states(self, ids: list[str]) -> dict[str, str]:
         out: dict[str, str] = {}
         try:
@@ -561,7 +569,9 @@ class SearchTab:
                 raise ValueError("draw must be an object with n and seed")
             n = _whole(draw.get("n"), "draw.n", low=1, high=RESULT_ROWS)
             seed = _whole(draw.get("seed", 0), "draw.seed", low=0, high=2**63 - 1)
-        ids = self._ids(body.get("pool"))
+        ids = self._ids(body["pool"]) if body.get("pool") else self._indexed()
+        if not ids:
+            raise ValueError("no title is indexed yet")
         self._frames_file()
         # What the encoder reads: each text cut at its 75th token, blanks dropped.
         searched = self.tokenizer.searched(phrase.strip())
