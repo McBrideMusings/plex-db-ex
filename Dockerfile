@@ -55,13 +55,14 @@ ENV PATH="/app/.venv/bin:$PATH" \
 # every URL and token they may carry a real value here: `/data` is the store's
 # own volume, `/snapshot` is the volume the station container already reads, so
 # `publish` writes where the consumer looks and nothing copies anything
-# (issue #43). `/explore-data` is the Query tab's saved queries' own mount,
-# never `/snapshot` — Plex DB-EX has no login, so anyone who reaches the
-# port could otherwise write into the directory the station reads
-# (plex-db-ex-oyg.3; `SavedQueries` additionally caps entry count and total
-# size). `/frames` holds the Frame index, frames.db (ADR-0024): tens of
-# gigabytes at full library, rebuildable, so it sits on its own mount rather
-# than beside the store whose backups it must stay out of. Credentials arrive
+# (issue #43). `/explore-data` is Plex DB-EX's own mount — saved queries,
+# decision files, tokenizer, clips cache — never `/snapshot`: Plex DB-EX has no
+# login, so anyone who reaches the port could otherwise write into the
+# directory the station reads (plex-db-ex-oyg.3; `SavedQueries` additionally
+# caps entry count and total size). `/frames` holds the Frame index, frames.db
+# (ADR-0024): tens of gigabytes at full library and rebuildable, so it has a
+# mount of its own and the store's backups, which copy plexdb.db alone, never
+# include it. Credentials arrive
 # from the host environment and appear in no committed file.
 ENV PLEXDB_PATH=/data/plexdb.db \
     PLEXDB_SNAPSHOT_PATH=/snapshot/plexdb.snapshot.db \
