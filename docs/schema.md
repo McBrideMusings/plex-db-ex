@@ -1528,6 +1528,9 @@ now and `--limit N` stops after N titles. It writes `frames.db` alone.
   A time with no decodable frame is skipped; a title with none fails.
 - **Vectors.** The encoder's unit vectors are stored with sqlite-vec's `vec_quantize_int8(…, 'unit')`;
   `frame_index_state.quant` is `int8`. Frames go to the encoder 32 per request.
+  `harvest-frames --keep-float` also writes the encoder's float32 vectors to `frames-float.db`
+  beside `frames.db`, for `plexdb frames quant-agreement` to rank int8 against fp16. That file
+  is a measurement: no reader opens it, nothing migrates it, and deleting it loses nothing.
 - **One transaction per title** replaces the title's `frame_vec`, `cuts` and `frame_index_state`
   rows and deletes its `frame_queue` row.
 - **Failures.** An unreadable part or an ffmpeg error records `error` in `frame_index_state`,

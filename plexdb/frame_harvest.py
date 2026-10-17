@@ -42,6 +42,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -50,7 +51,7 @@ from typing import Protocol
 
 import httpx
 
-from . import frames
+from . import frame_quant, frames
 from .config import Config
 from .errors import EncoderError, EncoderUnavailable, MediaError, PlexdbError
 from .frame_encoder import EncoderClient
@@ -657,6 +658,7 @@ def _index_title(
     encoder: EncoderClient,
     now_fn: Callable[[], datetime],
     log: Callable[[str], None],
+    float_conn: sqlite3.Connection | None = None,
 ) -> str:
     """Index one title. Returns `"ok"`, `"failed"` (an unreadable file; recorded), or
     `"rejected"` (the encoder refused its frames; recorded). Raises `EncoderUnavailable`
@@ -692,6 +694,13 @@ def _index_title(
                 f"frame_vec holds {frames.FRAME_DIMS}"
             )
         shot_count, vector_count = len(shot_list), len(samples)
+        if float_conn is not None:
+            # A measurement file failing to take a title must not cost the index the
+            # title; `frames quant-agreement` names the titles it holds no floats for.
+            try:
+                frame_quant.write_floats(float_conn, cand.item_id, samples, vectors)
+            except sqlite3.Error as err:
+                log(f"item_id={cand.item_id} float vectors not kept: {err}")
         _write_title(
             frames_conn, cand, file_hash=file_hash, cuts=cuts,
             duration_ms=scan.last_frame_ms, shot_list=shot_list, samples=samples,
@@ -721,12 +730,19 @@ def harvest(
     now_fn: Callable[[], datetime] = lambda: datetime.now().astimezone(),
     ignore_hours: bool = False,
     limit: int | None = None,
+    keep_float: bool = False,
     log: Callable[[str], None] = print,
 ) -> HarvestResult:
     """One harvest run over the configured Frame index. Raises `HarvesterBusy` when
-    another harvester, in this process or another, holds the slot."""
+    another harvester, in this process or another, holds the slot. `keep_float` also
+    writes each title's float32 vectors to `frames-float.db` (`plexdb/frame_quant.py`)."""
     path = frames.frames_path(config)
-    with frames.harvest_lock(path):
+    with frames.harvest_lock(path), ExitStack() as stack:
+        float_conn = (
+            stack.enter_context(frame_quant.open_float(frame_quant.float_path(path)))
+            if keep_float
+            else None
+        )
         return _harvest_locked(
             config,
             path,
@@ -737,6 +753,7 @@ def harvest(
             ignore_hours=ignore_hours,
             limit=limit,
             log=log,
+            float_conn=float_conn,
         )
 
 
@@ -751,6 +768,7 @@ def _harvest_locked(
     ignore_hours: bool,
     limit: int | None,
     log: Callable[[str], None],
+    float_conn: sqlite3.Connection | None,
 ) -> HarvestResult:
     window = frames.parse_hours(config.frame_hours)
     result = HarvestResult()
@@ -787,6 +805,7 @@ def _harvest_locked(
                         encoder,
                         now_fn,
                         lambda line: log(f"frames: {line}"),
+                        float_conn,
                     )
                 except EncoderUnavailable as err:
                     log(f"frames: stopping, {err}")

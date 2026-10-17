@@ -6,7 +6,8 @@ harvester to index a title ahead of the backlog. `plexdb frames migrate` brings
 `frames.db` to this build's schema. Each creates `frames.db` and applies its
 migrations when needed, and none writes `plexdb.db`. `plexdb frames
 probe-encoder` embeds one image and one phrase through the configured encoder
-(ADR-0025) and touches neither file.
+(ADR-0025) and touches neither file. `plexdb frames quant-agreement <phrase>…`
+compares int8 against fp16 rankings over `frames-float.db` (`plexdb/frame_quant.py`).
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from ..frame_encoder import (
     configured_reachable,
     from_config,
 )
+from ..frame_quant import agreement, float_path, load, open_float
 from ..frames import FRAME_DIMS, frames_path, migrate_configured, open_frames, queue, status
 from ..store import open_readonly
 
@@ -125,6 +127,43 @@ def _cmd_queue(args: argparse.Namespace) -> int:
     return 0
 
 
+def _positive(raw: str) -> int:
+    value = int(raw)
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"{raw} is not a positive count")
+    return value
+
+
+def _cmd_quant_agreement(args: argparse.Namespace) -> int:
+    config = Config.from_env()
+    path = frames_path(config)
+    floats = float_path(path)
+    if not floats.is_file():
+        print(
+            f"error: {floats} does not exist; run harvest-frames --keep-float first",
+            file=sys.stderr,
+        )
+        return 1
+    encoder = from_config(config)
+    try:
+        vectors = encoder.embed_texts(args.phrases)
+    finally:
+        encoder.close()
+    with open_frames(path) as frames_conn, open_float(floats) as float_conn:
+        paired = load(frames_conn, float_conn)
+    ks = args.top or [10, 50]
+    report = {
+        "titles": paired.titles,
+        "titles_without_floats": paired.titles_without_floats,
+        "phrases": [
+            {"phrase": phrase, **agreement(paired, vec, ks=ks)}
+            for phrase, vec in zip(args.phrases, vectors, strict=True)
+        ],
+    }
+    print(json.dumps(report, indent=2))
+    return 0
+
+
 def _cmd_migrate(_args: argparse.Namespace) -> int:
     config = Config.from_env()
     frames_path(config)
@@ -164,3 +203,17 @@ def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
         "the model, vector widths and latencies as JSON",
     )
     probe_parser.set_defaults(func=_cmd_probe_encoder)
+
+    quant_parser = actions.add_parser(
+        "quant-agreement",
+        help="rank Shots for each phrase from the int8 index and from frames-float.db's "
+        "vectors cast to fp16, and print how many of each top k match, as JSON",
+    )
+    quant_parser.add_argument("phrases", nargs="+", metavar="phrase")
+    quant_parser.add_argument(
+        "--top",
+        type=_positive,
+        action="append",
+        help="a k to compare; repeat for several (default: 10 and 50)",
+    )
+    quant_parser.set_defaults(func=_cmd_quant_agreement)

@@ -35,6 +35,7 @@ def _cmd_harvest_frames(args: argparse.Namespace) -> int:
             encoder=encoder,
             ignore_hours=args.ignore_hours,
             limit=args.limit,
+            keep_float=args.keep_float,
         )
     finally:
         encoder.close()
@@ -53,4 +54,10 @@ def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
         "--ignore-hours", action="store_true", help="run now, whatever PLEXDB_FRAME_HOURS says"
     )
     parser.add_argument("--limit", type=int, default=None, help="stop after this many titles")
+    parser.add_argument(
+        "--keep-float",
+        action="store_true",
+        help="also write each title's float32 vectors to frames-float.db, for "
+        "`plexdb frames quant-agreement`",
+    )
     parser.set_defaults(func=_cmd_harvest_frames)
