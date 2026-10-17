@@ -111,6 +111,19 @@ page shows a banner for every one that is missing.
 - **Log.** Each search, queue, frame and clip writes one `explore:` line on stderr with the raw
   values, and `admin logs live` shows them in the container.
 
+`POST /api/search/queue` is the tab's one write outside its own `clips/` cache, and it asks for no
+login: anyone who reaches the explorer's port can call it. The container publishes that port on one
+host address only, `PLEXDB_EXPLORE_BIND` (`[[docker_run.ports]]` in `admin.toml`), and publishes
+nothing while that or `PLEXDB_EXPLORE_PORT` is unset. The route (`queue_missing` in
+`plexdb/explore_search.py`) adds `frame_queue` rows to `frames.db` with `queued_by` `explore`, only
+for titles the explorer's store (the snapshot, in the container) lists in `items` and the Frame
+index holds as not indexed or `failed`; an id outside `items` is skipped, a title already queued
+keeps its place, and a call naming more than 5,000 ids is refused whole.
+So a caller can move library titles ahead of the harvest's backlog and retry failed ones, but
+cannot queue work outside the library. `/frames` is mounted read-write in the container because the
+harvester running beside the explorer writes through it; giving the explorer a read-only mount of
+its own waits on splitting it into its own container (plex-db-ex-bsh).
+
 ## Demo and clip modes
 
 Two URL modes play a scripted tour of the movie title map instead of the interactive page. Both
