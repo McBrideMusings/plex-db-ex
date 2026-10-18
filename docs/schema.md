@@ -1372,7 +1372,7 @@ it read-only where it lies and `ATTACH`es it to the Snapshot.
   be able to stop a sweep.
 - **Rollback-journal mode, not WAL.** No `-wal` or `-shm` sidecar, so a reader with a read-only
   mount can open it. A writer commits once per title.
-- **Never snapshotted or backed up.** It is derived from the media through Plex and runs to tens of
+- **Never snapshotted or backed up.** It is derived from the media files and runs to tens of
   gigabytes at full library; a lost file is rebuilt by the frame harvester. No migration copy is
   taken.
 - **No transaction touches both files.** Whatever a frames write needs from `plexdb.db` is read
@@ -1400,7 +1400,7 @@ CREATE TABLE frame_index_state (
     dims          INTEGER,     -- vector width
     quant         TEXT,        -- how a vector is stored, e.g. int8
     duration_ms   INTEGER,     -- the last video frame's offset, as the harvester decoded it
-    bytes         INTEGER,     -- bytes read through Plex
+    bytes         INTEGER,     -- the part's size, as Plex reports it
     file_hash     TEXT,        -- size + mtime + first MiB; a change re-indexes the title
     shots         INTEGER,
     vectors       INTEGER,
@@ -1513,10 +1513,13 @@ now and `--limit N` stops after N titles. It writes `frames.db` alone.
   movies before episodes, newest Plex `addedAt` first; then titles whose `file_hash` differs from
   the stored one, least recently indexed first. A failed title waits for a new `file_hash` or a
   new queue row. A title with several Plex copies uses the newest copy's first part.
-- **Reading.** `ffmpeg` and `ffprobe` read `{PLEX_URL}/library/parts/<part_id>/file` through a
-  loopback relay inside the harvester that adds the `X-Plex-Token` header, so the token is in no
-  command line and no error message. `file_hash` is the sha256 of the part's size, the `Last-Modified` header,
-  and the first MiB. `bytes` is the part's size.
+- **Reading.** Plex names each part's file; `ffmpeg` and `ffprobe` read that file, read-only,
+  under `PLEXDB_MEDIA_DIR`, after stripping whichever `PLEX_SOURCE_ROOTS` entry the path sits
+  under. A path under no root, or one that would resolve outside `PLEXDB_MEDIA_DIR`, fails the
+  title. Nothing streams from Plex: Plex makes each `/library/parts/<id>/file` read a playback
+  session and ends the account's previous one, so two readers of different titles would cut each
+  other off. `file_hash` is the sha256 of the part's size, the file's modification time as an
+  HTTP date, and its first MiB. `bytes` is the part's size.
 - **Cuts.** `scdet` (threshold 10) writes `cuts` rows with `source = 'scdet'` and its score;
   `ffprobe` chapter marks write `source = 'chapter'` with a NULL score.
 - **The end.** A title ends at its last video frame, found by the same decode as the Cuts, and

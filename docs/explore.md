@@ -72,12 +72,14 @@ On the title map, a click on empty canvas unpins the pinned card, as Esc already
 
 The Search tab finds Shots in the Frame index by what they look like. It is look-only: it saves,
 accepts and labels nothing. It needs `PLEXDB_FRAMES_DIR`, an encoder (`PLEXDB_FRAME_ENCODER_URL`,
-`PLEXDB_FRAME_MODEL`), the `plexdb-read` binary (`PLEXDB_READ_BIN`), ffmpeg and ffprobe, and `PLEX_URL`
-with `PLEX_TOKEN`; `/api/search/status` reports each one found or missing with its reason, and the
-page shows a banner for every one that is missing.
+`PLEXDB_FRAME_MODEL`), the `plexdb-read` binary (`PLEXDB_READ_BIN`), ffmpeg and ffprobe, `PLEX_URL`
+with `PLEX_TOKEN`, and the library read-only at `PLEXDB_MEDIA_DIR` with `PLEX_SOURCE_ROOTS`;
+`/api/search/status` reports each one found or missing with its reason, and the page shows a banner
+for every one that is missing.
 
 - **Pool.** The side panel holds the titles a search covers; an empty pool searches every title
-  `frame_index_state` holds with a `model`, so a search needs no titles picked. The add box offers titles and
+  `frame_index_state` holds with a `model`, so a search needs no titles picked, and the empty panel
+  reads "All indexed titles (N)". The add box offers titles and
   collections (a collection adds its members). Each title shows `indexed`, `not indexed`, `queued` or
   `failed`. A search whose pool has unindexed titles shows "Only N of M titles in this pool are
   indexed" and a "Queue the other M−N" link, which writes `frame_queue` rows through
@@ -104,7 +106,8 @@ page shows a banner for every one that is missing.
   title, timecodes, three frames, phrase similarity, the strongest negative and its similarity, and
   with a temperature each Shot's odds. Draw runs the reader's draw a second time with the same
   inputs and marks the drawn rows, so the picks equal `plexdb search … --draw N --seed S`.
-- **Frames and Play.** The server cuts a frame with ffmpeg from the Plex part URL
+- **Frames and Play.** The server asks Plex which file the indexed part is (a metadata read, which
+  starts no playback session), then cuts a frame from that file under `PLEXDB_MEDIA_DIR` with ffmpeg
   (`/api/search/frame`), and a Shot's in–out window as a 640 px wide H.264 MP4 without audio
   (`/api/search/clip`, with range requests). Both are cached under `<explore data>/clips/`, which
   holds at most 2 GB: past it the least recently used file goes first. The browser asks only the

@@ -5,10 +5,8 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-import threading
 from collections.abc import Sequence
 from datetime import datetime, timedelta
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -42,16 +40,26 @@ class FakePlex:
             {
                 "ratingKey": f"rk-{item_id}",
                 "addedAt": added,
-                "Media": [{"duration": 12_000, "Part": [{"id": i + 1, "size": 1000 + i}]}],
+                "Media": [
+                    {
+                        "duration": 12_000,
+                        "Part": [{"id": i + 1, "size": 1000 + i, "file": f"/media/p{i + 1}.mkv"}],
+                    }
+                ],
             }
             for i, (item_id, _, section, added) in enumerate(TITLES)
             if section == section_key
         ]
 
 
+def _part(path: Path) -> int:
+    return int(path.stem[1:])
+
+
 class FakeMedia:
     """No decoding: every title has Cuts at 3 s and 5 s and its last video frame at 10 s,
-    though Plex reports 12 s, as a file with audio past its video does."""
+    though Plex reports 12 s, as a file with audio past its video does. Part N's file is
+    `p<N>.mkv`, so it answers by part id."""
 
     def __init__(self) -> None:
         self.hashes: dict[int, str] = {}
@@ -59,16 +67,18 @@ class FakeMedia:
         self.read: list[int] = []
         self.asked: list[int] = []
 
-    def file_hash(self, part_id: int, size: int) -> str:
+    def file_hash(self, path: Path, size: int) -> str:
+        part_id = _part(path)
         return self.hashes.get(part_id, f"h{part_id}")
 
-    def scan(self, part_id: int) -> Scan:
+    def scan(self, path: Path) -> Scan:
+        part_id = _part(path)
         self.read.append(part_id)
         if part_id in self.fail_parts:
             raise MediaError(f"part {part_id}: ffmpeg scdet exited 1")
         return Scan([Cut(3000, 22.5, "scdet"), Cut(5000, None, "chapter")], 10_000)
 
-    def frames(self, part_id: int, times_ms: Sequence[int]) -> list[bytes | None]:
+    def frames(self, path: Path, times_ms: Sequence[int]) -> list[bytes | None]:
         self.asked += times_ms
         return [b"\xff\xd8jpeg" if t_ms <= 10_000 else None for t_ms in times_ms]
 
@@ -93,6 +103,8 @@ def config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Config:
     monkeypatch.setenv("PLEXDB_FRAMES_DIR", str(tmp_path / "frames"))
     monkeypatch.setenv("PLEXDB_FRAME_HOURS", "01:00-07:00")
     monkeypatch.setenv("PLEXDB_FRAME_MODEL", "clip-test")
+    monkeypatch.setenv("PLEXDB_MEDIA_DIR", str(tmp_path / "media"))
+    monkeypatch.setenv("PLEX_SOURCE_ROOTS", "/media")
     return Config.from_env()
 
 
@@ -209,12 +221,12 @@ def test_a_second_harvester_refuses_and_names_the_first(config: Config) -> None:
     refusals: list[str] = []
 
     class Rival(FakeMedia):
-        def scan(self, part_id: int) -> Scan:
+        def scan(self, path: Path) -> Scan:
             if not refusals:
                 with pytest.raises(HarvesterBusy) as busy:
                     run(config, FakeMedia(), encoder_with(), limit=1)
                 refusals.append(str(busy.value))
-            return super().scan(part_id)
+            return super().scan(path)
 
     run(config, Rival(), encoder_with(), limit=1)
     assert refusals == [f"another harvester is running (pid {os.getpid()}, indexing imdb:new)"]
@@ -311,10 +323,10 @@ def test_status_names_the_title_in_hand_while_it_is_indexed(config: Config) -> N
     seen: list[Any] = []
 
     class Spy(FakeMedia):
-        def scan(self, part_id: int) -> Scan:
+        def scan(self, path: Path) -> Scan:
             with frames.open_frames(frames_path(config)) as conn:
                 seen.append(frames._indexing(conn))
-            return super().scan(part_id)
+            return super().scan(path)
 
     run(config, Spy(), encoder_with(), limit=1)
     assert seen[0]["item_id"] == "imdb:new"
@@ -369,47 +381,12 @@ def test_a_stalled_or_unreadable_scdet_answer_fails_the_title_not_the_run() -> N
         frame_harvest.parse_scdet("lavfi.scd.score=high\n")
 
 
-def test_ffmpeg_reads_through_a_relay_so_the_token_is_in_no_argv() -> None:
-    seen: list[tuple[str, str | None, str | None]] = []
-
-    class FakePlex(BaseHTTPRequestHandler):
-        def do_GET(self) -> None:  # noqa: N802
-            seen.append((self.path, self.headers["X-Plex-Token"], self.headers["Range"]))
-            self.send_response(206)
-            self.send_header("Content-Length", "4")
-            self.send_header("Content-Range", "bytes 2-5/10")
-            self.end_headers()
-            self.wfile.write(b"data")
-
-        def log_message(self, format: str, *args: object) -> None:  # noqa: A002
-            pass
-
-    plex = ThreadingHTTPServer(("127.0.0.1", 0), FakePlex)
-    threading.Thread(target=plex.serve_forever, daemon=True).start()
-    try:
-        media = frame_harvest.FfmpegMedia(
-            f"http://127.0.0.1:{plex.server_address[1]}", "secret-token",
-            ffmpeg="ffmpeg", ffprobe="ffprobe",
-        )  # fmt: skip
-        argv = media._input(7)
-        assert "secret-token" not in " ".join(argv)
-        assert "-headers" not in argv
-        url = argv[argv.index("-i") + 1]
-        assert url.startswith("http://127.0.0.1:") and url.endswith("/library/parts/7/file")
-
-        got = httpx.get(url, headers={"Range": "bytes=2-5"})
-        assert (got.status_code, got.content) == (206, b"data")
-        assert got.headers["Content-Range"] == "bytes 2-5/10"
-        assert seen == [("/library/parts/7/file", "secret-token", "bytes=2-5")]
-        origin = url.split("/library", 1)[0]
-        assert httpx.get(origin + "/library/sections").status_code == 404
-        assert (
-            httpx.get(
-                "http://127.0.0.1:"
-                + origin.rsplit(":", 1)[1].split("/")[0]
-                + "/library/parts/7/file"
-            ).status_code
-            == 404
-        )
-    finally:
-        plex.shutdown()
+def test_a_plex_path_is_read_under_the_media_dir_and_never_outside_it(tmp_path: Path) -> None:
+    media = tmp_path / "library"
+    (media / "movies").mkdir(parents=True)
+    roots = ("/media",)
+    got = frame_harvest.local_path(media, "/media/movies/Heat (1995).mkv", roots)
+    assert got == media / "movies" / "Heat (1995).mkv"
+    for plex_file in ("/media/../etc/passwd", "/other/movies/x.mkv", "/mediacache/x.mkv", ""):
+        with pytest.raises(MediaError):
+            frame_harvest.local_path(media, plex_file, roots)

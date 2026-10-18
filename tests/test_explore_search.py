@@ -51,12 +51,12 @@ class FakeMedia:
     def __init__(self) -> None:
         self.calls: list[tuple[Any, ...]] = []
 
-    def frames(self, part_id: int, times: list[int], *, height: int = 224) -> list[bytes | None]:
-        self.calls.append(("frames", part_id, tuple(times), height))
+    def frames(self, path: Path, times: list[int], *, height: int = 224) -> list[bytes | None]:
+        self.calls.append(("frames", int(path.stem), tuple(times), height))
         return [b"\xff\xd8jpeg" for _ in times]
 
-    def clip(self, part_id: int, in_ms: int, out_ms: int, *, width: int = 640) -> bytes:
-        self.calls.append(("clip", part_id, in_ms, out_ms, width))
+    def clip(self, path: Path, in_ms: int, out_ms: int, *, width: int = 640) -> bytes:
+        self.calls.append(("clip", int(path.stem), in_ms, out_ms, width))
         return b"0123456789" * 10
 
 
@@ -169,6 +169,7 @@ def served(world: dict[str, Any], phrase_tokenizer: PhraseTokenizer) -> Iterator
         world["tmp"] / "explore-data",
         tokenizer=phrase_tokenizer,
         media=lambda: media,  # type: ignore[arg-type,return-value]
+        files=lambda _item_id, part: Path(f"/media/{part}.mkv"),
     )
     server = make_server(world["store"], "127.0.0.1", 0, search=tab)
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -379,7 +380,9 @@ def test_the_page_draws_token_boxes_results_a_lightbox_and_the_partial_pool_bann
     page.on("request", lambda r: requests.append(r.url))
     page.goto(served["url"] + "/#tab=search")
     page.wait_for_selector("#searchwrap:not([hidden])")
-    assert "Add titles to the pool" in page.inner_text("#sempty")
+    page.wait_for_function("document.getElementById('sempty').textContent.length > 0")
+    assert "search every indexed title" in page.inner_text("#sempty")
+    assert page.inner_text("#spoollist").startswith("All indexed titles (2)")
 
     page.fill("#spoolq", "heist")
     page.click("#spoolsugg li.opt")

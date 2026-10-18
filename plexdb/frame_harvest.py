@@ -1,11 +1,11 @@
-"""The frame harvester: reads each title through Plex and fills the Frame index.
+"""The frame harvester: reads each title's file and fills the Frame index.
 
 For one title it finds the Cuts (scdet's scene changes and the file's chapter
 marks), picks the frames to sample, embeds them through the encoder client
-(ADR-0025) and replaces the title's rows in `frames.db` in one transaction. The
-video is read over HTTP from `{PLEX_URL}/library/parts/<part_id>/file`, so the
-harvester needs no media mount. It writes `frames.db` alone; the store is read
-through a separate read-only connection (ADR-0024).
+(ADR-0025) and replaces the title's rows in `frames.db` in one transaction. Plex
+says which part each title plays and where its file is; the video itself is read
+from that file under `PLEXDB_MEDIA_DIR`, read-only. It writes `frames.db` alone;
+the store is read through a separate read-only connection (ADR-0024).
 
 **What it works on, in order.** (1) Titles someone queued, oldest first.
 (2) Titles never indexed, movies before episodes, newest Plex `addedAt` first.
@@ -32,29 +32,26 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
-import secrets
+import os
 import shutil
 import sqlite3
 import struct
 import subprocess
 import tempfile
-import threading
 import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 from datetime import datetime
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from email.utils import formatdate
 from pathlib import Path
 from typing import Protocol
 
-import httpx
-
 from . import frame_quant, frames
 from .config import Config
-from .errors import EncoderError, EncoderUnavailable, MediaError, PlexdbError
+from .errors import ConfigError, EncoderError, EncoderUnavailable, MediaError, PlexdbError
 from .frame_encoder import EncoderClient
+from .identity import canonical_path
 from .plex_client import PLEX_TYPE_EPISODE, PLEX_TYPE_MOVIE, PlexSource
 from .store import open_readonly
 
@@ -69,6 +66,8 @@ __all__ = [
     "MediaReader",
     "Scan",
     "harvest",
+    "local_path",
+    "locator",
     "run_in_windows",
     "sample_times",
     "shots",
@@ -125,6 +124,8 @@ class Candidate:
     item_id: str
     part_id: int
     size: int
+    #: The part's file as Plex names it; `local_path` says where this process reads it.
+    file: str
     reason: str
     #: Already computed by the discovery of a changed title, so it is not read twice.
     file_hash: str | None = None
@@ -134,11 +135,11 @@ class MediaReader(Protocol):
     """The three things the harvester asks of a video file. `FfmpegMedia` is the
     real one; a test substitutes a fake that decodes nothing."""
 
-    def file_hash(self, part_id: int, size: int) -> str: ...
+    def file_hash(self, path: Path, size: int) -> str: ...
 
-    def scan(self, part_id: int) -> Scan: ...
+    def scan(self, path: Path) -> Scan: ...
 
-    def frames(self, part_id: int, times_ms: Sequence[int]) -> list[bytes | None]:
+    def frames(self, path: Path, times_ms: Sequence[int]) -> list[bytes | None]:
         """One JPEG per time, `None` where the file has no frame there."""
         ...
 
@@ -170,143 +171,48 @@ def sample_times(shot_list: Sequence[tuple[int, int]]) -> list[tuple[int, int]]:
     return out
 
 
-# --- reading through Plex -----------------------------------------------------
+# --- reading the file -----------------------------------------------------------
 
 
-_PART_PATH = re.compile(r"^/library/parts/\d+/file$")
-_RELAYED_REQUEST_HEADERS = ("Range", "If-Range", "If-Modified-Since", "If-None-Match")
-_RELAYED_RESPONSE_HEADERS = (
-    "Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "Last-Modified", "ETag",
-)  # fmt: skip
+def local_path(media_dir: Path, plex_file: str, source_roots: Sequence[str]) -> Path:
+    """Where this process reads the file Plex reports as `plex_file`.
 
-
-class _PartRelay:
-    """A loopback HTTP server that forwards a Plex part read with the token attached.
-
-    ffmpeg and ffprobe accept a request header only as a command-line argument, which
-    anyone in the container's process list can read. They read this relay instead, so
-    the token stays in this process and argv carries a loopback URL. The URL's first path
-    segment is a random secret, so another local process cannot borrow the relay.
-    """
-
-    def __init__(self, plex_url: str, token: str) -> None:
-        base = plex_url.rstrip("/")
-        http = httpx.Client(timeout=60.0)
-        self._prefix = f"/{secrets.token_urlsafe(16)}"
-        prefix = self._prefix
-
-        class Handler(BaseHTTPRequestHandler):
-            def _forward(self, method: str) -> None:
-                if not self.path.startswith(prefix) or not _PART_PATH.match(
-                    self.path[len(prefix) :]
-                ):
-                    self.send_error(404)
-                    return
-                path = self.path[len(prefix) :]
-                headers = {"X-Plex-Token": token, "Accept-Encoding": "identity"}
-                for name in _RELAYED_REQUEST_HEADERS:
-                    if name in self.headers:
-                        headers[name] = self.headers[name]
-                started = False
-                try:
-                    with http.stream(method, base + path, headers=headers) as resp:
-                        if "Content-Length" not in resp.headers:
-                            self.close_connection = True
-                        started = True
-                        self.send_response(resp.status_code)
-                        for name in _RELAYED_RESPONSE_HEADERS:
-                            if name in resp.headers:
-                                self.send_header(name, resp.headers[name])
-                        self.end_headers()
-                        if method == "GET":
-                            for chunk in resp.iter_raw():
-                                self.wfile.write(chunk)
-                except httpx.HTTPError:
-                    if started:
-                        self.close_connection = True
-                    else:
-                        self.send_error(502)
-                except OSError:
-                    pass  # the reader closed the connection mid-body
-
-            def do_GET(self) -> None:  # noqa: N802
-                self._forward("GET")
-
-            def do_HEAD(self) -> None:  # noqa: N802
-                self._forward("HEAD")
-
-            def log_message(self, format: str, *args: object) -> None:  # noqa: A002
-                pass
-
-        Handler.protocol_version = "HTTP/1.1"
-        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self._server.daemon_threads = True
-        threading.Thread(target=self._server.serve_forever, daemon=True).start()
-
-    @property
-    def base(self) -> str:
-        return f"http://127.0.0.1:{self._server.server_address[1]}{self._prefix}"
-
-
-_relays: dict[tuple[str, str], _PartRelay] = {}
-_relays_lock = threading.Lock()
-
-
-def _relay_for(plex_url: str, token: str) -> _PartRelay:
-    with _relays_lock:
-        key = (plex_url.rstrip("/"), token)
-        if key not in _relays:
-            _relays[key] = _PartRelay(plex_url, token)
-        return _relays[key]
+    Plex's path loses whichever of `source_roots` it sits under and is read below
+    `media_dir`. A path under no root, or one whose `..` would leave `media_dir`, is a
+    `MediaError` rather than a read somewhere else. The check is on the path's text,
+    so a symlink inside the library is followed wherever it points."""
+    rest = canonical_path(plex_file, source_roots)
+    if rest == plex_file.replace("\\", "/"):
+        raise MediaError(f"{plex_file} is under none of PLEX_SOURCE_ROOTS {list(source_roots)}")
+    root = Path(os.path.normpath(media_dir.absolute()))
+    path = Path(os.path.normpath(root / rest))
+    if path == root or not path.is_relative_to(root):
+        raise MediaError(f"{plex_file} leaves PLEXDB_MEDIA_DIR")
+    return path
 
 
 class FfmpegMedia:
-    """Reads a Plex part with ffmpeg and ffprobe over HTTP. They read through a loopback
-    relay that holds the token, so it appears in no argv and no error message."""
+    """Reads a part's file with ffmpeg and ffprobe, read-only, from the media mount.
 
-    def __init__(
-        self,
-        plex_url: str,
-        token: str,
-        *,
-        ffmpeg: str,
-        ffprobe: str,
-        http: httpx.Client | None = None,
-    ) -> None:
-        self._base = plex_url.rstrip("/")
-        self._token = token
+    Reading the file rather than `/library/parts/<id>/file` matters: Plex makes each
+    such read a playback session and ends the account's previous one, so two readers
+    of different titles cut each other off."""
+
+    def __init__(self, *, ffmpeg: str, ffprobe: str) -> None:
         self._ffmpeg = ffmpeg
         self._ffprobe = ffprobe
-        self._http = http or httpx.Client(timeout=60.0)
 
-    def _url(self, part_id: int) -> str:
-        return f"{self._base}/library/parts/{part_id}/file"
-
-    def _relayed_url(self, part_id: int) -> str:
-        return f"{_relay_for(self._base, self._token).base}/library/parts/{part_id}/file"
-
-    def _input(self, part_id: int) -> list[str]:
-        return ["-rw_timeout", _IO_TIMEOUT_US, "-i", self._relayed_url(part_id)]
-
-    def file_hash(self, part_id: int, size: int) -> str:
-        """sha256 over the part's size, its `Last-Modified`, and its first MiB."""
-        headers = {"X-Plex-Token": self._token, "Range": f"bytes=0-{_HASH_BYTES - 1}"}
+    def file_hash(self, path: Path, size: int) -> str:
+        """sha256 over the part's size, its modification time and its first MiB."""
         try:
-            with self._http.stream("GET", self._url(part_id), headers=headers) as resp:
-                if resp.status_code not in (200, 206):
-                    raise MediaError(f"part {part_id}: Plex answered {resp.status_code}")
-                modified = resp.headers.get("Last-Modified", "")
-                head = bytearray()
-                for chunk in resp.iter_bytes():
-                    head += chunk
-                    if len(head) >= _HASH_BYTES:
-                        break
-        except httpx.HTTPError as err:
-            raise MediaError(
-                f"part {part_id}: cannot read through Plex: {type(err).__name__}"
-            ) from None
+            stat = path.stat()
+            with path.open("rb") as handle:
+                head = handle.read(_HASH_BYTES)
+        except OSError as err:
+            raise MediaError(f"{path}: cannot read: {err.strerror}") from None
+        modified = formatdate(int(stat.st_mtime), usegmt=True)
         digest = hashlib.sha256(f"{size}|{modified}|".encode())
-        digest.update(bytes(head[:_HASH_BYTES]))
+        digest.update(head)
         return digest.hexdigest()
 
     def _run(
@@ -326,49 +232,47 @@ class FfmpegMedia:
         except subprocess.TimeoutExpired:
             raise MediaError(f"{what}: {argv[0]} ran past {timeout_s:.0f} s") from None
 
-    def scan(self, part_id: int) -> Scan:
-        scdet, last_frame_ms = self._scdet(part_id)
-        found = sorted(scdet + self._chapters(part_id), key=lambda cut: (cut.t_ms, cut.source))
+    def scan(self, path: Path) -> Scan:
+        scdet, last_frame_ms = self._scdet(path)
+        found = sorted(scdet + self._chapters(path), key=lambda cut: (cut.t_ms, cut.source))
         return Scan(found, last_frame_ms)
 
-    def _scdet(self, part_id: int) -> tuple[list[Cut], int]:
+    def _scdet(self, path: Path) -> tuple[list[Cut], int]:
         """One decode: scdet's Cuts on one branch, every frame's pts (framecrc) on the other."""
         with tempfile.TemporaryDirectory(prefix="plexdb-scan-") as tmp:
             crc = Path(tmp) / "frames.crc"
             argv = [
                 self._ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
-                *self._input(part_id),
+                "-i", str(path),
                 "-filter_complex",
                 "[0:v:0]scale=-2:224,split[cut][all];"
                 "[cut]scdet=t=10:s=1,metadata=print:file=-,nullsink",
                 "-map", "[all]", "-fps_mode", "passthrough", "-f", "framecrc", "-y", str(crc),
             ]  # fmt: skip
-            done = self._run(argv, f"part {part_id}: scdet", timeout_s=_DECODE_TIMEOUT_S)
+            done = self._run(argv, f"{path}: scdet", timeout_s=_DECODE_TIMEOUT_S)
             if done.returncode != 0:
                 raise MediaError(
-                    f"part {part_id}: ffmpeg scdet exited {done.returncode}: "
-                    f"{done.stderr.strip()[-200:]}"
+                    f"{path}: ffmpeg scdet exited {done.returncode}: {done.stderr.strip()[-200:]}"
                 )
             with crc.open() as lines:
                 last_frame_ms = parse_last_frame(lines)
         if last_frame_ms is None:
-            raise MediaError(f"part {part_id}: ffmpeg decoded no video frame")
+            raise MediaError(f"{path}: ffmpeg decoded no video frame")
         return parse_scdet(done.stdout), last_frame_ms
 
-    def _chapters(self, part_id: int) -> list[Cut]:
+    def _chapters(self, path: Path) -> list[Cut]:
         argv = [
-            self._ffprobe, "-v", "error",
-            "-show_chapters", "-print_format", "json", self._relayed_url(part_id),
+            self._ffprobe, "-v", "error", "-show_chapters", "-print_format", "json", str(path),
         ]  # fmt: skip
-        done = self._run(argv, f"part {part_id}: chapters")
+        done = self._run(argv, f"{path}: chapters")
         if done.returncode != 0:
             raise MediaError(
-                f"part {part_id}: ffprobe exited {done.returncode}: {done.stderr.strip()[-200:]}"
+                f"{path}: ffprobe exited {done.returncode}: {done.stderr.strip()[-200:]}"
             )
         return parse_chapters(done.stdout)
 
     def frames(
-        self, part_id: int, times_ms: Sequence[int], *, height: int = 224
+        self, path: Path, times_ms: Sequence[int], *, height: int = 224
     ) -> list[bytes | None]:
         out: list[bytes | None] = []
         for start in range(0, len(times_ms), _EXTRACT_CHUNK):
@@ -376,45 +280,44 @@ class FfmpegMedia:
             with tempfile.TemporaryDirectory(prefix="plexdb-frames-") as tmp:
                 argv = [self._ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error"]
                 for t_ms in chunk:
-                    argv += ["-ss", f"{t_ms / 1000:.3f}", *self._input(part_id)]
+                    argv += ["-ss", f"{t_ms / 1000:.3f}", "-i", str(path)]
                 for i in range(len(chunk)):
                     argv += [
                         "-map", f"{i}:v:0", "-frames:v", "1", "-vf", f"scale=-2:{height}",
                         "-q:v", "3", "-y", str(Path(tmp) / f"{i}.jpg"),
                     ]  # fmt: skip
-                done = self._run(argv, f"part {part_id}: frames")
+                done = self._run(argv, f"{path}: frames")
                 got = [Path(tmp) / f"{i}.jpg" for i in range(len(chunk))]
-                if done.returncode != 0 and not any(path.exists() for path in got):
+                if done.returncode != 0 and not any(jpg.exists() for jpg in got):
                     raise MediaError(
-                        f"part {part_id}: ffmpeg exited {done.returncode}: "
-                        f"{done.stderr.strip()[-200:]}"
+                        f"{path}: ffmpeg exited {done.returncode}: {done.stderr.strip()[-200:]}"
                     )
-                out += [path.read_bytes() if path.exists() else None for path in got]
+                out += [jpg.read_bytes() if jpg.exists() else None for jpg in got]
         return out
 
-    def clip(self, part_id: int, in_ms: int, out_ms: int, *, width: int = 640) -> bytes:
-        """The part's `[in_ms, out_ms)` window as a silent H.264 MP4 `width` px wide.
+    def clip(self, path: Path, in_ms: int, out_ms: int, *, width: int = 640) -> bytes:
+        """The file's `[in_ms, out_ms)` window as a silent H.264 MP4 `width` px wide.
 
         The Search tab plays one Shot as a looping clip. `+faststart` moves the index
         to the front, so a `<video>` starts before the whole file has arrived.
         """
         if out_ms <= in_ms:
-            raise MediaError(f"part {part_id}: clip window {in_ms}-{out_ms} ms is empty")
+            raise MediaError(f"{path}: clip window {in_ms}-{out_ms} ms is empty")
         with tempfile.TemporaryDirectory(prefix="plexdb-clip-") as tmp:
             target = Path(tmp) / "clip.mp4"
             argv = [
                 self._ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
-                "-ss", f"{in_ms / 1000:.3f}", *self._input(part_id),
+                "-ss", f"{in_ms / 1000:.3f}", "-i", str(path),
                 "-t", f"{(out_ms - in_ms) / 1000:.3f}",
                 "-map", "0:v:0", "-an", "-sn", "-dn",
                 "-vf", f"scale={width}:-2",
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
                 "-movflags", "+faststart", "-y", str(target),
             ]  # fmt: skip
-            done = self._run(argv, f"part {part_id}: clip")
+            done = self._run(argv, f"{path}: clip")
             if done.returncode != 0 or not target.exists():
                 raise MediaError(
-                    f"part {part_id}: ffmpeg exited {done.returncode}: {done.stderr.strip()[-200:]}"
+                    f"{path}: ffmpeg exited {done.returncode}: {done.stderr.strip()[-200:]}"
                 )
             return target.read_bytes()
 
@@ -475,11 +378,13 @@ def parse_chapters(text: str) -> list[Cut]:
 # --- discovery ------------------------------------------------------------------
 
 
-def _plex_parts(
-    store_conn: sqlite3.Connection, plex: PlexSource
-) -> dict[str, tuple[str, int, int, int]]:
-    """`item_id -> (kind, added_at, part_id, size)` for every movie and episode Plex
-    lists with a media part. A title with several Plex copies takes the newest."""
+#: `(kind, added_at, part_id, size, file)` of one title's Plex part.
+_Part = tuple[str, int, int, int, str]
+
+
+def _plex_parts(store_conn: sqlite3.Connection, plex: PlexSource) -> dict[str, _Part]:
+    """`item_id -> (kind, added_at, part_id, size, file)` for every movie and episode
+    Plex lists with a media part. A title with several Plex copies takes the newest."""
     wanted: dict[str, tuple[str, str, str]] = {}
     for row in store_conn.execute(
         "SELECT p.rating_key, p.item_id, p.section_id, i.type FROM plex_items p "
@@ -487,7 +392,7 @@ def _plex_parts(
     ):
         wanted[str(row[0])] = (str(row[1]), str(row[2]), str(row[3]))
     section_types = {section.key: section.type for section in plex.sections()}
-    best: dict[str, tuple[str, int, int, int]] = {}
+    best: dict[str, _Part] = {}
     for key in sorted({section for _, section, _ in wanted.values()}):
         kind = section_types.get(key)
         if kind not in ("movie", "show"):
@@ -504,6 +409,7 @@ def _plex_parts(
                 int(record.get("addedAt") or 0),
                 int(parts[0]["id"]),
                 int(parts[0].get("size") or 0),
+                str(parts[0].get("file") or ""),
             )
             if item_id not in best or entry[1] > best[item_id][1]:
                 best[item_id] = entry
@@ -512,8 +418,9 @@ def _plex_parts(
 
 def _candidates(
     frames_conn: sqlite3.Connection,
-    parts: dict[str, tuple[str, int, int, int]],
+    parts: dict[str, _Part],
     media: MediaReader,
+    locate: Callable[[str], Path],
     log: Callable[[str], None],
     keep_going: Callable[[], bool],
 ) -> Iterator[Candidate]:
@@ -521,8 +428,8 @@ def _candidates(
     during a run is seen before the backlog resumes."""
 
     def candidate(item_id: str, reason: str, file_hash: str | None = None) -> Candidate:
-        _, _, part_id, size = parts[item_id]
-        return Candidate(item_id, part_id, size, reason, file_hash)
+        _, _, part_id, size, file = parts[item_id]
+        return Candidate(item_id, part_id, size, file, reason, file_hash)
 
     seen: set[str] = set()
     while True:
@@ -556,7 +463,7 @@ def _candidates(
         if not keep_going():
             return
         try:
-            current = media.file_hash(parts[item_id][2], parts[item_id][3])
+            current = media.file_hash(locate(parts[item_id][4]), parts[item_id][3])
         except MediaError as err:
             log(f"skip {item_id}: could not hash: {err}")
             continue
@@ -655,6 +562,7 @@ def _index_title(
     frames_conn: sqlite3.Connection,
     cand: Candidate,
     media: MediaReader,
+    locate: Callable[[str], Path],
     encoder: EncoderClient,
     now_fn: Callable[[], datetime],
     log: Callable[[str], None],
@@ -669,17 +577,18 @@ def _index_title(
     error: str | None = None
     outcome = "ok"
     try:
-        file_hash = file_hash or media.file_hash(cand.part_id, cand.size)
+        path = locate(cand.file)
+        file_hash = file_hash or media.file_hash(path, cand.size)
         started = time.perf_counter()
-        scan = media.scan(cand.part_id)
+        scan = media.scan(path)
         cuts = scan.cuts
         shot_list = shots([c.t_ms for c in cuts], scan.last_frame_ms)
         samples = sample_times(shot_list)
-        jpegs = media.frames(cand.part_id, [t_ms for t_ms, _ in samples])
+        jpegs = media.frames(path, [t_ms for t_ms, _ in samples])
         decode_s = time.perf_counter() - started
         kept = [(sample, jpeg) for sample, jpeg in zip(samples, jpegs, strict=True) if jpeg]
         if not kept:
-            raise MediaError(f"part {cand.part_id}: no frame could be read")
+            raise MediaError(f"{path}: no frame could be read")
         samples = [sample for sample, _ in kept]
         vectors: list[list[float]] = []
         model = encoder.model
@@ -771,6 +680,7 @@ def _harvest_locked(
     float_conn: sqlite3.Connection | None,
 ) -> HarvestResult:
     window = frames.parse_hours(config.frame_hours)
+    locate = locator(config)
     result = HarvestResult()
     with open_readonly(config.store_path) as store_conn:
         parts = _plex_parts(store_conn, plex)
@@ -781,6 +691,7 @@ def _harvest_locked(
             frames_conn,
             parts,
             media,
+            locate,
             lambda msg: log(f"frames: {msg}"),
             lambda: ignore_hours or frames.inside_hours(window, now_fn()),
         )
@@ -802,6 +713,7 @@ def _harvest_locked(
                         frames_conn,
                         cand,
                         media,
+                        locate,
                         encoder,
                         now_fn,
                         lambda line: log(f"frames: {line}"),
@@ -869,6 +781,18 @@ def configured_media(config: Config) -> FfmpegMedia:
             f"{config.ffmpeg} and {config.ffprobe} must be installed "
             "(or named by PLEXDB_FFMPEG and PLEXDB_FFPROBE) to harvest frames"
         )
-    return FfmpegMedia(
-        config.plex_url, config.plex_token, ffmpeg=config.ffmpeg, ffprobe=config.ffprobe
-    )
+    return FfmpegMedia(ffmpeg=config.ffmpeg, ffprobe=config.ffprobe)
+
+
+def locator(config: Config) -> Callable[[str], Path]:
+    """`local_path` under the configured media directory, or a `ConfigError` when
+    there is none: frame work reads files, so it needs to know where they are."""
+    media_dir = config.media_dir
+    if media_dir is None:
+        raise ConfigError(
+            "PLEXDB_MEDIA_DIR is not set, so no video file can be read; mount the library "
+            "read-only and name the directory Plex calls PLEX_SOURCE_ROOTS"
+        )
+    if not config.source_roots:
+        raise ConfigError("PLEX_SOURCE_ROOTS is not set, so Plex's file paths cannot be mapped")
+    return lambda plex_file: local_path(media_dir, plex_file, config.source_roots)

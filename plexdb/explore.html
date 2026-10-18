@@ -2988,7 +2988,12 @@ async function refreshPool() {
 function persistPool() { try { localStorage.setItem(POOL_KEY, JSON.stringify(srch.pool)); } catch {} }
 function paintPool() {
   const list = sEl("spoollist");
-  if (!srch.titles.length) { list.replaceChildren(el("li", { className: "empty" }, "No titles yet.")); return; }
+  if (!srch.titles.length) {
+    const n = srch.status ? srch.status.indexed : 0;
+    list.replaceChildren(el("li", { className: "empty" },
+      `All indexed titles (${fmt(n)}). Add titles to search only those.`));
+    return;
+  }
   list.replaceChildren(...srch.titles.map(t => {
     const label = { indexed: "indexed", none: "not indexed", queued: "queued", failed: "failed" }[t.state];
     const x = el("button", { type: "button", className: "x", title: "Remove from the pool", ariaLabel: `Remove ${t.title}` }, "×");

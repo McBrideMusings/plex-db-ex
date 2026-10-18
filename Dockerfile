@@ -62,12 +62,15 @@ ENV PATH="/app/.venv/bin:$PATH" \
 # caps entry count and total size). `/frames` holds the Frame index, frames.db
 # (ADR-0024): tens of gigabytes at full library and rebuildable, so it has a
 # mount of its own and the store's backups, which copy plexdb.db alone, never
-# include it. Credentials arrive
+# include it. `/media` is the library, mounted read-only where Plex's own
+# container mounts it, so the file paths Plex reports open here unchanged; the
+# frame harvester and the Search tab read video there. Credentials arrive
 # from the host environment and appear in no committed file.
 ENV PLEXDB_PATH=/data/plexdb.db \
     PLEXDB_SNAPSHOT_PATH=/snapshot/plexdb.snapshot.db \
     PLEXDB_EXPLORE_SAVED_PATH=/explore-data/explore-queries.json \
-    PLEXDB_FRAMES_DIR=/frames
+    PLEXDB_FRAMES_DIR=/frames \
+    PLEXDB_MEDIA_DIR=/media
 
 VOLUME ["/data", "/snapshot", "/explore-data", "/frames"]
 

@@ -9,8 +9,9 @@ Everything it shows comes through here.
 - **Token boxes** come from the Hugging Face tokenizer matching `PLEXDB_FRAME_MODEL`.
   The same tokenizer cuts a phrase at the 75th token before it is searched, so the
   page's "not searched" line is true.
-- **Frames and clips** are cut by ffmpeg from the Plex part (`FfmpegMedia`) and kept
-  in one least-recently-used cache under `<explore data>/clips`.
+- **Frames and clips** are cut by ffmpeg from the part's file under `PLEXDB_MEDIA_DIR`
+  (`FfmpegMedia`), found by asking Plex which file the part is, and kept in one
+  least-recently-used cache under `<explore data>/clips`.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ import os
 import re
 import sqlite3
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -31,9 +33,10 @@ from pathlib import Path
 from typing import Any
 
 from .config import Config
-from .errors import ConfigError, MediaError
-from .frame_harvest import FfmpegMedia
+from .errors import ConfigError, MediaError, PlexError
+from .frame_harvest import FfmpegMedia, locator
 from .frames import UnknownItem, open_frames, queue
+from .plex_client import LivePlexClient
 from .shot_search import reader_binary, search_argv
 from .store import open_readonly
 
@@ -250,6 +253,7 @@ class SearchTab:
         *,
         tokenizer: PhraseTokenizer | None = None,
         media: Callable[[], FfmpegMedia] | None = None,
+        files: Callable[[str, int], Path] | None = None,
         cache_cap: int = CACHE_BYTES,
     ) -> None:
         self._config = config
@@ -258,6 +262,10 @@ class SearchTab:
             config.frame_model, data_dir, config.frame_tokenizer
         )
         self._media_factory = media
+        self._files = files
+        self._file_cache: dict[tuple[str, int], Path] = {}
+        self._plex: LivePlexClient | None = None
+        self._file_lock = threading.Lock()
         self.cache = MediaCache(data_dir / "clips", cache_cap)
 
     # -- configuration, shown to the person ------------------------------------------
@@ -330,7 +338,13 @@ class SearchTab:
         if missing:
             return f"{' and '.join(missing)} not found (PLEXDB_FFMPEG, PLEXDB_FFPROBE)"
         if not self._config.plex_url or not self._config.plex_token:
-            return "PLEX_URL and PLEX_TOKEN are not set, so frames and clips cannot be cut"
+            return "PLEX_URL and PLEX_TOKEN are not set, so a part's file cannot be found"
+        try:
+            locator(self._config)
+        except ConfigError as err:
+            return str(err)
+        if self._config.media_dir and not self._config.media_dir.is_dir():
+            return f"PLEXDB_MEDIA_DIR {self._config.media_dir} is not a readable directory"
         return None
 
     # -- tokens ------------------------------------------------------------------------
@@ -693,10 +707,42 @@ class SearchTab:
         problem = self._media_problem()
         if problem:
             raise SearchUnavailable(problem)
-        cfg = self._config
-        return FfmpegMedia(cfg.plex_url, cfg.plex_token, ffmpeg=cfg.ffmpeg, ffprobe=cfg.ffprobe)
+        return FfmpegMedia(ffmpeg=self._config.ffmpeg, ffprobe=self._config.ffprobe)
 
-    def _cut(self, make: Callable[[], bytes]) -> Callable[[], bytes]:
+    def _file(self, item_id: str, part: int) -> Path:
+        """Where this process reads `part`'s file: Plex names it, `locator` maps it."""
+        if self._files is not None:
+            return self._files(item_id, part)
+        with self._file_lock:
+            if (item_id, part) in self._file_cache:
+                return self._file_cache[(item_id, part)]
+        problem = self._media_problem()
+        if problem:
+            raise SearchUnavailable(problem)
+        with open_readonly(self._store) as conn:
+            keys = [
+                str(r[0])
+                for r in conn.execute(
+                    "SELECT rating_key FROM plex_items WHERE item_id = ?", (item_id,)
+                )
+            ]
+        with self._file_lock:
+            if self._plex is None:
+                self._plex = LivePlexClient(self._config.plex_url, self._config.plex_token)
+            plex = self._plex
+        try:
+            found = next((f for key in keys if (f := plex.part_file(key, part))), None)
+        except PlexError as err:
+            _log(f"explore: part {part} of {item_id}: {err}")
+            raise SearchUnavailable("Plex did not say where this title's file is") from None
+        if found is None:
+            raise NoFrame(f"Plex no longer lists part {part} for {item_id}")
+        path = locator(self._config)(found)
+        with self._file_lock:
+            self._file_cache[(item_id, part)] = path
+        return path
+
+    def _cut(self, item_id: str, part: int, make: Callable[[], bytes]) -> Callable[[], bytes]:
         def run() -> bytes:
             # A results page asks for thirty thumbnails at once; they take turns rather than fail.
             if not CUT_SLOTS.acquire(timeout=CUT_WAIT_SECONDS):
@@ -704,7 +750,12 @@ class SearchTab:
             try:
                 return make()
             except MediaError as err:
-                raise SearchUnavailable(str(err)) from None
+                # The reason names files on the server, and this page has no login: it goes
+                # to the log, and the path is looked up again next time in case Plex moved it.
+                _log(f"explore: cut failed for part {part} of {item_id}: {err}")
+                with self._file_lock:
+                    self._file_cache.pop((item_id, part), None)
+                raise SearchUnavailable("could not read this title's file; see the log") from None
             finally:
                 CUT_SLOTS.release()
 
@@ -717,13 +768,14 @@ class SearchTab:
         height = LIGHTBOX_HEIGHT if large else FRAME_HEIGHT
 
         def make() -> bytes:
-            (jpeg,) = self._media().frames(part, [t_ms], height=height)
+            path = self._file(item_id, part)
+            (jpeg,) = self._media().frames(path, [t_ms], height=height)
             if jpeg is None:
-                raise MediaError(f"part {part}: no frame at {t_ms} ms")
+                raise MediaError(f"{path}: no frame at {t_ms} ms")
             return jpeg
 
         return self.cache.get(
-            f"frames/{_slug(item_id)}-{part}-{t_ms}-{height}.jpg", self._cut(make)
+            f"frames/{_slug(item_id)}-{part}-{t_ms}-{height}.jpg", self._cut(item_id, part, make)
         )
 
     def clip(self, item_id: str, part_id: int, in_ms: int, out_ms: int) -> Path:
@@ -736,8 +788,18 @@ class SearchTab:
             )
         return self.cache.get(
             f"{_slug(item_id)}-{part}-{in_ms}-{out_ms}-{CLIP_WIDTH}.mp4",
-            self._cut(lambda: self._media().clip(part, in_ms, out_ms, width=CLIP_WIDTH)),
+            self._cut(
+                item_id,
+                part,
+                lambda: self._media().clip(
+                    self._file(item_id, part), in_ms, out_ms, width=CLIP_WIDTH
+                ),
+            ),
         )
+
+
+def _log(line: str) -> None:
+    print(line, file=sys.stderr, flush=True)
 
 
 def _slug(item_id: str) -> str:

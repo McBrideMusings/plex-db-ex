@@ -85,6 +85,16 @@ class LivePlexClient:
         self._token = token
         self._http = http or httpx.Client(timeout=_DEFAULT_TIMEOUT)
 
+    def part_file(self, rating_key: str, part_id: int) -> str | None:
+        """The file Plex names for one part of one item, or `None` when the item has no
+        such part. A metadata read, so it starts no playback session."""
+        for record in self._get(f"/library/metadata/{rating_key}").get("Metadata") or []:
+            for media in record.get("Media", []):
+                for part in media.get("Part", []):
+                    if int(part.get("id", -1)) == part_id and part.get("file"):
+                        return str(part["file"])
+        return None
+
     def _get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         # The token rides in a header, not the query string, so it never lands
         # in a proxy or access log.

@@ -142,6 +142,11 @@ class Config:
     #: `ffprobe`, looked up on PATH; the container image ships both.
     ffmpeg: str
     ffprobe: str
+    #: `PLEXDB_MEDIA_DIR`, where this process sees the directory Plex calls its
+    #: source root (`source_roots`): the frame harvester and the Search tab read a
+    #: part's file there, read-only, rather than streaming it from Plex. Unset turns
+    #: frame work off.
+    media_dir: Path | None
 
     @property
     def frames_path(self) -> Path | None:
@@ -194,4 +199,9 @@ class Config:
             read_bin=os.environ.get("PLEXDB_READ_BIN", "").strip() or "plexdb-read",
             ffmpeg=os.environ.get("PLEXDB_FFMPEG", "").strip() or "ffmpeg",
             ffprobe=os.environ.get("PLEXDB_FFPROBE", "").strip() or "ffprobe",
+            media_dir=(
+                Path(media_raw).expanduser()
+                if (media_raw := os.environ.get("PLEXDB_MEDIA_DIR", "").strip())
+                else None
+            ),
         )
