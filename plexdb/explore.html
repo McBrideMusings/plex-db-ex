@@ -434,6 +434,16 @@
   #spoollist .st.none, #spoollist .st.failed { color: var(--noise); }
   #spoollist button.x { border: 0; background: transparent; color: var(--muted); cursor: pointer; font: inherit; padding: 0 2px; }
   #spoollist button.x:hover { color: var(--noise); }
+  #sframes { margin-top: 20px; border-top: 1px solid var(--line); padding-top: 12px; }
+  #sframes .fx { font-size: 12px; color: var(--muted); margin: 0 0 6px; padding: 0; list-style: none; }
+  #sframesfailed { list-style: none; margin: 8px 0 0; padding: 0; }
+  #sframesfailed li { display: block; padding: 5px 0; border-top: 1px solid var(--line); font-size: 13px; }
+  #sframesfailed .head { display: flex; gap: 6px; justify-content: space-between; align-items: baseline; }
+  #sframesfailed .name { min-width: 0; overflow-wrap: anywhere; }
+  #sframesfailed details { font-size: 12px; color: var(--muted); }
+  #sframesfailed summary { cursor: pointer; color: var(--noise); overflow-wrap: anywhere; }
+  #sframesfailed pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; margin: 4px 0 0; }
+  #sframesfailed button { font: inherit; font-size: 12px; cursor: pointer; }
   #smain { padding: 14px 20px 24px; min-width: 0; }
   .sbanner { border: 1px solid var(--line); background: var(--chip); border-radius: 6px; padding: 7px 12px; margin-bottom: 10px; }
   .sbanner.noise { border-color: var(--noise); background: var(--noise-bg); color: var(--noise); }
@@ -630,6 +640,12 @@
       <ul class="sugg" id="spoolsugg" role="listbox" hidden></ul>
     </div>
     <ul id="spoollist"><li class="empty">No titles yet.</li></ul>
+    <section id="sframes" aria-labelledby="sframesh">
+      <h2 id="sframesh">Frame index</h2>
+      <p id="sframesnow" class="fx"></p>
+      <ul id="sframescounts" class="fx"></ul>
+      <ul id="sframesfailed"></ul>
+    </section>
   </aside>
   <div id="smain">
     <div id="sbanners"></div>
@@ -2945,7 +2961,49 @@ function sBanner(kind, ...kids) {
 }
 function setBanners(list) { sEl("sbanners").replaceChildren(...list); }
 
+// ---- the Frame index panel: what is indexing, how far each section has got, what failed ----
+// The harvester writes local times with their offset; show them in the viewer's own clock.
+const frameWhen = at => at ? new Date(at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "";
+async function refreshFrames() {
+  let f;
+  try { f = await getJSON("/api/search/frames"); }
+  catch (err) { sEl("sframesnow").textContent = err.message; return; }
+  const now = f.indexing;
+  sEl("sframesnow").textContent = now
+    ? `Indexing now: ${now.year ? `${now.title} (${now.year})` : now.title}, since ${frameWhen(now.since)}`
+    : `Nothing indexing now · harvest hours ${f.frame_hours || "off"}`;
+  sEl("sframescounts").replaceChildren(
+    ...f.sections.map(s => el("li", {}, `Section ${s.section_id}: ${fmt(s.indexed)} of ${fmt(s.total)} indexed`)),
+    el("li", {}, `${fmt(f.queued)} queued · ${fmt(f.failed.length)} failed`));
+  sEl("sframesfailed").replaceChildren(...f.failed.map(t => {
+    const retry = t.queued ? el("span", { className: "st" }, "queued") : el("button", { type: "button" }, "Retry");
+    if (!t.queued) retry.addEventListener("click", async () => {
+      retry.disabled = true;
+      try { await sendJSON("POST", "/api/search/queue", { item_ids: [t.item_id] }); retry.replaceWith("queued"); }
+      catch (err) {
+        retry.disabled = false;
+        retry.after(el("span", { className: "st failed" }, ` not queued: ${err.message}`));
+        return;
+      }
+      refreshFrames(); refreshPool();
+    });
+    const firstLine = t.error.split("\n")[0];
+    return el("li", {},
+      el("div", { className: "head" }, el("span", { className: "name" }, t.year ? `${t.title} (${t.year})` : t.title), retry),
+      el("details", {}, el("summary", {}, firstLine.length > 90 ? firstLine.slice(0, 90) + "…" : firstLine),
+        el("pre", {}, `${t.error}\n\n${t.item_id} · failed ${frameWhen(t.at)}`)));
+  }));
+}
+
+// The harvester moves to a new title every 20–45 minutes: re-read the panel every 30 s while the
+// Search tab is on screen, and not at all while it is hidden.
+const FRAMES_EVERY_MS = 30_000;
+let framesTimer = 0;
 async function initSearch() {
+  refreshFrames();
+  if (!framesTimer) framesTimer = setInterval(() => {
+    if (!document.hidden && !sEl("searchwrap").hidden) refreshFrames();
+  }, FRAMES_EVERY_MS);
   if (srch.ready) { refreshPool(); return; }
   srch.ready = true;
   try { srch.pool = JSON.parse(localStorage.getItem(POOL_KEY) || "[]").filter(x => typeof x === "string"); } catch { srch.pool = []; }

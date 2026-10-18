@@ -35,7 +35,7 @@ from typing import Any
 from .config import Config
 from .errors import ConfigError, MediaError, PlexError
 from .frame_harvest import FfmpegMedia, locator
-from .frames import UnknownItem, open_frames, queue
+from .frames import UnknownItem, open_frames, queue, status
 from .plex_client import LivePlexClient
 from .shot_search import reader_binary, search_argv
 from .store import open_readonly
@@ -427,6 +427,50 @@ class SearchTab:
             if item not in ids:
                 ids.append(item)
         return ids
+
+    def frames_health(self) -> dict[str, object]:
+        """The Frame index panel: what is indexing now, how far each section has got, and
+        every failed title with its error, newest first. `frames.status` is the one source,
+        the same report `plexdb frames status` prints."""
+        frames_file = self._frames_file()
+        with closing(self._frames_conn()) as frames_conn, open_readonly(self._store) as store:
+            report = status(
+                frames_conn,
+                store,
+                path=frames_file,
+                hours=self._config.frame_hours,
+                now=datetime.now().astimezone(),
+                encoder_reachable=None,
+                ffmpeg_found=True,
+            )
+            waiting = {str(r[0]) for r in frames_conn.execute("SELECT item_id FROM frame_queue")}
+        failed: list[dict[str, Any]] = report["failed"]
+        indexing: dict[str, Any] | None = report["indexing"]
+        titles = self._titles(
+            [f["item_id"] for f in failed] + ([indexing["item_id"]] if indexing else [])
+        )
+
+        def named(item_id: str) -> dict[str, object]:
+            title, year, _ = titles.get(item_id, (item_id, None, ""))
+            return {"item_id": item_id, "title": title, "year": year}
+
+        return {
+            "indexing": None
+            if indexing is None
+            else {**named(indexing["item_id"]), "since": indexing["since"]},
+            "sections": report["sections"],
+            "queued": report["queued"],
+            "frame_hours": report["frame_hours"],
+            "failed": [
+                {
+                    **named(f["item_id"]),
+                    "error": f["error"],
+                    "at": f["at"],
+                    "queued": f["item_id"] in waiting,
+                }
+                for f in failed
+            ],
+        }
 
     def pool(self, raw: object) -> dict[str, object]:
         """Each pool title with whether the Frame index holds it."""

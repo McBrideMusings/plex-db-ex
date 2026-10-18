@@ -2532,7 +2532,9 @@ def make_server(
                     self._json(search.status())
                 return
             tab = self._search_tab()
-            if path == "/api/search/suggest":
+            if path == "/api/search/frames":
+                self._json(tab.frames_health())
+            elif path == "/api/search/suggest":
                 self._json(tab.suggest(query.get("q", "")))
             elif path == "/api/search/collection":
                 ref = query.get("id", "")
@@ -2667,6 +2669,9 @@ def make_server(
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(data)))
+            # The page and its answers change with every deploy and every write; a browser
+            # revalidates rather than showing yesterday's page beside today's API.
+            self.send_header("Cache-Control", "no-cache")
             self.end_headers()
             self.wfile.write(data)
 

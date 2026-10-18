@@ -85,6 +85,13 @@ for every one that is missing.
   indexed" and a "Queue the other M−N" link, which writes `frame_queue` rows through
   `frames.queue`, as `plexdb frames queue` does (`queued_by` is `explore`). The pool lives in the
   browser's localStorage.
+- **Frame index panel.** Under the Pool, `GET /api/search/frames` shows the title the harvester is
+  indexing now and since when, each Plex section's indexed and total titles, the queued count and the
+  harvest hours (`frames.status`, the report `plexdb frames status` prints). Below it, every title
+  whose last attempt failed, newest first: its name and the error's first line, which opens to the
+  full error, the item_id and when it failed. Retry queues that title through the same
+  `POST /api/search/queue`; a failed title already in the queue shows `queued` instead. The full
+  error names the file on the server, so it is shown to whoever reaches the port.
 - **Token boxes.** About 150 ms after typing stops, the page posts the text to
   `/api/search/tokenize`. The server tokenizes it with the Hugging Face tokenizer for
   `PLEXDB_FRAME_MODEL` and returns each token with its character offsets; the page draws one box per
