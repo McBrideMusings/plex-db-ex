@@ -166,7 +166,7 @@ _Avoid_: cache, provider
 
 **Frame index**:
 Every title's Cuts and the vectors of its sampled frames — one per Shot, and one every 2 s
-inside longer ones — held in `frames.db` and rebuilt from the media through Plex.
+inside longer ones — held in `frames.db` and rebuilt from the library's video files, which Plex names.
 _Avoid_: embeddings, frame cache
 
 **Frame harvester**:
