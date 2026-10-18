@@ -282,8 +282,11 @@ class FfmpegMedia:
             chunk = times_ms[start : start + _EXTRACT_CHUNK]
             with tempfile.TemporaryDirectory(prefix="plexdb-frames-") as tmp:
                 argv = [self._ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error"]
+                # One decoder thread per input: each of the chunk's inputs is its own decoder,
+                # and at the default of one thread per core a 4K chunk peaked at 16 GB (4 GB at
+                # one thread, and faster, since the inputs already run side by side).
                 for t_ms in chunk:
-                    argv += ["-ss", f"{t_ms / 1000:.3f}", "-i", str(path)]
+                    argv += ["-threads", "1", "-ss", f"{t_ms / 1000:.3f}", "-i", str(path)]
                 for i in range(len(chunk)):
                     argv += [
                         "-map", f"{i}:v:0", "-frames:v", "1", "-vf", f"scale=-2:{height}",
