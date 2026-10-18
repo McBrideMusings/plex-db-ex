@@ -238,15 +238,18 @@ class FfmpegMedia:
         return Scan(found, last_frame_ms)
 
     def _scdet(self, path: Path) -> tuple[list[Cut], int]:
-        """One decode: scdet's Cuts on one branch, every frame's pts (framecrc) on the other."""
+        """One decode, one chain: scdet marks the Cuts and prints them, and passes every frame
+        on (`s=0`) to framecrc, which records each frame's pts.
+
+        Not a `split` into a scdet branch and a framecrc branch: ffmpeg then queues every
+        decoded frame until the file ends, so memory grows with the title's length and a 4K
+        10-bit film is killed before it finishes."""
         with tempfile.TemporaryDirectory(prefix="plexdb-scan-") as tmp:
             crc = Path(tmp) / "frames.crc"
             argv = [
                 self._ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
                 "-i", str(path),
-                "-filter_complex",
-                "[0:v:0]scale=-2:224,split[cut][all];"
-                "[cut]scdet=t=10:s=1,metadata=print:file=-,nullsink",
+                "-filter_complex", "[0:v:0]scale=-2:224,scdet=t=10:s=0,metadata=print:file=-[all]",
                 "-map", "[all]", "-fps_mode", "passthrough", "-f", "framecrc", "-y", str(crc),
             ]  # fmt: skip
             done = self._run(argv, f"{path}: scdet", timeout_s=_DECODE_TIMEOUT_S)
