@@ -495,3 +495,17 @@ def test_status_shows_the_decoder_and_the_fallback(
     media = frame_harvest.configured_media(Config.from_env())
     assert media.decoder == "cuda"
     assert not frames.decoder_path(frames.frames_path(config)).exists(), "a new run starts clean"
+
+
+def test_a_row_with_no_lock_holder_reads_as_not_indexing(config: Config) -> None:
+    path = frames_path(config)
+    when = datetime(2026, 1, 1)
+    kwargs: dict[str, Any] = {"hours": "", "encoder_reachable": None, "ffmpeg_found": False}
+    with frames.open_frames(path) as conn:
+        frames.set_indexing(conn, "imdb:new", now=when)
+        assert not frames.harvester_running(path)
+        assert frames.status(conn, {}, path=path, now=when, **kwargs)["indexing"] is None
+        with frames.harvest_lock(path):
+            assert frames.harvester_running(path)
+            held = frames.status(conn, {}, path=path, now=when, **kwargs)["indexing"]
+            assert held == {"item_id": "imdb:new", "since": when.isoformat()}
