@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import sqlite3
-import subprocess
 from collections.abc import Sequence
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -403,47 +401,6 @@ def test_parse_last_frame_takes_the_largest_pts_in_the_time_base() -> None:
     assert frame_harvest.parse_last_frame(["#tb 0: 1/1000"]) is None
 
 
-def test_nearby_sample_times_are_cut_from_one_input_and_far_ones_from_their_own(
-    tmp_path: Path,
-) -> None:
-    script, log = _fake_ffmpeg(tmp_path, cuda_fails=False)
-    media = _media(script, "cpu")
-    times = [1000, 3000, 5000, 60_000, 200_000]
-    assert media.frames(tmp_path / "a.mkv", times) == [b"jpeg"] * 5
-    (line,) = log.read_text().splitlines()
-    assert line.count("-i ") == 3
-    assert line.count("-ss 1.000 -i") == 1
-    assert line.count("-ss 60.000 -i") == 1
-    assert line.count("-ss 3.000 -i") == 0, "a time inside a run has no seek of its own"
-
-
-def test_runs_split_on_a_gap_that_is_too_small_or_too_large() -> None:
-    assert frame_harvest._runs([0, 2000, 4000, 20_000, 20_500, 22_500]) == [
-        [0, 1, 2],
-        [3],
-        [4, 5],
-    ]
-
-
-@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
-def test_a_run_cut_from_one_input_is_byte_identical_to_one_seek_per_time(tmp_path: Path) -> None:
-    src = tmp_path / "src.mkv"
-    subprocess.run(
-        [
-            "ffmpeg", "-nostdin", "-loglevel", "error", "-f", "lavfi",
-            "-i", "testsrc2=size=320x240:rate=25:duration=60",
-            "-c:v", "libx264", "-g", "125", "-bf", "2", "-pix_fmt", "yuv420p", str(src),
-        ],
-        check=True,
-    )  # fmt: skip
-    media = frame_harvest.FfmpegMedia(ffmpeg="ffmpeg", ffprobe="ffprobe")
-    times = [1000, 3020, 5555, 9000, 12_345, 40_000, 41_999, 55_000]
-    together = media.frames(src, times)
-    alone = [media._frame_alone(src, t, 224) for t in times]
-    assert all(together), "every time has a frame"
-    assert together == alone
-
-
 def test_a_stalled_or_unreadable_scdet_answer_fails_the_title_not_the_run() -> None:
     with pytest.raises(MediaError):
         frame_harvest.parse_scdet("lavfi.scd.score=high\n")
@@ -481,10 +438,7 @@ if "framecrc" in args:
 else:
     for i, arg in enumerate(args):
         if arg == "-y":
-            target = args[i + 1]
-            count = int(args[args.index("-frames:v") + 1]) if "%d" in target else 1
-            for k in range(count):
-                open(target.replace("%d", str(k)), "wb").write(b"jpeg")
+            open(args[i + 1], "wb").write(b"jpeg")
 """
 
 

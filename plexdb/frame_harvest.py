@@ -83,13 +83,6 @@ SPAN_MS = 2000
 BATCH = 32
 #: Frames cut out per ffmpeg process.
 _EXTRACT_CHUNK = 24
-#: Sample times at most this far apart, and at least `_RUN_MIN_GAP_MS`, are cut from one
-#: input that seeks once and decodes forward through them.
-_RUN_GAP_MS = 10_000
-_RUN_MIN_GAP_MS = 1000
-#: A select test passes a frame whose pts is this many seconds short of the sample time,
-#: so a frame at exactly the time survives the float conversion.
-_SELECT_SLACK_S = 0.000001
 #: How much of the file the hash reads.
 _HASH_BYTES = 1 << 20
 #: Consecutive titles the encoder may reject (4xx other than 429) before the run
@@ -355,32 +348,23 @@ class FfmpegMedia:
                     chunk: Sequence[int] = chunk, tmp: str = tmp
                 ) -> tuple[subprocess.CompletedProcess[str], list[bytes | None]]:
                     argv = [self._ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error"]
-                    runs = _runs(chunk)
-                    # One decoder thread per input: each run is its own decoder, and at the
-                    # default of one thread per core a 4K chunk peaked at 16 GB (4 GB at one
-                    # thread, and faster, since the inputs already run side by side).
-                    for run in runs:
+                    # One decoder thread per input: each of the chunk's inputs is its own
+                    # decoder, and at the default of one thread per core a 4K chunk peaked at
+                    # 16 GB (4 GB at one thread, and faster, since the inputs already run side
+                    # by side).
+                    for t_ms in chunk:
                         argv += [
                             "-threads", "1",
-                            "-ss", f"{chunk[run[0]] / 1000:.3f}", "-i", str(path),
+                            "-ss", f"{t_ms / 1000:.3f}", "-i", str(path),
                         ]  # fmt: skip
-                    for r, run in enumerate(runs):
-                        argv += ["-map", f"{r}:v:0", "-frames:v", str(len(run))]
-                        if len(run) == 1:
-                            vf = f"scale=-2:{height}"
-                            target = str(Path(tmp) / f"{r}.0.jpg")
-                        else:
-                            vf = f"{_select_run([chunk[i] for i in run])},scale=-2:{height}"
-                            argv += ["-fps_mode", "passthrough", "-start_number", "0"]
-                            target = str(Path(tmp) / f"{r}.%d.jpg")
-                        argv += ["-vf", vf, "-q:v", "3", "-y", target]
+                    for i in range(len(chunk)):
+                        argv += [
+                            "-map", f"{i}:v:0", "-frames:v", "1", "-vf", f"scale=-2:{height}",
+                            "-q:v", "3", "-y", str(Path(tmp) / f"{i}.jpg"),
+                        ]  # fmt: skip
                     ran = self._run(argv, f"{path}: frames")
-                    got: list[bytes | None] = [None] * len(chunk)
-                    for r, run in enumerate(runs):
-                        for k, i in enumerate(run):
-                            jpg = Path(tmp) / f"{r}.{k}.jpg"
-                            got[i] = jpg.read_bytes() if jpg.exists() else None
-                    return ran, got
+                    jpgs = [Path(tmp) / f"{i}.jpg" for i in range(len(chunk))]
+                    return ran, [jpg.read_bytes() if jpg.exists() else None for jpg in jpgs]
 
                 done, found = cut()
             # One ffmpeg cutting several inputs ends early when one input is past the file's
@@ -439,31 +423,6 @@ class FfmpegMedia:
                     f"ffmpeg clip cut exited {done.returncode}",
                 )
             return target.read_bytes()
-
-
-def _runs(times_ms: Sequence[int]) -> list[list[int]]:
-    """Indexes into `times_ms`, grouped so each group is one ffmpeg input: a time joins
-    the group before it when it is later than the previous time by `_RUN_MIN_GAP_MS` to
-    `_RUN_GAP_MS`. Every other time starts its own group."""
-    runs: list[list[int]] = []
-    for i, t_ms in enumerate(times_ms):
-        if runs and _RUN_MIN_GAP_MS <= t_ms - times_ms[i - 1] <= _RUN_GAP_MS:
-            runs[-1].append(i)
-        else:
-            runs.append([i])
-    return runs
-
-
-def _select_run(times_ms: Sequence[int]) -> str:
-    """A `select` filter that passes, for each time in order, the first frame whose pts has
-    reached it, the frame `-ss <time>` with `-frames:v 1` picks. The input is seeked to
-    the first time, so the filter sees pts relative to it. State variable 0 counts the times
-    already satisfied; variable 1 is this frame's verdict."""
-    first = times_ms[0]
-    lookup = "+".join(
-        f"eq(ld(0),{k})*{(t - first) / 1000 - _SELECT_SLACK_S:.6f}" for k, t in enumerate(times_ms)
-    )
-    return f"select='st(1,gte(t,{lookup}));st(0,ld(0)+ld(1));ld(1)'"
 
 
 _ERROR_LINES_KEPT = 5

@@ -1561,13 +1561,6 @@ now and `--limit N` stops after N titles. It writes `frames.db` alone.
   every frame on to `framecrc`, so ffmpeg holds about 820 MB however long the title is. Frame
   extraction opens up to 24 seeks into the file in one ffmpeg, each with one decoder thread: a 4K
   10-bit batch peaks at about 4.2 GB, a 1080p batch at about 1.6 GB.
-- **Runs of nearby samples share one input.** Sample times 0.1 s to 10 s apart are cut from a
-  single input that seeks to the run's first time and decodes forward, a `select` filter taking
-  for each time the first frame whose pts has reached it. That is the frame a seek of its own
-  picks, so every JPEG is byte-identical; a lone sample keeps its own seek. Inside a long Shot
-  (a sample every 2 s) a run replaces up to 24 overlapping decodes of the same GOP with one.
-  Samples under 1 s apart each keep their own seek, so one frame never answers two times. A
-  test cuts a generated file both ways and compares the bytes.
 - **One harvester at a time.** A harvest takes an `flock` on `harvest.lock` in `PLEXDB_FRAMES_DIR`
   and writes its pid there. A second `plexdb harvest-frames` exits 1 with `another harvester is
   running (pid N, indexing <item_id>)`; `plexdb schedule`'s harvester logs the same refusal and
@@ -1635,8 +1628,7 @@ A fourth film, *3:10 to Yuma*, had a damaged file. The CPU decoder concealed the
 475 and 486 cuts on two runs of the same file; CUDA held 1 frame in 100, found no cuts and exited
 0. That is why a damaged source fails the title (the bullet above).
 
-`quant` stays `int8`. The backlog (`PLEXDB_FRAME_HOURS`) stays unset until extraction's single
-seek (plex-db-ex-8nb.1.31) is measured on a whole film.
+`quant` stays `int8`. The backlog (`PLEXDB_FRAME_HOURS`) is unset on the host.
 
 ### The encoder request (ADR-0025)
 
