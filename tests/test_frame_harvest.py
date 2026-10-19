@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
+import subprocess
 from collections.abc import Sequence
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -191,6 +193,22 @@ def test_an_unchanged_indexed_title_and_a_failed_one_are_not_visited_again(confi
     seed(config, "imdb:old", "h1", error="ffmpeg exited 1")
     result = run(config, media, encoder_with())
     assert "imdb:chg" not in result.titles and "imdb:old" not in result.titles
+
+
+def test_a_title_whose_indexed_part_plex_no_longer_lists_is_reindexed(config: Config) -> None:
+    media = FakeMedia()
+    with frames.open_frames(frames_path(config)) as conn:
+        conn.execute(
+            "INSERT INTO frame_index_state (item_id, part_id, file_hash, indexed_at) "
+            "VALUES ('imdb:old', 999, 'h1', '2026-10-01T00:00:00+00:00')"
+        )
+        conn.commit()
+    result = run(config, media, encoder_with(), limit=1)
+    assert result.titles == ["imdb:old"]
+    assert (
+        rows(config, "SELECT part_id FROM frame_index_state WHERE item_id = 'imdb:old'")[0][0] == 1
+    )
+    assert any("indexed part 999 is not Plex's part 1" in line for line in result.logs)  # type: ignore[attr-defined]
 
 
 def test_a_title_writes_cuts_one_vector_per_sampled_frame_and_its_state(config: Config) -> None:
@@ -584,3 +602,16 @@ def test_a_row_with_no_lock_holder_reads_as_not_indexing(config: Config) -> None
             assert frames.harvester_running(path)
             held = frames.status(conn, {}, path=path, now=when, **kwargs)["indexing"]
             assert held == {"item_id": "imdb:new", "since": when.isoformat()}
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs a real ffmpeg")
+def test_a_time_past_the_last_frame_costs_only_its_own_jpeg(tmp_path: Path) -> None:
+    video = tmp_path / "a.mp4"
+    make = [
+        "ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=d=10:s=320x240:r=24",
+        "-c:v", "libx264", "-g", "48", "-y", str(video),
+    ]  # fmt: skip
+    subprocess.run(make, check=True)
+    media = frame_harvest.FfmpegMedia(ffmpeg="ffmpeg", ffprobe="ffprobe", decode="cpu")
+    got = media.frames(video, [20000, 1000, 9990, 5000, 10500, 3000])
+    assert [g is not None for g in got] == [False, True, False, True, False, True]

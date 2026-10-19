@@ -367,13 +367,9 @@ class FfmpegMedia:
                     return ran, [jpg.read_bytes() if jpg.exists() else None for jpg in jpgs]
 
                 done, found = cut()
-            # One ffmpeg cutting several inputs ends early when one input is past the file's
-            # end, which can leave a time inside the file without its JPEG. Cut each missing
-            # time alone, so a miss means that time has no frame.
-            if len(chunk) > 1:
-                for i, t_ms in enumerate(chunk):
-                    if found[i] is None:
-                        found[i] = self._frame_alone(path, t_ms, height)
+            # An input seeked past the file's last frame writes no JPEG and makes ffmpeg exit
+            # non-zero; every other input still writes its own, so a None is that time's miss
+            # (tests/test_frame_harvest.py runs a real ffmpeg over a past-the-end time).
             if done.returncode != 0 and not any(found):
                 raise MediaError(
                     f"{path}: ffmpeg exited {done.returncode}: {done.stderr.strip()[-200:]}",
@@ -381,19 +377,6 @@ class FfmpegMedia:
                 )
             out += found
         return out
-
-    def _frame_alone(self, path: Path, t_ms: int, height: int) -> bytes | None:
-        with tempfile.TemporaryDirectory(prefix="plexdb-frame-") as tmp:
-            target = Path(tmp) / "0.jpg"
-            argv = [
-                self._ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
-                "-threads", "1",
-                "-ss", f"{t_ms / 1000:.3f}", "-i", str(path),
-                "-map", "0:v:0", "-frames:v", "1", "-vf", f"scale=-2:{height}",
-                "-q:v", "3", "-y", str(target),
-            ]  # fmt: skip
-            self._run(argv, f"{path}: frame at {t_ms} ms")  # no JPEG: no frame at this time
-            return target.read_bytes() if target.exists() else None
 
     def clip(self, path: Path, in_ms: int, out_ms: int, *, width: int = 640) -> bytes:
         """The file's `[in_ms, out_ms)` window as a silent H.264 MP4 `width` px wide.
@@ -589,8 +572,21 @@ def _candidates(
 
     state = {
         str(r["item_id"]): r
-        for r in frames_conn.execute("SELECT item_id, file_hash, indexed_at FROM frame_index_state")
+        for r in frames_conn.execute(
+            "SELECT item_id, part_id, file_hash, indexed_at FROM frame_index_state"
+        )
     }
+    # A title whose indexed part Plex no longer lists is searchable with frames nothing can
+    # serve. It re-indexes from the part Plex lists now, ahead of the new-title backlog; a
+    # failed title retries too, as its part is not the one that failed.
+    for item_id in sorted(state, key=lambda item: (state[item]["indexed_at"], item)):
+        indexed_part = state[item_id]["part_id"]
+        if item_id not in parts or item_id in seen or indexed_part in (None, parts[item_id][2]):
+            continue
+        seen.add(item_id)
+        log(f"{item_id}: indexed part {indexed_part} is not Plex's part {parts[item_id][2]}")
+        yield candidate(item_id, "part changed")
+
     fresh = sorted(
         (item_id for item_id in parts if item_id not in state and item_id not in seen),
         key=lambda item_id: (parts[item_id][0] != "movie", -parts[item_id][1], item_id),

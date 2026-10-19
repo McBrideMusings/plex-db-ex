@@ -1524,10 +1524,12 @@ the directory holds none, so on a fresh directory every count is zero.
 schedule` starts it when the window opens, and it is a step of no Sweep. `--ignore-hours` runs it
 now and `--limit N` stops after N titles. It writes `frames.db` alone.
 
-- **Order.** Queued titles, oldest `queued_at` first; then titles with no `frame_index_state` row,
+- **Order.** Queued titles, oldest `queued_at` first; then titles whose stored `part_id` is not the
+  part Plex lists now (the file was swapped, so frame requests for the old part answer 404),
+  least recently indexed first; then titles with no `frame_index_state` row,
   movies before episodes, newest Plex `addedAt` first; then titles whose `file_hash` differs from
-  the stored one, least recently indexed first. A failed title waits for a new `file_hash` or a
-  new queue row. A title with several Plex copies uses the newest copy's first part.
+  the stored one, least recently indexed first. A failed title waits for a new `file_hash`, a new
+  part or a new queue row. A title with several Plex copies uses the newest copy's first part.
 - **Reading.** Plex names each part's file; `ffmpeg` and `ffprobe` read that file, read-only,
   under `PLEXDB_MEDIA_DIR`, after stripping whichever `PLEX_SOURCE_ROOTS` entry the path sits
   under. A path under no root, or one that would resolve outside `PLEXDB_MEDIA_DIR`, fails the
