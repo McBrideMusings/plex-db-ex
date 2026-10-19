@@ -82,7 +82,7 @@ pub fn check_store(conn: &Connection, path: &Path) -> Result<(), ReaderError> {
 /// The `frames.db` schema version this crate's search was written against
 /// (`plexdb/frames.py::SCHEMA_VERSION`). A frames.db at any other version is
 /// refused at open, older or newer.
-pub const SUPPORTED_FRAMES_VERSION: i64 = 3;
+pub const SUPPORTED_FRAMES_VERSION: i64 = 4;
 
 /// Confirm the attached `frames` schema is a frames.db at exactly
 /// [`SUPPORTED_FRAMES_VERSION`].

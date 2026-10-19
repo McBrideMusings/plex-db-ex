@@ -12,7 +12,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use plexdb_reader::{PhraseCache, Reader, ReaderError, Search, Url};
+use plexdb_reader::{PhraseCache, Reader, ReaderError, SUPPORTED_FRAMES_VERSION, Search, Url};
 use rusqlite::Connection;
 use serde_json::Value;
 
@@ -742,18 +742,19 @@ fn cuts_and_chapters_are_the_titles_boundaries() {
 fn a_frames_file_at_another_schema_version_is_refused_at_open() {
     let fx = fixture();
     let conn = Connection::open(&fx.frames).expect("open frames.db");
-    conn.execute("UPDATE schema_version SET version = 4", [])
+    let newer = SUPPORTED_FRAMES_VERSION + 1;
+    conn.execute("UPDATE schema_version SET version = ?1", [newer])
         .expect("bump");
     drop(conn);
-    let err = Reader::open(&fx.snapshot, Some(&fx.frames), None).expect_err("version 4");
+    let err = Reader::open(&fx.snapshot, Some(&fx.frames), None).expect_err("a newer version");
     assert!(
         matches!(
             err,
             ReaderError::UnsupportedFramesVersion {
-                found: 4,
-                supported: 3,
+                found,
+                supported: SUPPORTED_FRAMES_VERSION,
                 ..
-            }
+            } if found == newer
         ),
         "{err}"
     );
