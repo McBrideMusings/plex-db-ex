@@ -17,6 +17,7 @@ from playwright.sync_api import Browser, sync_playwright
 from tokenizers import Tokenizer, models, pre_tokenizers
 
 from plexdb.config import Config
+from plexdb.errors import PlexError
 from plexdb.explore import make_server
 from plexdb.explore_search import (
     TOKEN_LIMIT,
@@ -25,6 +26,7 @@ from plexdb.explore_search import (
     SearchTab,
 )
 from plexdb.frames import migrate, open_frames
+from plexdb.plex_client import Section
 from plexdb.store import init, open_store
 
 MODEL = "test/clip"
@@ -599,4 +601,68 @@ def test_the_frame_index_panel_rereads_the_sections_when_the_store_changes(
             (NOW,),
         )
         conn.commit()
-    assert tab.frames_health()["sections"] == [{"section_id": "2", "indexed": 1, "total": 1}]
+    assert tab.frames_health()["sections"] == [
+        {"section_id": "2", "indexed": 1, "total": 1, "name": None}
+    ]
+
+
+def _seed_section(world: dict[str, Any]) -> None:
+    with open_store(world["store"]) as conn:
+        conn.execute(
+            "INSERT INTO plex_items (rating_key, item_id, section_id, last_seen) "
+            "VALUES ('1', 'imdb:tt1', '2', ?)",
+            (NOW,),
+        )
+        conn.commit()
+
+
+def test_the_frame_index_bar_names_each_library_by_its_plex_title(
+    world: dict[str, Any], phrase_tokenizer: PhraseTokenizer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_section(world)
+    monkeypatch.setattr(
+        "plexdb.explore_search.LivePlexClient.sections",
+        lambda self: [Section(key="2", type="movie", title="Movies")],
+    )
+    tab = SearchTab(
+        Config.from_env(), world["store"], world["tmp"] / "explore-data", tokenizer=phrase_tokenizer
+    )
+    health = tab.frames_health()
+    assert health["sections"] == [{"section_id": "2", "indexed": 1, "total": 1, "name": "Movies"}]
+    assert health["names_error"] is None
+
+
+def test_the_frame_index_bar_keeps_the_section_id_when_plex_does_not_answer(
+    world: dict[str, Any], phrase_tokenizer: PhraseTokenizer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_section(world)
+
+    def refuse(self: object) -> list[Section]:
+        raise PlexError("cannot reach Plex at http://plex.invalid:32400: refused")
+
+    monkeypatch.setattr("plexdb.explore_search.LivePlexClient.sections", refuse)
+    tab = SearchTab(
+        Config.from_env(), world["store"], world["tmp"] / "explore-data", tokenizer=phrase_tokenizer
+    )
+    health = tab.frames_health()
+    assert health["sections"] == [{"section_id": "2", "indexed": 1, "total": 1, "name": None}]
+    assert health["names_error"] == "Plex did not answer"
+
+
+def test_the_frame_index_bar_asks_plex_for_names_once_inside_the_cache_window(
+    world: dict[str, Any], phrase_tokenizer: PhraseTokenizer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_section(world)
+    asked: list[int] = []
+
+    def sections(self: object) -> list[Section]:
+        asked.append(1)
+        return [Section(key="2", type="movie", title="Movies")]
+
+    monkeypatch.setattr("plexdb.explore_search.LivePlexClient.sections", sections)
+    tab = SearchTab(
+        Config.from_env(), world["store"], world["tmp"] / "explore-data", tokenizer=phrase_tokenizer
+    )
+    tab.frames_health()
+    tab.frames_health()
+    assert len(asked) == 1

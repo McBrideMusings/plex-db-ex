@@ -90,9 +90,13 @@ for every one that is missing.
   indexed" and a "Queue the other M−N" link, which writes `frame_queue` rows through
   `frames.queue`, as `plexdb frames queue` does (`queued_by` is `explore`). The pool lives in the
   browser's localStorage.
-- **Frame index panel.** Under the Pool, `GET /api/search/frames` shows the title the harvester is
-  indexing now and since when, each Plex section's indexed and total titles, the queued count and the
-  harvest hours (`frames.status`, the report `plexdb frames status` prints). Each Plex section's
+- **Frame index bar.** Pinned to the bottom of the Pool sidebar, `GET /api/search/frames` shows the
+  title the harvester is indexing now and since when (else "Idle" with the harvest hours), each Plex
+  section's indexed and total titles under the library's Plex name, the queued count when it is not
+  zero, and a "N failed" control that opens the failed list (`frames.status`, the report `plexdb
+  frames status` prints). Each section carries `name`, read from Plex's `/library/sections` and kept
+  for 10 minutes (30 seconds after a failure); when Plex does not answer, `name` is null, the bar
+  reads "Section N" and `names_error` holds the reason. Each Plex section's
   title set is read once and kept until the store file changes, so only the first request after a
   sweep rescans `plex_items` (about 0.3 s on the 87,000-title store; a refresh after that takes
   about 0.2 s). Below it, the 20 newest titles whose last attempt failed, with a line counting the

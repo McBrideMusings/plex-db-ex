@@ -447,9 +447,15 @@
                         border: 1px solid var(--line); border-radius: 50%; background: var(--panel); color: var(--ink); cursor: pointer; font: inherit; }
   #spoollist button.x:hover { color: var(--noise); border-color: var(--noise); }
   #sshowall { margin-top: 8px; }
-  #sframes { margin-top: 20px; border-top: 1px solid var(--line); padding-top: 12px; }
-  #sframes .fx { font-size: 12px; color: var(--muted); margin: 0 0 6px; padding: 0; list-style: none; }
-  #sframesfailed { list-style: none; margin: 8px 0 0; padding: 0; }
+  #spool { display: flex; flex-direction: column; align-self: start; }
+  #sframes { margin: auto -12px -20px; padding: 10px 12px; border-top: 1px solid var(--line); background: var(--panel);
+             position: sticky; bottom: -20px; z-index: 1; font-size: 12px; }
+  #sframes .fx { color: var(--muted); margin: 0 0 4px; padding: 0; list-style: none; }
+  #sframes #sframesnow { color: var(--ink); }
+  #sframes .fx li { display: block; padding: 0; border: 0; font-variant-numeric: tabular-nums; }
+  #sframes .fx.detail { font-size: 11px; }
+  #sframesfailtoggle { font: inherit; font-size: 12px; padding: 0; border: 0; background: none; color: var(--noise); cursor: pointer; text-decoration: underline; }
+  #sframesfailed { list-style: none; margin: 8px 0 0; padding: 0; max-height: 40vh; overflow-y: auto; }
   #sframesfailed li { display: block; padding: 5px 0; border-top: 1px solid var(--line); font-size: 13px; }
   #sframesfailed .head { display: flex; gap: 6px; justify-content: space-between; align-items: baseline; }
   #sframesfailed .name { min-width: 0; overflow-wrap: anywhere; }
@@ -657,11 +663,14 @@
     </div>
     <button type="button" class="link" id="sshowall" hidden>Show all titles</button>
     <ul id="spoollist"><li class="empty">No titles yet.</li></ul>
-    <section id="sframes" aria-labelledby="sframesh">
-      <h2 id="sframesh">Frame index</h2>
+    <section id="sframes" aria-label="Frame index">
       <p id="sframesnow" class="fx"></p>
       <ul id="sframescounts" class="fx"></ul>
-      <ul id="sframesfailed"></ul>
+      <p id="sframesnames" class="fx" hidden></p>
+      <p id="sframesqueued" class="fx" hidden></p>
+      <button type="button" id="sframesfailtoggle" aria-expanded="false" aria-controls="sframesfailed" hidden></button>
+      <ul id="sframesfailed" hidden></ul>
+      <p id="sframesdecoder" class="fx detail"></p>
     </section>
   </aside>
   <div id="smain">
@@ -2980,22 +2989,39 @@ function sBanner(kind, ...kids) {
 }
 function setBanners(list) { sEl("sbanners").replaceChildren(...list); }
 
-// ---- the Frame index panel: what is indexing, how far each section has got, what failed ----
+// ---- the Frame index bar: what is indexing, how far each library has got, what failed ----
 // The harvester writes local times with their offset; show them in the viewer's own clock.
 const frameWhen = at => at ? new Date(at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "";
+const frameClock = at => at ? new Date(at).toLocaleTimeString([], { timeStyle: "short" }) : "";
+// PLEXDB_FRAME_HOURS is "HH:MM-HH:MM" on the host's clock; the bar shows it as 12-hour times.
+function frameHours(hours) {
+  const m = /^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})$/.exec(hours || "");
+  if (!m) return hours;
+  const at = (h, mm) => `${(+h % 12) || 12}:${mm} ${+h < 12 ? "AM" : "PM"}`;
+  return `${at(m[1], m[2])} – ${at(m[3], m[4])}`;
+}
+let framesFailedOpen = false;
 async function refreshFrames() {
   let f;
   try { f = await getJSON("/api/search/frames"); }
   catch (err) { sEl("sframesnow").textContent = err.message; return; }
   const now = f.indexing;
   sEl("sframesnow").textContent = now
-    ? `Indexing now: ${now.year ? `${now.title} (${now.year})` : now.title}, since ${frameWhen(now.since)}`
-    : `Nothing indexing now · harvest hours ${f.frame_hours || "off"}`;
+    ? `Indexing ${now.year ? `${now.title} (${now.year})` : now.title} since ${frameClock(now.since)}`
+    : f.frame_hours ? `Idle · harvests ${frameHours(f.frame_hours)}` : "Idle · harvest hours off";
   sEl("sframescounts").replaceChildren(
-    ...f.sections.map(s => el("li", {}, `Section ${s.section_id}: ${fmt(s.indexed)} of ${fmt(s.total)} indexed`)),
-    el("li", {}, `${fmt(f.queued)} queued · ${fmt(f.failed_total)} failed`
-      + (f.failed_total > f.failed.length ? ` (showing the newest ${fmt(f.failed.length)})` : "")),
-    el("li", {}, `Decoder: ${f.decoder}`));
+    ...f.sections.map(s => el("li", {}, `${s.name || `Section ${s.section_id}`} ${fmt(s.indexed)} of ${fmt(s.total)}`)));
+  const note = (id, text) => { sEl(id).textContent = text; sEl(id).hidden = !text; };
+  note("sframesnames", f.names_error ? `library names unavailable: ${f.names_error}` : "");
+  note("sframesqueued", f.queued ? `${fmt(f.queued)} queued (sent to the front)` : "");
+  sEl("sframesdecoder").textContent = `Decoder: ${f.decoder}`;
+  const toggle = sEl("sframesfailtoggle");
+  toggle.hidden = !f.failed_total;
+  if (!f.failed_total) framesFailedOpen = false;
+  toggle.textContent = `${fmt(f.failed_total)} failed`
+    + (f.failed_total > f.failed.length && framesFailedOpen ? ` (showing the newest ${fmt(f.failed.length)})` : "");
+  toggle.setAttribute("aria-expanded", String(framesFailedOpen));
+  sEl("sframesfailed").hidden = !framesFailedOpen;
   sEl("sframesfailed").replaceChildren(...f.failed.map(t => {
     const retry = t.queued ? el("span", { className: "st" }, "queued") : el("button", { type: "button" }, "Retry");
     if (!t.queued) retry.addEventListener("click", async () => {
@@ -3019,7 +3045,21 @@ async function refreshFrames() {
 // Search tab is on screen, and not at all while it is hidden.
 const FRAMES_EVERY_MS = 30_000;
 let framesTimer = 0;
+// The sidebar is as tall as what is left of the viewport below it, so the bar at its bottom never
+// sits under the fold, at the top of the page or scrolled.
+function fitSidebar() {
+  const side = sEl("spool");
+  if (sEl("searchwrap").hidden) return;
+  side.style.height = matchMedia("(max-width: 900px)").matches ? "" : `${innerHeight - Math.max(0, side.getBoundingClientRect().top)}px`;
+}
+addEventListener("scroll", fitSidebar, { passive: true });
+addEventListener("resize", fitSidebar);
+sEl("sframesfailtoggle").addEventListener("click", () => {
+  framesFailedOpen = !framesFailedOpen;
+  refreshFrames();
+});
 async function initSearch() {
+  fitSidebar();
   refreshFrames();
   if (!framesTimer) framesTimer = setInterval(() => {
     if (!document.hidden && !sEl("searchwrap").hidden) refreshFrames();

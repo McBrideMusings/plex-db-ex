@@ -259,6 +259,11 @@ def _stamp(path: Path) -> tuple[int, ...]:
 UNKNOWN_FAILURE = "failed (see harvester log)"
 
 
+#: How long the explorer keeps Plex's library names, and how soon it asks again after a failure.
+NAMES_TTL_S = 600.0
+NAMES_RETRY_S = 30.0
+
+
 class SearchTab:
     """Everything `/api/search/*` answers with."""
 
@@ -285,6 +290,8 @@ class SearchTab:
         self._file_lock = threading.Lock()
         self._sections: tuple[tuple[int, ...], dict[str, set[str]]] | None = None
         self._sections_lock = threading.Lock()
+        self._names: tuple[float, dict[str, str], str | None] | None = None
+        self._names_lock = threading.Lock()
         self.cache = MediaCache(data_dir / "clips", cache_cap)
 
     # -- configuration, shown to the person ------------------------------------------
@@ -461,6 +468,38 @@ class SearchTab:
                     self._sections = (stamp, section_titles(store))
             return self._sections[1]
 
+    def _library_names(self) -> tuple[dict[str, str], str | None]:
+        """Plex's name for each library section, and why it could not be read (else None).
+
+        Cached: names are read at most once per `NAMES_TTL_S`, a failure for `NAMES_RETRY_S`, so the
+        panel's 30-second poll does not ask Plex each time."""
+        with self._names_lock:
+            if self._names is not None and time.monotonic() < self._names[0]:
+                return self._names[1], self._names[2]
+        names: dict[str, str] = {}
+        error: str | None = None
+        if not self._config.plex_url or not self._config.plex_token:
+            error = "PLEX_URL and PLEX_TOKEN are not set"
+        else:
+            try:
+                names = {s.key: s.title for s in self._plex_client().sections() if s.title}
+            except PlexError as err:
+                _log(f"explore: library names: {err}")
+                error = "Plex did not answer"
+        with self._names_lock:
+            self._names = (
+                time.monotonic() + (NAMES_RETRY_S if error else NAMES_TTL_S),
+                names,
+                error,
+            )
+        return names, error
+
+    def _plex_client(self) -> LivePlexClient:
+        with self._file_lock:
+            if self._plex is None:
+                self._plex = LivePlexClient(self._config.plex_url, self._config.plex_token)
+            return self._plex
+
     def frames_health(self) -> dict[str, object]:
         """The Frame index panel: what is indexing now, how far each section has got, and
         the newest failed titles with their reasons, never the full error (`failed_total` counts
@@ -468,6 +507,7 @@ class SearchTab:
         `frames.status` is the one source, the same report `plexdb frames status` prints."""
         frames_file = self._frames_file()
         sections = self._section_titles()
+        names, names_error = self._library_names()
         with closing(self._frames_conn()) as frames_conn:
             report = status(
                 frames_conn,
@@ -495,7 +535,10 @@ class SearchTab:
             "indexing": None
             if indexing is None
             else {**named(indexing["item_id"]), "since": indexing["since"]},
-            "sections": report["sections"],
+            "sections": [
+                {**sec, "name": names.get(str(sec["section_id"]))} for sec in report["sections"]
+            ],
+            "names_error": names_error,
             "queued": report["queued"],
             "frame_hours": report["frame_hours"],
             "decoder": report["decoder"],
@@ -821,10 +864,7 @@ class SearchTab:
                     "SELECT rating_key FROM plex_items WHERE item_id = ?", (item_id,)
                 )
             ]
-        with self._file_lock:
-            if self._plex is None:
-                self._plex = LivePlexClient(self._config.plex_url, self._config.plex_token)
-            plex = self._plex
+        plex = self._plex_client()
         try:
             found = next((f for key in keys if (f := plex.part_file(key, part))), None)
         except PlexError as err:
