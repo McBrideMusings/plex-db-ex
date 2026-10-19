@@ -22,6 +22,7 @@ import fcntl
 import json
 import os
 import sqlite3
+import time as time_module
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -43,6 +44,7 @@ __all__ = [
     "PruneStats",
     "UnknownItem",
     "frames_path",
+    "harvester_running",
     "inside_hours",
     "migrate",
     "migrate_configured",
@@ -51,10 +53,12 @@ __all__ = [
     "prune_orphans",
     "queue",
     "section_titles",
-    "harvester_running",
     "set_indexing",
     "status",
 ]
+
+_LOCK_TRIES = 4
+_LOCK_RETRY_SECONDS = 0.05
 
 #: Width of one frame vector: CLIP ViT-L/14's projection, the model the encoder
 #: serves (ADR-0025). vec0 fixes a column's width when the table is created, so
@@ -414,7 +418,16 @@ def harvest_lock(path: Path) -> Iterator[None]:
     lock_path = path.parent / "harvest.lock"
     with open(lock_path, "a+") as handle:
         try:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            # A status probe holds the lock for microseconds; a few short retries
+            # keep it from refusing a harvester that no other harvester holds against.
+            for attempt in range(_LOCK_TRIES):
+                try:
+                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if attempt == _LOCK_TRIES - 1:
+                        raise
+                    time_module.sleep(_LOCK_RETRY_SECONDS)
         except BlockingIOError:
             handle.seek(0)
             pid = handle.read().strip() or "unknown"
@@ -437,7 +450,8 @@ def harvester_running(path: Path) -> bool:
         return False
     with handle:
         try:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            # Shared, so two status probes never read each other as a harvester.
+            fcntl.flock(handle, fcntl.LOCK_SH | fcntl.LOCK_NB)
         except BlockingIOError:
             return True
         fcntl.flock(handle, fcntl.LOCK_UN)
