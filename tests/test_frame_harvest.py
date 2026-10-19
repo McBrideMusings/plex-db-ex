@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
+import subprocess
 from collections.abc import Sequence
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -600,3 +602,16 @@ def test_a_row_with_no_lock_holder_reads_as_not_indexing(config: Config) -> None
             assert frames.harvester_running(path)
             held = frames.status(conn, {}, path=path, now=when, **kwargs)["indexing"]
             assert held == {"item_id": "imdb:new", "since": when.isoformat()}
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs a real ffmpeg")
+def test_a_time_past_the_last_frame_costs_only_its_own_jpeg(tmp_path: Path) -> None:
+    video = tmp_path / "a.mp4"
+    make = [
+        "ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=d=10:s=320x240:r=24",
+        "-c:v", "libx264", "-g", "48", "-y", str(video),
+    ]  # fmt: skip
+    subprocess.run(make, check=True)
+    media = frame_harvest.FfmpegMedia(ffmpeg="ffmpeg", ffprobe="ffprobe", decode="cpu")
+    got = media.frames(video, [20000, 1000, 9990, 5000, 10500, 3000])
+    assert [g is not None for g in got] == [False, True, False, True, False, True]

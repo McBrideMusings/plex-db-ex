@@ -367,13 +367,9 @@ class FfmpegMedia:
                     return ran, [jpg.read_bytes() if jpg.exists() else None for jpg in jpgs]
 
                 done, found = cut()
-            # One ffmpeg cutting several inputs ends early when one input is past the file's
-            # end, which can leave a time inside the file without its JPEG. Cut each missing
-            # time alone, so a miss means that time has no frame.
-            if len(chunk) > 1:
-                for i, t_ms in enumerate(chunk):
-                    if found[i] is None:
-                        found[i] = self._frame_alone(path, t_ms, height)
+            # An input seeked past the file's last frame writes no JPEG and makes ffmpeg exit
+            # non-zero; every other input still writes its own, so a None is that time's miss
+            # (tests/test_frame_harvest.py runs a real ffmpeg over a past-the-end time).
             if done.returncode != 0 and not any(found):
                 raise MediaError(
                     f"{path}: ffmpeg exited {done.returncode}: {done.stderr.strip()[-200:]}",
@@ -381,19 +377,6 @@ class FfmpegMedia:
                 )
             out += found
         return out
-
-    def _frame_alone(self, path: Path, t_ms: int, height: int) -> bytes | None:
-        with tempfile.TemporaryDirectory(prefix="plexdb-frame-") as tmp:
-            target = Path(tmp) / "0.jpg"
-            argv = [
-                self._ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
-                "-threads", "1",
-                "-ss", f"{t_ms / 1000:.3f}", "-i", str(path),
-                "-map", "0:v:0", "-frames:v", "1", "-vf", f"scale=-2:{height}",
-                "-q:v", "3", "-y", str(target),
-            ]  # fmt: skip
-            self._run(argv, f"{path}: frame at {t_ms} ms")  # no JPEG: no frame at this time
-            return target.read_bytes() if target.exists() else None
 
     def clip(self, path: Path, in_ms: int, out_ms: int, *, width: int = 640) -> bytes:
         """The file's `[in_ms, out_ms)` window as a silent H.264 MP4 `width` px wide.

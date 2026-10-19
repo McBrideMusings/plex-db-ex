@@ -410,6 +410,37 @@ def test_check_reads_nothing_while_a_migration_holds_the_store(
     assert _cmd_check(argparse.Namespace(wait=0.0)) == 0
 
 
+def test_check_waits_when_a_migration_takes_the_lock_between_poll_and_full_look(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The poll saw the store current; the container's startup migration then
+    took the lock before the full look. With time left on `--wait`, that is a
+    wait, not a failure."""
+    from plexdb.commands import check
+
+    path = tmp_path / "plexdb.db"
+    monkeypatch.setenv("PLEXDB_PATH", str(path))
+    monkeypatch.setenv("PLEXDB_BACKUP_DIR", str(tmp_path / "backups"))
+    init(path)
+    real_look = check._look
+    deep_looks = 0
+
+    def look(config: object, *, frames_deep: bool = False) -> Report | None:
+        nonlocal deep_looks
+        if frames_deep:
+            deep_looks += 1
+            if deep_looks == 1:
+                return None
+        return real_look(config, frames_deep=frames_deep)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(check, "_look", look)
+    monkeypatch.setattr(check, "POLL_SECONDS", 0.0)
+
+    assert _cmd_check(argparse.Namespace(wait=60.0)) == 0
+    assert deep_looks == 2
+    assert "a migration is still running" not in capsys.readouterr().out
+
+
 def test_idle_exits_zero_only_while_nothing_holds_the_store(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
