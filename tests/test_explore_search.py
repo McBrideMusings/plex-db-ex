@@ -453,3 +453,26 @@ def test_a_clip_window_past_the_title_or_longer_than_two_minutes_is_refused(
             urllib.request.urlopen(base + out_ms)
         assert err.value.code == 400
     assert served["media"].calls == []
+
+
+def test_the_frame_index_panel_hides_the_media_path_from_a_failed_titles_error(
+    world: dict[str, Any], monkeypatch: pytest.MonkeyPatch, phrase_tokenizer: PhraseTokenizer
+) -> None:
+    media = world["tmp"] / "media"
+    error = f"{media}/movies/Heat (1995)/Heat.mkv: ffmpeg scdet exited -9"
+    with open_frames(world["frames"]) as frames:
+        frames.execute(
+            "INSERT INTO frame_index_state (item_id, part_id, indexed_at, error) "
+            "VALUES ('imdb:tt3', 13, ?, ?)",
+            (NOW, error),
+        )
+        frames.commit()
+    monkeypatch.setenv("PLEXDB_MEDIA_DIR", str(media))
+    tab = SearchTab(
+        Config.from_env(), world["store"], world["tmp"] / "explore-data", tokenizer=phrase_tokenizer
+    )
+    failed = tab.frames_health()["failed"]
+    assert [f["error"] for f in failed] == ["ffmpeg scdet exited -9"]  # type: ignore[attr-defined]
+    with open_frames(world["frames"]) as frames:
+        stored = frames.execute("SELECT error FROM frame_index_state WHERE part_id = 13").fetchone()
+    assert stored[0] == error

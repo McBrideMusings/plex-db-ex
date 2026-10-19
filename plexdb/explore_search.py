@@ -428,6 +428,20 @@ class SearchTab:
                 ids.append(item)
         return ids
 
+    def _without_media_path(self, error: str) -> str:
+        """`error` with the file path under `PLEXDB_MEDIA_DIR` cut out. The harvester writes
+        `<path>: <what failed>`; the explorer has no login, so the library's layout stays in
+        `frames.db` and the harvester log."""
+        media = self._config.media_dir
+        if media is None:
+            return error
+        root = str(media).rstrip("/")
+        start = error.find(root + "/")
+        if start < 0:
+            return error
+        end = error.find(": ", start + len(root))
+        return error[:start] + (error[end + 2 :] if end >= 0 else "")
+
     def frames_health(self) -> dict[str, object]:
         """The Frame index panel: what is indexing now, how far each section has got, and
         every failed title with its error, newest first. `frames.status` is the one source,
@@ -464,7 +478,7 @@ class SearchTab:
             "failed": [
                 {
                     **named(f["item_id"]),
-                    "error": f["error"],
+                    "error": self._without_media_path(f["error"]),
                     "at": f["at"],
                     "queued": f["item_id"] in waiting,
                 }
