@@ -390,3 +390,100 @@ def test_a_plex_path_is_read_under_the_media_dir_and_never_outside_it(tmp_path: 
     for plex_file in ("/media/../etc/passwd", "/other/movies/x.mkv", "/mediacache/x.mkv", ""):
         with pytest.raises(MediaError):
             frame_harvest.local_path(media, plex_file, roots)
+
+
+# --- CUDA decode (PLEXDB_FRAME_DECODE) ---
+
+_FAKE_FFMPEG = """#!/usr/bin/env python3
+import sys
+args = sys.argv[1:]
+with open({log!r}, "a") as log:
+    log.write(" ".join(args) + "\\n")
+if "-hwaccel" in args and {cuda_fails!r}:
+    sys.stderr.write("[AVHWDeviceContext] Cannot load libcuda.so.1\\n")
+    sys.stderr.write("Device creation failed: -1.\\n")
+    sys.exit(1)
+if "framecrc" in args:
+    with open(args[-1], "w") as crc:
+        crc.write("#tb 0: 1/1000\\n0, 0, 0, 40, 10, 0x0\\n0, 9000, 9000, 40, 10, 0x0\\n")
+    print("lavfi.scd.score=30.0")
+    print("lavfi.scd.time=4.0")
+else:
+    for i, arg in enumerate(args):
+        if arg == "-y":
+            open(args[i + 1], "wb").write(b"jpeg")
+"""
+
+
+def _fake_ffmpeg(tmp_path: Path, *, cuda_fails: bool) -> tuple[Path, Path]:
+    log = tmp_path / "ffmpeg.log"
+    script = tmp_path / "ffmpeg"
+    script.write_text(_FAKE_FFMPEG.format(log=str(log), cuda_fails=cuda_fails))
+    script.chmod(0o755)
+    return script, log
+
+
+def _media(script: Path, decode: str, seen: list[str] | None = None) -> frame_harvest.FfmpegMedia:
+    return frame_harvest.FfmpegMedia(
+        ffmpeg=str(script),
+        ffprobe="true",
+        decode=decode,
+        on_fallback=None if seen is None else seen.append,
+    )
+
+
+def test_cuda_decode_passes_hwaccel_to_the_scan_and_each_extraction_input(
+    tmp_path: Path,
+) -> None:
+    script, log = _fake_ffmpeg(tmp_path, cuda_fails=False)
+    media = _media(script, "cuda")
+    media._scdet(tmp_path / "a.mkv")
+    assert media.frames(tmp_path / "a.mkv", [1000, 2000]) == [b"jpeg", b"jpeg"]
+    scan_line, frames_line = log.read_text().splitlines()
+    assert scan_line.count("-hwaccel cuda -i") == 1
+    assert frames_line.count("-threads 1 -hwaccel cuda -ss") == 2
+    assert "hwaccel_output_format" not in log.read_text()
+    assert media.decoder == "cuda"
+
+
+def test_a_failed_cuda_scan_decodes_on_the_cpu_and_reports_ffmpegs_last_line(
+    tmp_path: Path,
+) -> None:
+    script, log = _fake_ffmpeg(tmp_path, cuda_fails=True)
+    seen: list[str] = []
+    media = _media(script, "cuda", seen)
+    cuts, last = media._scdet(tmp_path / "a.mkv")
+    assert [c.t_ms for c in cuts] == [4000]
+    assert last == 9000
+    assert seen == ["Device creation failed: -1."]
+    assert media.decoder == "cpu"
+    assert media.frames(tmp_path / "a.mkv", [1000]) == [b"jpeg"]
+    assert log.read_text().count("-hwaccel") == 1, "after the fallback nothing asks for CUDA"
+
+
+def test_a_failed_cuda_extraction_decodes_on_the_cpu(tmp_path: Path) -> None:
+    script, _ = _fake_ffmpeg(tmp_path, cuda_fails=True)
+    seen: list[str] = []
+    media = _media(script, "cuda", seen)
+    assert media.frames(tmp_path / "a.mkv", [1000, 2000]) == [b"jpeg", b"jpeg"]
+    assert seen == ["Device creation failed: -1."]
+    assert media.decoder == "cpu"
+
+
+def test_status_shows_the_decoder_and_the_fallback(
+    config: Config, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from plexdb.cli import main
+
+    monkeypatch.setenv("PLEXDB_FRAME_DECODE", "cuda")
+    shown: list[str] = []
+    for _ in range(2):
+        assert main(["frames", "status"]) == 0
+        shown.append(json.loads(capsys.readouterr().out)["decoder"])
+        frames.write_decoder_fallback(
+            frames.frames_path(Config.from_env()), "Device creation failed: -1."
+        )
+    assert shown == ["cuda", "cpu (cuda requested: Device creation failed: -1.)"]
+    media = frame_harvest.configured_media(Config.from_env())
+    assert media.decoder == "cuda"
+    assert not frames.decoder_path(frames.frames_path(config)).exists(), "a new run starts clean"

@@ -2975,7 +2975,8 @@ async function refreshFrames() {
   sEl("sframescounts").replaceChildren(
     ...f.sections.map(s => el("li", {}, `Section ${s.section_id}: ${fmt(s.indexed)} of ${fmt(s.total)} indexed`)),
     el("li", {}, `${fmt(f.queued)} queued · ${fmt(f.failed_total)} failed`
-      + (f.failed_total > f.failed.length ? ` (showing the newest ${fmt(f.failed.length)})` : "")));
+      + (f.failed_total > f.failed.length ? ` (showing the newest ${fmt(f.failed.length)})` : "")),
+    el("li", {}, `Decoder: ${f.decoder}`));
   sEl("sframesfailed").replaceChildren(...f.failed.map(t => {
     const retry = t.queued ? el("span", { className: "st" }, "queued") : el("button", { type: "button" }, "Retry");
     if (!t.queued) retry.addEventListener("click", async () => {

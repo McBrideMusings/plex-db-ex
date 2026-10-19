@@ -35,7 +35,7 @@ from typing import Any
 from .config import Config
 from .errors import ConfigError, MediaError, PlexError
 from .frame_harvest import FfmpegMedia, locator
-from .frames import UnknownItem, open_frames, queue, section_titles, status
+from .frames import UnknownItem, decoder_report, open_frames, queue, section_titles, status
 from .plex_client import LivePlexClient
 from .shot_search import reader_binary, search_argv
 from .store import open_readonly
@@ -500,6 +500,7 @@ class SearchTab:
                 now=datetime.now().astimezone(),
                 encoder_reachable=None,
                 ffmpeg_found=True,
+                decoder=decoder_report(frames_file, self._config.frame_decode),
             )
             waiting = {str(r[0]) for r in frames_conn.execute("SELECT item_id FROM frame_queue")}
         failed: list[dict[str, Any]] = report["failed"]
@@ -519,6 +520,7 @@ class SearchTab:
             "sections": report["sections"],
             "queued": report["queued"],
             "frame_hours": report["frame_hours"],
+            "decoder": report["decoder"],
             "failed_total": report["failed_total"],
             "failed": [
                 {

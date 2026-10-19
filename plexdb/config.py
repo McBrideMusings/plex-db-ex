@@ -15,6 +15,16 @@ from dotenv import load_dotenv
 
 from .errors import ConfigError
 
+FRAME_DECODERS = ("cpu", "cuda")
+
+
+def _frame_decode() -> str:
+    raw = os.environ.get("PLEXDB_FRAME_DECODE", "").strip().lower() or "cpu"
+    if raw not in FRAME_DECODERS:
+        raise ConfigError(f"PLEXDB_FRAME_DECODE is {raw!r}; use one of {', '.join(FRAME_DECODERS)}")
+    return raw
+
+
 __all__ = ["DEFAULT_SHARED_ACCOUNT_IDS", "DEFAULT_STORE_PATH", "Config", "ConfigError"]
 
 #: Where the store lands when nothing says otherwise. A path is not a secret,
@@ -142,6 +152,9 @@ class Config:
     #: `ffprobe`, looked up on PATH; the container image ships both.
     ffmpeg: str
     ffprobe: str
+    #: `PLEXDB_FRAME_DECODE`: `cpu` (the default, also when unset) decodes video in
+    #: software; `cuda` passes ffmpeg `-hwaccel cuda` to decode on the host's NVIDIA GPU.
+    frame_decode: str
     #: `PLEXDB_MEDIA_DIR`, where this process sees the directory Plex calls its
     #: source root (`source_roots`): the frame harvester and the Search tab read a
     #: part's file there, read-only, rather than streaming it from Plex. Unset turns
@@ -199,6 +212,7 @@ class Config:
             read_bin=os.environ.get("PLEXDB_READ_BIN", "").strip() or "plexdb-read",
             ffmpeg=os.environ.get("PLEXDB_FFMPEG", "").strip() or "ffmpeg",
             ffprobe=os.environ.get("PLEXDB_FFPROBE", "").strip() or "ffprobe",
+            frame_decode=_frame_decode(),
             media_dir=(
                 Path(media_raw).expanduser()
                 if (media_raw := os.environ.get("PLEXDB_MEDIA_DIR", "").strip())

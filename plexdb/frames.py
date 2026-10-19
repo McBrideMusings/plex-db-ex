@@ -19,6 +19,7 @@ Two rules shape every write here:
 from __future__ import annotations
 
 import fcntl
+import json
 import os
 import sqlite3
 from collections.abc import Iterator
@@ -182,6 +183,31 @@ def frames_path(config: Config) -> Path:
     return config.frames_path
 
 
+def decoder_path(frames_file: Path) -> Path:
+    return frames_file.parent / "decoder.json"
+
+
+def write_decoder_fallback(frames_file: Path, reason: str) -> None:
+    """Record that the harvester asked for CUDA and decodes on the CPU, and why."""
+    decoder_path(frames_file).write_text(json.dumps({"cuda_failed": reason}))
+
+
+def clear_decoder_fallback(frames_file: Path) -> None:
+    decoder_path(frames_file).unlink(missing_ok=True)
+
+
+def decoder_report(frames_file: Path, requested: str) -> str:
+    """What `plexdb frames status` shows as `decoder`: the requested decoder, or
+    `cpu (cuda requested: <reason>)` after the harvester fell back."""
+    if requested == "cpu":
+        return "cpu"
+    try:
+        reason = json.loads(decoder_path(frames_file).read_text())["cuda_failed"]
+    except (OSError, ValueError, KeyError):
+        return requested
+    return f"cpu (cuda requested: {reason})"
+
+
 def _connect(path: Path) -> sqlite3.Connection:
     if path.is_dir():
         raise StoreError(f"{path} is a directory, not a frames.db")
@@ -302,6 +328,7 @@ def status(
     now: datetime,
     encoder_reachable: bool | None,
     ffmpeg_found: bool,
+    decoder: str = "cpu",
     failed_limit: int | None = None,
 ) -> dict[str, Any]:
     """What `plexdb frames status` prints. Its shape is documented in
@@ -348,6 +375,7 @@ def status(
         "indexing": _indexing(frames_conn),
         "encoder_reachable": encoder_reachable,
         "ffmpeg_found": ffmpeg_found,
+        "decoder": decoder,
         "failed_total": failed_total,
         "failed": [
             {"item_id": row["item_id"], "error": row["error"], "at": row["indexed_at"]}
