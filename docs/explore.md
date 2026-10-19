@@ -89,7 +89,7 @@ for every one that is missing.
   indexing now and since when, each Plex section's indexed and total titles, the queued count and the
   harvest hours (`frames.status`, the report `plexdb frames status` prints). Each Plex section's
   title set is read once and kept until the store file changes, so only the first request after a
-  sweep rescans `plex_items` (about 1.5 s on the 87,000-title store; a refresh after that takes
+  sweep rescans `plex_items` (about 0.3 s on the 87,000-title store; a refresh after that takes
   about 0.2 s). Below it, the 20 newest titles whose last attempt failed, with a line counting the
   rest: its name and the failure's reason, which opens to the item_id and when it failed. Retry
   queues that title through the same `POST /api/search/queue`; a failed title already in the queue

@@ -316,13 +316,14 @@ def inside_hours(window: tuple[time, time] | None, now: datetime) -> bool:
 def section_titles(store_conn: sqlite3.Connection) -> dict[str, set[str]]:
     """The movies and episodes in each Plex section — the titles the harvester
     indexes. A show has no file of its own."""
-    rows = store_conn.execute(
-        "SELECT DISTINCT p.section_id, p.item_id FROM plex_items p "
-        "JOIN items i ON i.item_id = p.item_id WHERE i.type IN ('movie', 'episode')"
-    ).fetchall()
     sections: dict[str, set[str]] = {}
-    for row in rows:
-        sections.setdefault(str(row[0]), set()).add(str(row[1]))
+    # The sets drop the duplicates a title in two sections' rows would give; a DISTINCT in
+    # SQL builds a temp b-tree over every row first, several times the cost of the scan.
+    for section_id, item_id in store_conn.execute(
+        "SELECT p.section_id, p.item_id FROM plex_items p "
+        "JOIN items i ON i.item_id = p.item_id WHERE i.type IN ('movie', 'episode')"
+    ):
+        sections.setdefault(section_id, set()).add(item_id)
     return sections
 
 
