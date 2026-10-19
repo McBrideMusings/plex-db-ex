@@ -274,7 +274,9 @@ impl Reader {
             "SELECT in_ms, out_ms FROM frames.shots WHERE item_id = ?1 ORDER BY shot_ix",
         )?;
         let rows = stmt
-            .query_map((item_id,), |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))?
+            .query_map((item_id,), |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+            })?
             .collect::<Result<Vec<_>, _>>()?;
         rows.into_iter()
             .map(|(a, b)| match (u64::try_from(a), u64::try_from(b)) {
