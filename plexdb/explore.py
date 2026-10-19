@@ -2493,6 +2493,8 @@ def make_server(
                     f"explore: search queued {out['queued']} title(s) for frames", file=sys.stderr
                 )
                 self._json(out)
+            elif path == "/api/search/why":
+                self._json(tab.why(body))
             elif path == "/api/search/run":
                 began = time.monotonic()
                 try:

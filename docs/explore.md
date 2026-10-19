@@ -140,7 +140,19 @@ for every one that is missing.
   (`/api/search/clip`, with range requests). Both are cached under `<explore data>/clips/`, which
   holds at most 2 GB: past it the least recently used file goes first. The browser asks only the
   explorer's own server; it never reaches Plex, the encoder or a tokenizer (ADR-0017).
-- **Log.** Each search, queue, frame and clip writes one `explore:` line on stderr with the raw
+- **Why?** The button beside Frames and Play opens a 440 px column on the right, and the rows narrow
+  to one thumbnail each. `POST /api/search/why` (`{phrase, item_id, in_ms}`, built in
+  `plexdb/explore_why.py`) reads every indexed frame's int8 vector from `frames.db` once, keeps them
+  until the file changes, and takes the phrase's vector from the Phrase cache that the search filled,
+  so no encoder or model weights are involved. It returns the best frame of the Shot and its
+  similarity, the median and top-1% (99th percentile) of the phrase's similarity over every indexed
+  frame, the phrase's similarity for every frame of the title, the four highest peaks at least two
+  minutes apart, the 6 nearest frames by image similarity from other Shots of the same title, and the
+  8 nearest from other titles, at most two per title. The column shows these as Score, the phrase
+  across the whole film (or episode), and the two "Looks most like" grids; a thumbnail opens the
+  lightbox. Choosing "Why?" on another row replaces the content; Close or Esc closes the column.
+  An unsearched phrase (no Phrase cache row) answers 503 and the column says so.
+- **Log.** Each search, queue, why, frame and clip writes one `explore:` line on stderr with the raw
   values, and `admin logs live` shows them in the container.
 
 `POST /api/search/queue` is the tab's one write outside its own `clips/` cache, and it asks for no

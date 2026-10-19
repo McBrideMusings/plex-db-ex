@@ -34,6 +34,7 @@ from typing import Any
 
 from .config import Config
 from .errors import ConfigError, MediaError, PlexError
+from .explore_why import WhyCache, WhyUnavailable, explain, phrase_vector
 from .frame_harvest import FfmpegMedia, locator
 from .frames import UnknownItem, decoder_report, open_frames, queue, section_titles, status
 from .plex_client import LivePlexClient
@@ -293,6 +294,7 @@ class SearchTab:
         self._names: tuple[float, dict[str, str], str | None] | None = None
         self._names_lock = threading.Lock()
         self.cache = MediaCache(data_dir / "clips", cache_cap)
+        self._why = WhyCache(self._frames_file)
 
     # -- configuration, shown to the person ------------------------------------------
 
@@ -815,6 +817,62 @@ class SearchTab:
             "draw": None if n is None else {"n": n, "seed": seed, "picks": len(picks)},
             "formula": FORMULA,
         }
+
+    # -- why a Shot matched -------------------------------------------------------------
+
+    def why(self, body: dict[str, object]) -> dict[str, object]:
+        """The numbers behind one result row: its score against the whole library, the phrase
+        across its title, and the frames it looks most like (`explore_why`)."""
+        phrase = body.get("phrase")
+        item_id = body.get("item_id")
+        if not isinstance(phrase, str) or not phrase.strip() or len(phrase) > MAX_TEXT:
+            raise ValueError("phrase must be the searched text")
+        if not isinstance(item_id, str) or not item_id or len(item_id) > MAX_ITEM_ID:
+            raise ValueError("item_id is required")
+        in_ms = _whole(body.get("in_ms"), "in_ms", low=0, high=2**40)
+        with closing(self._frames_conn()) as conn:
+            state = conn.execute(
+                "SELECT model, model_version FROM frame_index_state "
+                "WHERE item_id = ? AND model IS NOT NULL AND error IS NULL",
+                (item_id,),
+            ).fetchone()
+            shot = conn.execute(
+                "SELECT shot_ix FROM shots WHERE item_id = ? AND in_ms = ?", (item_id, in_ms)
+            ).fetchone()
+        if state is None or shot is None:
+            raise NoFrame(f"{item_id} has no Shot starting at {in_ms} ms in the Frame index")
+        try:
+            vector = phrase_vector(
+                self._config.phrase_cache_path,
+                self.tokenizer.searched(phrase.strip()),
+                state["model"],
+                state["model_version"] or "",
+            )
+            began = time.monotonic()
+            out = explain(self._why.library(), vector, item_id, int(shot["shot_ix"]))
+        except WhyUnavailable as err:
+            raise SearchUnavailable(str(err)) from None
+        names = {item_id}
+        for key in ("same", "other"):
+            names.update(e["item_id"] for e in out[key])
+        titles = self._titles(sorted(names))
+        parts = self._parts(sorted(names))
+
+        def titled(entry: dict[str, Any]) -> dict[str, Any]:
+            title, year, _ = titles.get(entry["item_id"], (entry["item_id"], None, ""))
+            return {**entry, "title": title, "year": year, "part_id": parts.get(entry["item_id"])}
+
+        title, year, kind = titles.get(item_id, (item_id, None, ""))
+        out["title"] = {"item_id": item_id, "title": title, "year": year, "kind": kind}
+        out["part_id"] = parts.get(item_id)
+        out["same"] = [titled(e) for e in out["same"]]
+        out["other"] = [titled(e) for e in out["other"]]
+        _log(
+            f"explore: why {item_id!r} in_ms={in_ms} frames={out['frames']} "
+            f"median={out['median']:.3f} top1={out['top1']:.3f} best={out['best']['sim']:.3f} "
+            f"ms={(time.monotonic() - began) * 1000:.0f}"
+        )
+        return out
 
     # -- frames and clips -----------------------------------------------------------------
 

@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import ast
 import json
+import math
+import sqlite3
 import stat
+import statistics
+import struct
 import threading
 import urllib.error
 import urllib.request
@@ -363,6 +367,156 @@ def test_the_cache_evicts_the_least_recently_used_file_past_its_cap(tmp_path: Pa
     cache.get("c.mp4", lambda: b"x" * 100)
     names = sorted(p.name for p in (tmp_path / "clips").iterdir())
     assert names == ["a.mp4", "c.mp4"]
+
+
+#: Each frame as (item_id, shot in_ms, t_ms, degrees from the phrase). A frame at `d` degrees
+#: scores cos(d) with the phrase, and two frames score cos of the difference with each other.
+WHY_FRAMES: list[tuple[str, int, int, float]] = [
+    ("imdb:tt1", 0, 0, 60),
+    ("imdb:tt1", 0, 1000, 20),
+    ("imdb:tt1", 9000, 9000, 22),
+    ("imdb:tt1", 200000, 200000, 35),
+    ("imdb:tt1", 400000, 400000, 80),
+    ("imdb:tt1", 600000, 600000, 30),
+    ("imdb:tt1", 600000, 610000, 29),
+    ("imdb:tt2", 1000, 5000, 21),
+    ("imdb:tt2", 1000, 6000, 14),
+    ("imdb:tt2", 1000, 7000, 27),
+    ("imdb:tt3", 0, 0, 18),
+    ("imdb:tt3", 0, 1000, 24),
+    ("imdb:tt3", 0, 2000, 12),
+]
+
+
+def _seed_why(world: dict[str, Any], phrases: tuple[str, ...] = ("sunny firefight",)) -> None:
+    """Give the Frame index the vectors above and the Phrase cache the phrase's unit vector."""
+
+    def vec(degrees: float) -> str:
+        angle = math.radians(degrees)
+        return json.dumps([round(127 * math.cos(angle)), round(127 * math.sin(angle))] + [0] * 766)
+
+    with open_frames(world["frames"]) as frames:
+        frames.execute(
+            "INSERT INTO frame_index_state (item_id, part_id, model, model_version, dims, "
+            "quant, indexed_at) VALUES ('imdb:tt3', 13, ?, 'v1', 768, 'int8', ?)",
+            (MODEL, NOW),
+        )
+        starts: dict[str, list[int]] = {}
+        for item_id, shot_in, t_ms, degrees in WHY_FRAMES:
+            ins = starts.setdefault(item_id, [])
+            if shot_in not in ins:
+                ins.append(shot_in)
+                frames.execute(
+                    "INSERT INTO shots (item_id, shot_ix, in_ms, out_ms) VALUES (?, ?, ?, ?)",
+                    (item_id, len(ins) - 1, shot_in, shot_in + 5000),
+                )
+            frames.execute(
+                "INSERT INTO frame_vec (item_id, t_ms, shot_ix, vec) VALUES (?, ?, ?, vec_int8(?))",
+                (item_id, t_ms, ins.index(shot_in), vec(degrees)),
+            )
+        frames.commit()
+    unit = struct.pack("<768f", 1.0, *([0.0] * 767))
+    with sqlite3.connect(world["tmp"] / "phrases.db") as cache:
+        cache.execute(
+            "CREATE TABLE phrase_cache (phrase TEXT NOT NULL, model TEXT NOT NULL, "
+            "model_version TEXT NOT NULL, vec BLOB NOT NULL, created_at TEXT NOT NULL, "
+            "last_used_at TEXT NOT NULL, PRIMARY KEY (phrase, model, model_version))"
+        )
+        for phrase in phrases:
+            cache.execute(
+                "INSERT INTO phrase_cache VALUES (?, ?, 'v1', ?, ?, ?)",
+                (phrase, MODEL, unit, NOW, NOW),
+            )
+
+
+def test_why_scores_the_best_frame_against_the_library_and_names_its_neighbours(
+    served: dict[str, Any],
+) -> None:
+    _seed_why(served)
+    status, out = _post(
+        served["url"] + "/api/search/why",
+        {"phrase": "Sunny  firefight", "item_id": "imdb:tt1", "in_ms": 0},
+    )
+    assert status == 200
+    cosines = [math.cos(math.radians(d)) for *_, d in WHY_FRAMES]
+    assert out["frames"] == 13 and out["titles"] == 3
+    assert out["best"]["t_ms"] == 1000
+    assert out["best"]["sim"] == pytest.approx(math.cos(math.radians(20)), abs=0.01)
+    assert out["median"] == pytest.approx(statistics.median(cosines), abs=0.01)
+    assert out["highest"] == pytest.approx(max(cosines), abs=0.01)
+    assert out["is_highest"] is False
+    assert out["top1"] <= out["highest"] and out["top1"] > out["median"]
+    assert [p["t_ms"] for p in out["peaks"]] == [1000, 610000, 200000, 400000]
+    assert len(out["series"]) == 7
+    # The best frame's own Shot (t=0 at 60 degrees) is left out of "in this title".
+    assert [e["t_ms"] for e in out["same"]] == [9000, 610000, 600000, 200000, 400000]
+    assert out["same"][0]["image_sim"] == pytest.approx(math.cos(math.radians(2)), abs=0.01)
+    # Other titles by image similarity, at most two each: the third frame of each is dropped.
+    assert [(e["item_id"], e["t_ms"]) for e in out["other"]] == [
+        ("imdb:tt2", 5000),
+        ("imdb:tt3", 0),
+        ("imdb:tt3", 1000),
+        ("imdb:tt2", 6000),
+    ]
+    assert out["other"][0]["title"] == "La Haine" and out["other"][0]["part_id"] == 12
+    assert out["title"]["title"] == "Heat" and out["part_id"] == 11
+
+
+def test_why_says_when_the_frame_is_the_highest_in_the_library(served: dict[str, Any]) -> None:
+    _seed_why(served)
+    status, out = _post(
+        served["url"] + "/api/search/why",
+        {"phrase": "sunny firefight", "item_id": "imdb:tt3", "in_ms": 0},
+    )
+    assert status == 200 and out["is_highest"] is True and out["best"]["t_ms"] == 2000
+
+
+def test_why_refuses_a_phrase_nobody_searched_and_a_shot_that_is_not_there(
+    served: dict[str, Any],
+) -> None:
+    _seed_why(served)
+    status, out = _post(
+        served["url"] + "/api/search/why",
+        {"phrase": "something else", "item_id": "imdb:tt1", "in_ms": 0},
+    )
+    assert status == 503 and "Phrase cache" in out["error"]
+    status, out = _post(
+        served["url"] + "/api/search/why",
+        {"phrase": "sunny firefight", "item_id": "imdb:tt1", "in_ms": 123},
+    )
+    assert status == 404
+
+
+def test_the_why_column_opens_with_its_sections_and_esc_restores_the_rows(
+    served: dict[str, Any], browser: Browser
+) -> None:
+    _seed_why(served)
+    page = browser.new_page(viewport={"width": 1400, "height": 900})
+    page.goto(served["url"] + "/#tab=search")
+    page.wait_for_selector("#spoollist li.ptile")
+    page.fill("#sphrase", "sunny firefight")
+    page.click("#sadvtoggle")
+    page.fill("#snot", "gangland execution, futuristic")
+    page.click("#ssearch")
+    page.wait_for_selector("#srows > li")
+    assert page.locator("#srows > li:first-child .thumbs button:visible").count() == 3
+    page.click("#srows > li:first-child >> text=Why?")
+    page.wait_for_selector("#swhy .wsec", state="attached")
+    page.wait_for_function("document.querySelectorAll('#swhy .wsec').length === 4")
+    assert "Why #1 matched" in page.inner_text("#swhy")
+    assert page.locator("#srows > li.sel").count() == 1
+    assert page.locator("#srows > li:first-child .thumbs button:visible").count() == 1
+    sections = page.locator("#swhy .wsec h3").all_text_contents()
+    assert sections[0] == "Score" and "across the whole film" in sections[1]
+    assert sections[2].startswith("Looks most like — in this film")
+    assert sections[3].startswith("Looks most like — other titles")
+    # The fixture's frame bytes are not a decodable image, so every tile falls back to its caption.
+    page.wait_for_selector("#swhy .tile button.missing")
+    assert "Heat" in page.locator("#swhy .tile button.missing").first.inner_text()
+    page.keyboard.press("Escape")
+    assert page.locator("#swhy").is_hidden()
+    assert page.locator("#srows > li:first-child .thumbs button:visible").count() == 3
+    page.close()
 
 
 @pytest.fixture
