@@ -476,3 +476,40 @@ def test_the_frame_index_panel_hides_the_media_path_from_a_failed_titles_error(
     with open_frames(world["frames"]) as frames:
         stored = frames.execute("SELECT error FROM frame_index_state WHERE part_id = 13").fetchone()
     assert stored[0] == error
+
+
+def test_the_frame_index_panel_lists_the_newest_failures_and_counts_the_rest(
+    world: dict[str, Any], phrase_tokenizer: PhraseTokenizer
+) -> None:
+    with open_frames(world["frames"]) as frames:
+        for n in range(25):
+            frames.execute(
+                "INSERT INTO frame_index_state (item_id, part_id, indexed_at, error) "
+                "VALUES (?, ?, ?, 'ffmpeg exited 1')",
+                (f"imdb:tt{100 + n}", 100 + n, f"2026-10-17T00:{n:02d}:00+00:00"),
+            )
+        frames.commit()
+    tab = SearchTab(
+        Config.from_env(), world["store"], world["tmp"] / "explore-data", tokenizer=phrase_tokenizer
+    )
+    health = tab.frames_health()
+    failed: list[dict[str, Any]] = health["failed"]  # type: ignore[assignment]
+    assert health["failed_total"] == 25
+    assert [f["item_id"] for f in failed] == [f"imdb:tt{124 - n}" for n in range(20)]
+
+
+def test_the_frame_index_panel_rereads_the_sections_when_the_store_changes(
+    world: dict[str, Any], phrase_tokenizer: PhraseTokenizer
+) -> None:
+    tab = SearchTab(
+        Config.from_env(), world["store"], world["tmp"] / "explore-data", tokenizer=phrase_tokenizer
+    )
+    assert tab.frames_health()["sections"] == []
+    with open_store(world["store"]) as conn:
+        conn.execute(
+            "INSERT INTO plex_items (rating_key, item_id, section_id, last_seen) "
+            "VALUES ('1', 'imdb:tt1', '2', ?)",
+            (NOW,),
+        )
+        conn.commit()
+    assert tab.frames_health()["sections"] == [{"section_id": "2", "indexed": 1, "total": 1}]

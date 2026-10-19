@@ -49,6 +49,7 @@ __all__ = [
     "parse_hours",
     "prune_orphans",
     "queue",
+    "section_titles",
     "set_indexing",
     "status",
 ]
@@ -275,7 +276,7 @@ def inside_hours(window: tuple[time, time] | None, now: datetime) -> bool:
     return start <= at < end if start < end else at >= start or at < end
 
 
-def _section_titles(store_conn: sqlite3.Connection) -> dict[str, set[str]]:
+def section_titles(store_conn: sqlite3.Connection) -> dict[str, set[str]]:
     """The movies and episodes in each Plex section — the titles the harvester
     indexes. A show has no file of its own."""
     rows = store_conn.execute(
@@ -294,27 +295,37 @@ def _section_order(section_id: str) -> tuple[int, int, str]:
 
 def status(
     frames_conn: sqlite3.Connection,
-    store_conn: sqlite3.Connection,
+    sections: dict[str, set[str]],
     *,
     path: Path,
     hours: str,
     now: datetime,
     encoder_reachable: bool | None,
     ffmpeg_found: bool,
+    failed_limit: int | None = None,
 ) -> dict[str, Any]:
     """What `plexdb frames status` prints. Its shape is documented in
     docs/schema.md; a key added here goes there too. `encoder_reachable` is
-    `None` when no encoder is configured."""
+    `None` when no encoder is configured.
+
+    `sections` is the result of `section_titles`, which scans every title in
+    the store: a caller that asks often keeps it between calls. `failed_limit`
+    keeps only the newest N failures in `failed`; `failed_total` counts them all."""
     indexed = {
         str(row[0])
         for row in frames_conn.execute(
             "SELECT item_id FROM frame_index_state WHERE error IS NULL"
         ).fetchall()
     }
-    sections = _section_titles(store_conn)
+    failed_total = int(
+        frames_conn.execute(
+            "SELECT count(*) FROM frame_index_state WHERE error IS NOT NULL"
+        ).fetchone()[0]
+    )
     failed = frames_conn.execute(
         "SELECT item_id, error, indexed_at FROM frame_index_state "
-        "WHERE error IS NOT NULL ORDER BY indexed_at DESC, item_id"
+        "WHERE error IS NOT NULL ORDER BY indexed_at DESC, item_id LIMIT ?",
+        (-1 if failed_limit is None else failed_limit,),
     ).fetchall()
     queued = int(frames_conn.execute("SELECT count(*) FROM frame_queue").fetchone()[0])
     return {
@@ -337,6 +348,7 @@ def status(
         "indexing": _indexing(frames_conn),
         "encoder_reachable": encoder_reachable,
         "ffmpeg_found": ffmpeg_found,
+        "failed_total": failed_total,
         "failed": [
             {"item_id": row["item_id"], "error": row["error"], "at": row["indexed_at"]}
             for row in failed

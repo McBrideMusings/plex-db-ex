@@ -87,8 +87,9 @@ for every one that is missing.
   browser's localStorage.
 - **Frame index panel.** Under the Pool, `GET /api/search/frames` shows the title the harvester is
   indexing now and since when, each Plex section's indexed and total titles, the queued count and the
-  harvest hours (`frames.status`, the report `plexdb frames status` prints). Below it, every title
-  whose last attempt failed, newest first: its name and the error's first line, which opens to the
+  harvest hours (`frames.status`, the report `plexdb frames status` prints). Each Plex section's
+  title set is read once and kept until the store file changes, so a refresh does not rescan `plex_items`. Below it, the 20 newest titles
+  whose last attempt failed (a line counts the rest): its name and the error's first line, which opens to the
   full error, the item_id and when it failed. Retry queues that title through the same
   `POST /api/search/queue`; a failed title already in the queue shows `queued` instead. The error
   is returned without the file path under `PLEXDB_MEDIA_DIR`, since the page has no login; the full
