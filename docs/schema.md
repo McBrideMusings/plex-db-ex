@@ -1480,6 +1480,7 @@ the directory holds none, so on a fresh directory every count is zero.
   "indexing": {"item_id": "imdb:tt0113277", "since": "2026-10-15T02:11:40-04:00"},
   "encoder_reachable": true,
   "ffmpeg_found": true,
+  "decoder": "cpu",
   "failed": [
     {"item_id": "imdb:tt0113277", "error": "ffmpeg exited 1", "at": "2026-10-15T02:14:09-04:00"}
   ]
@@ -1498,6 +1499,7 @@ the directory holds none, so on a fresh directory every count is zero.
 | `indexing` | The title the harvester is indexing now — `item_id` and `since` — or `null` when none is. A harvester that was killed mid-title leaves its row until the next run starts. |
 | `encoder_reachable` | Whether `GET {PLEXDB_FRAME_ENCODER_URL}/v1/models` answered 2xx within 10 s; `null` when `PLEXDB_FRAME_ENCODER_URL` is unset. Listing models loads none, so this never waits out a cold start. |
 | `ffmpeg_found` | Whether `PLEXDB_FFMPEG` and `PLEXDB_FFPROBE` (default `ffmpeg`, `ffprobe`) are both found. The harvester needs them; the container image ships both. |
+| `decoder` | `PLEXDB_FRAME_DECODE`: `cpu` (the default) or `cuda`. After the harvester asked for CUDA and fell back, `cpu (cuda requested: <ffmpeg's last line>)`; the note lives in `decoder.json` beside `frames.db` until the next harvester run starts. |
 | `failed` | Every failed title, newest attempt first: its item_id, the error, and when. |
 
 `plexdb frames queue <item_id>` adds a `frame_queue` row and exits non-zero for an item_id not in

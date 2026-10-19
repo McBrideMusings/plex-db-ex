@@ -28,7 +28,15 @@ from ..frame_encoder import (
     from_config,
 )
 from ..frame_quant import agreement, float_path, load, open_float
-from ..frames import FRAME_DIMS, frames_path, migrate_configured, open_frames, queue, status
+from ..frames import (
+    FRAME_DIMS,
+    decoder_report,
+    frames_path,
+    migrate_configured,
+    open_frames,
+    queue,
+    status,
+)
 from ..store import open_readonly
 
 NAME = "frames"
@@ -51,6 +59,7 @@ def _cmd_status(_args: argparse.Namespace) -> int:
             encoder_reachable=reachable,
             ffmpeg_found=shutil.which(config.ffmpeg) is not None
             and shutil.which(config.ffprobe) is not None,
+            decoder=decoder_report(path, config.frame_decode),
         )
     print(json.dumps(report, indent=2))
     return 0

@@ -198,9 +198,38 @@ class FfmpegMedia:
     such read a playback session and ends the account's previous one, so two readers
     of different titles cut each other off."""
 
-    def __init__(self, *, ffmpeg: str, ffprobe: str) -> None:
+    def __init__(
+        self,
+        *,
+        ffmpeg: str,
+        ffprobe: str,
+        decode: str = "cpu",
+        on_fallback: Callable[[str], None] | None = None,
+    ) -> None:
         self._ffmpeg = ffmpeg
         self._ffprobe = ffprobe
+        self._decode = decode
+        self._on_fallback = on_fallback
+
+    @property
+    def decoder(self) -> str:
+        """`cuda` while CUDA decodes, `cpu` otherwise, including after a fallback."""
+        return self._decode
+
+    def _hwaccel(self) -> list[str]:
+        """Flags before an input. No `-hwaccel_output_format`: ffmpeg copies each decoded
+        frame back to system memory, so scdet, framecrc and the JPEG cut see the pixels the
+        CPU decode gives."""
+        return ["-hwaccel", "cuda"] if self._decode == "cuda" else []
+
+    def _fall_back(self, stderr: str) -> None:
+        """CUDA failed where a CPU decode is about to be tried: decode on the CPU from here
+        on and say why, with ffmpeg's own last line."""
+        lines = [line for line in stderr.strip().splitlines() if line.strip()]
+        reason = lines[-1].strip() if lines else "ffmpeg exited without a message"
+        self._decode = "cpu"
+        if self._on_fallback is not None:
+            self._on_fallback(reason)
 
     def file_hash(self, path: Path, size: int) -> str:
         """sha256 over the part's size, its modification time and its first MiB."""
@@ -246,13 +275,26 @@ class FfmpegMedia:
         10-bit film is killed before it finishes."""
         with tempfile.TemporaryDirectory(prefix="plexdb-scan-") as tmp:
             crc = Path(tmp) / "frames.crc"
-            argv = [
-                self._ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
-                "-i", str(path),
-                "-filter_complex", "[0:v:0]scale=-2:224,scdet=t=10:s=0,metadata=print:file=-[all]",
-                "-map", "[all]", "-fps_mode", "passthrough", "-f", "framecrc", "-y", str(crc),
-            ]  # fmt: skip
-            done = self._run(argv, f"{path}: scdet", timeout_s=_DECODE_TIMEOUT_S)
+
+            def argv() -> list[str]:
+                return [
+                    self._ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
+                    *self._hwaccel(), "-i", str(path),
+                    "-filter_complex",
+                    "[0:v:0]scale=-2:224,scdet=t=10:s=0,metadata=print:file=-[all]",
+                    "-map", "[all]", "-fps_mode", "passthrough", "-f", "framecrc",
+                    "-y", str(crc),
+                ]  # fmt: skip
+
+            done = self._run(argv(), f"{path}: scdet", timeout_s=_DECODE_TIMEOUT_S)
+            if done.returncode != 0 and self._decode == "cuda":
+                cuda_stderr = done.stderr
+                self._decode = "cpu"
+                done = self._run(argv(), f"{path}: scdet", timeout_s=_DECODE_TIMEOUT_S)
+                if done.returncode == 0:
+                    self._fall_back(cuda_stderr)
+                else:
+                    self._decode = "cuda"
             if done.returncode != 0:
                 raise MediaError(
                     f"{path}: ffmpeg scdet exited {done.returncode}: {done.stderr.strip()[-200:]}"
@@ -281,20 +323,38 @@ class FfmpegMedia:
         for start in range(0, len(times_ms), _EXTRACT_CHUNK):
             chunk = times_ms[start : start + _EXTRACT_CHUNK]
             with tempfile.TemporaryDirectory(prefix="plexdb-frames-") as tmp:
-                argv = [self._ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error"]
-                # One decoder thread per input: each of the chunk's inputs is its own decoder,
-                # and at the default of one thread per core a 4K chunk peaked at 16 GB (4 GB at
-                # one thread, and faster, since the inputs already run side by side).
-                for t_ms in chunk:
-                    argv += ["-threads", "1", "-ss", f"{t_ms / 1000:.3f}", "-i", str(path)]
-                for i in range(len(chunk)):
-                    argv += [
-                        "-map", f"{i}:v:0", "-frames:v", "1", "-vf", f"scale=-2:{height}",
-                        "-q:v", "3", "-y", str(Path(tmp) / f"{i}.jpg"),
-                    ]  # fmt: skip
-                done = self._run(argv, f"{path}: frames")
-                got = [Path(tmp) / f"{i}.jpg" for i in range(len(chunk))]
-                found = [jpg.read_bytes() if jpg.exists() else None for jpg in got]
+
+                def cut(
+                    chunk: Sequence[int] = chunk, tmp: str = tmp
+                ) -> tuple[subprocess.CompletedProcess[str], list[bytes | None]]:
+                    argv = [self._ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error"]
+                    # One decoder thread per input: each of the chunk's inputs is its own
+                    # decoder, and at the default of one thread per core a 4K chunk peaked at
+                    # 16 GB (4 GB at one thread, and faster, since the inputs already run side
+                    # by side).
+                    for t_ms in chunk:
+                        argv += [
+                            "-threads", "1", *self._hwaccel(),
+                            "-ss", f"{t_ms / 1000:.3f}", "-i", str(path),
+                        ]  # fmt: skip
+                    for i in range(len(chunk)):
+                        argv += [
+                            "-map", f"{i}:v:0", "-frames:v", "1", "-vf", f"scale=-2:{height}",
+                            "-q:v", "3", "-y", str(Path(tmp) / f"{i}.jpg"),
+                        ]  # fmt: skip
+                    ran = self._run(argv, f"{path}: frames")
+                    jpgs = [Path(tmp) / f"{i}.jpg" for i in range(len(chunk))]
+                    return ran, [jpg.read_bytes() if jpg.exists() else None for jpg in jpgs]
+
+                done, found = cut()
+                if done.returncode != 0 and not any(found) and self._decode == "cuda":
+                    cuda_stderr = done.stderr
+                    self._decode = "cpu"
+                    done, found = cut()
+                    if any(found):
+                        self._fall_back(cuda_stderr)
+                    else:
+                        self._decode = "cuda"
             # One ffmpeg cutting several inputs ends early when one input is past the file's
             # end, which can leave a time inside the file without its JPEG. Cut each missing
             # time alone, so a miss means that time has no frame.
@@ -314,7 +374,8 @@ class FfmpegMedia:
             target = Path(tmp) / "0.jpg"
             argv = [
                 self._ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
-                "-threads", "1", "-ss", f"{t_ms / 1000:.3f}", "-i", str(path),
+                "-threads", "1", *self._hwaccel(),
+                "-ss", f"{t_ms / 1000:.3f}", "-i", str(path),
                 "-map", "0:v:0", "-frames:v", "1", "-vf", f"scale=-2:{height}",
                 "-q:v", "3", "-y", str(target),
             ]  # fmt: skip
@@ -807,7 +868,19 @@ def configured_media(config: Config) -> FfmpegMedia:
             f"{config.ffmpeg} and {config.ffprobe} must be installed "
             "(or named by PLEXDB_FFMPEG and PLEXDB_FFPROBE) to harvest frames"
         )
-    return FfmpegMedia(ffmpeg=config.ffmpeg, ffprobe=config.ffprobe)
+    frames_file = frames.frames_path(config)
+    frames.clear_decoder_fallback(frames_file)
+
+    def record(reason: str) -> None:
+        print(f"frame decode: cuda failed, decoding on the CPU: {reason}", flush=True)
+        frames.write_decoder_fallback(frames_file, reason)
+
+    return FfmpegMedia(
+        ffmpeg=config.ffmpeg,
+        ffprobe=config.ffprobe,
+        decode=config.frame_decode,
+        on_fallback=record,
+    )
 
 
 def locator(config: Config) -> Callable[[str], Path]:
