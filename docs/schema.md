@@ -1780,8 +1780,8 @@ plexdb-read search <phrase> (--pool <item_id> [--pool ...] | --pool-file <path|-
 go in any order. `plexdb-read --help` prints the usage and exits 0.
 
 ```json
-{"shots": [{"item_id": "imdb:tt0113277", "in_ms": 0, "out_ms": 3000, "frames": [[0, 0.91]],
-            "phrase_sim": 0.91, "negative_sims": [0.12], "score": 0.85, "p": 0.62}],
+{"shots": [{"item_id": "imdb:tt0113277", "in_ms": 0, "out_ms": 3000, "frames": [[0, 0.29]],
+            "phrase_sim": 0.29, "negative_sims": [0.12], "score": 0.23, "p": 0.62}],
  "indexed": 1, "pool": 2, "model": "openai/clip-vit-large-patch14"}
 ```
 
