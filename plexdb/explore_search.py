@@ -255,6 +255,15 @@ def _stamp(path: Path) -> tuple[int, ...]:
     return (info.st_mtime_ns, info.st_size)
 
 
+_PLEX_PATH_ERRORS = (
+    (
+        re.compile(r".+ is under none of PLEX_SOURCE_ROOTS \[.*\]", re.DOTALL),
+        "the file is under none of PLEX_SOURCE_ROOTS",
+    ),
+    (re.compile(r".+ leaves PLEXDB_MEDIA_DIR", re.DOTALL), "the file leaves PLEXDB_MEDIA_DIR"),
+)
+
+
 class SearchTab:
     """Everything `/api/search/*` answers with."""
 
@@ -446,7 +455,11 @@ class SearchTab:
     def _without_media_path(self, error: str) -> str:
         """`error` with the file path under `PLEXDB_MEDIA_DIR` cut out. The harvester writes
         `<path>: <what failed>`; the explorer has no login, so the library's layout stays in
-        `frames.db` and the harvester log."""
+        `frames.db` and the harvester log. The two errors that name Plex's own path
+        (`local_path`) lose it and the source roots too."""
+        for shape, plain in _PLEX_PATH_ERRORS:
+            if shape.fullmatch(error):
+                return plain
         media = self._config.media_dir
         if media is None:
             return error

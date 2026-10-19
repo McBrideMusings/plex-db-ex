@@ -16,6 +16,7 @@ from playwright.sync_api import Browser, sync_playwright
 from tokenizers import Tokenizer, models, pre_tokenizers
 
 from plexdb.config import Config
+from plexdb.errors import MediaError
 from plexdb.explore import make_server
 from plexdb.explore_search import (
     TOKEN_LIMIT,
@@ -23,6 +24,7 @@ from plexdb.explore_search import (
     PhraseTokenizer,
     SearchTab,
 )
+from plexdb.frame_harvest import local_path
 from plexdb.frames import migrate, open_frames
 from plexdb.store import init, open_store
 
@@ -513,3 +515,38 @@ def test_the_frame_index_panel_rereads_the_sections_when_the_store_changes(
         )
         conn.commit()
     assert tab.frames_health()["sections"] == [{"section_id": "2", "indexed": 1, "total": 1}]
+
+
+def _local_path_error(plex_file: str) -> str:
+    with pytest.raises(MediaError) as err:
+        local_path(Path("/media"), plex_file, ["/a", "/b"])
+    return str(err.value)
+
+
+@pytest.mark.parametrize(
+    ("plex_file", "shown"),
+    [
+        ("/data/tv/S01E01.mkv", "the file is under none of PLEX_SOURCE_ROOTS"),
+        ("/a/../../etc/x.mkv", "the file leaves PLEXDB_MEDIA_DIR"),
+    ],
+)
+def test_the_frame_index_panel_hides_plexs_path_and_the_source_roots(
+    world: dict[str, Any], phrase_tokenizer: PhraseTokenizer, plex_file: str, shown: str
+) -> None:
+    error = _local_path_error(plex_file)
+    assert plex_file in error
+    with open_frames(world["frames"]) as frames:
+        frames.execute(
+            "INSERT INTO frame_index_state (item_id, part_id, indexed_at, error) "
+            "VALUES ('imdb:tt3', 13, ?, ?)",
+            (NOW, error),
+        )
+        frames.commit()
+    tab = SearchTab(
+        Config.from_env(), world["store"], world["tmp"] / "explore-data", tokenizer=phrase_tokenizer
+    )
+    failed = tab.frames_health()["failed"]
+    assert [f["error"] for f in failed] == [shown]  # type: ignore[attr-defined]
+    with open_frames(world["frames"]) as frames:
+        stored = frames.execute("SELECT error FROM frame_index_state WHERE part_id = 13").fetchone()
+    assert stored[0] == error
