@@ -1607,15 +1607,36 @@ hours of video — measured what the whole library costs before its backlog star
 | Shots per hour of video | 447 on average; 7 (*Russian Ark*) to 1,116 (*Mad Max: Fury Road*) |
 | Vectors per hour | 1,853 |
 | `frames.db` per hour | 1.78 MB (int8) |
-| Whole library, 63,293 hours | 112.9 GB of int8 vectors, 117 million vectors; fp16 would be 242.5 GB |
+| Whole library, 62,281 hours | 110.9 GB of int8 vectors, 115 million vectors; fp16 would be 238.6 GB |
 | int8 against fp16 | Over 20 phrases, the int8 and fp16 top 10 share 9.05 Shots on average (8 at worst), the top 50 share 45.2 (41–49), and the first Shot is the same for 19 of 20; the largest similarity difference is 0.024 |
-| Pace | About 3.9× real time, 2 titles an hour, decoding on the CPU |
+| Pace | 5.6× to 9.9× real time on 1080p, decoding on the CPU |
 | What sets the pace | Decoding: 12,080 s of decode against 476 s of encode over eight titles |
-| Whole library at that pace | About 16,200 hours |
+| Whole library at that pace | About 6,300 to 11,100 hours of decoding |
 | Tautulli | Logs no harvester read: none of the 20 films appears in its history over the runs |
 
-`quant` stays `int8`. The backlog (`PLEXDB_FRAME_HOURS`) waits for GPU decoding to be measured
-(plex-db-ex-8nb.1.21).
+The library, by Plex's stream metadata: 62,281 hours, of which 34,727 are 1080p H.264, 20,442
+are 1080p HEVC and about 226 are 4K.
+
+**Whole films on the GPU** (RTX 3090, 2026-10-19). `decode_s` is the scan plus the extraction, in
+seconds:
+
+| Film | CPU | CUDA scan, CPU extraction |
+|---|---|---|
+| *1917*, 4K HEVC 10-bit | 5,463.7 | 3,759.9 (896.8 + 2,863.1) |
+| *Spider-Man: Into the Spider-Verse*, H.264 | 805.0 (340.7 + 464.3) | 837.5 (294.5 + 543.0) |
+| *Russian Ark*, H.264 | 1,067.9 (420.7 + 647.2) | 880.1 (276.7 + 603.4) |
+
+Cuts, Shots, frame times and int8 vectors came out identical on the CPU and on CUDA for all three.
+CUDA cuts 31% off the 4K film. On 1080p H.264 it ranges from 4% slower to 18% faster, because
+extraction, which stays on the CPU, takes most of the time. The 4K titles are about 226 hours of
+the library, so at *1917*'s rates CUDA saves about 54 hours of decoding across the whole library.
+
+A fourth film, *3:10 to Yuma*, had a damaged file. The CPU decoder concealed the errors and gave
+475 and 486 cuts on two runs of the same file; CUDA held 1 frame in 100, found no cuts and exited
+0. That is why a damaged source fails the title (the bullet above).
+
+`quant` stays `int8`. The backlog (`PLEXDB_FRAME_HOURS`) stays unset until extraction's single
+seek (plex-db-ex-8nb.1.31) is measured on a whole film.
 
 ### The encoder request (ADR-0025)
 
