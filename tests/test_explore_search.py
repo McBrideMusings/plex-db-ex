@@ -383,11 +383,12 @@ def test_the_page_draws_token_boxes_results_a_lightbox_and_the_partial_pool_bann
     page.wait_for_selector("#searchwrap:not([hidden])")
     page.wait_for_function("document.getElementById('sempty').textContent.length > 0")
     assert "search every indexed title" in page.inner_text("#sempty")
-    assert page.inner_text("#spoollist").startswith("All indexed titles (2)")
+    page.wait_for_selector("#spoollist li.ptile")
+    assert page.locator("#spoollist li.ptile").count() == 2
 
     page.fill("#spoolq", "heist")
     page.click("#spoolsugg li.opt")
-    page.wait_for_selector("#spoollist .st.indexed")
+    page.wait_for_selector("#spoollist .st.indexed", state="attached")
     page.fill("#spoolq", "ronin")
     page.wait_for_selector("#spoolsugg li.opt")
     page.click("#spoolsugg li.opt")
@@ -425,6 +426,43 @@ def test_the_page_draws_token_boxes_results_a_lightbox_and_the_partial_pool_bann
     page.wait_for_selector("#srows > li:first-child .clip")
     page.wait_for_selector("#srows > li:first-child >> text=Stop")
     assert all(r.startswith(served["url"]) or r.startswith("data:") for r in requests), requests
+    page.close()
+
+
+def test_the_sidebar_grid_counts_each_titles_shots_and_narrows_the_results(
+    served: dict[str, Any], browser: Browser
+) -> None:
+    page = browser.new_page(viewport={"width": 1280, "height": 800})
+    page.goto(served["url"] + "/#tab=search")
+    page.wait_for_selector("#spoollist li.ptile")
+    assert page.locator("#spoollist li.ptile").count() == 2
+    assert page.locator("#spoollist .st").all_inner_texts() == ["", ""]
+    page.fill("#sphrase", "sunny firefight")
+    page.click("#sadvtoggle")
+    page.fill("#snot", "gangland execution, futuristic")
+    page.click("#ssearch")
+    page.wait_for_selector("#srows > li")
+    # FOUND ranks Heat twice (ranks 1 and 3) and La Haine once (rank 2).
+    counts = page.evaluate(
+        "[...document.querySelectorAll('#spoollist li.ptile')]"
+        ".map(li => [li.querySelector('.cap').textContent, li.querySelector('.st').textContent])"
+    )
+    assert counts == [["Heat (1995)", "2 matches"], ["La Haine (1995)", "1 match"]]
+    assert page.locator("#srows > li").count() == 3
+    page.click("#spoollist li.ptile >> nth=1")
+    assert page.locator("#srows > li").count() == 1
+    assert page.locator("#spoollist li.sel").count() == 1
+    assert page.locator("#sshowall").is_visible()
+    page.keyboard.press("Escape")
+    assert page.locator("#srows > li").count() == 3
+    assert page.locator("#sshowall").is_hidden()
+    page.click("#spoollist li.ptile >> nth=0")
+    assert page.locator("#srows > li").count() == 2
+    page.click("#spoollist li.ptile >> nth=0")
+    assert page.locator("#srows > li").count() == 3
+    page.click("#spoollist li.ptile >> nth=0")
+    page.click("#sshowall")
+    assert page.locator("#srows > li").count() == 3
     page.close()
 
 

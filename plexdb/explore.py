@@ -2534,6 +2534,8 @@ def make_server(
             tab = self._search_tab()
             if path == "/api/search/frames":
                 self._json(tab.frames_health())
+            elif path == "/api/search/indexed":
+                self._json(tab.indexed_titles())
             elif path == "/api/search/suggest":
                 self._json(tab.suggest(query.get("q", "")))
             elif path == "/api/search/collection":

@@ -527,6 +527,18 @@ class SearchTab:
             "indexed": sum(t.state == "indexed" for t in found),
         }
 
+    def indexed_titles(self) -> dict[str, object]:
+        """Every title the Frame index can search, as the grid shows a search over no pool."""
+        ids = self._indexed()
+        titles = self._titles(ids)
+        found = [
+            PoolTitle(i, titles[i][0], titles[i][1], titles[i][2], "indexed")
+            for i in ids
+            if i in titles
+        ]
+        found.sort(key=lambda t: (t.title.casefold(), t.year or 0, t.item_id))
+        return {"titles": [t.__dict__ for t in found]}
+
     def _titles(self, ids: list[str]) -> dict[str, tuple[str, int | None, str]]:
         out: dict[str, tuple[str, int | None, str]] = {}
         with open_readonly(self._store) as conn:

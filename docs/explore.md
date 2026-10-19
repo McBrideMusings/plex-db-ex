@@ -78,10 +78,15 @@ with `PLEX_TOKEN`, and the library read-only at `PLEXDB_MEDIA_DIR` with `PLEX_SO
 for every one that is missing.
 
 - **Pool.** The side panel holds the titles a search covers; an empty pool searches every title
-  `frame_index_state` holds with a `model`, so a search needs no titles picked, and the empty panel
-  reads "All indexed titles (N)". The add box offers titles and
-  collections (a collection adds its members). Each title shows `indexed`, `not indexed`, `queued` or
-  `failed`. A search whose pool has unindexed titles shows "Only N of M titles in this pool are
+  `frame_index_state` holds with a `model`, so a search needs no titles picked. The panel is a poster
+  grid (`/api/poster`, loaded lazily) of the pool's titles, or of every indexed title from
+  `GET /api/search/indexed` when the pool is empty. The add box offers titles and
+  collections (a collection adds its members). A pool title not yet indexed says `not indexed`,
+  `queued` or `failed` on its tile and keeps a remove button. After a search each tile shows how many
+  of the returned (top 100) Shots belong to it, "12 matches"; tiles with none fade and sort last,
+  the rest by best rank. Clicking a tile narrows the result list to that title's Shots in the page
+  alone (no new request); a second click, Esc or "Show all titles" clears it, as does a new search.
+  A search whose pool has unindexed titles shows "Only N of M titles in this pool are
   indexed" and a "Queue the other M−N" link, which writes `frame_queue` rows through
   `frames.queue`, as `plexdb frames queue` does (`queued_by` is `explore`). The pool lives in the
   browser's localStorage.

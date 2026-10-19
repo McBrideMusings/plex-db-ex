@@ -427,13 +427,26 @@
   #spool h2, #smain h2 { font-size: 11px; margin: 0 0 8px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
   #spool .searchbox input[type="search"] { width: 100%; }
   #spool .sugg { min-width: 100%; }
-  #spoollist { list-style: none; margin: 10px 0 0; padding: 0; }
-  #spoollist li { display: flex; gap: 6px; align-items: baseline; justify-content: space-between; padding: 3px 0; font-size: 13px; }
-  #spoollist .name { min-width: 0; overflow-wrap: anywhere; }
-  #spoollist .st { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  #spoollist { list-style: none; margin: 10px 0 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  #spoollist li.empty { grid-column: 1 / -1; font-size: 13px; }
+  #spoollist li.ptile { position: relative; min-width: 0; font-size: 12px; transition: opacity .15s; }
+  #spoollist li.ptile.faded { opacity: .4; }
+  #spoollist button.tile { display: block; width: 100%; padding: 0; border: 0; background: transparent; color: inherit; font: inherit;
+                           text-align: left; cursor: default; }
+  #spoollist button.tile:not(:disabled) { cursor: pointer; }
+  #spoollist .art { display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden; width: 100%; aspect-ratio: 2 / 3;
+                    background: var(--chip); color: var(--muted); border: 1px solid var(--line); border-radius: 5px; padding: 4px;
+                    box-sizing: border-box; text-align: center; font-size: 12px; overflow-wrap: anywhere; }
+  #spoollist .art img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  #spoollist li.sel .art { outline: 2px solid var(--accent); outline-offset: 1px; }
+  #spoollist li.sel { background: var(--selected); border-radius: 6px; }
+  #spoollist .cap { display: block; padding: 3px 1px 0; line-height: 1.25; overflow-wrap: anywhere; }
+  #spoollist .st { display: block; color: var(--muted); font-size: 11px; }
   #spoollist .st.none, #spoollist .st.failed { color: var(--noise); }
-  #spoollist button.x { border: 0; background: transparent; color: var(--muted); cursor: pointer; font: inherit; padding: 0 2px; }
-  #spoollist button.x:hover { color: var(--noise); }
+  #spoollist button.x { position: absolute; top: 3px; right: 3px; width: 20px; height: 20px; line-height: 18px; padding: 0; text-align: center;
+                        border: 1px solid var(--line); border-radius: 50%; background: var(--panel); color: var(--ink); cursor: pointer; font: inherit; }
+  #spoollist button.x:hover { color: var(--noise); border-color: var(--noise); }
+  #sshowall { margin-top: 8px; }
   #sframes { margin-top: 20px; border-top: 1px solid var(--line); padding-top: 12px; }
   #sframes .fx { font-size: 12px; color: var(--muted); margin: 0 0 6px; padding: 0; list-style: none; }
   #sframesfailed { list-style: none; margin: 8px 0 0; padding: 0; }
@@ -642,6 +655,7 @@
              role="combobox" aria-expanded="false" aria-controls="spoolsugg">
       <ul class="sugg" id="spoolsugg" role="listbox" hidden></ul>
     </div>
+    <button type="button" class="link" id="sshowall" hidden>Show all titles</button>
     <ul id="spoollist"><li class="empty">No titles yet.</li></ul>
     <section id="sframes" aria-labelledby="sframesh">
       <h2 id="sframesh">Frame index</h2>
@@ -2952,7 +2966,7 @@ document.addEventListener("keydown", e => {
 // ---- Search tab ----
 // The server tokenizes, searches, cuts frames and clips (ADR-0017): this page only draws what
 // /api/search/* returns and never reaches Plex, the encoder or a tokenizer itself.
-const srch = { ready: false, pool: [], titles: [], seq: 0, timer: 0, last: null, draw: null, lb: null, playing: new Set(), status: null };
+const srch = { ready: false, pool: [], titles: [], all: [], focus: null, counts: new Map(), seq: 0, timer: 0, last: null, draw: null, lb: null, playing: new Set(), status: null };
 const sEl = id => document.getElementById(id);
 const POOL_KEY = "plexdb-search-pool";
 const pct = p => `${p * 100 < 10 ? (p * 100).toFixed(1) : Math.round(p * 100)}%`;
@@ -3041,7 +3055,12 @@ function paintEmpty() {
 
 // ---- the pool ----
 async function refreshPool() {
-  if (!srch.pool.length) { srch.titles = []; paintPool(); return; }
+  if (!srch.pool.length) {
+    srch.titles = [];
+    try { srch.all = (await getJSON("/api/search/indexed")).titles; }
+    catch (err) { srch.all = []; setBanners([sBanner("noise", err.message)]); }
+    paintPool(); return;
+  }
   try {
     const out = await sendJSON("POST", "/api/search/pool", { item_ids: srch.pool });
     srch.titles = out.titles;
@@ -3050,22 +3069,65 @@ async function refreshPool() {
   persistPool(); paintPool();
 }
 function persistPool() { try { localStorage.setItem(POOL_KEY, JSON.stringify(srch.pool)); } catch {} }
+// How many of the returned Shots belong to each title, and the best rank among them.
+function countShots() {
+  srch.counts = new Map();
+  for (const s of srch.last ? srch.last.shots : []) {
+    const c = srch.counts.get(s.item_id);
+    if (c) c.n++; else srch.counts.set(s.item_id, { n: 1, best: s.rank });
+  }
+}
 function paintPool() {
-  const list = sEl("spoollist");
-  if (!srch.titles.length) {
+  const list = sEl("spoollist"), inPool = srch.pool.length > 0;
+  sEl("sshowall").hidden = !srch.focus;
+  let titles = inPool ? srch.titles : srch.all;
+  if (!titles.length) {
     const n = srch.status ? srch.status.indexed : 0;
     list.replaceChildren(el("li", { className: "empty" },
-      `All indexed titles (${fmt(n)}). Add titles to search only those.`));
+      inPool ? "No titles yet." : `All indexed titles (${fmt(n)}). Add titles to search only those.`));
     return;
   }
-  list.replaceChildren(...srch.titles.map(t => {
-    const label = { indexed: "indexed", none: "not indexed", queued: "queued", failed: "failed" }[t.state];
-    const x = el("button", { type: "button", className: "x", title: "Remove from the pool", ariaLabel: `Remove ${t.title}` }, "×");
-    x.addEventListener("click", () => { srch.pool = srch.pool.filter(id => id !== t.item_id); refreshPool(); });
-    return el("li", {}, el("span", { className: "name" }, t.year ? `${t.title} (${t.year})` : t.title),
-      el("span", { className: "st " + t.state }, label), x);
+  if (srch.last) {
+    const rank = t => srch.counts.get(t.item_id)?.best ?? Infinity;
+    titles = titles.map((t, i) => [t, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(x => x[0]);
+  }
+  list.replaceChildren(...titles.map(t => {
+    const name = t.year ? `${t.title} (${t.year})` : t.title;
+    const hit = srch.counts.get(t.item_id);
+    const art = el("span", { className: "art" }, t.title);
+    const img = el("img", { loading: "lazy", decoding: "async", alt: "", src: `/api/poster?item_id=${encodeURIComponent(t.item_id)}` });
+    img.addEventListener("error", () => img.remove(), { once: true });
+    art.append(img);
+    const note = t.state !== "indexed" ? { none: "not indexed", queued: "queued", failed: "failed" }[t.state]
+      : srch.last ? (hit ? `${hit.n} match${hit.n === 1 ? "" : "es"}` : "no matches") : "";
+    const tile = el("button", { type: "button", className: "tile", disabled: !hit, ariaPressed: String(srch.focus === t.item_id), title: name },
+      art, el("span", { className: "cap" }, name),
+      el("span", { className: "st " + t.state }, note));
+    tile.addEventListener("click", () => focusTitle(srch.focus === t.item_id ? null : t.item_id));
+    const li = el("li", { className: "ptile" + (srch.last && !hit ? " faded" : "") + (srch.focus === t.item_id ? " sel" : "") }, tile);
+    if (inPool) {
+      const x = el("button", { type: "button", className: "x", title: "Remove from the pool", ariaLabel: `Remove ${t.title}` }, "×");
+      x.addEventListener("click", () => {
+        srch.pool = srch.pool.filter(id => id !== t.item_id);
+        if (srch.focus === t.item_id) { srch.focus = null; if (srch.last) showRows(); }
+        refreshPool();
+      });
+      li.append(x);
+    }
+    return li;
   }));
 }
+// Narrowing is a view over the ranked Shots the server already returned; nothing is asked again.
+function focusTitle(id) {
+  if (!srch.last) return;
+  srch.focus = id;
+  paintPool();
+  showRows();
+}
+sEl("sshowall").addEventListener("click", () => focusTitle(null));
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && srch.focus && !srch.lb && !sEl("searchwrap").hidden) focusTitle(null);
+});
 function addToPool(ids) {
   for (const id of ids) if (!srch.pool.includes(id)) srch.pool.push(id);
   return refreshPool();
@@ -3181,7 +3243,8 @@ async function runSearch(draw) {
   try {
     srch.last = await sendSearch(body);
   } catch (err) {
-    srch.last = null; srch.draw = null;
+    srch.last = null; srch.draw = null; srch.focus = null; srch.counts = new Map();
+    paintPool();
     sEl("smeta").textContent = ""; clearRows();
     const down = err.encoderDown;
     setBanners([sBanner("noise", down
@@ -3190,6 +3253,8 @@ async function runSearch(draw) {
     paintEmpty(); return;
   } finally { for (const b of [sEl("ssearch"), sEl("sdraw"), sEl("spagesize")]) b.disabled = false; }
   paintAdvSummary();
+  srch.focus = null;
+  countShots();
   paintResults();
   refreshPool();
 }
@@ -3231,15 +3296,22 @@ function paintResults() {
     meta += ` · Seed ${r.draw.seed} drew ${picks.join(", ")}. etv-station gets the same pick for this phrase, these settings and seed.`;
   }
   srch.meta = meta;
+  showRows();
+}
+// The ranked Shots on screen: all of them, or the one title's.
+const visibleShots = () => srch.focus ? srch.last.shots.filter(s => s.item_id === srch.focus) : srch.last.shots;
+function showRows() {
+  const r = srch.last, shots = visibleShots();
   clearRows();
   // A drawn pick past the first page still shows, after it, so the pick the meta line names is on screen.
-  sEl("srows").append(...r.shots.slice(pageSize()).filter(s => s.drawn).map(s => {
+  sEl("srows").append(...shots.slice(pageSize()).filter(s => s.drawn).map(s => {
     const li = rowFor(s);
     li.classList.add("past");
     return li;
   }));
   showMore();
-  if (!r.shots.length) sEl("sempty").textContent = r.indexed ? "No shots to rank." : "None of the pool's titles are indexed yet.";
+  sEl("sempty").textContent = shots.length ? ""
+    : r.indexed ? "No shots to rank." : "None of the pool's titles are indexed yet.";
 }
 
 // ---- paging: the server ranks the top 100 Shots and the page shows them a page at a time ----
@@ -3263,7 +3335,7 @@ function clearRows() {
 // Appends the next `n` ranked rows. A drawn pick shown past the page is already in the list, so it
 // keeps its element (and any playing clip) and the new rows go in before the first one still past.
 function showMore(n = pageSize()) {
-  const r = srch.last, list = sEl("srows"), next = r.shots.slice(srch.shown, srch.shown + n);
+  const r = srch.last, shots = visibleShots(), list = sEl("srows"), next = shots.slice(srch.shown, srch.shown + n);
   const past = new Map([...list.querySelectorAll("li.past")].map(li => [li.dataset.key, li]));
   let first = null;
   for (const s of next) {
@@ -3273,12 +3345,13 @@ function showMore(n = pageSize()) {
     first ??= li;
   }
   srch.shown += next.length;
-  const left = r.shots.length - srch.shown, extra = list.querySelectorAll("li.past").length;
+  const left = shots.length - srch.shown, extra = list.querySelectorAll("li.past").length;
   const more = sEl("smore");
   if (left === 0 && !more.hidden && more.contains(document.activeElement)) first?.querySelector("button")?.focus();
   more.hidden = left === 0;
   sEl("smorebtn").textContent = `Show ${Math.min(pageSize(), left)} more`;
-  sEl("smeta").textContent = `${srch.meta} · ${srch.shown} of ${r.shots.length} shown`
+  sEl("smeta").textContent = `${srch.meta} · ${srch.shown} of ${shots.length} shown`
+    + (srch.focus ? ` · only ${shots[0]?.title ?? "one title"}` : "")
     + (extra ? ` · ${extra} drawn past the page` : "");
 }
 sEl("smorebtn").addEventListener("click", () => showMore());
