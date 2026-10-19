@@ -419,7 +419,10 @@ def test_the_page_draws_token_boxes_results_a_lightbox_and_the_partial_pool_bann
     assert page.locator("#lightbox").is_hidden()
 
     page.click("#srows > li:first-child >> text=Play")
-    page.wait_for_selector("#srows > li:first-child video[loop]")
+    # The fixture's clip bytes are not a decodable video, so the page drops the <video> as soon
+    # as it errors; the `.clip` box and the Stop label are what stay.
+    page.wait_for_selector("#srows > li:first-child .clip")
+    page.wait_for_selector("#srows > li:first-child >> text=Stop")
     assert all(r.startswith(served["url"]) or r.startswith("data:") for r in requests), requests
     page.close()
 

@@ -1937,10 +1937,12 @@ def test_lists_tab_adds_excludes_and_shows_a_failed_list(
 
     page.fill("#laddurl", "https://mdblist.com/lists/pierce/new")
     page.click("#ladd")
-    page.wait_for_selector("#ltable tr.waiting")
-    assert "Waiting for sweep" in page.locator("#ltable tr.waiting").inner_text()
+    # The page clears the box and writes the status only after it has repainted the table, and
+    # the failed list is already waiting, so wait on that signal rather than on any waiting row.
     page.wait_for_function("document.querySelector('#laddurl').value === ''")
     assert "The next sweep fetches it" in page.locator("#laddstatus").inner_text()
+    added = page.locator("#ltable tr.waiting", has_text="pierce/new")
+    assert "Waiting for sweep" in added.inner_text()
 
     page.fill("#laddurl", "https://example.com/x")
     page.click("#ladd")
