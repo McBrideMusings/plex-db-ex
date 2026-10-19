@@ -797,3 +797,58 @@ fn pooled_watched_units_covers_every_account() {
         reader.watched_units_for(42).expect("account 42's"),
     );
 }
+
+#[test]
+fn tag_neighbours_reads_either_end_of_an_edge_strongest_first() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("plexdb.db");
+    let conn = common::build_fixture(&path);
+    conn.execute_batch(
+        "INSERT INTO tag_network (kind, value, df, x, y) VALUES \
+             ('movie', 'action', 97, 0, 0), \
+             ('movie', 'kung fu', 120, 0, 0), \
+             ('movie', 'martial art', 142, 0, 0), \
+             ('movie', 'wuxia', 17, 0, 0), \
+             ('show', 'kung fu', 5, 0, 0), \
+             ('show', 'anime', 40, 0, 0); \
+         INSERT INTO tag_network_edge (kind, a, b, shared) VALUES \
+             ('movie', 'action', 'kung fu', 60), \
+             ('movie', 'kung fu', 'martial art', 100), \
+             ('movie', 'kung fu', 'wuxia', 17), \
+             ('movie', 'action', 'wuxia', 3), \
+             ('show', 'anime', 'kung fu', 4);",
+    )
+    .expect("seed the tag network");
+    drop(conn);
+
+    let reader = Reader::open(&path, None, None).expect("open the fixture store");
+    let neighbours = reader
+        .tag_neighbours("movie", "kung fu")
+        .expect("query neighbours");
+
+    let got: Vec<(&str, i64, i64)> = neighbours
+        .iter()
+        .map(|n| (n.tag.as_str(), n.shared, n.df))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            ("martial art", 100, 142),
+            ("action", 60, 97),
+            ("wuxia", 17, 17)
+        ]
+    );
+
+    // The other kind's network is separate.
+    let shows = reader.tag_neighbours("show", "kung fu").expect("show kind");
+    assert_eq!(shows.len(), 1);
+    assert_eq!(shows[0].tag, "anime");
+
+    // A tag the network does not hold is empty, not an error.
+    assert!(
+        reader
+            .tag_neighbours("movie", "no such tag")
+            .expect("unknown tag")
+            .is_empty()
+    );
+}

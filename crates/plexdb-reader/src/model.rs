@@ -28,6 +28,19 @@ pub struct Edge {
     pub fetched_at: String,
 }
 
+/// One tag that co-occurs with another on the tag network — a row of
+/// `tag_network_edge` seen from one of its two ends.
+///
+/// `shared` is how many titles carry both tags; `df` is how many titles carry
+/// `tag` alone, so a caller can tell a strong tie to a rare tag from one to a
+/// ubiquitous tag.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TagNeighbour {
+    pub tag: String,
+    pub shared: i64,
+    pub df: i64,
+}
+
 /// One attribute in a user's Layer 2 taste vector, and how strongly their
 /// watch history carries it.
 ///

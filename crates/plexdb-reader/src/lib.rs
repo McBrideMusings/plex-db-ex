@@ -64,7 +64,9 @@ use std::path::Path;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Row};
 
 pub use error::ReaderError;
-pub use model::{CollectionMembership, Edge, EnrichmentFact, TasteAttribute, TasteVector};
+pub use model::{
+    CollectionMembership, Edge, EnrichmentFact, TagNeighbour, TasteAttribute, TasteVector,
+};
 pub use phrase::{MAX_UNUSED_DAYS, PhraseCache};
 pub use schema::{SUPPORTED_FRAMES_VERSION, SUPPORTED_READER_SHAPE, check_frames, check_store};
 pub use search::{Capabilities, Search, ShotHit, ShotSearch};
@@ -381,6 +383,35 @@ impl Reader {
         let mut stmt = self.conn.prepare(sql)?;
         let rows = stmt
             .query_map((item_id, edge_type), Self::edge_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// The tags that share titles with `tag` on the precomputed tag network
+    /// of `kind` (`"movie"` or `"show"`), strongest tie first.
+    ///
+    /// The network keeps an edge only when it is among either tag's strongest
+    /// co-tags, so this is the stored neighbourhood, not every co-occurring
+    /// tag. `tag` is matched exactly, as the network stores it. Ties on
+    /// `shared` break by tag, for a deterministic result. Empty, not an error,
+    /// for a tag the network does not hold.
+    pub fn tag_neighbours(&self, kind: &str, tag: &str) -> Result<Vec<TagNeighbour>, ReaderError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT n.value, e.shared, n.df \
+             FROM tag_network_edge e \
+             JOIN tag_network n \
+               ON n.kind = e.kind AND n.value = CASE WHEN e.a = ?2 THEN e.b ELSE e.a END \
+             WHERE e.kind = ?1 AND (e.a = ?2 OR e.b = ?2) \
+             ORDER BY e.shared DESC, n.value",
+        )?;
+        let rows = stmt
+            .query_map((kind, tag), |row| {
+                Ok(TagNeighbour {
+                    tag: row.get(0)?,
+                    shared: row.get(1)?,
+                    df: row.get(2)?,
+                })
+            })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
     }
