@@ -1577,7 +1577,11 @@ now and `--limit N` stops after N titles. It writes `frames.db` alone.
   a 4K HEVC 10-bit film took 25.0 s on CUDA against 69.0 s on the CPU, with identical cut times
   and frame pts. Extraction of 24 frames took 20.3 s on CUDA against 23.3 s on the CPU, and ffmpeg
   printed `Failed setup for format cuda` because 24 parallel 4K decoders exceed NVDEC's session
-  limits, so some silently fell back to software.
+  limits, so some silently fell back to software. The same 120 s probe over 24 films, 3 in each
+  of 8 groups (1080p H.264 at 23.976, 25 and 29.97 fps; 720p H.264; 1080p HEVC 8-bit and 10-bit;
+  4K HEVC 10-bit; 1080p AV1 10-bit), gave identical cuts and frame pts on CUDA and the CPU for all
+  24, with the CUDA scan 1.2× to 3.2× faster. A 24-input extraction with `-hwaccel cuda` hung on
+  all three AV1 films after 13 frames, which is one more reason extraction stays on the CPU.
 - **A damaged source is a failure, never an index.** The scan runs at `-loglevel warning` and
   `frame_harvest.classify_decode_stderr` sorts its stderr line by line. A line from a video decoder
   (`[hevc @`, `[h264 @`, `[av1 @` and the like) carrying "invalid", "error", "outside the valid
