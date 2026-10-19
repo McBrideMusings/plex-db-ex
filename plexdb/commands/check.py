@@ -219,12 +219,20 @@ def await_current(
 
 def _cmd_check(args: argparse.Namespace) -> int:
     config = Config.from_env()
-    report = await_current(lambda: _look(config), args.wait)
-    if report is not None:
+    deadline = time.monotonic() + args.wait
+    while True:
+        report = await_current(lambda: _look(config), max(0.0, deadline - time.monotonic()))
+        if report is None:
+            break
         # One full look, taken once the polling is over: the report printed is
         # a single consistent read, and the only one that runs frames.db's
-        # quick_check.
+        # quick_check. A migration can take the lock between the poll and this
+        # look; that is a wait like any other while time remains.
         report = _look(config, frames_deep=True)
+        if report is not None or time.monotonic() >= deadline:
+            break
+        print("a migration is running; waiting", flush=True)
+        time.sleep(POLL_SECONDS)
     if report is None:
         print(f"{config.store_path}: a migration is still running — not read")
         return 1
