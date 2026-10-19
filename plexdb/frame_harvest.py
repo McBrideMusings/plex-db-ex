@@ -8,10 +8,12 @@ from that file under `PLEXDB_MEDIA_DIR`, read-only. It writes `frames.db` alone;
 the store is read through a separate read-only connection (ADR-0024).
 
 **What it works on, in order.** (1) Titles someone queued, oldest first.
-(2) Titles never indexed, movies before episodes, newest Plex `addedAt` first.
-(3) Titles whose `file_hash` changed since they were indexed, least recently
-indexed first. A title that failed is retried by neither (2) nor (3) until its
-`file_hash` changes or it is queued again.
+(2) Titles whose indexed `part_id` is not the part Plex lists now, least recently
+indexed first. (3) Titles never indexed, movies before episodes, newest Plex
+`addedAt` first. (4) Titles whose `file_hash` changed since they were indexed,
+least recently indexed first. A failed attempt records Plex's current part, so a
+title that failed is retried by none of (2) to (4) until its `file_hash` changes
+or it is queued again.
 
 **Sampling.** The title ends at its last video frame, as the scdet pass decodes
 it: a container can carry seconds of audio past the video, and a frame asked
