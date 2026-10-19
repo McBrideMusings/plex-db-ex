@@ -296,17 +296,34 @@ def test_an_unreadable_title_records_its_error_and_the_run_moves_on(config: Conf
 
 def test_the_log_line_carries_the_fields_the_operator_reads(config: Config) -> None:
     result = run(config, FakeMedia(), encoder_with(), limit=1)
-    (line,) = [row for row in result.logs if "item_id=imdb:new" in row]  # type: ignore[attr-defined]
+    (line,) = [row for row in result.logs if "item_id=imdb:new" in row and "part=" in row]  # type: ignore[attr-defined]  # noqa: E501
     for field in (
         "frames: 2026-",
         "part=2",
         "bytes=1001",
         "decode_s=",
+        "scan_s=",
+        "extract_s=",
         "encode_s=",
         "shots=3",
         "vectors=4",
     ):
         assert field in line
+
+
+def test_each_stage_logs_a_start_line_before_the_title_line(config: Config) -> None:
+    result = run(config, FakeMedia(), encoder_with(), limit=1)
+    rows = [row for row in result.logs if "item_id=imdb:new" in row]  # type: ignore[attr-defined]
+    assert [("stage=scan start" in r, "stage=extract start" in r) for r in rows[:2]] == [
+        (True, False),
+        (False, True),
+    ]
+    assert "part=2" in rows[2]
+
+
+def test_the_default_log_flushes_each_line(capsys: pytest.CaptureFixture[str]) -> None:
+    frame_harvest._flushed("frames: x")
+    assert capsys.readouterr().out == "frames: x\n"
 
 
 def test_outside_the_window_nothing_is_read_and_a_closing_window_stops_after_the_title(
@@ -434,16 +451,14 @@ def _media(script: Path, decode: str, seen: list[str] | None = None) -> frame_ha
     )
 
 
-def test_cuda_decode_passes_hwaccel_to_the_scan_and_each_extraction_input(
-    tmp_path: Path,
-) -> None:
+def test_cuda_decode_passes_hwaccel_to_the_scan_only(tmp_path: Path) -> None:
     script, log = _fake_ffmpeg(tmp_path, cuda_fails=False)
     media = _media(script, "cuda")
     media._scdet(tmp_path / "a.mkv")
     assert media.frames(tmp_path / "a.mkv", [1000, 2000]) == [b"jpeg", b"jpeg"]
     scan_line, frames_line = log.read_text().splitlines()
     assert scan_line.count("-hwaccel cuda -i") == 1
-    assert frames_line.count("-threads 1 -hwaccel cuda -ss") == 2
+    assert "-hwaccel" not in frames_line
     assert "hwaccel_output_format" not in log.read_text()
     assert media.decoder == "cuda"
 
@@ -461,15 +476,6 @@ def test_a_failed_cuda_scan_decodes_on_the_cpu_and_reports_ffmpegs_last_line(
     assert media.decoder == "cpu"
     assert media.frames(tmp_path / "a.mkv", [1000]) == [b"jpeg"]
     assert log.read_text().count("-hwaccel") == 1, "after the fallback nothing asks for CUDA"
-
-
-def test_a_failed_cuda_extraction_decodes_on_the_cpu(tmp_path: Path) -> None:
-    script, _ = _fake_ffmpeg(tmp_path, cuda_fails=True)
-    seen: list[str] = []
-    media = _media(script, "cuda", seen)
-    assert media.frames(tmp_path / "a.mkv", [1000, 2000]) == [b"jpeg", b"jpeg"]
-    assert seen == ["Device creation failed: -1."]
-    assert media.decoder == "cpu"
 
 
 def test_status_shows_the_decoder_and_the_fallback(

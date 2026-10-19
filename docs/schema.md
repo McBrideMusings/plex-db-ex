@@ -1567,7 +1567,17 @@ now and `--limit N` stops after N titles. It writes `frames.db` alone.
   retries in 15 minutes. The operating system drops the lock when its holder exits, so a crash
   leaves nothing to clear.
 - **The log line**, one per title, to stdout: `frames: <ISO time> item_id=… part=… bytes=…
-  decode_s=… encode_s=… shots=… vectors=… reason=queued|new|changed` and `error='…'` on a failure.
+  decode_s=… scan_s=… extract_s=… encode_s=… shots=… vectors=… reason=queued|new|changed` and
+  `error='…'` on a failure. `decode_s` runs from the scan's start to the extraction's end, so it also holds the shot arithmetic between them. Before the title's line, two
+  lines mark the stages as they begin: `frames: <ISO time> item_id=… stage=scan start` and
+  `… stage=extract start`. Every log line is flushed when written, so a harvest whose stdout goes
+  to a file shows its progress live.
+- **CUDA decodes the scene scan only.** `PLEXDB_FRAME_DECODE=cuda` puts `-hwaccel cuda` on the scan
+  and nowhere else; extraction always decodes on the CPU. A 120 s probe on an RTX 3090: the scan of
+  a 4K HEVC 10-bit film took 25.0 s on CUDA against 69.0 s on the CPU, with identical cut times
+  and frame pts. Extraction of 24 frames took 20.3 s on CUDA against 23.3 s on the CPU, and ffmpeg
+  printed `Failed setup for format cuda` because 24 parallel 4K decoders exceed NVDEC's session
+  limits, so some silently fell back to software.
 
 ### Measured on 20 films
 

@@ -153,7 +153,8 @@ class Config:
     ffmpeg: str
     ffprobe: str
     #: `PLEXDB_FRAME_DECODE`: `cpu` (the default, also when unset) decodes video in
-    #: software; `cuda` passes ffmpeg `-hwaccel cuda` to decode on the host's NVIDIA GPU.
+    #: software; `cuda` passes ffmpeg `-hwaccel cuda` to the scene scan only, which then decodes
+    #: on the host's NVIDIA GPU. Frame extraction always decodes on the CPU.
     frame_decode: str
     #: `PLEXDB_MEDIA_DIR`, where this process sees the directory Plex calls its
     #: source root (`source_roots`): the frame harvester and the Search tab read a

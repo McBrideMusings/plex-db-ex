@@ -220,9 +220,10 @@ class FfmpegMedia:
         return self._decode
 
     def _hwaccel(self) -> list[str]:
-        """Flags before an input. No `-hwaccel_output_format`: ffmpeg copies each decoded
-        frame back to system memory, so scdet, framecrc and the JPEG cut see the pixels the
-        CPU decode gives."""
+        """Flags before the scene scan's input; extraction never takes them, because 24
+        parallel 4K CUDA decoders exceed NVDEC's session limits (docs/schema.md has the
+        measurements). No `-hwaccel_output_format`: ffmpeg copies each decoded frame back to
+        system memory, so scdet and framecrc see the pixels the CPU decode gives."""
         return ["-hwaccel", "cuda"] if self._decode == "cuda" else []
 
     def _fall_back(self, stderr: str) -> None:
@@ -343,7 +344,7 @@ class FfmpegMedia:
                     # by side).
                     for t_ms in chunk:
                         argv += [
-                            "-threads", "1", *self._hwaccel(),
+                            "-threads", "1",
                             "-ss", f"{t_ms / 1000:.3f}", "-i", str(path),
                         ]  # fmt: skip
                     for i in range(len(chunk)):
@@ -356,14 +357,6 @@ class FfmpegMedia:
                     return ran, [jpg.read_bytes() if jpg.exists() else None for jpg in jpgs]
 
                 done, found = cut()
-                if done.returncode != 0 and not any(found) and self._decode == "cuda":
-                    cuda_stderr = done.stderr
-                    self._decode = "cpu"
-                    done, found = cut()
-                    if any(found):
-                        self._fall_back(cuda_stderr)
-                    else:
-                        self._decode = "cuda"
             # One ffmpeg cutting several inputs ends early when one input is past the file's
             # end, which can leave a time inside the file without its JPEG. Cut each missing
             # time alone, so a miss means that time has no frame.
@@ -384,7 +377,7 @@ class FfmpegMedia:
             target = Path(tmp) / "0.jpg"
             argv = [
                 self._ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
-                "-threads", "1", *self._hwaccel(),
+                "-threads", "1",
                 "-ss", f"{t_ms / 1000:.3f}", "-i", str(path),
                 "-map", "0:v:0", "-frames:v", "1", "-vf", f"scale=-2:{height}",
                 "-q:v", "3", "-y", str(target),
@@ -670,6 +663,15 @@ def _record_failure(
         frames_conn.execute("DELETE FROM frame_queue WHERE item_id = ?", (cand.item_id,))
 
 
+def _stamp(now_fn: Callable[[], datetime]) -> str:
+    return now_fn().isoformat(timespec="seconds")
+
+
+def _flushed(line: str) -> None:
+    """The default log: a harvest whose stdout is a file shows its progress as it runs."""
+    print(line, flush=True)
+
+
 def _index_title(
     frames_conn: sqlite3.Connection,
     cand: Candidate,
@@ -685,18 +687,23 @@ def _index_title(
     with nothing written when the encoder stops answering."""
     file_hash = cand.file_hash
     shot_count = vector_count = 0
-    decode_s = encode_s = 0.0
+    decode_s = scan_s = extract_s = encode_s = 0.0
     error: str | None = None
     outcome = "ok"
     try:
         path = locate(cand.file)
         file_hash = file_hash or media.file_hash(path, cand.size)
         started = time.perf_counter()
+        log(f"{_stamp(now_fn)} item_id={cand.item_id} stage=scan start")
         scan = media.scan(path)
+        scan_s = time.perf_counter() - started
         cuts = scan.cuts
         shot_list = shots([c.t_ms for c in cuts], scan.last_frame_ms)
         samples = sample_times(shot_list)
+        log(f"{_stamp(now_fn)} item_id={cand.item_id} stage=extract start")
+        extract_started = time.perf_counter()
         jpegs = media.frames(path, [t_ms for t_ms, _ in samples])
+        extract_s = time.perf_counter() - extract_started
         decode_s = time.perf_counter() - started
         kept = [(sample, jpeg) for sample, jpeg in zip(samples, jpegs, strict=True) if jpeg]
         if not kept:
@@ -737,8 +744,9 @@ def _index_title(
             outcome, reason = "rejected", "encoder refused the frames"
         _record_failure(frames_conn, cand, error, reason, file_hash, now_fn())
     line = (
-        f"{now_fn().isoformat(timespec='seconds')} item_id={cand.item_id} part={cand.part_id} "
-        f"bytes={cand.size} decode_s={decode_s:.1f} encode_s={encode_s:.1f} "
+        f"{_stamp(now_fn)} item_id={cand.item_id} part={cand.part_id} "
+        f"bytes={cand.size} decode_s={decode_s:.1f} scan_s={scan_s:.1f} "
+        f"extract_s={extract_s:.1f} encode_s={encode_s:.1f} "
         f"shots={shot_count} vectors={vector_count} reason={cand.reason}"
     )
     log(line if error is None else f"{line} error={error!r}")
@@ -755,7 +763,7 @@ def harvest(
     ignore_hours: bool = False,
     limit: int | None = None,
     keep_float: bool = False,
-    log: Callable[[str], None] = print,
+    log: Callable[[str], None] = _flushed,
 ) -> HarvestResult:
     """One harvest run over the configured Frame index. Raises `HarvesterBusy` when
     another harvester, in this process or another, holds the slot. `keep_float` also
@@ -860,7 +868,7 @@ def run_in_windows(
     *,
     clock: Callable[[], datetime],
     sleep: Callable[[float], None] = time.sleep,
-    log: Callable[[str], None] = print,
+    log: Callable[[str], None] = _flushed,
     iterations: int | None = None,
     poll_s: float = 60.0,
     retry_s: float = 900.0,
