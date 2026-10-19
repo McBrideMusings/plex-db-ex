@@ -1727,6 +1727,12 @@ frame against each negative, in the order given.
 `weight` defaults to 0.5, Midjourney's `--no`. Shots are ordered by `score` descending, ties by
 `(item_id, in_ms)`, so identical inputs give identical output.
 
+**A score ranks; it does not judge.** Over 20 phrases judged by eye on 21 indexed films, every
+`phrase_sim` in the top 12 fell between 0.23 and 0.32, and a Shot that did not match the phrase
+scored level with ones that did (*zombies outside a farmhouse at night*: a *Children of Men* Shot
+at 0.285 between *Night of the Living Dead* Shots at 0.287 and 0.284). No cutoff on `score`
+separates a match from a miss; a reader takes the top `n` or draws.
+
 **Probabilities and draw.** With a temperature `T > 0`, each returned Shot carries
 `p = exp(score / T) / sum`, summing to 1 over the Shots returned. `draw` takes `n` Shots without
 replacement, weighted by `p`, from a SplitMix64 generator seeded by `seed`: the same results, `n`
