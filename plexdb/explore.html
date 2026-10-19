@@ -3591,7 +3591,7 @@ function whyScale(d, value) {
   return el("div", { className: "scale", innerHTML: svg + `</svg>` });
 }
 function whyPlot(d, peakOn) {
-  const W = 400, H = 120, L = 6, R = 6, T = 6, B = 16, n = d.series.length;
+  const W = 400, H = 130, L = 38, R = 6, T = 18, B = 16, n = d.series.length;
   const tMax = Math.max(1, d.series[n - 1][0]);
   const vals = d.series.map(p => p[1]);
   const lo = Math.min(d.median, ...vals), hi = Math.max(d.top1, ...vals);
@@ -3599,9 +3599,15 @@ function whyPlot(d, peakOn) {
   const dx = Math.max(1.5, (W - L - R) / Math.max(1, n - 1));
   let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Similarity to the phrase across the title">`;
   for (const [t, v] of d.series) if (v > d.top1) svg += `<rect class="above" x="${(x(t) - dx / 2).toFixed(1)}" y="${T}" width="${dx.toFixed(1)}" height="${H - T - B}"/>`;
-  svg += `<line class="ref" x1="${L}" x2="${W - R}" y1="${y(d.median).toFixed(1)}" y2="${y(d.median).toFixed(1)}"/><text x="${L}" y="${(y(d.median) - 2).toFixed(1)}">median</text>`;
-  svg += `<line class="ref" x1="${L}" x2="${W - R}" y1="${y(d.top1).toFixed(1)}" y2="${y(d.top1).toFixed(1)}"/><text x="${L}" y="${(y(d.top1) - 2).toFixed(1)}">top 1%</text>`;
-  svg += `<polyline class="curve" points="${d.series.map(([t, v]) => `${x(t).toFixed(1)},${y(v).toFixed(1)}`).join(" ")}"/>`;
+  svg += `<line class="ref" x1="${L}" x2="${W - R}" y1="${y(d.median).toFixed(1)}" y2="${y(d.median).toFixed(1)}"/><text x="${L - 4}" y="${(y(d.median) + 3).toFixed(1)}" text-anchor="end">median</text>`;
+  svg += `<line class="ref" x1="${L}" x2="${W - R}" y1="${y(d.top1).toFixed(1)}" y2="${y(d.top1).toFixed(1)}"/><text x="${L - 4}" y="${(y(d.top1) + 3).toFixed(1)}" text-anchor="end">top 1%</text>`;
+  // The line is the best frame in each 2 px of plot; every frame would overdraw ~6 per pixel.
+  const best = new Map();
+  for (const [t, v] of d.series) {
+    const b = Math.floor((x(t) - L) / 2);
+    if (!best.has(b) || v > best.get(b)[1]) best.set(b, [t, v]);
+  }
+  svg += `<polyline class="curve" points="${[...best.values()].map(([t, v]) => `${x(t).toFixed(1)},${y(v).toFixed(1)}`).join(" ")}"/>`;
   svg += `<circle class="me" cx="${x(d.best.t_ms).toFixed(1)}" cy="${y(d.best.sim).toFixed(1)}" r="3.5"/>`;
   d.peaks.forEach((p, i) => {
     svg += `<g class="peak${p.t_ms === peakOn ? " on" : ""}"><circle cx="${x(p.t_ms).toFixed(1)}" cy="${(y(p.sim) - 9).toFixed(1)}" r="7"/><text x="${x(p.t_ms).toFixed(1)}" y="${(y(p.sim) - 6).toFixed(1)}">${i + 1}</text></g>`;
@@ -3641,7 +3647,7 @@ function paintWhy() {
       const peakOn = d.peaks.find(p => p.t_ms >= s.in_ms && p.t_ms < s.out_ms)?.t_ms;
       const above = d.series.filter(p => p[1] > d.top1).length;
       kids.push(sec(`“${w.phrase}” across the whole ${whole}`, whyPlot(d, peakOn),
-        note(`Shaded: ${above} of ${fmt(d.series.length)} frames of this ${whole} are in the library's top 1%. Numbered: the four highest peaks at least two minutes apart.`),
+        note(`The line is the best frame in each 2 px of ${whole}. Shaded: ${above} of ${fmt(d.series.length)} frames of this ${whole} are in the library's top 1%. Numbered: the four highest peaks at least two minutes apart.`),
         el("div", { className: "tiles" }, ...d.peaks.map((p, i) => whyTile(own, p,
           [el("strong", {}, `${i + 1}`), ` ${whyTime(p.t_ms)} · ${p.sim.toFixed(3)}${p.t_ms >= s.in_ms && p.t_ms < s.out_ms ? " · this shot" : ""}`], { badge: i + 1, group: { ...s, frames: peakFrames }, index: i })))));
       const group = list => ({ ...s, frames: list.map(e => ({ t_ms: e.t_ms, sim: e.phrase_sim, item_id: e.item_id, part_id: e.part_id, title: e.title })) });
