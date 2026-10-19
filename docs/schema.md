@@ -1540,9 +1540,12 @@ now and `--limit N` stops after N titles. It writes `frames.db` alone.
   keeps the title's earlier rows, drops its queue row, and the run moves on. An encoder that is
   refused, times out, answers 5xx or answers 429 stops the run with the title untouched; the next
   window resumes. Three titles in a row refused with another 4xx also stop it.
-- **Stalls.** ffmpeg gives up on a Plex read that delivers nothing for 60 s, and a decode that
-  runs past six hours fails the title. The scan for changed titles reads 1 MiB per indexed title
-  and stops when the window closes.
+- **Stalls.** A decode that runs past six hours fails the title. The scan for changed titles
+  reads 1 MiB per indexed title and stops when the window closes.
+- **Memory.** The scene scan is one filter chain: `scdet` with `s=0` marks the Cuts and passes
+  every frame on to `framecrc`, so ffmpeg holds about 820 MB however long the title is. Frame
+  extraction opens up to 24 seeks into the file in one ffmpeg, each with one decoder thread: a 4K
+  10-bit batch peaks at about 4.2 GB, a 1080p batch at about 1.6 GB.
 - **One harvester at a time.** A harvest takes an `flock` on `harvest.lock` in `PLEXDB_FRAMES_DIR`
   and writes its pid there. A second `plexdb harvest-frames` exits 1 with `another harvester is
   running (pid N, indexing <item_id>)`; `plexdb schedule`'s harvester logs the same refusal and
@@ -1550,6 +1553,26 @@ now and `--limit N` stops after N titles. It writes `frames.db` alone.
   leaves nothing to clear.
 - **The log line**, one per title, to stdout: `frames: <ISO time> item_id=… part=… bytes=…
   decode_s=… encode_s=… shots=… vectors=… reason=queued|new|changed` and `error='…'` on a failure.
+
+### Measured on 20 films
+
+Twenty films indexed on Tower — fast-cut action, long takes, animation and old film stock, 35.9
+hours of video — measured what the whole library costs before its backlog starts.
+
+| Measure | Result |
+|---|---|
+| Shots per hour of video | 447 on average; 7 (*Russian Ark*) to 1,116 (*Mad Max: Fury Road*) |
+| Vectors per hour | 1,853 |
+| `frames.db` per hour | 1.78 MB (int8) |
+| Whole library, 63,293 hours | 112.9 GB of int8 vectors, 117 million vectors; fp16 would be 242.5 GB |
+| int8 against fp16 | Over 20 phrases, the int8 and fp16 top 10 share 9.05 Shots on average (8 at worst), the top 50 share 45.2 (41–49), and the first Shot is the same for 19 of 20; the largest similarity difference is 0.024 |
+| Pace | About 3.9× real time, 2 titles an hour, decoding on the CPU |
+| What sets the pace | Decoding: 12,080 s of decode against 476 s of encode over eight titles |
+| Whole library at that pace | About 16,200 hours |
+| Tautulli | Logs no harvester read: none of the 20 films appears in its history over the runs |
+
+`quant` stays `int8`. The backlog (`PLEXDB_FRAME_HOURS`) waits for GPU decoding to be measured
+(plex-db-ex-8nb.1.21).
 
 ### The encoder request (ADR-0025)
 
