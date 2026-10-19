@@ -35,6 +35,7 @@ from ..frames import (
     migrate_configured,
     open_frames,
     queue,
+    section_titles,
     status,
 )
 from ..store import open_readonly
@@ -52,7 +53,7 @@ def _cmd_status(_args: argparse.Namespace) -> int:
     with open_frames(path) as frames_conn, open_readonly(config.store_path) as store_conn:
         report = status(
             frames_conn,
-            store_conn,
+            section_titles(store_conn),
             path=path,
             hours=config.frame_hours,
             now=datetime.now().astimezone(),

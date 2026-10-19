@@ -35,7 +35,7 @@ from typing import Any
 from .config import Config
 from .errors import ConfigError, MediaError, PlexError
 from .frame_harvest import FfmpegMedia, locator
-from .frames import UnknownItem, decoder_report, open_frames, queue, status
+from .frames import UnknownItem, decoder_report, open_frames, queue, section_titles, status
 from .plex_client import LivePlexClient
 from .shot_search import reader_binary, search_argv
 from .store import open_readonly
@@ -242,6 +242,19 @@ def _ms(value: int) -> str:
     return f"{hours}:{minutes:02d}:{seconds:02d}.{milli // 100}"
 
 
+#: How many failed titles the Frame index panel lists; `failed_total` counts the rest.
+FAILED_SHOWN = 20
+
+
+def _stamp(path: Path) -> tuple[int, ...]:
+    """A file's modification time and size, or `(0, 0)` when it is absent."""
+    try:
+        info = path.stat()
+    except OSError:
+        return (0, 0)
+    return (info.st_mtime_ns, info.st_size)
+
+
 class SearchTab:
     """Everything `/api/search/*` answers with."""
 
@@ -266,6 +279,8 @@ class SearchTab:
         self._file_cache: dict[tuple[str, int], Path] = {}
         self._plex: LivePlexClient | None = None
         self._file_lock = threading.Lock()
+        self._sections: tuple[tuple[int, ...], dict[str, set[str]]] | None = None
+        self._sections_lock = threading.Lock()
         self.cache = MediaCache(data_dir / "clips", cache_cap)
 
     # -- configuration, shown to the person ------------------------------------------
@@ -442,15 +457,31 @@ class SearchTab:
         end = error.find(": ", start + len(root))
         return error[:start] + (error[end + 2 :] if end >= 0 else "")
 
+    def _section_titles(self) -> dict[str, set[str]]:
+        """The movies and episodes in each Plex section, read from the store once and kept
+        until the store file or its WAL changes (the sweep is the only writer)."""
+        stamp = tuple(
+            value
+            for suffix in ("", "-wal")
+            for value in _stamp(self._store.with_name(self._store.name + suffix))
+        )
+        with self._sections_lock:
+            if self._sections is None or self._sections[0] != stamp:
+                with open_readonly(self._store) as store:
+                    self._sections = (stamp, section_titles(store))
+            return self._sections[1]
+
     def frames_health(self) -> dict[str, object]:
         """The Frame index panel: what is indexing now, how far each section has got, and
-        every failed title with its error, newest first. `frames.status` is the one source,
-        the same report `plexdb frames status` prints."""
+        the newest failed titles with their errors (`failed_total` counts them all).
+        `frames.status` is the one source, the same report `plexdb frames status` prints."""
         frames_file = self._frames_file()
-        with closing(self._frames_conn()) as frames_conn, open_readonly(self._store) as store:
+        sections = self._section_titles()
+        with closing(self._frames_conn()) as frames_conn:
             report = status(
                 frames_conn,
-                store,
+                sections,
+                failed_limit=FAILED_SHOWN,
                 path=frames_file,
                 hours=self._config.frame_hours,
                 now=datetime.now().astimezone(),
@@ -477,6 +508,7 @@ class SearchTab:
             "queued": report["queued"],
             "frame_hours": report["frame_hours"],
             "decoder": report["decoder"],
+            "failed_total": report["failed_total"],
             "failed": [
                 {
                     **named(f["item_id"]),
