@@ -164,8 +164,14 @@ def _V3(conn: sqlite3.Connection) -> None:
         )
 
 
+#: Version 4 — `reason`, the short path-free phrase for a failed title, beside `error`'s
+#: full message. Titles already failed keep NULL: their message is not rewritten.
+_V4 = """
+ALTER TABLE frame_index_state ADD COLUMN reason TEXT;
+"""
+
 #: Append-only, like `schema.MIGRATIONS`, and versioned separately from it.
-MIGRATIONS: tuple[schema.Migration, ...] = (_V1, _V2, _V3)
+MIGRATIONS: tuple[schema.Migration, ...] = (_V1, _V2, _V3, _V4)
 SCHEMA_VERSION = len(MIGRATIONS)
 
 #: Every frames.db table keyed by item_id, in the order a prune deletes from.
@@ -350,7 +356,7 @@ def status(
         ).fetchone()[0]
     )
     failed = frames_conn.execute(
-        "SELECT item_id, error, indexed_at FROM frame_index_state "
+        "SELECT item_id, error, reason, indexed_at FROM frame_index_state "
         "WHERE error IS NOT NULL ORDER BY indexed_at DESC, item_id LIMIT ?",
         (-1 if failed_limit is None else failed_limit,),
     ).fetchall()
@@ -378,7 +384,12 @@ def status(
         "decoder": decoder,
         "failed_total": failed_total,
         "failed": [
-            {"item_id": row["item_id"], "error": row["error"], "at": row["indexed_at"]}
+            {
+                "item_id": row["item_id"],
+                "error": row["error"],
+                "reason": row["reason"],
+                "at": row["indexed_at"],
+            }
             for row in failed
         ],
     }

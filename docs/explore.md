@@ -91,10 +91,12 @@ for every one that is missing.
   title set is read once and kept until the store file changes, so only the first request after a
   sweep rescans `plex_items` (about 1.5 s on the 87,000-title store; a refresh after that takes
   about 0.2 s). Below it, the 20 newest titles whose last attempt failed, with a line counting the
-  rest: its name and the error's first line, which opens to the full error, the item_id and when it failed. Retry queues that title through the same
-  `POST /api/search/queue`; a failed title already in the queue shows `queued` instead. The error
-  is returned without the file path under `PLEXDB_MEDIA_DIR`, since the page has no login; the full
-  text stays in `frames.db` and the harvester log.
+  rest: its name and the failure's reason, which opens to the item_id and when it failed. Retry
+  queues that title through the same `POST /api/search/queue`; a failed title already in the queue
+  shows `queued` instead. The endpoint returns each title's `reason`, a short phrase with no path in
+  it, and never its `error`, since the page has no login; a title that failed before `reason`
+  existed reads "failed (see harvester log)". The full error stays in `frames.db`, in
+  `plexdb frames status` and in the harvester log.
 - **Token boxes.** About 150 ms after typing stops, the page posts the text to
   `/api/search/tokenize`. The server tokenizes it with the Hugging Face tokenizer for
   `PLEXDB_FRAME_MODEL` and returns each token with its character offsets; the page draws one box per

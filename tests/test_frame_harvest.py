@@ -75,7 +75,7 @@ class FakeMedia:
         part_id = _part(path)
         self.read.append(part_id)
         if part_id in self.fail_parts:
-            raise MediaError(f"part {part_id}: ffmpeg scdet exited 1")
+            raise MediaError(f"part {part_id}: ffmpeg scdet exited 1", "ffmpeg scene scan exited 1")
         return Scan([Cut(3000, 22.5, "scdet"), Cut(5000, None, "chapter")], 10_000)
 
     def frames(self, path: Path, times_ms: Sequence[int]) -> list[bytes | None]:
@@ -286,9 +286,11 @@ def test_an_unreadable_title_records_its_error_and_the_run_moves_on(config: Conf
     result = run(config, media, encoder_with(), limit=2)
     assert (result.indexed, result.failed) == (1, 1)
     state = rows(
-        config, "SELECT error, file_hash FROM frame_index_state WHERE item_id = 'imdb:new'"
+        config,
+        "SELECT error, reason, file_hash FROM frame_index_state WHERE item_id = 'imdb:new'",
     )[0]
     assert "scdet exited 1" in state["error"] and state["file_hash"] == "h2"
+    assert state["reason"] == "ffmpeg scene scan exited 1"
     assert any("item_id=imdb:new" in line and "error=" in line for line in result.logs)  # type: ignore[attr-defined]  # noqa: E501
 
 

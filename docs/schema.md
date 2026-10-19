@@ -1460,6 +1460,17 @@ to the boundary before it makes no Shot. Readers read `in_ms` and `out_ms`; none
 The migration numbered the titles already indexed by that same rule, from `cuts` and
 `frame_index_state.duration_ms`.
 
+### Version 4 — a failed title's reason
+
+```sql
+ALTER TABLE frame_index_state ADD COLUMN reason TEXT;
+```
+
+`reason` is the short phrase for a failed title, such as `file not under PLEX_SOURCE_ROOTS` or
+`ffmpeg scene scan exited -9`, and holds no path and no ffmpeg output. `error` keeps the full
+message. Every `MediaError` carries one, and the harvester writes both when it records a failure.
+A title that failed before version 4 has `reason` NULL; a successful index clears both columns.
+
 ### `plexdb frames status`
 
 Prints one JSON object on stdout and exits 0. It creates `frames.db` at the current version if
@@ -1483,7 +1494,7 @@ the directory holds none, so on a fresh directory every count is zero.
   "decoder": "cpu",
   "failed_total": 1,
   "failed": [
-    {"item_id": "imdb:tt0113277", "error": "ffmpeg exited 1", "at": "2026-10-15T02:14:09-04:00"}
+    {"item_id": "imdb:tt0113277", "error": "/media/Heat.mkv: ffmpeg frame cut exited 1: …", "reason": "ffmpeg frame cut exited 1", "at": "2026-10-15T02:14:09-04:00"}
   ]
 }
 ```
@@ -1502,7 +1513,7 @@ the directory holds none, so on a fresh directory every count is zero.
 | `ffmpeg_found` | Whether `PLEXDB_FFMPEG` and `PLEXDB_FFPROBE` (default `ffmpeg`, `ffprobe`) are both found. The harvester needs them; the container image ships both. |
 | `decoder` | `PLEXDB_FRAME_DECODE`: `cpu` (the default) or `cuda`. After the harvester asked for CUDA and fell back, `cpu (cuda requested: <ffmpeg's last line>)`; the note lives in `decoder.json` beside `frames.db` until the next harvester run starts. |
 | `failed_total` | How many titles' last attempt failed. |
-| `failed` | Those titles, newest first, each with its `item_id`, `error` and `at`. The command lists all of them; the explorer's Frame index panel keeps the newest 20 and shows `failed_total` for the rest. |
+| `failed` | Those titles, newest first, each with its `item_id`, `error` (the full message, which can name file paths and carry ffmpeg's stderr), `reason` (the short path-free phrase, `null` for a title that failed before version 4) and `at`. The command lists all of them with both; the explorer's Frame index panel keeps the newest 20, returns `reason` only (`failed (see harvester log)` where it is `null`), and shows `failed_total` for the rest. |
 
 `plexdb frames queue <item_id>` adds a `frame_queue` row and exits non-zero for an item_id not in
 `items`; a title already queued keeps its place.
@@ -1540,7 +1551,7 @@ now and `--limit N` stops after N titles. It writes `frames.db` alone.
   is a measurement: no reader opens it, nothing migrates it, and deleting it loses nothing.
 - **One transaction per title** replaces the title's `frame_vec`, `cuts` and `frame_index_state`
   rows and deletes its `frame_queue` row.
-- **Failures.** An unreadable part or an ffmpeg error records `error` in `frame_index_state`,
+- **Failures.** An unreadable part or an ffmpeg error records `error` and `reason` in `frame_index_state`,
   keeps the title's earlier rows, drops its queue row, and the run moves on. An encoder that is
   refused, times out, answers 5xx or answers 429 stops the run with the title untouched; the next
   window resumes. Three titles in a row refused with another 4xx also stop it.

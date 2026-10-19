@@ -255,13 +255,8 @@ def _stamp(path: Path) -> tuple[int, ...]:
     return (info.st_mtime_ns, info.st_size)
 
 
-_PLEX_PATH_ERRORS = (
-    (
-        re.compile(r".+ is under none of PLEX_SOURCE_ROOTS \[.*\]", re.DOTALL),
-        "the file is under none of PLEX_SOURCE_ROOTS",
-    ),
-    (re.compile(r".+ leaves PLEXDB_MEDIA_DIR", re.DOTALL), "the file leaves PLEXDB_MEDIA_DIR"),
-)
+#: What the panel says of a title that failed before `frame_index_state.reason` existed.
+UNKNOWN_FAILURE = "failed (see harvester log)"
 
 
 class SearchTab:
@@ -452,24 +447,6 @@ class SearchTab:
                 ids.append(item)
         return ids
 
-    def _without_media_path(self, error: str) -> str:
-        """`error` with the file path under `PLEXDB_MEDIA_DIR` cut out. The harvester writes
-        `<path>: <what failed>`; the explorer has no login, so the library's layout stays in
-        `frames.db` and the harvester log. The two errors that name Plex's own path
-        (`local_path`) lose it and the source roots too."""
-        for shape, plain in _PLEX_PATH_ERRORS:
-            if shape.fullmatch(error):
-                return plain
-        media = self._config.media_dir
-        if media is None:
-            return error
-        root = str(media).rstrip("/")
-        start = error.find(root + "/")
-        if start < 0:
-            return error
-        end = error.find(": ", start + len(root))
-        return error[:start] + (error[end + 2 :] if end >= 0 else "")
-
     def _section_titles(self) -> dict[str, set[str]]:
         """The movies and episodes in each Plex section, read from the store once and kept
         until the store file or its WAL changes (the sweep is the only writer)."""
@@ -486,7 +463,8 @@ class SearchTab:
 
     def frames_health(self) -> dict[str, object]:
         """The Frame index panel: what is indexing now, how far each section has got, and
-        the newest failed titles with their errors (`failed_total` counts them all).
+        the newest failed titles with their reasons, never the full error (`failed_total` counts
+        them all).
         `frames.status` is the one source, the same report `plexdb frames status` prints."""
         frames_file = self._frames_file()
         sections = self._section_titles()
@@ -525,7 +503,7 @@ class SearchTab:
             "failed": [
                 {
                     **named(f["item_id"]),
-                    "error": self._without_media_path(f["error"]),
+                    "reason": f["reason"] or UNKNOWN_FAILURE,
                     "at": f["at"],
                     "queued": f["item_id"] in waiting,
                 }
@@ -855,7 +833,7 @@ class SearchTab:
             try:
                 return make()
             except MediaError as err:
-                # The reason names files on the server, and this page has no login: it goes
+                # The message names files on the server, and this page has no login: it goes
                 # to the log, and the path is looked up again next time in case Plex moved it.
                 _log(f"explore: cut failed for part {part} of {item_id}: {err}")
                 with self._file_lock:
@@ -876,7 +854,7 @@ class SearchTab:
             path = self._file(item_id, part)
             (jpeg,) = self._media().frames(path, [t_ms], height=height)
             if jpeg is None:
-                raise MediaError(f"{path}: no frame at {t_ms} ms")
+                raise MediaError(f"{path}: no frame at {t_ms} ms", "no frame at that time")
             return jpeg
 
         return self.cache.get(

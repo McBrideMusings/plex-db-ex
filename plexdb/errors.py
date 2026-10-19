@@ -112,7 +112,14 @@ class HarvesterBusy(PlexdbError):
 
 class MediaError(PlexdbError):
     """A title's video could not be read through Plex or decoded: the part is unreadable,
-    ffmpeg or ffprobe exited non-zero, or neither is installed. It fails that title only."""
+    ffmpeg or ffprobe exited non-zero, or neither is installed. It fails that title only.
+
+    `str(err)` is the full message and may name paths and carry ffmpeg's stderr. `reason`
+    is a short fixed phrase with neither, safe to show on a page with no login."""
+
+    def __init__(self, message: str, reason: str) -> None:
+        super().__init__(message)
+        self.reason = reason
 
 
 class JevError(PlexdbError):

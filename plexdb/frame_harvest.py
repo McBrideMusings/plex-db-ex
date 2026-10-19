@@ -183,11 +183,14 @@ def local_path(media_dir: Path, plex_file: str, source_roots: Sequence[str]) -> 
     so a symlink inside the library is followed wherever it points."""
     rest = canonical_path(plex_file, source_roots)
     if rest == plex_file.replace("\\", "/"):
-        raise MediaError(f"{plex_file} is under none of PLEX_SOURCE_ROOTS {list(source_roots)}")
+        raise MediaError(
+            f"{plex_file} is under none of PLEX_SOURCE_ROOTS {list(source_roots)}",
+            "file not under PLEX_SOURCE_ROOTS",
+        )
     root = Path(os.path.normpath(media_dir.absolute()))
     path = Path(os.path.normpath(root / rest))
     if path == root or not path.is_relative_to(root):
-        raise MediaError(f"{plex_file} leaves PLEXDB_MEDIA_DIR")
+        raise MediaError(f"{plex_file} leaves PLEXDB_MEDIA_DIR", "file leaves PLEXDB_MEDIA_DIR")
     return path
 
 
@@ -238,7 +241,7 @@ class FfmpegMedia:
             with path.open("rb") as handle:
                 head = handle.read(_HASH_BYTES)
         except OSError as err:
-            raise MediaError(f"{path}: cannot read: {err.strerror}") from None
+            raise MediaError(f"{path}: cannot read: {err.strerror}", "file unreadable") from None
         modified = formatdate(int(stat.st_mtime), usegmt=True)
         digest = hashlib.sha256(f"{size}|{modified}|".encode())
         digest.update(head)
@@ -257,9 +260,13 @@ class FfmpegMedia:
                 timeout=timeout_s,
             )
         except FileNotFoundError:
-            raise MediaError(f"{what}: {argv[0]} is not installed") from None
+            raise MediaError(
+                f"{what}: {argv[0]} is not installed", "ffmpeg or ffprobe not installed"
+            ) from None
         except subprocess.TimeoutExpired:
-            raise MediaError(f"{what}: {argv[0]} ran past {timeout_s:.0f} s") from None
+            raise MediaError(
+                f"{what}: {argv[0]} ran past {timeout_s:.0f} s", f"{Path(argv[0]).name} timed out"
+            ) from None
 
     def scan(self, path: Path) -> Scan:
         scdet, last_frame_ms = self._scdet(path)
@@ -297,12 +304,13 @@ class FfmpegMedia:
                     self._decode = "cuda"
             if done.returncode != 0:
                 raise MediaError(
-                    f"{path}: ffmpeg scdet exited {done.returncode}: {done.stderr.strip()[-200:]}"
+                    f"{path}: ffmpeg scdet exited {done.returncode}: {done.stderr.strip()[-200:]}",
+                    f"ffmpeg scene scan exited {done.returncode}",
                 )
             with crc.open() as lines:
                 last_frame_ms = parse_last_frame(lines)
         if last_frame_ms is None:
-            raise MediaError(f"{path}: ffmpeg decoded no video frame")
+            raise MediaError(f"{path}: ffmpeg decoded no video frame", "no video frame decoded")
         return parse_scdet(done.stdout), last_frame_ms
 
     def _chapters(self, path: Path) -> list[Cut]:
@@ -312,7 +320,8 @@ class FfmpegMedia:
         done = self._run(argv, f"{path}: chapters")
         if done.returncode != 0:
             raise MediaError(
-                f"{path}: ffprobe exited {done.returncode}: {done.stderr.strip()[-200:]}"
+                f"{path}: ffprobe exited {done.returncode}: {done.stderr.strip()[-200:]}",
+                f"ffprobe exited {done.returncode}",
             )
         return parse_chapters(done.stdout)
 
@@ -364,7 +373,8 @@ class FfmpegMedia:
                         found[i] = self._frame_alone(path, t_ms, height)
             if done.returncode != 0 and not any(found):
                 raise MediaError(
-                    f"{path}: ffmpeg exited {done.returncode}: {done.stderr.strip()[-200:]}"
+                    f"{path}: ffmpeg exited {done.returncode}: {done.stderr.strip()[-200:]}",
+                    f"ffmpeg frame cut exited {done.returncode}",
                 )
             out += found
         return out
@@ -389,7 +399,9 @@ class FfmpegMedia:
         to the front, so a `<video>` starts before the whole file has arrived.
         """
         if out_ms <= in_ms:
-            raise MediaError(f"{path}: clip window {in_ms}-{out_ms} ms is empty")
+            raise MediaError(
+                f"{path}: clip window {in_ms}-{out_ms} ms is empty", "clip window empty"
+            )
         with tempfile.TemporaryDirectory(prefix="plexdb-clip-") as tmp:
             target = Path(tmp) / "clip.mp4"
             argv = [
@@ -404,7 +416,8 @@ class FfmpegMedia:
             done = self._run(argv, f"{path}: clip")
             if done.returncode != 0 or not target.exists():
                 raise MediaError(
-                    f"{path}: ffmpeg exited {done.returncode}: {done.stderr.strip()[-200:]}"
+                    f"{path}: ffmpeg exited {done.returncode}: {done.stderr.strip()[-200:]}",
+                    f"ffmpeg clip cut exited {done.returncode}",
                 )
             return target.read_bytes()
 
@@ -419,12 +432,16 @@ def parse_scdet(text: str) -> list[Cut]:
             try:
                 score = float(line.split("=", 1)[1])
             except ValueError:
-                raise MediaError(f"scdet printed an unreadable score: {line!r}") from None
+                raise MediaError(
+                    f"scdet printed an unreadable score: {line!r}", "scene scan output unreadable"
+                ) from None
         elif line.startswith("lavfi.scd.time="):
             try:
                 t_ms = round(float(line.split("=", 1)[1]) * 1000)
             except ValueError:
-                raise MediaError(f"scdet printed an unreadable time: {line!r}") from None
+                raise MediaError(
+                    f"scdet printed an unreadable time: {line!r}", "scene scan output unreadable"
+                ) from None
             if t_ms > 0:
                 cuts.append(Cut(t_ms, score, "scdet"))
     return cuts
@@ -444,12 +461,14 @@ def parse_last_frame(lines: Iterable[str]) -> int | None:
             try:
                 pts = int(line.split(",")[2])
             except (IndexError, ValueError):
-                raise MediaError(f"framecrc printed an unreadable line: {line!r}") from None
+                raise MediaError(
+                    f"framecrc printed an unreadable line: {line!r}", "frame list unreadable"
+                ) from None
             last = pts if last is None else max(last, pts)
     if last is None:
         return None
     if den <= 0:
-        raise MediaError("framecrc printed no time base")
+        raise MediaError("framecrc printed no time base", "frame list unreadable")
     return last * num * 1000 // den
 
 
@@ -458,7 +477,9 @@ def parse_chapters(text: str) -> list[Cut]:
         body = json.loads(text or "{}")
         marks = [round(float(ch["start_time"]) * 1000) for ch in body.get("chapters", [])]
     except (ValueError, KeyError, TypeError):
-        raise MediaError("ffprobe returned chapters that are not JSON") from None
+        raise MediaError(
+            "ffprobe returned chapters that are not JSON", "chapter list unreadable"
+        ) from None
     return [Cut(t_ms, None, "chapter") for t_ms in marks if t_ms > 0]
 
 
@@ -622,17 +643,20 @@ def _record_failure(
     frames_conn: sqlite3.Connection,
     cand: Candidate,
     error: str,
+    reason: str,
     file_hash: str | None,
     now: datetime,
 ) -> None:
-    """Keep whatever rows the title had; mark the attempt failed and take it off the queue."""
+    """Keep whatever rows the title had; mark the attempt failed and take it off the queue.
+    `error` is the full message, `reason` the path-free phrase a page may show."""
     with frames_conn:
         frames_conn.execute(
             "INSERT INTO frame_index_state (item_id, part_id, bytes, file_hash, "
-            "indexed_at, error) VALUES (?, ?, ?, ?, ?, ?) "
+            "indexed_at, error, reason) VALUES (?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(item_id) DO UPDATE SET part_id = excluded.part_id, "
             "bytes = excluded.bytes, file_hash = coalesce(excluded.file_hash, file_hash), "
-            "indexed_at = excluded.indexed_at, error = excluded.error",
+            "indexed_at = excluded.indexed_at, error = excluded.error, "
+            "reason = excluded.reason",
             (
                 cand.item_id,
                 cand.part_id,
@@ -640,6 +664,7 @@ def _record_failure(
                 file_hash,
                 now.isoformat(),
                 error,
+                reason,
             ),
         )
         frames_conn.execute("DELETE FROM frame_queue WHERE item_id = ?", (cand.item_id,))
@@ -675,7 +700,7 @@ def _index_title(
         decode_s = time.perf_counter() - started
         kept = [(sample, jpeg) for sample, jpeg in zip(samples, jpegs, strict=True) if jpeg]
         if not kept:
-            raise MediaError(f"{path}: no frame could be read")
+            raise MediaError(f"{path}: no frame could be read", "no frame could be read")
         samples = [sample for sample, _ in kept]
         vectors: list[list[float]] = []
         model = encoder.model
@@ -706,8 +731,11 @@ def _index_title(
         raise
     except (MediaError, EncoderError) as err:
         error = str(err)
-        outcome = "rejected" if isinstance(err, EncoderError) else "failed"
-        _record_failure(frames_conn, cand, error, file_hash, now_fn())
+        if isinstance(err, MediaError):
+            outcome, reason = "failed", err.reason
+        else:
+            outcome, reason = "rejected", "encoder refused the frames"
+        _record_failure(frames_conn, cand, error, reason, file_hash, now_fn())
     line = (
         f"{now_fn().isoformat(timespec='seconds')} item_id={cand.item_id} part={cand.part_id} "
         f"bytes={cand.size} decode_s={decode_s:.1f} encode_s={encode_s:.1f} "
@@ -866,7 +894,8 @@ def configured_media(config: Config) -> FfmpegMedia:
     if shutil.which(config.ffmpeg) is None or shutil.which(config.ffprobe) is None:
         raise MediaError(
             f"{config.ffmpeg} and {config.ffprobe} must be installed "
-            "(or named by PLEXDB_FFMPEG and PLEXDB_FFPROBE) to harvest frames"
+            "(or named by PLEXDB_FFMPEG and PLEXDB_FFPROBE) to harvest frames",
+            "ffmpeg or ffprobe not installed",
         )
     frames_file = frames.frames_path(config)
     frames.clear_decoder_fallback(frames_file)

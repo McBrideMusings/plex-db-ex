@@ -2989,11 +2989,10 @@ async function refreshFrames() {
       }
       refreshFrames(); refreshPool();
     });
-    const firstLine = t.error.split("\n")[0];
     return el("li", {},
       el("div", { className: "head" }, el("span", { className: "name" }, t.year ? `${t.title} (${t.year})` : t.title), retry),
-      el("details", {}, el("summary", {}, firstLine.length > 90 ? firstLine.slice(0, 90) + "…" : firstLine),
-        el("pre", {}, `${t.error}\n\n${t.item_id} · failed ${frameWhen(t.at)}`)));
+      el("details", {}, el("summary", {}, t.reason),
+        el("pre", {}, `${t.item_id} · failed ${frameWhen(t.at)}`)));
   }));
 }
 

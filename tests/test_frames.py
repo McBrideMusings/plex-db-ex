@@ -358,7 +358,7 @@ def test_v3_gives_each_title_already_indexed_the_shots_the_harvester_would_have_
     finally:
         conn.close()
 
-    assert frames.migrate(path) == (2, 3)
+    assert frames.migrate(path) == (2, frames.SCHEMA_VERSION)
 
     with sqlite3.connect(path) as conn:
         held = conn.execute("SELECT item_id, shot_ix, in_ms, out_ms FROM shots ORDER BY 1, 2")
@@ -368,3 +368,34 @@ def test_v3_gives_each_title_already_indexed_the_shots_the_harvester_would_have_
             ("imdb:a", 2, 8000, 10_000),
             ("imdb:n", 0, 0, 7000),
         ]
+
+
+def test_v4_adds_reason_and_keeps_every_row(tmp_path: Path) -> None:
+    path = tmp_path / "frames.db"
+    conn = frames._connect(path)
+    try:
+        schema.apply(conn, frames.MIGRATIONS[:3])
+        for n in range(20):
+            conn.execute(
+                "INSERT INTO frame_index_state (item_id, model, indexed_at, error) "
+                "VALUES (?, ?, 'now', ?)",
+                (
+                    f"imdb:t{n}",
+                    None if n % 2 else "m",
+                    "/m/x.mkv: ffmpeg exited 1" if n % 2 else None,
+                ),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert frames.migrate(path) == (3, 4)
+
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT count(*) FROM frame_index_state").fetchone()[0] == 20
+        assert (
+            conn.execute(
+                "SELECT count(*) FROM frame_index_state WHERE reason IS NOT NULL"
+            ).fetchone()[0]
+            == 0
+        )
