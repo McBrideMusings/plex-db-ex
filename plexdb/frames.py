@@ -18,17 +18,19 @@ Two rules shape every write here:
 
 from __future__ import annotations
 
+import errno
 import fcntl
 import json
 import os
 import sqlite3
-import time as time_module
+import struct
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, time
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 import sqlite_vec
 
@@ -57,8 +59,10 @@ __all__ = [
     "status",
 ]
 
-_LOCK_TRIES = 4
-_LOCK_RETRY_SECONDS = 0.05
+#: `struct flock` as `fcntl` takes it. The field order differs between the BSD and
+#: Linux layouts; both leave `l_start` and `l_len` zero, which means the whole file.
+_FLOCK_DARWIN = sys.platform == "darwin"
+_FLOCK_FORMAT = "qqihh" if _FLOCK_DARWIN else "hhqqi"
 
 #: Width of one frame vector: CLIP ViT-L/14's projection, the model the encoder
 #: serves (ADR-0025). vec0 fixes a column's width when the table is created, so
@@ -410,7 +414,7 @@ def _indexing(frames_conn: sqlite3.Connection) -> dict[str, str] | None:
 def harvest_lock(path: Path) -> Iterator[None]:
     """Hold the one harvester slot, or raise `HarvesterBusy` naming the holder.
 
-    The lock is an `flock` on `harvest.lock` beside `frames.db`; the operating
+    The lock is an open-file-description lock on `harvest.lock` beside `frames.db`; the operating
     system drops it when the holder exits, however it exits, so a crash leaves
     nothing to clear. The file carries the holder's pid, and the title in hand
     comes from the `frame_harvest` row.
@@ -419,17 +423,10 @@ def harvest_lock(path: Path) -> Iterator[None]:
     lock_path = path.parent / "harvest.lock"
     with open(lock_path, "a+") as handle:
         try:
-            # A status probe holds the lock for microseconds; a few short retries
-            # keep it from refusing a harvester that no other harvester holds against.
-            for attempt in range(_LOCK_TRIES):
-                try:
-                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except BlockingIOError:
-                    if attempt == _LOCK_TRIES - 1:
-                        raise
-                    time_module.sleep(_LOCK_RETRY_SECONDS)
-        except BlockingIOError:
+            _ofd_lock(handle, fcntl.F_WRLCK, fcntl.F_OFD_SETLK)
+        except OSError as error:
+            if error.errno not in (errno.EAGAIN, errno.EACCES):
+                raise
             handle.seek(0)
             pid = handle.read().strip() or "unknown"
             raise HarvesterBusy(
@@ -442,21 +439,27 @@ def harvest_lock(path: Path) -> Iterator[None]:
         yield
 
 
+def _ofd_lock(handle: IO[str], lock_type: int, command: int) -> bytes:
+    """Run one open-file-description lock `command` over the whole of `handle`."""
+    if _FLOCK_DARWIN:
+        request = struct.pack(_FLOCK_FORMAT, 0, 0, 0, lock_type, os.SEEK_SET)
+    else:
+        request = struct.pack(_FLOCK_FORMAT, lock_type, os.SEEK_SET, 0, 0, 0)
+    return fcntl.fcntl(handle, command, request)
+
+
 def harvester_running(path: Path) -> bool:
-    """Whether a harvester holds `harvest.lock` now. Tries the flock without blocking
-    and releases it at once; a missing lock file means no harvester has ever run."""
+    """Whether a harvester holds `harvest.lock` now. Asks the operating system which lock
+    would block a write lock (`F_OFD_GETLK`) and takes none, so the probe never makes a
+    starting harvester see a holder; a missing lock file means no harvester has ever run."""
     try:
         handle = open(path.parent / "harvest.lock")
     except FileNotFoundError:
         return False
     with handle:
-        try:
-            # Shared, so two status probes never read each other as a harvester.
-            fcntl.flock(handle, fcntl.LOCK_SH | fcntl.LOCK_NB)
-        except BlockingIOError:
-            return True
-        fcntl.flock(handle, fcntl.LOCK_UN)
-        return False
+        answer = _ofd_lock(handle, fcntl.F_WRLCK, fcntl.F_OFD_GETLK)
+    lock_type = struct.unpack(_FLOCK_FORMAT, answer)[3 if _FLOCK_DARWIN else 0]
+    return bool(lock_type != fcntl.F_UNLCK)
 
 
 def _title_in_hand(path: Path) -> str:

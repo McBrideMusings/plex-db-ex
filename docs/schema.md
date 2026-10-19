@@ -1563,11 +1563,12 @@ now and `--limit N` stops after N titles. It writes `frames.db` alone.
   every frame on to `framecrc`, so ffmpeg holds about 820 MB however long the title is. Frame
   extraction opens up to 24 seeks into the file in one ffmpeg, each with one decoder thread: a 4K
   10-bit batch peaks at about 4.2 GB, a 1080p batch at about 1.6 GB.
-- **One harvester at a time.** A harvest takes an `flock` on `harvest.lock` in `PLEXDB_FRAMES_DIR`
+- **One harvester at a time.** A harvest takes an open-file-description lock (`F_OFD_SETLK`) on `harvest.lock` in `PLEXDB_FRAMES_DIR`
   and writes its pid there. A second `plexdb harvest-frames` exits 1 with `another harvester is
   running (pid N, indexing <item_id>)`; `plexdb schedule`'s harvester logs the same refusal and
   retries in 15 minutes. The operating system drops the lock when its holder exits, so a crash
-  leaves nothing to clear.
+  leaves nothing to clear. `plexdb frames status` asks the operating system whether the lock is
+  held (`F_OFD_GETLK`) and takes none, so it never makes a starting harvester see a holder.
 - **The log line**, one per title, to stdout: `frames: <ISO time> item_id=… part=… bytes=…
   decode_s=… scan_s=… extract_s=… encode_s=… shots=… vectors=… reason=queued|new|changed` and
   `error='…'` on a failure. `decode_s` runs from the scan's start to the extraction's end, so it also holds the shot arithmetic between them. Before the title's line, two
