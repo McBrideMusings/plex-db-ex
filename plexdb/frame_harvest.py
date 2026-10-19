@@ -642,7 +642,10 @@ def _write_title(
     now: datetime,
 ) -> None:
     with frames_conn:
-        for table in ("frame_vec", "cuts", "shots"):
+        # By rowid: `DELETE FROM frame_vec WHERE item_id = ?` scans the whole vec0 table, which
+        # at full library is tens of millions of vectors for every title written.
+        frames.delete_vectors(frames_conn, cand.item_id)
+        for table in ("cuts", "shots"):
             frames_conn.execute(f"DELETE FROM {table} WHERE item_id = ?", (cand.item_id,))  # noqa: S608
         frames_conn.executemany(
             "INSERT OR IGNORE INTO cuts (item_id, t_ms, score, source) VALUES (?, ?, ?, ?)",

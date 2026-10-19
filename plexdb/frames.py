@@ -540,7 +540,7 @@ def _titles_held(frames_conn: sqlite3.Connection) -> set[str]:
     return held
 
 
-def _delete_vectors(frames_conn: sqlite3.Connection, item_id: str) -> int:
+def delete_vectors(frames_conn: sqlite3.Connection, item_id: str) -> int:
     """Delete one title's vectors by rowid and return how many went.
 
     `DELETE FROM frame_vec WHERE item_id = ?` scans the whole vec0 table
@@ -570,7 +570,7 @@ def prune_orphans(frames_conn: sqlite3.Connection, live: set[str]) -> PruneStats
     deleted = dict.fromkeys(_TITLE_TABLES, 0)
     for item_id in orphans:
         with frames_conn:
-            deleted["frame_vec"] += _delete_vectors(frames_conn, item_id)
+            deleted["frame_vec"] += delete_vectors(frames_conn, item_id)
             for table in _TITLE_TABLES:
                 if table == "frame_vec":
                     continue
