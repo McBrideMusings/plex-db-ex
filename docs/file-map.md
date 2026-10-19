@@ -42,7 +42,7 @@ plex-db-ex/
 │   │   ├── lists.py
 │   │   ├── list_one.py
 │   │   ├── latent_users.py
-│   │   ├── harvest_frames.py  `plexdb harvest-frames [--ignore-hours] [--limit N]`: runs the frame harvester now; in no sweep
+│   │   ├── harvest_frames.py  `plexdb harvest-frames [--ignore-hours] [--limit N] [--keep-float]` (`--keep-float` also writes the float32 vectors to `frames-float.db` for the int8-against-fp16 comparison): runs the frame harvester now; in no sweep
 │   │   ├── prune_frames.py  deletes every frames.db row whose item_id is no longer in `items`; sweep step 27, right after the walk and the identity repairs, skipped when `PLEXDB_FRAMES_DIR` is unset
 │   │   ├── prune_keyword_verdicts.py  deletes `keyword_pairs`, `keyword_roles` and `keyword_role_decisions` rows keyed on a keyword value no `enrichment` row carries; sweep step 63, between the keyword writers and the film-suffix rule, needs no service
 │   │   ├── publish.py
@@ -80,9 +80,9 @@ plex-db-ex/
 │   ├── role_review.py     the Plex DB-EX Roles tab's server side: `RoleDecisions` is `role_decisions.json` keyed by (spelling, role), resolved the same way, `require_role` refuses a (keyword, role) with no verdict, and `roles_json` lists up to 200 keywords matching a filter with every source's verdict per role and every decision, the file's pending ones over the table's; Plex DB-EX serves it at `/api/roles`
 │   ├── roles.py           the Jev role judge: every keyword with no `jev` row in `keyword_roles` gets five rows (score and model, or a 400/422 refusal in `error`), written in committed batches of 200 keywords; `fold_role_decisions` applies `role_decisions.json` to `keyword_role_decisions`
 │   ├── embed_client.py    llama-swap embeddings client (`nomic-embed-text`) behind an `Embedder` protocol
-│   ├── frame_harvest.py   the frame harvester: candidate order (queued, new, changed), Cut and Shot sampling, `FfmpegMedia` (ffmpeg/ffprobe over Plex's part URL), one transaction per title, and `run_in_windows`, the loop `plexdb schedule` runs inside `PLEXDB_FRAME_HOURS`
+│   ├── frame_harvest.py   the frame harvester: candidate order (queued, new, changed), Cut and Shot sampling, `FfmpegMedia` (ffmpeg/ffprobe over the video file under `PLEXDB_MEDIA_DIR`, which `local_path` maps from the path Plex reports), one transaction per title, and `run_in_windows`, the loop `plexdb schedule` runs inside `PLEXDB_FRAME_HOURS`
 │   ├── shot_search.py     the `plexdb-read search` command line, built once: `reader_binary` and `search_argv` — `plexdb search` and the Plex DB-EX Search tab both run it, so neither can drift from the reader
-│   ├── explore_search.py  the Plex DB-EX Search tab's server side (`SearchTab`): `PhraseTokenizer` (the model's tokenizer read from a local `tokenizer.json`, 75-token cut), the pool (suggest, collection, per-title index state, queue through `frames.queue`), search and draw through `plexdb-read`, and frames and clips cut by `FfmpegMedia` into one 2 GB least-recently-used `MediaCache`; served at `/api/search/*`
+│   ├── explore_search.py  the Plex DB-EX Search tab's server side (`SearchTab`): `PhraseTokenizer` (the model's tokenizer read from a local `tokenizer.json`, 75-token cut), the pool (suggest, collection, per-title index state, queue through `frames.queue`), search and draw through `plexdb-read`, and frames and clips cut by `FfmpegMedia` from the files under `PLEXDB_MEDIA_DIR` into one 2 GB least-recently-used `MediaCache`; served at `/api/search/*`
 │   ├── frame_encoder.py   the Frame encoder client (ADR-0025): `EncoderClient.embed_images`/`embed_texts` over `/v1/embeddings` with a 300 s timeout, `EncoderUnavailable` on a refused connection or a 5xx, and `reachable` for `frames status`; `probe.jpg` beside it is the image `probe-encoder` sends
 │   ├── jev_client.py      Jev pair judge (`score` and `noul` questions in one request, 429 backoff) behind a `Judge` protocol, and the role judge (one `noul` question per role in one request) behind `RoleJudge`; `judge_all`, the thread fan-out both judges share
 │   ├── tmdb_client.py     read-only TMDB client (keywords, recommendations, similar) behind a TMDbSource protocol
