@@ -476,12 +476,15 @@
   .sbar { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
   button.outline { font: inherit; color: var(--accent); background: var(--panel); border: 1px solid var(--accent); border-radius: 6px; padding: 4px 12px; cursor: pointer; }
   button.outline:disabled { opacity: 0.6; cursor: progress; }
-  #smeta { color: var(--muted); font-size: 12px; margin: 12px 0 6px; }
+  #sresbar { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: baseline; justify-content: space-between; margin: 12px 0 6px; color: var(--muted); font-size: 12px; }
+  #sresbar label { display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }
+  #sresbar select { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 2px 4px; }
   #sempty { color: var(--muted); padding: 24px 0; }
   #srows { list-style: none; margin: 0; padding: 0; }
   #srows > li { display: grid; grid-template-columns: 2.2em 302px minmax(0, 1fr) 7em; gap: 10px; align-items: center; padding: 8px 6px;
                 border-bottom: 1px solid var(--line); border-radius: 6px; }
   #srows > li.drawn { outline: 2px solid var(--accent); outline-offset: -2px; }
+  #srows > li:not(.past) + li.past { margin-top: 14px; border-top: 1px dashed var(--line); }
   #srows .rank { color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; }
   #srows .thumbs { display: flex; gap: 4px; }
   #srows .thumbs button { padding: 0; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; width: 98px; height: 56px; cursor: zoom-in; background: var(--chip); }
@@ -674,9 +677,11 @@
       </div>
       <div class="sbar"><button type="button" class="primary" id="ssearch">Search</button></div>
     </div>
-    <div id="smeta"></div>
+    <div id="sresbar"><span id="smeta" aria-live="polite"></span>
+      <label>Rows per page <select id="spagesize"><option>10</option><option selected>25</option><option>50</option><option>100</option></select></label></div>
     <div id="sempty"></div>
     <ol id="srows"></ol>
+    <div id="smore" class="more" hidden><button type="button" class="plain" id="smorebtn"></button></div>
   </div>
   <div id="lightbox" hidden role="dialog" aria-modal="true" aria-label="Frames of this Shot">
     <img id="lbimg" alt="">
@@ -3171,19 +3176,19 @@ async function runSearch(draw) {
   const body = { phrase, pool: srch.pool, negatives: negativeParts(), weight: +sEl("sweight").value };
   if (+sEl("stemp").value > 0) body.temperature = +sEl("stemp").value;
   if (draw) body.draw = draw;
-  for (const b of [sEl("ssearch"), sEl("sdraw")]) b.disabled = true;
+  for (const b of [sEl("ssearch"), sEl("sdraw"), sEl("spagesize")]) b.disabled = true;
   sEl("smeta").textContent = "Searching…";
   try {
     srch.last = await sendSearch(body);
   } catch (err) {
     srch.last = null; srch.draw = null;
-    sEl("smeta").textContent = ""; sEl("srows").replaceChildren();
+    sEl("smeta").textContent = ""; clearRows();
     const down = err.encoderDown;
     setBanners([sBanner("noise", down
       ? `The encoder at ${down.url} refused ${down.phrases.map(p => `“${p}”`).join(", ")} (${down.reason}). Phrases searched before still work; a new one needs the encoder.`
       : err.message)]);
     paintEmpty(); return;
-  } finally { for (const b of [sEl("ssearch"), sEl("sdraw")]) b.disabled = false; }
+  } finally { for (const b of [sEl("ssearch"), sEl("sdraw"), sEl("spagesize")]) b.disabled = false; }
   paintAdvSummary();
   paintResults();
   refreshPool();
@@ -3220,21 +3225,80 @@ function paintResults() {
   const formula = r.searched.negatives.length ? `score = phrase similarity − ${r.weight} × strongest negative similarity` : "score = phrase similarity";
   let meta = `${fmt(r.total)} shot${r.total === 1 ? "" : "s"} · ${r.indexed} of ${r.pool} titles indexed · ${r.model || "no model"} · ${formula}`;
   if (r.temperature) meta += ` · odds = exp(score / ${r.temperature.toFixed(3)}), shares of 100%`;
-  if (r.total > r.shots.filter(s => s.rank <= 100).length) meta += " · top 100 shown";
+  if (r.total > r.shots.filter(s => s.rank <= 100).length) meta += " · top 100 ranked";
   if (r.draw) {
     const picks = r.shots.filter(s => s.drawn).sort((a, b) => a.drawn - b.drawn).map(s => `#${s.rank}`);
     meta += ` · Seed ${r.draw.seed} drew ${picks.join(", ")}. etv-station gets the same pick for this phrase, these settings and seed.`;
   }
-  sEl("smeta").textContent = meta;
-  sEl("srows").replaceChildren(...r.shots.map(rowFor));
+  srch.meta = meta;
+  clearRows();
+  // A drawn pick past the first page still shows, after it, so the pick the meta line names is on screen.
+  sEl("srows").append(...r.shots.slice(pageSize()).filter(s => s.drawn).map(s => {
+    const li = rowFor(s);
+    li.classList.add("past");
+    return li;
+  }));
+  showMore();
   if (!r.shots.length) sEl("sempty").textContent = r.indexed ? "No shots to rank." : "None of the pool's titles are indexed yet.";
 }
+
+// ---- paging: the server ranks the top 100 Shots and the page shows them a page at a time ----
+const PAGE_KEY = "plexdb-explore:search-page-size";
+try {
+  const saved = localStorage.getItem(PAGE_KEY);
+  if ([...sEl("spagesize").options].some(o => o.value === saved)) sEl("spagesize").value = saved;
+} catch {}
+const pageSize = () => +sEl("spagesize").value;
+sEl("spagesize").addEventListener("change", () => {
+  try { localStorage.setItem(PAGE_KEY, sEl("spagesize").value); } catch {}
+  // Rows already shown stay; a larger page fills up to it.
+  if (srch.last) showMore(Math.max(0, pageSize() - srch.shown));
+});
+function clearRows() {
+  thumbWatch.disconnect();
+  srch.shown = 0;
+  sEl("srows").replaceChildren();
+  sEl("smore").hidden = true;
+}
+// Appends the next `n` ranked rows. A drawn pick shown past the page is already in the list, so it
+// keeps its element (and any playing clip) and the new rows go in before the first one still past.
+function showMore(n = pageSize()) {
+  const r = srch.last, list = sEl("srows"), next = r.shots.slice(srch.shown, srch.shown + n);
+  const past = new Map([...list.querySelectorAll("li.past")].map(li => [li.dataset.key, li]));
+  let first = null;
+  for (const s of next) {
+    let li = past.get(`${s.item_id}|${s.in_ms}`);
+    if (li) li.classList.remove("past");
+    else list.insertBefore(li = rowFor(s), list.querySelector("li.past"));
+    first ??= li;
+  }
+  srch.shown += next.length;
+  const left = r.shots.length - srch.shown, extra = list.querySelectorAll("li.past").length;
+  const more = sEl("smore");
+  if (left === 0 && !more.hidden && more.contains(document.activeElement)) first?.querySelector("button")?.focus();
+  more.hidden = left === 0;
+  sEl("smorebtn").textContent = `Show ${Math.min(pageSize(), left)} more`;
+  sEl("smeta").textContent = `${srch.meta} · ${srch.shown} of ${r.shots.length} shown`
+    + (extra ? ` · ${extra} drawn past the page` : "");
+}
+sEl("smorebtn").addEventListener("click", () => showMore());
+
+// A row's thumbnails are cut only once the row comes within a screen of the viewport. Asking for
+// every row's at once queued about 300 ffmpeg cuts behind three cut slots before the first screen filled.
+const thumbWatch = new IntersectionObserver(entries => {
+  for (const e of entries) {
+    if (!e.isIntersecting) continue;
+    thumbWatch.unobserve(e.target);
+    for (const img of e.target.querySelectorAll("img[data-src]")) { img.src = img.dataset.src; delete img.dataset.src; }
+  }
+}, { rootMargin: "100% 0px" });
 
 function rowFor(s) {
   const r = srch.last, key = `${s.item_id}|${s.in_ms}`;
   const thumbs = el("div", { className: "thumbs" }, ...s.thumbs.map((t, i) => {
     const b = el("button", { type: "button", ariaLabel: `Open frame ${i + 1}` },
-      el("img", { loading: "lazy", decoding: "async", alt: "", src: frameUrl(s.item_id, s.part_id, t, false) }));
+      el("img", { decoding: "async", alt: "" }));
+    b.querySelector("img").dataset.src = frameUrl(s.item_id, s.part_id, t, false);
     b.querySelector("img").addEventListener("error", e => e.target.remove(), { once: true });
     b.addEventListener("click", () => openLightbox(s, s.frames.findIndex(f => f.t_ms === t)));
     return b;
@@ -3259,6 +3323,8 @@ function rowFor(s) {
     odds);
   play.addEventListener("click", () => togglePlay(li, play, s, key));
   if (srch.playing.has(key)) addClip(li, s);
+  li.dataset.key = key;
+  thumbWatch.observe(li);
   return li;
 }
 function addClip(li, s) {

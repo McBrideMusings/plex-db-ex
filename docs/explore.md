@@ -120,6 +120,11 @@ for every one that is missing.
   title, timecodes, three frames, phrase similarity, the strongest negative and its similarity, and
   with a temperature each Shot's odds. Draw runs the reader's draw a second time with the same
   inputs and marks the drawn rows, so the picks equal `plexdb search … --draw N --seed S`.
+- **Paging.** The page shows the ranked Shots a page at a time, 25 unless "Rows per page" says 10, 50
+  or 100 (kept in `localStorage` as `plexdb-explore:search-page-size`), with a "Show N more" button
+  under them. A drawn pick past the page still shows, after a dashed line. A row's thumbnails are
+  requested only once the row comes within a screen of the viewport, so a search cuts the thumbnails
+  of the rows near the screen rather than all of them.
 - **Frames and Play.** The server asks Plex which file the indexed part is (a metadata read, which
   starts no playback session), then cuts a frame from that file under `PLEXDB_MEDIA_DIR` with ffmpeg
   (`/api/search/frame`), and a Shot's in–out window as a 640 px wide H.264 MP4 without audio
