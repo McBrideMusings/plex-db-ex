@@ -193,6 +193,22 @@ def test_an_unchanged_indexed_title_and_a_failed_one_are_not_visited_again(confi
     assert "imdb:chg" not in result.titles and "imdb:old" not in result.titles
 
 
+def test_a_title_whose_indexed_part_plex_no_longer_lists_is_reindexed(config: Config) -> None:
+    media = FakeMedia()
+    with frames.open_frames(frames_path(config)) as conn:
+        conn.execute(
+            "INSERT INTO frame_index_state (item_id, part_id, file_hash, indexed_at) "
+            "VALUES ('imdb:old', 999, 'h1', '2026-10-01T00:00:00+00:00')"
+        )
+        conn.commit()
+    result = run(config, media, encoder_with(), limit=1)
+    assert result.titles == ["imdb:old"]
+    assert (
+        rows(config, "SELECT part_id FROM frame_index_state WHERE item_id = 'imdb:old'")[0][0] == 1
+    )
+    assert any("indexed part 999 is not Plex's part 1" in line for line in result.logs)  # type: ignore[attr-defined]
+
+
 def test_a_title_writes_cuts_one_vector_per_sampled_frame_and_its_state(config: Config) -> None:
     media = FakeMedia()
     run(config, media, encoder_with(), limit=1)

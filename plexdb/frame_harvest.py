@@ -589,8 +589,21 @@ def _candidates(
 
     state = {
         str(r["item_id"]): r
-        for r in frames_conn.execute("SELECT item_id, file_hash, indexed_at FROM frame_index_state")
+        for r in frames_conn.execute(
+            "SELECT item_id, part_id, file_hash, indexed_at FROM frame_index_state"
+        )
     }
+    # A title whose indexed part Plex no longer lists is searchable with frames nothing can
+    # serve. It re-indexes from the part Plex lists now, ahead of the new-title backlog; a
+    # failed title retries too, as its part is not the one that failed.
+    for item_id in sorted(state, key=lambda item: (state[item]["indexed_at"], item)):
+        indexed_part = state[item_id]["part_id"]
+        if item_id not in parts or item_id in seen or indexed_part in (None, parts[item_id][2]):
+            continue
+        seen.add(item_id)
+        log(f"{item_id}: indexed part {indexed_part} is not Plex's part {parts[item_id][2]}")
+        yield candidate(item_id, "part changed")
+
     fresh = sorted(
         (item_id for item_id in parts if item_id not in state and item_id not in seen),
         key=lambda item_id: (parts[item_id][0] != "movie", -parts[item_id][1], item_id),
