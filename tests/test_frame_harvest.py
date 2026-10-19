@@ -66,6 +66,7 @@ class FakeMedia:
     def __init__(self) -> None:
         self.hashes: dict[int, str] = {}
         self.fail_parts: set[int] = set()
+        self.damaged_parts: set[int] = set()
         self.read: list[int] = []
         self.asked: list[int] = []
 
@@ -78,7 +79,12 @@ class FakeMedia:
         self.read.append(part_id)
         if part_id in self.fail_parts:
             raise MediaError(f"part {part_id}: ffmpeg scdet exited 1", "ffmpeg scene scan exited 1")
-        return Scan([Cut(3000, 22.5, "scdet"), Cut(5000, None, "chapter")], 10_000)
+        if part_id in self.damaged_parts:
+            raise MediaError(
+                f"part {part_id}: source file damaged (3 decode errors, cpu decode)",
+                "source file damaged (3 decode errors)",
+            )
+        return Scan([Cut(3000, 22.5, "scdet"), Cut(5000, None, "chapter")], 10_000, 2)
 
     def frames(self, path: Path, times_ms: Sequence[int]) -> list[bytes | None]:
         self.asked += times_ms
@@ -466,6 +472,8 @@ if "-hwaccel" in args and {cuda_fails!r}:
     sys.stderr.write("Device creation failed: -1.\\n")
     sys.exit(1)
 if "framecrc" in args:
+    for line in {stderr!r}:
+        sys.stderr.write(line + "\\n")
     with open(args[-1], "w") as crc:
         crc.write("#tb 0: 1/1000\\n0, 0, 0, 40, 10, 0x0\\n0, 9000, 9000, 40, 10, 0x0\\n")
     print("lavfi.scd.score=30.0")
@@ -480,10 +488,12 @@ else:
 """
 
 
-def _fake_ffmpeg(tmp_path: Path, *, cuda_fails: bool) -> tuple[Path, Path]:
+def _fake_ffmpeg(
+    tmp_path: Path, *, cuda_fails: bool, stderr: tuple[str, ...] = ()
+) -> tuple[Path, Path]:
     log = tmp_path / "ffmpeg.log"
     script = tmp_path / "ffmpeg"
-    script.write_text(_FAKE_FFMPEG.format(log=str(log), cuda_fails=cuda_fails))
+    script.write_text(_FAKE_FFMPEG.format(log=str(log), cuda_fails=cuda_fails, stderr=stderr))
     script.chmod(0o755)
     return script, log
 
@@ -515,13 +525,78 @@ def test_a_failed_cuda_scan_decodes_on_the_cpu_and_reports_ffmpegs_last_line(
     script, log = _fake_ffmpeg(tmp_path, cuda_fails=True)
     seen: list[str] = []
     media = _media(script, "cuda", seen)
-    cuts, last = media._scdet(tmp_path / "a.mkv")
+    cuts, last, _ = media._scdet(tmp_path / "a.mkv")
     assert [c.t_ms for c in cuts] == [4000]
     assert last == 9000
     assert seen == ["Device creation failed: -1."]
     assert media.decoder == "cpu"
     assert media.frames(tmp_path / "a.mkv", [1000]) == [b"jpeg"]
     assert log.read_text().count("-hwaccel") == 1, "after the fallback nothing asks for CUDA"
+
+
+_DAMAGED = (
+    "[hevc @ 0x1] The cu_qp_delta 53 is outside the valid range [-32, 31].",
+    "[hevc @ 0x1] Skipping invalid undecodable NALU: 51",
+    "[matroska,webm @ 0x2] Unknown profile bitstream",
+)
+
+
+def test_a_scan_that_exits_0_with_decoder_errors_is_a_damaged_source(tmp_path: Path) -> None:
+    script, log = _fake_ffmpeg(tmp_path, cuda_fails=False, stderr=_DAMAGED)
+    media = _media(script, "cpu")
+    with pytest.raises(MediaError) as caught:
+        media.scan(tmp_path / "a.mkv")
+    assert caught.value.reason == "source file damaged (2 decode errors)"
+    assert "cu_qp_delta 53" in str(caught.value)
+    assert "-loglevel warning" in log.read_text()
+
+
+def test_a_damaged_source_is_never_retried_on_the_other_decoder(tmp_path: Path) -> None:
+    script, log = _fake_ffmpeg(tmp_path, cuda_fails=False, stderr=_DAMAGED)
+    media = _media(script, "cuda")
+    with pytest.raises(MediaError, match="damaged"):
+        media._scdet(tmp_path / "a.mkv")
+    assert len(log.read_text().splitlines()) == 1
+    assert media.decoder == "cuda"
+
+
+def test_only_the_first_five_error_lines_are_kept_in_the_message(tmp_path: Path) -> None:
+    errors = tuple(f"[hevc @ 0x1] Invalid NAL unit {n}, skipping." for n in range(8))
+    script, _ = _fake_ffmpeg(tmp_path, cuda_fails=False, stderr=errors)
+    with pytest.raises(MediaError) as caught:
+        _media(script, "cpu").scan(tmp_path / "a.mkv")
+    assert caught.value.reason == "source file damaged (8 decode errors)"
+    assert "NAL unit 4," in str(caught.value) and "NAL unit 5," not in str(caught.value)
+
+
+def test_non_decoder_warnings_index_normally_and_are_counted(tmp_path: Path) -> None:
+    warns = (
+        "[matroska,webm @ 0x2] Unknown profile bitstream",
+        "[aac @ 0x3] Invalid data in the audio stream",
+        "Past duration 0.6 too large",
+    )
+    script, _ = _fake_ffmpeg(tmp_path, cuda_fails=False, stderr=warns)
+    scan = _media(script, "cpu").scan(tmp_path / "a.mkv")
+    assert scan.last_frame_ms == 9000
+    assert scan.warnings == 3
+
+
+def test_a_cuda_setup_notice_from_the_decoder_is_not_damage(tmp_path: Path) -> None:
+    notice = "[hevc @ 0x1] Failed setup for format cuda: hwaccel initialisation returned error."
+    script, _ = _fake_ffmpeg(tmp_path, cuda_fails=False, stderr=(notice,))
+    scan = _media(script, "cuda").scan(tmp_path / "a.mkv")
+    assert scan.warnings == 1
+
+
+def test_a_damaged_title_writes_no_rows_and_records_its_reason(config: Config) -> None:
+    media = FakeMedia()
+    media.damaged_parts = {2}  # imdb:new
+    result = run(config, media, encoder_with(), limit=2)
+    assert (result.indexed, result.failed) == (1, 1)
+    state = rows(config, "SELECT reason FROM frame_index_state WHERE item_id = 'imdb:new'")[0]
+    assert state["reason"] == "source file damaged (3 decode errors)"
+    assert rows(config, "SELECT count(*) FROM shots WHERE item_id = 'imdb:new'")[0][0] == 0
+    assert any("decode_warnings=2" in line for line in result.logs)  # type: ignore[attr-defined]
 
 
 def test_status_shows_the_decoder_and_the_fallback(

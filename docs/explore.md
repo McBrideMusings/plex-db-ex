@@ -96,7 +96,9 @@ for every one that is missing.
   shows `queued` instead. The endpoint returns each title's `reason`, a short phrase with no path in
   it, and never its `error`, since the page has no login; a title that failed before `reason`
   existed reads "failed (see harvester log)". The full error stays in `frames.db`, in
-  `plexdb frames status` and in the harvester log.
+  `plexdb frames status` and in the harvester log. A title whose decode reported errors shows
+  `source file damaged (N decode errors)`, where N is how many errors the decoder printed; the
+  harvester does not retry it until the file changes or Retry queues it.
 - **Token boxes.** About 150 ms after typing stops, the page posts the text to
   `/api/search/tokenize`. The server tokenizes it with the Hugging Face tokenizer for
   `PLEXDB_FRAME_MODEL` and returns each token with its character offsets; the page draws one box per

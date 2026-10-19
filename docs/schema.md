@@ -1585,6 +1585,17 @@ now and `--limit N` stops after N titles. It writes `frames.db` alone.
   and frame pts. Extraction of 24 frames took 20.3 s on CUDA against 23.3 s on the CPU, and ffmpeg
   printed `Failed setup for format cuda` because 24 parallel 4K decoders exceed NVDEC's session
   limits, so some silently fell back to software.
+- **A damaged source is a failure, never an index.** The scan runs at `-loglevel warning` and
+  `frame_harvest.classify_decode_stderr` sorts its stderr line by line. A line from a video decoder
+  (`[hevc @`, `[h264 @`, `[av1 @` and the like) carrying "invalid", "error", "outside the valid
+  range", "undecodable" or "concealing" is a decode error; every other warning is counted and
+  ignored. One or more decode errors fail the title with the `reason` `source file damaged (N
+  decode errors)`, whichever decoder ran, and `error` keeps the first 5 error lines. The
+  CUDA-to-CPU fallback runs only on a non-zero exit, so a damaged file is never retried on the other
+  decoder. A title with no decode errors is indexed as before, and its log line carries
+  `decode_warnings=<count>`. The reason: CUDA decoding a damaged HEVC file held 30 distinct frames
+  across 3,000, so the scan found no cuts and exited 0, and two CPU decodes of one file gave 475
+  and 486 cuts.
 
 ### Measured on 20 films
 

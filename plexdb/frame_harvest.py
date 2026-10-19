@@ -33,6 +33,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import sqlite3
 import struct
@@ -122,6 +123,7 @@ class Scan:
 
     cuts: list[Cut]
     last_frame_ms: int
+    warnings: int = 0
 
 
 @dataclass(frozen=True)
@@ -277,11 +279,11 @@ class FfmpegMedia:
             ) from None
 
     def scan(self, path: Path) -> Scan:
-        scdet, last_frame_ms = self._scdet(path)
+        scdet, last_frame_ms, warnings = self._scdet(path)
         found = sorted(scdet + self._chapters(path), key=lambda cut: (cut.t_ms, cut.source))
-        return Scan(found, last_frame_ms)
+        return Scan(found, last_frame_ms, warnings)
 
-    def _scdet(self, path: Path) -> tuple[list[Cut], int]:
+    def _scdet(self, path: Path) -> tuple[list[Cut], int, int]:
         """One decode, one chain: scdet marks the Cuts and prints them, and passes every frame
         on (`s=0`) to framecrc, which records each frame's pts.
 
@@ -293,7 +295,7 @@ class FfmpegMedia:
 
             def argv() -> list[str]:
                 return [
-                    self._ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
+                    self._ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "warning",
                     *self._hwaccel(), "-i", str(path),
                     "-filter_complex",
                     "[0:v:0]scale=-2:224,scdet=t=10:s=0,metadata=print:file=-[all]",
@@ -315,11 +317,19 @@ class FfmpegMedia:
                     f"{path}: ffmpeg scdet exited {done.returncode}: {done.stderr.strip()[-200:]}",
                     f"ffmpeg scene scan exited {done.returncode}",
                 )
+            errors, warnings = classify_decode_stderr(done.stderr)
+            if errors:
+                raise MediaError(
+                    f"{path}: source file damaged ({len(errors)} decode errors, "
+                    f"{self._decode} decode); first {_ERROR_LINES_KEPT}: "
+                    + " | ".join(errors[:_ERROR_LINES_KEPT]),
+                    f"source file damaged ({len(errors)} decode errors)",
+                )
             with crc.open() as lines:
                 last_frame_ms = parse_last_frame(lines)
         if last_frame_ms is None:
             raise MediaError(f"{path}: ffmpeg decoded no video frame", "no video frame decoded")
-        return parse_scdet(done.stdout), last_frame_ms
+        return parse_scdet(done.stdout), last_frame_ms, warnings
 
     def _chapters(self, path: Path) -> list[Cut]:
         argv = [
@@ -454,6 +464,36 @@ def _select_run(times_ms: Sequence[int]) -> str:
         f"eq(ld(0),{k})*{(t - first) / 1000 - _SELECT_SLACK_S:.6f}" for k, t in enumerate(times_ms)
     )
     return f"select='st(1,gte(t,{lookup}));st(0,ld(0)+ld(1));ld(1)'"
+
+
+_ERROR_LINES_KEPT = 5
+_VIDEO_DECODER_LINE = re.compile(
+    r"^\[(hevc|h264|av1|vp[89]|mpeg[124]video|mpeg4|vc1|wmv[123]|msmpeg4v[123]|mjpeg|prores"
+    r"|dnxhd|theora)\w*\s*@"
+)
+_DECODE_ERROR_WORDS = ("invalid", "error", "outside the valid range", "undecodable", "concealing")
+
+
+def classify_decode_stderr(stderr: str) -> tuple[list[str], int]:
+    """Split ffmpeg's warning-level stderr into the video decoder's error lines and a count of
+    every other line. A decoder line counts as an error when it carries one of
+    `_DECODE_ERROR_WORDS`; the rest are warnings the harvest ignores."""
+    errors: list[str] = []
+    warnings = 0
+    for raw in stderr.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        lowered = line.lower()
+        if (
+            _VIDEO_DECODER_LINE.match(line)
+            and "failed setup for format" not in lowered
+            and any(w in lowered for w in _DECODE_ERROR_WORDS)
+        ):
+            errors.append(line)
+        else:
+            warnings += 1
+    return errors, warnings
 
 
 def parse_scdet(text: str) -> list[Cut]:
@@ -727,7 +767,7 @@ def _index_title(
     `"rejected"` (the encoder refused its frames; recorded). Raises `EncoderUnavailable`
     with nothing written when the encoder stops answering."""
     file_hash = cand.file_hash
-    shot_count = vector_count = 0
+    shot_count = vector_count = decode_warnings = 0
     decode_s = scan_s = extract_s = encode_s = 0.0
     error: str | None = None
     outcome = "ok"
@@ -738,6 +778,7 @@ def _index_title(
         log(f"{_stamp(now_fn)} item_id={cand.item_id} stage=scan start")
         scan = media.scan(path)
         scan_s = time.perf_counter() - started
+        decode_warnings = scan.warnings
         cuts = scan.cuts
         shot_list = shots([c.t_ms for c in cuts], scan.last_frame_ms)
         samples = sample_times(shot_list)
@@ -788,7 +829,8 @@ def _index_title(
         f"{_stamp(now_fn)} item_id={cand.item_id} part={cand.part_id} "
         f"bytes={cand.size} decode_s={decode_s:.1f} scan_s={scan_s:.1f} "
         f"extract_s={extract_s:.1f} encode_s={encode_s:.1f} "
-        f"shots={shot_count} vectors={vector_count} reason={cand.reason}"
+        f"shots={shot_count} vectors={vector_count} decode_warnings={decode_warnings} "
+        f"reason={cand.reason}"
     )
     log(line if error is None else f"{line} error={error!r}")
     return outcome
