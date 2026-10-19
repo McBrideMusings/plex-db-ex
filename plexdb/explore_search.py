@@ -474,8 +474,7 @@ class SearchTab:
     def frames_health(self) -> dict[str, object]:
         """The Frame index panel: what is indexing now, how far each section has got, and
         the newest failed titles with their errors (`failed_total` counts them all).
-        `frames.status` is the one source,
-        the same report `plexdb frames status` prints."""
+        `frames.status` is the one source, the same report `plexdb frames status` prints."""
         frames_file = self._frames_file()
         sections = self._section_titles()
         with closing(self._frames_conn()) as frames_conn:

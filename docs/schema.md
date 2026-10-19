@@ -1501,7 +1501,6 @@ the directory holds none, so on a fresh directory every count is zero.
 | `ffmpeg_found` | Whether `PLEXDB_FFMPEG` and `PLEXDB_FFPROBE` (default `ffmpeg`, `ffprobe`) are both found. The harvester needs them; the container image ships both. |
 | `failed_total` | How many titles' last attempt failed. |
 | `failed` | Those titles, newest first, each with its `item_id`, `error` and `at`. The command lists all of them; the explorer's Frame index panel keeps the newest 20 and shows `failed_total` for the rest. |
-| `failed` | Every failed title, newest attempt first: its item_id, the error, and when. |
 
 `plexdb frames queue <item_id>` adds a `frame_queue` row and exits non-zero for an item_id not in
 `items`; a title already queued keeps its place.
