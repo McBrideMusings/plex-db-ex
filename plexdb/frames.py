@@ -51,6 +51,7 @@ __all__ = [
     "prune_orphans",
     "queue",
     "section_titles",
+    "harvester_running",
     "set_indexing",
     "status",
 ]
@@ -378,7 +379,7 @@ def status(
         "queued": queued,
         "frame_hours": hours or None,
         "inside_hours": inside_hours(parse_hours(hours), now),
-        "indexing": _indexing(frames_conn),
+        "indexing": _indexing(frames_conn) if harvester_running(path) else None,
         "encoder_reachable": encoder_reachable,
         "ffmpeg_found": ffmpeg_found,
         "decoder": decoder,
@@ -425,6 +426,22 @@ def harvest_lock(path: Path) -> Iterator[None]:
         handle.write(str(os.getpid()))
         handle.flush()
         yield
+
+
+def harvester_running(path: Path) -> bool:
+    """Whether a harvester holds `harvest.lock` now. Tries the flock without blocking
+    and releases it at once; a missing lock file means no harvester has ever run."""
+    try:
+        handle = open(path.parent / "harvest.lock")
+    except FileNotFoundError:
+        return False
+    with handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        fcntl.flock(handle, fcntl.LOCK_UN)
+        return False
 
 
 def _title_in_hand(path: Path) -> str:

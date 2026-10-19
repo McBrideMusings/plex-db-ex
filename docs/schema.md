@@ -1508,7 +1508,7 @@ the directory holds none, so on a fresh directory every count is zero.
 | `queued` | Rows in `frame_queue`. |
 | `frame_hours` | `PLEXDB_FRAME_HOURS` as set — `HH:MM-HH:MM` in the process's TZ, an end earlier than the start running past midnight — or `null` when unset. |
 | `inside_hours` | Whether the current time is inside that window; `false` when it is unset. |
-| `indexing` | The title the harvester is indexing now — `item_id` and `since` — or `null` when none is. A harvester that was killed mid-title leaves its row until the next run starts. |
+| `indexing` | The title the harvester is indexing now — `item_id` and `since` — or `null` when none is. Reported only while a harvester holds `harvest.lock`; a row left by a killed harvester reads as `null`, and the next harvester start deletes it. |
 | `encoder_reachable` | Whether `GET {PLEXDB_FRAME_ENCODER_URL}/v1/models` answered 2xx within 10 s; `null` when `PLEXDB_FRAME_ENCODER_URL` is unset. Listing models loads none, so this never waits out a cold start. |
 | `ffmpeg_found` | Whether `PLEXDB_FFMPEG` and `PLEXDB_FFPROBE` (default `ffmpeg`, `ffprobe`) are both found. The harvester needs them; the container image ships both. |
 | `decoder` | `PLEXDB_FRAME_DECODE`: `cpu` (the default) or `cuda`. After the harvester asked for CUDA and fell back, `cpu (cuda requested: <ffmpeg's last line>)`; the note lives in `decoder.json` beside `frames.db` until the next harvester run starts. |
