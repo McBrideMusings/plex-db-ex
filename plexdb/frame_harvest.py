@@ -48,7 +48,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from email.utils import formatdate
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from . import frame_quant, frames
 from .config import Config
@@ -272,6 +272,26 @@ class FfmpegMedia:
             raise MediaError(
                 f"{what}: {argv[0]} ran past {timeout_s:.0f} s", f"{Path(argv[0]).name} timed out"
             ) from None
+
+    def probe(self, path: Path) -> tuple[dict[str, Any] | None, str]:
+        """ffprobe's streams and format for `path`: `(report, "")`, or `(None, why)` when
+        ffprobe ran and rejected the file (`why` is its last stderr line, without the path).
+        A missing binary or a run past the time limit is a `MediaError`, since the file
+        itself was not judged."""
+        argv = [
+            self._ffprobe, "-v", "error", "-show_format", "-show_streams",
+            "-print_format", "json", str(path),
+        ]  # fmt: skip
+        done = self._run(argv, f"{path}: probe")
+        if done.returncode != 0:
+            lines = [ln for ln in done.stderr.strip().splitlines() if ln.strip()]
+            why = lines[-1].replace(f"{path}: ", "").strip() if lines else ""
+            return None, why or f"ffprobe exited {done.returncode}"
+        try:
+            report = json.loads(done.stdout or "{}")
+        except ValueError:
+            return None, "ffprobe printed output that is not JSON"
+        return (report, "") if isinstance(report, dict) else (None, "ffprobe printed no report")
 
     def scan(self, path: Path) -> Scan:
         scdet, last_frame_ms, warnings = self._scdet(path)
