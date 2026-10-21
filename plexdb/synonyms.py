@@ -71,8 +71,19 @@ __all__ = [
 
 #: How many nearest neighbours each keyword proposes.
 NEIGHBOURS = 10
-#: The lowest cosine a neighbour may have and still be proposed.
-MIN_COSINE = 0.75
+#: The lowest cosine a neighbour may have and still be proposed. It belongs to
+#: `embed_client.MODEL`: embeddinggemma-300m cosines run higher than nomic's.
+#: Measured 2026-10-20 over 24,219 keywords, top-10 neighbours, against the
+#: 1,116 merged pairs in the store (accepted, or undecided with jev_score >= 0.9):
+#:   nomic-embed-text    0.75  recalls 1,108  43,662 proposals (1.80 per keyword)
+#:   embeddinggemma-300m 0.70  recalls 1,070 134,039 proposals (5.53 per keyword)
+#:   embeddinggemma-300m 0.75  recalls 1,047  79,084 proposals (3.27 per keyword)
+#:   embeddinggemma-300m 0.78  recalls 1,000  48,209 proposals (1.99 per keyword)
+#:   embeddinggemma-300m 0.80  recalls   936  32,197 proposals (1.33 per keyword)
+#: No gemma cut reaches nomic's recall (the ceiling at 0.50 is 1,085). 0.78 keeps
+#: the proposals per keyword near nomic's. The labelled pairs are the ones nomic
+#: proposed, so they favour nomic.
+MIN_COSINE = 0.78
 #: Texts per embeddings request.
 EMBED_BATCH = 128
 #: Keywords examined per committed batch — about 330 pairs, about 10 seconds of Jev.

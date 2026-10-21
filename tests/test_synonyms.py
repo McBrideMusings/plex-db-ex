@@ -2,7 +2,7 @@
 
 Both services are faked: a fixed vector per keyword stands in for the embedding
 server, and a fake judge records every pair it is asked about. The fixture
-store holds six keywords with these cosines (>= 0.75 is proposed):
+store holds six keywords with these cosines (>= 0.78 is proposed):
 
     heist, bank robbery, robbery   0.90 / 0.95 / 0.85 between the three
     prison, jail                   0.99
@@ -496,7 +496,7 @@ def test_jev_refuses_a_score_outside_zero_to_one() -> None:
 def test_the_embedder_returns_vectors_in_input_order_and_names_a_server_error() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
-        assert body["model"] == "nomic-embed-text"
+        assert body["model"] == "embeddinggemma-300m"
         if body["input"] == ["boom"]:
             return httpx.Response(500, text="upstream command exited prematurely")
         data = [{"index": 1, "embedding": [0.0, 2.0]}, {"index": 0, "embedding": [1.0, 0.0]}]

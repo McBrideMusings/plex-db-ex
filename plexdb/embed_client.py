@@ -14,8 +14,8 @@ import httpx
 from .errors import EmbeddingError
 
 #: The one model the keyword vectors come from. A different model gives
-#: different cosines, so the 0.75 cut in `synonyms.py` belongs to this one.
-MODEL = "nomic-embed-text"
+#: different cosines, so the cut in `synonyms.py` belongs to this one.
+MODEL = "embeddinggemma-300m"
 _DEFAULT_TIMEOUT = 300.0
 
 

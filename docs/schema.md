@@ -906,7 +906,7 @@ title carries (the normalization rule under Version 1 says when that happens).
 
 `plexdb judge-keyword-pairs` adds the rows. Every run examines every stored keyword, and each
 proposes its 10 nearest neighbours in the whole stored vocabulary
-with cosine >= 0.75 between `nomic-embed-text` vectors of their shortest readable surface forms
+with cosine >= 0.78 between `embeddinggemma-300m` vectors of their shortest readable surface forms
 (`keyword_forms.surface`, no task prefix). Jev is asked about the two surface forms, with a
 `score` question and a `noul` question ("Do the two tags mean the same thing?") in one request;
 `jev_score` is the `noul` answer and `jev_model` is the model id in the response (for example
