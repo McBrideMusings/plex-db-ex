@@ -33,3 +33,4 @@ ADR wins; [the PRD](../PRD) already reflects them.
 | [0026](./0026-the-reader-embeds-a-new-phrase-and-caches-it-beside-its-caller) | The reader embeds a new phrase and caches it beside its caller |
 | [0027](./0027-an-unowned-list-entry-is-stored-by-external-id) | An unowned list entry is stored by external id, never under an `item_id` |
 | [0028](./0028-list-decisions-and-fetch-attempts-are-keyed-by-list-url) | List decisions and fetch attempts are keyed by list URL, in tables beside the facts |
+| [0029](./0029-a-dashboard-panel-is-a-persons-saved-query-and-its-nightly-value-lives-beside-the-store) | A dashboard panel is a person's saved query, and its nightly value lives beside the store |

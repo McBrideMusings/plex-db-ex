@@ -178,6 +178,12 @@ _Avoid_: walker, indexer, scanner
 A Reader's own file of Phrase vectors, filled on first use and pruned after 90 days unused.
 _Avoid_: query cache
 
+**Dashboard**:
+A named grid of Panels in the Query tab's Dashboard view, stored in `explore-panels.json`.
+
+**Panel**:
+A saved query with a chart and a recorded value; the Sweep records that value each night.
+
 ## Relationships
 
 - A **Consumer** is a **Reader**, a **Writer**, or both.
