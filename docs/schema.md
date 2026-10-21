@@ -1392,6 +1392,41 @@ record commits on its own, so an interrupted run keeps what it fetched. Neither 
 
 Plex DB-EX's Query tab carries the recipe "Tracks per language" in a "Library health" group.
 
+## Version 24 — the verdict of checking each file
+
+```
+media_check   part_id INTEGER → media_part, kind TEXT NOT NULL ('header' | 'decode'),
+              checked_at TEXT NOT NULL, ok INTEGER NOT NULL (0 | 1), error TEXT,
+              PK (part_id, kind)
+```
+
+One row per part and kind of check; a re-check replaces the row. `ok` is 1 when the file passed and
+`error` is then NULL; `ok` is 0 with `error` naming every rule the file broke. `checked_at` is UTC.
+Deleting a part deletes its checks.
+
+`header` is written by `plexdb check-files`, the sweep step after `media-walk`. It runs ffprobe over
+the file (read from `PLEXDB_MEDIA_DIR`, the way the frame harvester reads it; ffprobe is named by
+`PLEXDB_FFPROBE`, default `ffprobe`) and fails the file when any of these breaks:
+
+- it does not parse: ffprobe exits non-zero or prints no report. `error` reads
+  `does not parse: ` and ffprobe's last stderr line, without the path.
+- it is empty on disk: `file is empty`.
+- it has no video stream, or no audio stream.
+- its duration is more than 2% from `media_part.duration_ms`, or ffprobe reports none while Plex
+  does. A part with no Plex duration skips this rule, and so does one of several parts under the
+  same `rating_key`, because Plex then gives the whole title's duration.
+
+`decode` is the kind the full-decode pass will write; `check-files` never writes it.
+
+**Refresh rule.** `check-files` probes only a part with no `header` row. `media-walk` replaces a
+changed record's parts whole, so a part that is new, or that Plex re-read because its size or
+`updatedAt` changed, has no row and is probed; an unchanged part is not. A part the run could not
+judge (its file is not on the media mount, or ffprobe is missing or ran past its time limit) gets no
+row, so the next run tries it again. Neither `plexdb-reader` nor `READER_SHAPE` reads the table.
+
+Plex DB-EX's Query tab carries the recipe "Damaged or rule-breaking files" in the "Library health"
+group: every check with `ok = 0`, newest first, with the title, the file and the error.
+
 ## The original language of a title
 
 `enrich-tmdb-language` writes one `enrichment` row per movie and show carrying a `tmdb` external id:

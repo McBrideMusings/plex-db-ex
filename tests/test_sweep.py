@@ -30,6 +30,7 @@ EXPECTED_SWEEP = [
     ("fold-list-decisions", Step.BEST_EFFORT),
     ("walk", Step.REQUIRED),
     ("media-walk", Step.BEST_EFFORT),
+    ("check-files", Step.BEST_EFFORT),
     ("prune-frames", Step.BEST_EFFORT),
     ("ingest-plays", Step.REQUIRED),
     ("enrich-tautulli-plays", Step.BEST_EFFORT),

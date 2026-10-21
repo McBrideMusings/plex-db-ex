@@ -1841,6 +1841,18 @@ RECIPES: tuple[dict[str, str], ...] = (
             "ORDER BY i.title, i.item_id"
         ),
     },
+    {
+        "group": "Library health",
+        "name": "Damaged or rule-breaking files",
+        "sql": (
+            "SELECT i.title, p.file, c.kind, c.error, c.checked_at\n"
+            "FROM media_check c\n"
+            "JOIN media_part p ON p.part_id = c.part_id\n"
+            "JOIN items i ON i.item_id = p.item_id\n"
+            "WHERE c.ok = 0\n"
+            "ORDER BY c.checked_at DESC, i.title, p.file"
+        ),
+    },
 )
 
 
