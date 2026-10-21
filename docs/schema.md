@@ -1358,6 +1358,40 @@ take any MDBList or Letterboxd list URL, the other three need a list the store, 
 already name, else 404) and lays it over the list table, so a decision shows at once with a dashed
 outline and a badge (`Waiting for sweep`, `Excluded · next sweep removes it`) until the sweep acts.
 
+## Version 23 — the files and tracks Plex lists for each title
+
+```
+media_part    part_id INTEGER PK, item_id TEXT NOT NULL → items, rating_key TEXT NOT NULL, file TEXT NOT NULL,
+              size INTEGER, container TEXT, video_codec TEXT, audio_codec TEXT, height INTEGER,
+              bitrate INTEGER, duration_ms INTEGER, plex_updated_at INTEGER, fetched_at TEXT NOT NULL
+media_stream  part_id INTEGER → media_part, idx INTEGER, kind TEXT NOT NULL, codec TEXT, lang TEXT,
+              forced INTEGER NOT NULL, title TEXT, PK (part_id, idx)
+```
+
+One `media_part` row per file Plex lists for a movie or an episode, keyed by Plex's own part id. A
+show has none. `item_id` is the title; `rating_key` is the Plex record the part was read from, so a
+title Plex lists twice (two rating keys, one `item_id`) keeps both records' parts apart.
+`container`, `video_codec`, `audio_codec`, `height`, `bitrate` and `duration_ms` are Plex's own
+values for the file's media, and `file` is the path as Plex reports it. `plex_updated_at` is the
+record's Plex `updatedAt` (epoch seconds) when it was read; `fetched_at` is UTC.
+
+`media_stream` holds the tracks of one part. `kind` is `video`, `audio` or `subtitle`; `idx` is
+Plex's own stream index within the part; `lang` is Plex's `languageCode` (three letters, e.g. `eng`),
+NULL for an untagged track; `forced` is 1 for a forced subtitle track; `title` is Plex's display
+title for the track. Deleting a part deletes its streams.
+
+**Refresh rule.** Only `plexdb media-walk` writes both tables, as the sweep step after `walk`. It
+reads the section listings `walk` reads, which already carry each title's `updatedAt`, and requests
+`/library/metadata/<ratingKey>` (the only response with the tracks) for a record only when its
+`updatedAt` differs from the one stored with its parts, or when it has no parts stored. A second
+run over an unchanged library makes no metadata request. A fetch replaces the whole set of parts and
+streams stored for that rating key, so a part Plex stopped listing is dropped and a track is never
+appended twice. A record whose listing now names no file loses its parts without a request. Each
+record commits on its own, so an interrupted run keeps what it fetched. Neither table is read by
+`plexdb-reader`; `READER_SHAPE` stays.
+
+Plex DB-EX's Query tab carries the recipe "Tracks per language" in a "Library health" group.
+
 ## frames.db — the Frame index
 
 A second SQLite file, `frames.db`, in the directory `PLEXDB_FRAMES_DIR` names (`/frames` in the

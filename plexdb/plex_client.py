@@ -70,6 +70,16 @@ class PlexSource(Protocol):
         ...
 
 
+class PlexMediaSource(PlexSource, Protocol):
+    """What `plexdb media-walk` reads: the library listing, plus one title's full
+    record, which is the only response that carries its tracks."""
+
+    def metadata(self, rating_key: str) -> dict[str, Any] | None:
+        """The full `Metadata` record for one rating key, or `None` when Plex has
+        none."""
+        ...
+
+
 class LivePlexClient:
     """The one `PlexSource` that reaches a real server, over `httpx`.
 
@@ -94,6 +104,15 @@ class LivePlexClient:
                     if int(part.get("id", -1)) == part_id and part.get("file"):
                         return str(part["file"])
         return None
+
+    def metadata(self, rating_key: str) -> dict[str, Any] | None:
+        """The one full `Metadata` record Plex holds for `rating_key`, streams included,
+        or `None` when Plex no longer has it. A metadata read, so it starts no playback
+        session."""
+        records: list[dict[str, Any]] = (
+            self._get(f"/library/metadata/{rating_key}").get("Metadata") or []
+        )
+        return records[0] if records else None
 
     def _get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         # The token rides in a header, not the query string, so it never lands

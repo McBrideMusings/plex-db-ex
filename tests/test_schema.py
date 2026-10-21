@@ -19,6 +19,7 @@ V3_TABLES = {"edges"}
 V6_TABLES = {"collection", "collection_membership"}
 V21_TABLES = {"collection_entry"}
 V22_TABLES = {"list_decision", "list_attempt"}
+V23_TABLES = {"media_part", "media_stream"}
 V7_TABLES = {"enrichment_cursor"}
 V9_TABLES = {"title_map", "title_map_state"}
 V10_TABLES = {"keyword_forms"}
@@ -196,6 +197,7 @@ def test_a_current_store_carries_every_migrations_tables_and_nothing_else(
         | V20_TABLES
         | V21_TABLES
         | V22_TABLES
+        | V23_TABLES
         | {"reader_shape"}
         | {"schema_version"}
     )

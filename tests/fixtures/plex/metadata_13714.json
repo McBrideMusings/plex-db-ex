@@ -1,0 +1,41 @@
+{
+  "MediaContainer": {
+    "size": 1,
+    "Metadata": [
+      {
+        "ratingKey": "13714",
+        "key": "/library/metadata/13714",
+        "type": "movie",
+        "title": "The 'Burbs",
+        "updatedAt": 1760000000,
+        "Media": [
+          {
+            "id": 21001,
+            "duration": 6100386,
+            "bitrate": 9200,
+            "height": 1080,
+            "container": "mkv",
+            "videoCodec": "h264",
+            "audioCodec": "dts",
+            "Part": [
+              {
+                "id": 31001,
+                "file": "/media/movies/The 'Burbs (1989) {imdb-tt0096734}/The 'Burbs (1989) Bluray-1080p.mkv",
+                "size": 7021345678,
+                "duration": 6100386,
+                "container": "mkv",
+                "Stream": [
+                  {"id": 1, "streamType": 1, "index": 0, "codec": "h264", "height": 1080},
+                  {"id": 2, "streamType": 2, "index": 1, "codec": "dts", "languageCode": "eng", "displayTitle": "English (DTS 5.1)"},
+                  {"id": 3, "streamType": 2, "index": 2, "codec": "ac3", "languageCode": "fra", "displayTitle": "French (AC3 5.1)"},
+                  {"id": 4, "streamType": 3, "index": 3, "codec": "srt", "languageCode": "eng", "forced": true, "displayTitle": "English (SRT Forced)"},
+                  {"id": 5, "streamType": 3, "index": 4, "codec": "srt", "languageCode": "spa", "displayTitle": "Spanish (SRT)"}
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

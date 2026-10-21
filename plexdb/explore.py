@@ -1810,6 +1810,19 @@ RECIPES: tuple[dict[str, str], ...] = (
             "ORDER BY e.item_id, e.namespace, e.key, e.value"
         ),
     },
+    {
+        "group": "Library health",
+        "name": "Tracks per language",
+        "sql": (
+            "SELECT COALESCE(s.lang, '(untagged)') AS lang, s.kind,\n"
+            "       COUNT(*) AS tracks, COUNT(DISTINCT p.item_id) AS titles\n"
+            "FROM media_stream s\n"
+            "JOIN media_part p ON p.part_id = s.part_id\n"
+            "WHERE s.kind IN ('audio', 'subtitle')\n"
+            "GROUP BY lang, s.kind\n"
+            "ORDER BY s.kind, tracks DESC"
+        ),
+    },
 )
 
 
