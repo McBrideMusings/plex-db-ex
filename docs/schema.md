@@ -1392,6 +1392,28 @@ record commits on its own, so an interrupted run keeps what it fetched. Neither 
 
 Plex DB-EX's Query tab carries the recipe "Tracks per language" in a "Library health" group.
 
+## The original language of a title
+
+`enrich-tmdb-language` writes one `enrichment` row per movie and show carrying a `tmdb` external id:
+`namespace = 'tmdb'`, `source = 'tmdb'`, `key = 'original_language'`, `value` TMDB's ISO 639-1 code
+exactly as sent (`en`, `ja`), `rank` NULL. No schema change. An episode has no row of its own; its
+language is its show's, reached through `items.show_item_id`. A title TMDB names no language for
+(unknown id, or a details body without one) gets a cursor and no row.
+
+**Refresh rule.** Only this command writes the rows. A title is fetched once and again only when its
+`enrichment_cursor` row (namespace `tmdb`, source `tmdb`, key `fetched`) is older than
+`TMDB_LANGUAGE_STALE_DAYS` (default 45 days); a title inside that window is not asked of TMDB at all.
+A fetch replaces the title's `original_language` rows and moves its cursor in one transaction.
+`--rewipe` deletes those rows and cursors and nothing else under `tmdb`. It runs as sweep step 51,
+beside `enrich-tmdb-keywords`, and needs `TMDB_API_KEY`.
+
+The rollup reads every namespace, so a watched title's language counts as one more attribute in a
+taste vector, as its ratings and collections already do.
+
+Plex DB-EX's Query tab carries the recipe "English original, no English subtitle" in the "Library
+health" group: movies and episodes whose original language is `en` (an episode's from its show), that
+have at least one stored file, and no `media_stream` subtitle track with `lang = 'eng'`.
+
 ## frames.db — the Frame index
 
 A second SQLite file, `frames.db`, in the directory `PLEXDB_FRAMES_DIR` names (`/frames` in the

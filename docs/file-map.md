@@ -22,6 +22,7 @@ plex-db-ex/
 │   │   ├── enrich_tautulli.py
 │   │   ├── enrich_tmdb_edges.py
 │   │   ├── enrich_tmdb_keywords.py
+│   │   ├── enrich_tmdb_language.py
 │   │   ├── enrich_wikidata.py  the keyless Gated Source for Wikidata; sweep step 56, after both TMDB steps and before `refresh-map`
 │   │   ├── explore.py
 │   │   ├── fold_merge_decisions.py  applies `merge_decisions.json` to `keyword_pairs` (a pair no judge scored gets a decision-only row); sweep step 11, right after `migrate`, needs no service
@@ -58,6 +59,7 @@ plex-db-ex/
 │   ├── errors.py          the errors a user is meant to see, as one `error: …` line
 │   ├── identity.py        item_id derivation — first-hit-wins over external GUIDs, path hash as the floor; specified by tests/fixtures/item_id.json
 │   ├── enrich_tmdb.py     TMDB keyword sweep: writes `source='tmdb'` rows into the shared `keywords` namespace (ADR-0016), cached, staleness-gated, tolerant of a failing title (aborts after 3 in a row)
+│   ├── enrich_tmdb_language.py  TMDB original-language sweep: one `tmdb`/`tmdb`/`original_language` row per walked movie and show with a `tmdb` id, cached by a `fetched` cursor, staleness-gated (`TMDB_LANGUAGE_STALE_DAYS`); an episode takes its show's
 │   ├── enrich_wikidata.py Wikidata sweep: batches walked titles by IMDb id, writes P840/P2408/P921/P136 labels as `source='wikidata'` keywords, `region`/`era` rows in `keyword_roles` for P840/P2408 plus a per-title row in `keyword_role_statements` (each run ends by deleting `wikidata` role rows no title states any more), and P166 labels verbatim into the `awards` namespace; one cursor per title, a failed batch writes nothing (aborts after 3 in a row)
 │   ├── enrich_anilist.py  AniList sweep: maps walked movies/shows to AniList ids through Fribb's mapping (TMDB by kind, then IMDb, then TVDB for a show), merges the tags of every entry a title maps to, writes them as `source='anilist'` keywords with AniList's rank in `enrichment.rank` (spoilers under key `spoiler_keyword`), and states roles from tag categories through `CATEGORY_ROLES`; one cursor per anime title, a failed batch writes nothing (aborts after 3 in a row)
 │   ├── anilist_client.py  read-only AniList GraphQL client behind an AniListSource protocol: fetches Fribb's `anime-list-full.json`, asks `Page { media(id_in: …) }` 50 ids per request with a pause under the 30 requests/minute limit, and honours `Retry-After` on a 429 a bounded number of times

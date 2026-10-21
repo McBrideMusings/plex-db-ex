@@ -52,6 +52,12 @@ class TMDbSource(Protocol):
         """
         ...
 
+    def original_language(self, tmdb_id: str, media_type: str) -> str | None:
+        """The ISO 639-1 code of the language TMDB says a title was made in
+        (`en`, `ja`), or `None` when TMDB has never heard of the id or names no
+        language."""
+        ...
+
     def recommendations(self, tmdb_id: str, media_type: str) -> list[str]:
         """TMDB ids TMDB recommends for one title, best match first.
 
@@ -86,6 +92,14 @@ class LiveTMDbClient:
             return []
         raw = body.get("keywords") if path == "movie" else body.get("results")
         return [str(entry["name"]) for entry in (raw or []) if entry.get("name")]
+
+    def original_language(self, tmdb_id: str, media_type: str) -> str | None:
+        path = "movie" if media_type == "movie" else "tv"
+        body = self._get(f"{path}/{tmdb_id}")
+        if body is None:
+            return None
+        language = body.get("original_language")
+        return str(language) if language else None
 
     def recommendations(self, tmdb_id: str, media_type: str) -> list[str]:
         return self._related(tmdb_id, media_type, "recommendations")

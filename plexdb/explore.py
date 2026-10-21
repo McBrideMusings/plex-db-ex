@@ -1823,6 +1823,24 @@ RECIPES: tuple[dict[str, str], ...] = (
             "ORDER BY s.kind, tracks DESC"
         ),
     },
+    {
+        "group": "Library health",
+        "name": "English original, no English subtitle",
+        "sql": (
+            "SELECT i.item_id, i.type, i.title, l.value AS original_language\n"
+            "FROM items i\n"
+            "JOIN enrichment l ON l.item_id = COALESCE(i.show_item_id, i.item_id)\n"
+            "                 AND l.namespace = 'tmdb' AND l.key = 'original_language'\n"
+            "WHERE i.type IN ('movie', 'episode')\n"
+            "  AND l.value = 'en'\n"
+            "  AND EXISTS (SELECT 1 FROM media_part p WHERE p.item_id = i.item_id)\n"
+            "  AND NOT EXISTS (\n"
+            "    SELECT 1 FROM media_part p\n"
+            "    JOIN media_stream s ON s.part_id = p.part_id\n"
+            "    WHERE p.item_id = i.item_id AND s.kind = 'subtitle' AND s.lang = 'eng')\n"
+            "ORDER BY i.title, i.item_id"
+        ),
+    },
 )
 
 

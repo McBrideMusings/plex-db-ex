@@ -34,6 +34,7 @@ EXPECTED_SWEEP = [
     ("ingest-plays", Step.REQUIRED),
     ("enrich-tautulli-plays", Step.BEST_EFFORT),
     ("enrich-tmdb-keywords", Step.BEST_EFFORT),
+    ("enrich-tmdb-language", Step.BEST_EFFORT),
     ("enrich-tmdb-edges", Step.BEST_EFFORT),
     ("enrich-anilist", Step.BEST_EFFORT),
     ("enrich-letterboxd", Step.BEST_EFFORT),
