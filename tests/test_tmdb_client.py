@@ -25,6 +25,9 @@ _RECORDED = {
     "/3/movie/155/similar": "movie_155_similar.json",
     "/3/tv/1396/recommendations": "tv_1396_recommendations.json",
     "/3/tv/1396/similar": "tv_1396_similar.json",
+    "/3/movie/155": "movie_155_details.json",
+    "/3/movie/129": "movie_129_details.json",
+    "/3/tv/1396": "tv_1396_details.json",
     "/3/movie/424783/recommendations": "movie_zero_recommendations.json",
 }
 
@@ -187,3 +190,15 @@ def test_a_200_with_a_non_json_body_raises_tmdb_error_not_a_json_traceback() -> 
 
     with pytest.raises(TMDbError, match="not JSON"):
         client.keywords("27205", "movie")
+
+
+def test_original_language_comes_from_the_details_body() -> None:
+    client = _client()
+
+    assert client.original_language("155", "movie") == "en"
+    assert client.original_language("129", "movie") == "ja"
+    assert client.original_language("1396", "tv") == "en"
+
+
+def test_an_id_tmdb_has_never_heard_of_has_no_original_language() -> None:
+    assert _client().original_language("999999999", "movie") is None

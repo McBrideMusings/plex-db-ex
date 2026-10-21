@@ -43,6 +43,9 @@ class FakeTMDbSource:
     fail_calls: set[int] = field(default_factory=set)
     calls: list[tuple[str, str]] = field(default_factory=list)
 
+    language_by_id: dict[tuple[str, str], str | None] = field(default_factory=dict)
+    language_calls: list[tuple[str, str]] = field(default_factory=list)
+
     recommendations_by_id: dict[tuple[str, str], list[str]] = field(default_factory=dict)
     fail_recommendation_calls: set[int] = field(default_factory=set)
     recommendation_calls: list[tuple[str, str]] = field(default_factory=list)
@@ -56,6 +59,10 @@ class FakeTMDbSource:
         if len(self.calls) in self.fail_calls:
             raise TMDbError(f"scripted failure on call {len(self.calls)} ({tmdb_id}, {media_type})")
         return list(self.keywords_by_id.get((tmdb_id, media_type), []))
+
+    def original_language(self, tmdb_id: str, media_type: str) -> str | None:
+        self.language_calls.append((tmdb_id, media_type))
+        return self.language_by_id.get((tmdb_id, media_type))
 
     def recommendations(self, tmdb_id: str, media_type: str) -> list[str]:
         self.recommendation_calls.append((tmdb_id, media_type))
@@ -93,6 +100,9 @@ class FailOnRepeatSource:
     keywords_by_id: dict[tuple[str, str], list[str]] = field(default_factory=dict)
     calls: list[tuple[str, str]] = field(default_factory=list)
 
+    language_by_id: dict[tuple[str, str], str | None] = field(default_factory=dict)
+    language_calls: list[tuple[str, str]] = field(default_factory=list)
+
     recommendations_by_id: dict[tuple[str, str], list[str]] = field(default_factory=dict)
     recommendation_calls: list[tuple[str, str]] = field(default_factory=list)
 
@@ -105,6 +115,15 @@ class FailOnRepeatSource:
             raise AssertionError(f"asked for {key} twice — the cache should have prevented this")
         self.calls.append(key)
         return list(self.keywords_by_id.get(key, []))
+
+    def original_language(self, tmdb_id: str, media_type: str) -> str | None:
+        key = (tmdb_id, media_type)
+        if key in self.language_calls:
+            raise AssertionError(
+                f"asked for original_language({key}) twice — the cache should have prevented this"
+            )
+        self.language_calls.append(key)
+        return self.language_by_id.get(key)
 
     def recommendations(self, tmdb_id: str, media_type: str) -> list[str]:
         key = (tmdb_id, media_type)
