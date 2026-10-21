@@ -1,4 +1,5 @@
-"""`plexdb check-files` — probe each new or changed file against the health rules."""
+"""`plexdb check-files` — probe each new or changed file against the health rules, and decode
+a nightly batch of files in full."""
 
 from __future__ import annotations
 
@@ -29,10 +30,14 @@ def _cmd_check_files(args: argparse.Namespace) -> int:
         )
     media = FfmpegMedia(ffmpeg=config.ffmpeg, ffprobe=config.ffprobe)
     with open_store(config.store_path) as conn:
-        stats = check_files(conn, media, locate, limit=args.limit)
+        stats = check_files(conn, media, locate, limit=args.limit, decode_batch=config.decode_batch)
     print(
         f"files: {stats.checked} checked, {stats.passed} passed, {stats.failed} failed, "
         f"{stats.skipped} left for the next run"
+    )
+    print(
+        f"decode: {stats.decoded} decoded in full, {stats.decode_failed} failed, "
+        f"{stats.decode_skipped} left for the next run"
     )
     return 0
 
@@ -41,7 +46,8 @@ def register(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parser = sub.add_parser(
         NAME,
         help="probe each new or changed file with ffprobe and record whether it keeps "
-        "the health rules; needs PLEXDB_MEDIA_DIR and PLEX_SOURCE_ROOTS",
+        "the health rules, then decode PLEXDB_DECODE_BATCH files in full (oldest decode "
+        "first); needs PLEXDB_MEDIA_DIR and PLEX_SOURCE_ROOTS",
     )
     parser.add_argument(
         "--limit",

@@ -1835,6 +1835,16 @@ RECIPES: tuple[dict[str, str], ...] = (
             "ORDER BY c.checked_at DESC, i.title, p.file"
         ),
     },
+    {
+        "group": "Library health",
+        "name": "Decode progress",
+        "sql": (
+            "SELECT COUNT(c.part_id) AS parts_decoded, COUNT(*) AS parts_total,\n"
+            "       MIN(c.checked_at) AS oldest_decode\n"
+            "FROM media_part p\n"
+            "LEFT JOIN media_check c ON c.part_id = p.part_id AND c.kind = 'decode'"
+        ),
+    },
 )
 
 

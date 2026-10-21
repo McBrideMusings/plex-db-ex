@@ -46,7 +46,7 @@ plex-db-ex/
 │   │   ├── prune_frames.py  deletes every frames.db row whose item_id is no longer in `items`; sweep step 27, right after the walk and the identity repairs, skipped when `PLEXDB_FRAMES_DIR` is unset
 │   │   ├── prune_keyword_verdicts.py  deletes `keyword_pairs`, `keyword_roles` and `keyword_role_decisions` rows keyed on a keyword value no `enrichment` row carries; sweep step 63, between the keyword writers and the film-suffix rule, needs no service
 │   │   ├── publish.py
-│   │   ├── check_files.py  sweep step 22, right after media-walk: ffprobe each part with no header verdict against the health rules
+│   │   ├── check_files.py  sweep step 22, right after media-walk: ffprobe each part with no header verdict against the health rules, then decode a nightly batch in full
 │   │   ├── media_walk.py   sweep step 21, right after walk: files and tracks of titles whose Plex updatedAt changed
 │   │   ├── refresh_map.py  sweep step 67, after both judges so the map draws that night's merges
 │   │   ├── refresh_tagnetwork.py  sweep step 68

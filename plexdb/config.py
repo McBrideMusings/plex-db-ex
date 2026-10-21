@@ -18,6 +18,22 @@ from .errors import ConfigError
 FRAME_DECODERS = ("cpu", "cuda")
 
 
+DEFAULT_DECODE_BATCH = 50
+
+
+def _decode_batch() -> int:
+    raw = os.environ.get("PLEXDB_DECODE_BATCH", "").strip()
+    if not raw:
+        return DEFAULT_DECODE_BATCH
+    try:
+        batch = int(raw)
+    except ValueError:
+        batch = -1
+    if batch < 0:
+        raise ConfigError(f"PLEXDB_DECODE_BATCH is {raw!r}; use a whole number, 0 or more")
+    return batch
+
+
 def _frame_decode() -> str:
     raw = os.environ.get("PLEXDB_FRAME_DECODE", "").strip().lower() or "cpu"
     if raw not in FRAME_DECODERS:
@@ -152,6 +168,9 @@ class Config:
     #: `ffprobe`, looked up on PATH; the container image ships both.
     ffmpeg: str
     ffprobe: str
+    #: `PLEXDB_DECODE_BATCH`: how many parts `plexdb check-files` decodes in full per run
+    #: (default 50; 0 turns the decode pass off).
+    decode_batch: int
     #: `PLEXDB_FRAME_DECODE`: `cpu` (the default, also when unset) decodes video in
     #: software; `cuda` passes ffmpeg `-hwaccel cuda` to the scene scan only, which then decodes
     #: on the host's NVIDIA GPU. Frame extraction always decodes on the CPU.
@@ -213,6 +232,7 @@ class Config:
             read_bin=os.environ.get("PLEXDB_READ_BIN", "").strip() or "plexdb-read",
             ffmpeg=os.environ.get("PLEXDB_FFMPEG", "").strip() or "ffmpeg",
             ffprobe=os.environ.get("PLEXDB_FFPROBE", "").strip() or "ffprobe",
+            decode_batch=_decode_batch(),
             frame_decode=_frame_decode(),
             media_dir=(
                 Path(media_raw).expanduser()

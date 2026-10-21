@@ -194,3 +194,90 @@ def test_the_damaged_files_recipe_lists_the_bad_file_and_not_the_good_one(
     rows = conn.execute(recipe["sql"]).fetchall()
 
     assert [str(clips["truncated"]) in " ".join(map(str, row)) for row in rows] == [True]
+
+
+def _decode_rows(conn: sqlite3.Connection) -> dict[int, tuple[int, str | None, str]]:
+    return {
+        r[0]: (r[1], r[2], r[3])
+        for r in conn.execute(
+            "SELECT part_id, ok, error, checked_at FROM media_check WHERE kind = 'decode'"
+        )
+    }
+
+
+def test_a_truncated_file_fails_decode_with_ffmpegs_error_text_stored(
+    conn: sqlite3.Connection, clips: dict[str, Path]
+) -> None:
+    _add_part(conn, 1, clips["valid"], DURATION_MS)
+    _add_part(conn, 2, clips["truncated"], DURATION_MS)
+
+    stats = check_files(conn, CountingMedia(), Path, decode_batch=10)
+
+    rows = _decode_rows(conn)
+    assert (stats.decoded, stats.decode_failed) == (2, 1)
+    assert rows[1][:2] == (1, None)
+    assert rows[2][0] == 0
+    assert rows[2][1] and "moov atom not found" in rows[2][1]
+    assert str(clips["truncated"]) not in rows[2][1]
+
+
+_OLD = {1: "2026-10-03T00:00:00+00:00", 2: "2026-10-01T00:00:00+00:00"}
+
+
+def test_decode_takes_never_decoded_parts_first_then_the_oldest_up_to_the_batch(
+    conn: sqlite3.Connection, clips: dict[str, Path]
+) -> None:
+    for part_id in (1, 2, 3, 4):
+        _add_part(conn, part_id, clips["valid"], DURATION_MS)
+    conn.executemany(
+        "INSERT INTO media_check (part_id, kind, checked_at, ok) VALUES (?, 'decode', ?, 1)",
+        list(_OLD.items()),
+    )
+    conn.commit()
+
+    stats = check_files(conn, CountingMedia(), Path, decode_batch=3)
+
+    rows = _decode_rows(conn)
+    assert stats.decoded == 3
+    # 3 and 4 were never decoded; of the two decoded before, part 2 is older than part 1.
+    redone = {part_id for part_id, row in rows.items() if row[2] != _OLD.get(part_id)}
+    assert redone == {2, 3, 4}
+
+
+def test_a_batch_of_zero_decodes_nothing(conn: sqlite3.Connection, clips: dict[str, Path]) -> None:
+    _add_part(conn, 1, clips["valid"], DURATION_MS)
+
+    stats = check_files(conn, CountingMedia(), Path, decode_batch=0)
+
+    assert stats.decoded == 0 and _decode_rows(conn) == {}
+
+
+def test_decode_progress_recipe_counts_decoded_parts_and_the_oldest_date(
+    conn: sqlite3.Connection, clips: dict[str, Path]
+) -> None:
+    for part_id in (1, 2, 3):
+        _add_part(conn, part_id, clips["valid"], DURATION_MS)
+    conn.execute(
+        "INSERT INTO media_check (part_id, kind, checked_at, ok) VALUES"
+        " (1, 'decode', '2026-10-01T00:00:00+00:00', 1),"
+        " (2, 'decode', '2026-10-05T00:00:00+00:00', 1)"
+    )
+    conn.commit()
+
+    recipe = next(r for r in RECIPES if r["name"] == "Decode progress")
+    assert recipe["group"] == "Library health"
+    row = conn.execute(recipe["sql"]).fetchone()
+    assert tuple(row) == (2, 3, "2026-10-01T00:00:00+00:00")
+
+
+def test_parts_missing_from_the_mount_do_not_use_up_the_decode_batch(
+    conn: sqlite3.Connection, clips: dict[str, Path], tmp_path: Path
+) -> None:
+    for part_id in (1, 2):
+        _add_part(conn, part_id, tmp_path / f"gone{part_id}.mp4", DURATION_MS)
+    _add_part(conn, 3, clips["valid"], DURATION_MS)
+
+    stats = check_files(conn, CountingMedia(), Path, decode_batch=1)
+
+    assert (stats.decoded, stats.decode_skipped) == (1, 2)
+    assert set(_decode_rows(conn)) == {3}

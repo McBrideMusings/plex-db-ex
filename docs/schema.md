@@ -1416,7 +1416,13 @@ the file (read from `PLEXDB_MEDIA_DIR`, the way the frame harvester reads it; ff
   does. A part with no Plex duration skips this rule, and so does one of several parts under the
   same `rating_key`, because Plex then gives the whole title's duration.
 
-`decode` is the kind the full-decode pass will write; `check-files` never writes it.
+`decode` is written by the second half of `plexdb check-files`: ffmpeg decodes every frame of the
+file (`-v error -f null`) and the file fails when ffmpeg prints anything, `error` then holding its
+output (at most five lines, the path shown as `<file>`; `moov atom not found` for a file cut short). A run
+decodes at most `PLEXDB_DECODE_BATCH` parts (default 50, 0 turns the pass off): parts with no
+`decode` row first, then the one whose row is oldest. A re-decode replaces the row, so the library
+cycles through the batch. A part the run could not decode (not on the mount, ffmpeg missing or past
+its time limit) gets no row.
 
 **Refresh rule.** `check-files` probes only a part with no `header` row. `media-walk` replaces a
 changed record's parts whole, so a part that is new, or that Plex re-read because its size or
@@ -1425,7 +1431,9 @@ judge (its file is not on the media mount, or ffprobe is missing or ran past its
 row, so the next run tries it again. Neither `plexdb-reader` nor `READER_SHAPE` reads the table.
 
 Plex DB-EX's Query tab carries the recipe "Damaged or rule-breaking files" in the "Library health"
-group: every check with `ok = 0`, newest first, with the title, the file and the error.
+group: every check with `ok = 0`, newest first, with the title, the file and the error. The recipe
+"Decode progress" in the same group is one row: `parts_decoded`, `parts_total` and `oldest_decode`
+(the oldest `checked_at` of a `decode` row).
 
 ## frames.db — the Frame index
 

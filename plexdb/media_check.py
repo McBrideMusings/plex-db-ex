@@ -14,6 +14,13 @@ kind: ffprobe reads the file's container and streams, and the file passes when i
 because Plex re-read it, is the one with no row. A part a run did not judge (the file is
 not on the media mount, ffprobe is missing or timed out) gets no row either, so the next
 run tries it again rather than recording a mount that was down as a damaged file.
+
+**Decode a batch a night.** The `decode` kind runs ffmpeg over every frame of a file and
+fails it on any error ffmpeg prints. A full decode reads the whole file, so a run decodes
+at most `decode_batch` parts: the ones never decoded first, then the one decoded longest
+ago. A re-decode replaces the part's row, so the whole library cycles through the batch.
+A part the run could not decode gets no row and does not use up the batch, so parts the
+mount lacks never crowd out the ones it has.
 """
 
 from __future__ import annotations
@@ -41,6 +48,10 @@ class CheckStats:
     failed: int = 0
     #: Parts left unchecked for the next run: not on the mount, or ffprobe could not judge.
     skipped: int = 0
+    decoded: int = 0
+    decode_failed: int = 0
+    #: Parts the decode pass could not judge (not on the mount, ffmpeg missing or timed out).
+    decode_skipped: int = 0
 
 
 def _duration_ms(report: dict[str, Any]) -> int | None:
@@ -89,8 +100,10 @@ def check_files(
     locate: Callable[[str], Path],
     *,
     limit: int | None = None,
+    decode_batch: int = 0,
 ) -> CheckStats:
-    """Probe every part with no `header` verdict, at most `limit` of them."""
+    """Probe every part with no `header` verdict, at most `limit` of them, then decode
+    `decode_batch` parts in full."""
     stats = CheckStats()
     now = datetime.now(UTC).isoformat(timespec="seconds")
     pending = conn.execute(
@@ -121,4 +134,42 @@ def check_files(
             stats.failed += 1
         else:
             stats.passed += 1
+    _decode_batch(conn, media, locate, decode_batch, stats, now)
     return stats
+
+
+def _decode_batch(
+    conn: sqlite3.Connection,
+    media: FfmpegMedia,
+    locate: Callable[[str], Path],
+    batch: int,
+    stats: CheckStats,
+    now: str,
+) -> None:
+    """Decode the `batch` parts whose last decode is oldest, never-decoded ones first."""
+    if batch <= 0:
+        return
+    parts = conn.execute(
+        "SELECT p.part_id, p.file FROM media_part p LEFT JOIN media_check c"
+        " ON c.part_id = p.part_id AND c.kind = 'decode'"
+        " ORDER BY c.checked_at IS NOT NULL, c.checked_at, p.part_id"
+    ).fetchall()
+    for part_id, file in parts:
+        if stats.decoded >= batch:
+            break
+        try:
+            path = locate(file)
+            path.stat()  # raises OSError for a file not on the mount, before ffmpeg runs
+            error = media.decode(path)
+        except (MediaError, OSError):
+            stats.decode_skipped += 1
+            continue
+        with conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO media_check (part_id, kind, checked_at, ok, error)"
+                " VALUES (?, 'decode', ?, ?, ?)",
+                (part_id, now, 0 if error else 1, error or None),
+            )
+        stats.decoded += 1
+        if error:
+            stats.decode_failed += 1

@@ -293,6 +293,20 @@ class FfmpegMedia:
             return None, "ffprobe printed output that is not JSON"
         return (report, "") if isinstance(report, dict) else (None, "ffprobe printed no report")
 
+    def decode(self, path: Path) -> str:
+        """Decode every frame of `path` and throw it away: `""` when ffmpeg reported nothing,
+        else its error output with the path replaced by `<file>`. A missing binary or a run
+        past the time limit is a `MediaError`, since the file itself was not judged."""
+        argv = [
+            self._ffmpeg, "-nostdin", "-v", "error", "-i", str(path), "-f", "null", "-",
+        ]  # fmt: skip
+        done = self._run(argv, f"{path}: decode", timeout_s=_DECODE_TIMEOUT_S)
+        lines = [ln.replace(str(path), "<file>").strip() for ln in done.stderr.splitlines()]
+        lines = [ln for ln in lines if ln]
+        if done.returncode != 0 and not lines:
+            return f"ffmpeg exited {done.returncode}"
+        return "\n".join(lines[:5])
+
     def scan(self, path: Path) -> Scan:
         scdet, last_frame_ms, warnings = self._scdet(path)
         found = sorted(scdet + self._chapters(path), key=lambda cut: (cut.t_ms, cut.source))
