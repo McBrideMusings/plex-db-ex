@@ -1948,6 +1948,31 @@ def test_pie_table_and_heatmap_draw_their_rows_and_stat_draws_a_sparkline(
             (tile(t).bounding_box() or {"height": 0})["height"] for t in ("bar", "heatmap", "table")
         )
         assert (tile("pie").bounding_box() or {"height": 999})["height"] <= tall
+    page.close()
+
+    big = (
+        "SELECT 'mkv' AS lang, 777512 AS n UNION ALL SELECT 'mp4', 86690 "
+        "UNION ALL SELECT 'avi', 9680 UNION ALL SELECT '(none)', 7000 "
+        "UNION ALL SELECT 'mpegts', 60000 UNION ALL SELECT 'a-very-long-container-name', 5"
+    )
+    page = _open_dashboard(browser, base_url, store, _chart_panels({"*": big}))
+    for width in (1280, 1000):
+        page.set_viewport_size({"width": width, "height": 800})
+        box = tile("pie").bounding_box()
+        assert box is not None
+        cells = (
+            tile("pie")
+            .locator(".pielegend > *")
+            .evaluate_all(
+                "els => els.map(e => { const r = e.getBoundingClientRect();"
+                " return [r.right, Math.round(r.top + r.height / 2)]; })"
+            )
+        )
+        assert len(cells) == 24
+        assert all(right <= box["x"] + box["width"] for right, _ in cells)
+        assert len({mid for _, mid in cells}) == 6  # a row's four cells share a line
+    page.close()
+    page = _open_dashboard(browser, base_url, store, panels)
     assert tile("table").locator("th").all_inner_texts() == ["lang", "kind", "n"]
     assert tile("table").locator("tbody tr").count() == 8
     heat = tile("heatmap")
