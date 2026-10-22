@@ -330,18 +330,19 @@
   .bars .bv { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
   .tile svg.spark { height: 34px; }
   .tile svg .spark { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
-  .pie { display: flex; gap: 16px; align-items: center; justify-content: center; flex: 1; min-width: 0; }
-  .pie svg { width: 130px; max-width: 45%; flex: none; }
-  .pielegend { min-width: 0; }
+  .pie { display: flex; gap: 10px; align-items: center; justify-content: center; flex: 1; min-width: 0; }
+  .pie svg { flex: 0 20 130px; width: 130px; min-width: 36px; max-width: 45%; }
+  .pielegend { min-width: 0; flex: 0 1 auto; }
   .pie .s0 { fill: var(--accent); } .pie .s1 { fill: var(--centre); } .pie .s2 { fill: var(--noise); }
   .pie .s3 { fill: var(--green); } .pie .s4 { fill: var(--purple); } .pie .other { fill: var(--edge); }
   .pie svg path, .pie svg circle { stroke: var(--panel); stroke-width: 0.02; }
   .pielegend .pc::before { content: "\00b7  "; }
-  .pielegend { display: grid; grid-template-columns: auto auto auto auto; gap: 3px 8px; align-items: center; font-variant-numeric: tabular-nums; }
+  .pielegend { display: grid; grid-template-columns: auto minmax(3ch, 1fr) auto auto; gap: 3px 6px; align-items: center; font-variant-numeric: tabular-nums; }
   .pielegend i { width: 9px; height: 9px; border-radius: 2px; display: block; }
   .pielegend i.s0 { background: var(--accent); } .pielegend i.s1 { background: var(--centre); } .pielegend i.s2 { background: var(--noise); }
   .pielegend i.s3 { background: var(--green); } .pielegend i.s4 { background: var(--purple); } .pielegend i.other { background: var(--edge); }
-  .pielegend .n, .pielegend .pc { color: var(--muted); text-align: right; }
+  .pielegend .n, .pielegend .pc { color: var(--muted); text-align: right; white-space: nowrap; }
+  .pielegend .pl { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tabwrap { overflow: auto; }
   .tabwrap table { width: 100%; font-size: 12px; }
   .tabwrap th { position: static; background: none; }
@@ -4029,7 +4030,7 @@ function pieChart(panel) {
     }
     from = to;
     const pc = Math.round(share * 100);
-    legend.append(el("i", { className: s.cls }), el("span", {}, s.name), el("span", { className: "n" }, fmt(s.n)), el("span", { className: "pc" }, share > 0 && pc === 0 ? "<1%" : pc + "%"));
+    legend.append(el("i", { className: s.cls }), el("span", { className: "pl", title: s.name }, s.name), el("span", { className: "n" }, fmt(s.n)), el("span", { className: "pc" }, share > 0 && pc === 0 ? "<1%" : pc + "%"));
   }
   return el("div", { className: "pie" }, root, legend);
 }
