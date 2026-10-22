@@ -1922,6 +1922,28 @@ def _open_dashboard(
     return page
 
 
+def test_a_bar_panel_caps_at_its_tiles_rows_and_sums_the_rest_into_other(
+    browser: Browser, base_url: str, store: Path
+) -> None:
+    def bars(rows: int, height: str) -> tuple[list[str], list[str]]:
+        sql = " UNION ALL ".join(f"SELECT 'l{i:02}' AS lang, {i} AS n" for i in range(1, rows + 1))
+        panel = _chart_panels({"*": sql})[2] | {"height": height}
+        page = _open_dashboard(browser, base_url, store, [panel])
+        box = page.locator(".bars")
+        out = (box.locator(".bl").all_inner_texts(), box.locator(".bv").all_inner_texts())
+        page.close()
+        return out
+
+    names, values = bars(20, "tall")
+    assert names == [f"l{i:02}" for i in range(20, 12, -1)] + ["other"]
+    assert values[-1] == str(sum(range(1, 13)))
+    names, values = bars(20, "short")
+    assert names == ["l20", "l19", "l18", "l17", "other"]
+    assert values[-1] == str(sum(range(1, 17)))
+    names, _ = bars(3, "tall")
+    assert names == ["l03", "l02", "l01"]
+
+
 def test_pie_table_and_heatmap_draw_their_rows_and_stat_draws_a_sparkline(
     browser: Browser, base_url: str, store: Path
 ) -> None:

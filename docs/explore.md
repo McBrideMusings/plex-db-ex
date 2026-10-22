@@ -274,7 +274,10 @@ panel records starts a new history line ([`schema.md`](./schema.md)).
   recorded". With no recorded night the tile shows the live value and "History starts with
   tonight's sweep."
 - **Gauge** panels show `value` as a share of the `total` column of the first row.
-- **Bar** panels draw one bar per row, from the `label` and `number` columns.
+- **Bar** panels draw the top rows by the `number` column, from the `label` and `number` columns: 8 in
+  a tall tile, 4 in a short one. When more rows come back, one more bar labelled "other" carries the
+  sum of the rest, drawn in the edge colour like the pie's "other" slice. Bar lengths scale against the
+  largest drawn bar, "other" included. The Editor still shows every row.
 - A panel whose latest night is an error shows "The query failed tonight." with SQLite's message and
   the last recorded value; a panel whose SQL fails now shows "The query failed." with the message.
 - A dashboard with no panels shows "This dashboard has no panels." and an **Add panel** button.

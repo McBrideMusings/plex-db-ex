@@ -327,6 +327,7 @@
   .bars .bl { color: var(--ink); }
   .bars .bt { background: var(--chip); border-radius: 2px; height: 8px; }
   .bars .bf { background: var(--accent); border-radius: 2px; height: 8px; }
+  .bars .bf.other { background: var(--edge); }
   .bars .bv { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
   .tile svg.spark { height: 34px; }
   .tile svg .spark { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
@@ -3985,13 +3986,16 @@ function barChart(panel) {
   const { columns, rows } = panel.live;
   const label = columns.indexOf(panel.label), num = columns.indexOf(panel.number);
   if (label < 0 || num < 0) return el("div", { className: "tilenote" }, `The query has no ${label < 0 ? "column " + panel.label : "column " + panel.number}.`);
-  const top = Math.max(1, ...rows.map(r => Number(r[num]) || 0));
+  const all = rows.map(r => ({ name: String(r[label]), n: Number(r[num]) || 0 })).sort((a, b) => b.n - a.n);
+  const keep = panel.height === "tall" ? 8 : 4;
+  const bars = all.slice(0, keep).map(b => ({ ...b, cls: "" }));
+  if (all.length > keep) bars.push({ name: "other", n: all.slice(keep).reduce((sum, b) => sum + b.n, 0), cls: " other" });
+  const top = Math.max(1, ...bars.map(b => b.n));
   const box = el("div", { className: "bars" });
-  for (const r of rows) {
-    const n = Number(r[num]) || 0;
-    const fill = el("div", { className: "bf" });
-    fill.style.width = `${n / top * 100}%`;
-    box.append(el("span", { className: "bl" }, String(r[label])), el("div", { className: "bt" }, fill), el("span", { className: "bv" }, fmt(n)));
+  for (const b of bars) {
+    const fill = el("div", { className: "bf" + b.cls });
+    fill.style.width = `${b.n / top * 100}%`;
+    box.append(el("span", { className: "bl" }, b.name), el("div", { className: "bt" }, fill), el("span", { className: "bv" }, fmt(b.n)));
   }
   return box;
 }
