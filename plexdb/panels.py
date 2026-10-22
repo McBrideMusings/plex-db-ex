@@ -27,6 +27,7 @@ from .config import Config
 from .decisions import decisions_dir
 from .errors import NoSuchPanel, PanelsFileError
 from .explore import QueryError, TooManyQueries, run_query
+from .media_check import DECODE_TIMED_OUT
 
 __all__ = [
     "DEFAULT_DASHBOARDS",
@@ -87,6 +88,7 @@ DEFAULT_DASHBOARDS: tuple[dict[str, Any], ...] = (
                     "JOIN media_part p ON p.part_id = c.part_id\n"
                     "JOIN items i ON i.item_id = p.item_id\n"
                     "WHERE c.ok = 0\n"
+                    f"  AND NOT (c.kind = 'decode' AND c.error = '{DECODE_TIMED_OUT}')\n"
                     "ORDER BY c.checked_at DESC, i.title, p.file"
                 ),
                 "chart": "line",

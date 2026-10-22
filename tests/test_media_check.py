@@ -311,8 +311,16 @@ def test_a_decode_that_times_out_is_recorded_and_the_next_run_starts_elsewhere(
     stats = check_files(conn, first, Path, decode_batch=1)
 
     assert first.decoded_files == [clips["valid"]]
-    assert (stats.decoded, stats.decode_failed, stats.decode_skipped) == (1, 1, 0)
+    assert (stats.decoded, stats.decode_failed, stats.decode_timed_out) == (1, 0, 1)
+    assert stats.decode_skipped == 0
     assert _decode_rows(conn)[1][:2] == (0, "ffmpeg timed out")
+    damaged = next(
+        p["sql"] for d in DEFAULT_DASHBOARDS for p in d["panels"] if p["id"] == "damaged-files"
+    )
+    # The silent clip's header check fails on its own; the timed-out decode adds no row.
+    assert [(r["kind"], r["file"]) for r in conn.execute(damaged)] == [
+        ("header", str(clips["silent"]))
+    ]
 
     second = SlowFirstPartMedia()
     check_files(conn, second, Path, decode_batch=1)
