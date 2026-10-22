@@ -10,6 +10,7 @@
     --bg: #f7f7f5; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6b66; --line: #e3e2dd;
     --accent: #2f5fb3; --accent-ink: #ffffff; --noise: #b3432f; --noise-bg: #fbeeea;
     --chip: #eef1f7; --row-hover: #f2f4f8; --selected: #e4ebf8; --centre: #c77d12; --edge: #b9bdc6;
+    --green: #2e8b57; --purple: #7a4fb0;
     color-scheme: light;
   }
   @media (prefers-color-scheme: dark) {
@@ -17,6 +18,7 @@
       --bg: #161615; --panel: #1f1f1d; --ink: #e9e8e3; --muted: #9a998f; --line: #34332f;
       --accent: #7ea4ea; --accent-ink: #10131a; --noise: #ec8a74; --noise-bg: #3a231d;
       --chip: #2a2f3a; --row-hover: #262a31; --selected: #2b3547; --centre: #f0b04a; --edge: #4a4f5a;
+      --green: #6fcf97; --purple: #b58cf0;
       color-scheme: dark;
     }
   }
@@ -319,6 +321,29 @@
   .bars .bt { background: var(--chip); border-radius: 2px; height: 8px; }
   .bars .bf { background: var(--accent); border-radius: 2px; height: 8px; }
   .bars .bv { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+  .tile svg.spark { height: 34px; }
+  .tile svg .spark { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+  .pie { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+  .pie svg { width: 110px; flex: none; }
+  .pie .s0 { fill: var(--accent); } .pie .s1 { fill: var(--centre); } .pie .s2 { fill: var(--noise); }
+  .pie .s3 { fill: var(--green); } .pie .s4 { fill: var(--purple); } .pie .other { fill: var(--edge); }
+  .pie svg path, .pie svg circle { stroke: var(--panel); stroke-width: 0.02; }
+  .pielegend .pc::before { content: "\00b7  "; }
+  .pielegend { display: grid; grid-template-columns: auto auto auto auto; gap: 3px 8px; align-items: center; font-variant-numeric: tabular-nums; }
+  .pielegend i { width: 9px; height: 9px; border-radius: 2px; display: block; }
+  .pielegend i.s0 { background: var(--accent); } .pielegend i.s1 { background: var(--centre); } .pielegend i.s2 { background: var(--noise); }
+  .pielegend i.s3 { background: var(--green); } .pielegend i.s4 { background: var(--purple); } .pielegend i.other { background: var(--edge); }
+  .pielegend .n, .pielegend .pc { color: var(--muted); text-align: right; }
+  .tabwrap { overflow: auto; }
+  .tabwrap table { width: 100%; font-size: 12px; }
+  .tabwrap th { position: static; background: none; }
+  .tabwrap td { max-width: 14em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .heat { display: grid; gap: 4px; align-items: center; font-variant-numeric: tabular-nums; }
+  .heat .hx { color: var(--muted); text-align: center; font-size: 11px; }
+  .heat .hy { color: var(--ink); }
+  .heat .hc { text-align: center; border-radius: 3px; padding: 3px 4px; color: var(--ink); }
+  .heat .hc.hot { color: var(--accent-ink); }
+  .heat .hc.none { background: var(--chip); color: var(--muted); }
   .tileerr { margin: auto 0; background: var(--noise-bg); color: var(--noise); border-radius: 5px; padding: 9px 11px; overflow-wrap: anywhere; }
   .tileerr p { margin: 0; }
   .tileerr .last { color: var(--muted); margin-top: 4px; font-size: 12px; }
@@ -3917,6 +3942,81 @@ function barChart(panel) {
   return box;
 }
 
+function sparkline(points) {
+  const W = 200, H = 34;
+  const lo = Math.min(...points.map(p => p.value)), hi = Math.max(...points.map(p => p.value));
+  const t0 = dayMs(points[0].day), t1 = dayMs(points[points.length - 1].day);
+  const x = p => points.length === 1 ? W : (dayMs(p.day) - t0) / (t1 - t0) * W;
+  const y = v => hi === lo ? H / 2 : 3 + (1 - (v - lo) / (hi - lo)) * (H - 6);
+  const root = svg("svg", { class: "spark", viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: "none", role: "img", "aria-label": "Value by night" });
+  if (points.length > 1) root.append(svg("polyline", { class: "spark", points: points.map(p => `${x(p)},${y(p.value)}`).join(" ") }));
+  return root;
+}
+
+const PIE_CLASSES = ["s0", "s1", "s2", "s3", "s4"];
+function pieChart(panel) {
+  const { columns, rows } = panel.live;
+  const label = columns.indexOf(panel.label), num = columns.indexOf(panel.number);
+  if (label < 0 || num < 0) return el("div", { className: "tilenote" }, `The query has no ${label < 0 ? "column " + panel.label : "column " + panel.number}.`);
+  const all = rows.map(r => ({ name: String(r[label]), n: Math.max(0, Number(r[num]) || 0) })).sort((a, b) => b.n - a.n);
+  const slices = all.slice(0, 5).map((s, i) => ({ ...s, cls: PIE_CLASSES[i] }));
+  const rest = all.slice(5).reduce((sum, s) => sum + s.n, 0);
+  if (all.length > 5) slices.push({ name: "other", n: rest, cls: "other" });
+  const total = slices.reduce((sum, s) => sum + s.n, 0);
+  if (total <= 0) return el("div", { className: "tilenote" }, "No rows tonight.");
+  const root = svg("svg", { viewBox: "-1 -1 2 2", role: "img", "aria-label": panel.title });
+  const legend = el("div", { className: "pielegend" });
+  let from = 0;
+  for (const s of slices) {
+    const share = s.n / total, to = from + share;
+    if (share >= 1) root.append(svg("circle", { class: s.cls, cx: 0, cy: 0, r: 1 }));
+    else if (share > 0) {
+      const a0 = 2 * Math.PI * from - Math.PI / 2, a1 = 2 * Math.PI * to - Math.PI / 2;
+      root.append(svg("path", { class: s.cls, d: `M 0 0 L ${Math.cos(a0)} ${Math.sin(a0)} A 1 1 0 ${share > 0.5 ? 1 : 0} 1 ${Math.cos(a1)} ${Math.sin(a1)} Z` }));
+    }
+    from = to;
+    const pc = Math.round(share * 100);
+    legend.append(el("i", { className: s.cls }), el("span", {}, s.name), el("span", { className: "n" }, fmt(s.n)), el("span", { className: "pc" }, share > 0 && pc === 0 ? "<1%" : pc + "%"));
+  }
+  return el("div", { className: "pie" }, root, legend);
+}
+
+function tableChart(panel) {
+  const { columns, rows } = panel.live;
+  const cell = v => v === null || v === undefined ? "" : typeof v === "number" ? fmt(v) : String(v);
+  const body = rows.slice(0, 50).map(r => el("tr", {}, ...r.map(v => el("td", { title: cell(v) }, cell(v)))));
+  return el("div", { className: "tabwrap" }, el("table", {}, el("thead", {}, el("tr", {}, ...columns.map(c => el("th", {}, c)))), el("tbody", {}, ...body)));
+}
+
+function heatmapChart(panel) {
+  const { columns, rows } = panel.live;
+  const xi = columns.indexOf(panel.x), yi = columns.indexOf(panel.y), ni = columns.indexOf(panel.number);
+  const missing = [[xi, panel.x], [yi, panel.y], [ni, panel.number]].find(([at]) => at < 0);
+  if (missing) return el("div", { className: "tilenote" }, `The query has no column ${missing[1]}.`);
+  const xs = [], ys = [], cells = new Map();
+  for (const r of rows) {
+    const x = String(r[xi]), y = String(r[yi]);
+    if (!xs.includes(x)) xs.push(x);
+    if (!ys.includes(y)) ys.push(y);
+    cells.set(y + "\u0000" + x, Number(r[ni]) || 0);
+  }
+  const top = Math.max(1, ...cells.values());
+  const box = el("div", { className: "heat" });
+  box.style.gridTemplateColumns = `auto repeat(${xs.length}, minmax(0, 1fr))`;
+  box.append(el("span"), ...xs.map(x => el("span", { className: "hx" }, x)));
+  for (const y of ys) {
+    box.append(el("span", { className: "hy" }, y));
+    for (const x of xs) {
+      const n = cells.get(y + "\u0000" + x);
+      if (n === undefined) { box.append(el("span", { className: "hc none" }, "\u2014")); continue; }
+      const f = n / top, c = el("span", { className: "hc" + (f > 0.5 ? " hot" : "") }, fmt(n));
+      c.style.background = `color-mix(in srgb, var(--accent) ${Math.round(20 + f * 80)}%, var(--panel))`;
+      box.append(c);
+    }
+  }
+  return box;
+}
+
 function tileError(heading, message, last) {
   const box = el("div", { className: "tileerr", role: "alert" }, el("p", {}, el("strong", {}, heading + " "), message));
   if (last) box.append(el("p", { className: "last" }, `Last recorded value: ${fmt(last.value)} on ${dayLabel(last.day)}. Edit the panel to fix its SQL.`));
@@ -3933,7 +4033,11 @@ function paintTile(panel) {
   tile.style.gridColumn = `span ${panel.width}`;
   const latest = panel.series[panel.series.length - 1];
   if (panel.live.error) { tile.append(tileError("The query failed.", panel.live.error, values[values.length - 1])); return tile; }
-  if (panel.chart === "line") {
+  const noRows = () => el("div", { className: "tilenote" }, "No rows tonight.");
+  const listed = ["pie", "table", "heatmap", "bar"].includes(panel.chart);
+  if (listed && !panel.live.rows.length) tile.append(noRows());
+  else if ((panel.chart === "line" || panel.chart === "stat" || panel.chart === "gauge") && panel.value !== "rows" && !panel.live.rows.length) tile.append(noRows());
+  else if (panel.chart === "line" || panel.chart === "stat") {
     if (latest && "error" in latest) { tile.append(tileError("The query failed tonight.", latest.error, values[values.length - 1])); return tile; }
     const now = values.length ? values[values.length - 1].value : liveValue(panel);
     const capped = !values.length && panel.live.truncated;
@@ -3944,7 +4048,7 @@ function paintTile(panel) {
       head.append(el("span", { className: "delta" }, `${signed(now - prev.value)} since ${dayLabel(prev.day)}`));
     } else if (values.length === 1) head.append(el("span", { className: "delta" }, "first night recorded"));
     tile.append(head);
-    if (values.length) tile.append(lineChart(values));
+    if (values.length) tile.append(panel.chart === "stat" ? sparkline(values) : lineChart(values));
     else tile.append(el("div", { className: "tilenote" }, "History starts with tonight\u2019s sweep."));
   } else if (panel.chart === "gauge") {
     const value = liveValue(panel);
@@ -3954,6 +4058,13 @@ function paintTile(panel) {
     else tile.append(gaugeChart(value, total, panel.unit || panel.value.slice("column:".length).replace(/_/g, " ")));
   } else if (panel.chart === "bar") {
     tile.append(barChart(panel));
+    if (panel.unit) tile.append(el("div", { className: "tilenote" }, panel.unit));
+  } else if (panel.chart === "pie") {
+    tile.append(pieChart(panel));
+    if (panel.unit) tile.append(el("div", { className: "tilenote" }, panel.unit));
+  } else if (panel.chart === "table") tile.append(tableChart(panel));
+  else if (panel.chart === "heatmap") {
+    tile.append(heatmapChart(panel));
     if (panel.unit) tile.append(el("div", { className: "tilenote" }, panel.unit));
   }
   else tile.append(el("div", { className: "tilenote" }, `No ${panel.chart} chart yet.`));

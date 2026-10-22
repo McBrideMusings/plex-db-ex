@@ -50,7 +50,12 @@ HISTORY_FILE = "panel-history.json"
 ROWS = "rows"
 COLUMN_PREFIX = "column:"
 #: The display settings a chart cannot draw without.
-CHART_SETTINGS = {"gauge": ("total",), "bar": ("label", "number")}
+CHART_SETTINGS = {
+    "gauge": ("total",),
+    "bar": ("label", "number"),
+    "pie": ("label", "number"),
+    "heatmap": ("x", "y", "number"),
+}
 HEIGHTS = ("short", "tall")
 WIDTHS = range(1, 5)
 #: How many hex digits of the SQL-and-value hash a series key keeps.
