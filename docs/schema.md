@@ -1445,7 +1445,7 @@ else beside the snapshot, else beside the store).
 
 `explore-panels.json` is `{"dashboards": [{"id", "name", "panels": [Panel]}]}`. A Panel has text
 `id`, `title`, `sql` and `chart`; `value`, either `rows` or `column:<name>`; `width` 1 to 4; and
-`height`, `short` or `tall`. It may also carry `total`, `label`, `number`, `unit`, `x` and `y`, which the
+`height`, `short` or `tall`. `chart` is `line`, `stat`, `gauge`, `bar`, `pie`, `table` or `heatmap`. It may also carry `total`, `label`, `number`, `unit`, `x` and `y`, which the
 dashboard reads and the sweep ignores. A file that is not valid JSON or breaks this shape is
 refused whole; so is an unknown `chart`, a `gauge` panel without `total`, a `bar` or `pie` panel
 without `label` and `number`, and a `heatmap` panel without `x`, `y` and `number`. A missing file is created with the Library health dashboard, the first time the

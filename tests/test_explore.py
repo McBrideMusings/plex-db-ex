@@ -1798,6 +1798,121 @@ def test_the_dashboard_draws_the_four_seeded_panels_and_edit_opens_the_editor(
     assert "parts_decoded" in page.input_value("#sql")
 
 
+_TRACKS = (
+    "SELECT 'eng' AS lang, 'audio' AS kind, 10 AS n UNION ALL SELECT 'eng', 'subtitle', 9 "
+    "UNION ALL SELECT 'jpn', 'audio', 4 UNION ALL SELECT 'fre', 'audio', 3 "
+    "UNION ALL SELECT 'spa', 'audio', 2 UNION ALL SELECT 'ger', 'audio', 1 "
+    "UNION ALL SELECT 'ita', 'audio', 1 UNION ALL SELECT 'por', 'audio', 1"
+)
+_TRACKS_BY_LANGUAGE = (
+    f"SELECT lang, SUM(n) AS n FROM ({_TRACKS}) GROUP BY lang ORDER BY n DESC, lang"
+)
+_COLUMNS = {"label": "lang", "number": "n", "x": "kind", "y": "lang"}
+
+
+def _chart_panels(sql: dict[str, str], value: str = "rows") -> list[dict[str, Any]]:
+    return [
+        {
+            "id": chart,
+            "title": chart,
+            "chart": chart,
+            "sql": sql.get(chart, sql["*"]),
+            "value": value,
+            "width": 1,
+            "height": "short",
+            **({k: v for k, v in _COLUMNS.items() if chart != "stat"}),
+        }
+        for chart in ("line", "stat", "bar", "pie", "table", "heatmap")
+    ]
+
+
+def _open_dashboard(
+    browser: Browser, base_url: str, store: Path, panels: list[dict[str, Any]]
+) -> Page:
+    (store.parent / "explore-panels.json").write_text(
+        json.dumps({"dashboards": [{"id": "d", "name": "D", "panels": panels}]})
+    )
+    page = browser.new_page(viewport={"width": 1280, "height": 800})
+    page.goto(base_url)
+    page.click('button[data-tab="query"]')
+    page.wait_for_selector(".tile")
+    return page
+
+
+def test_pie_table_and_heatmap_draw_their_rows_and_stat_draws_a_sparkline(
+    browser: Browser, base_url: str, store: Path
+) -> None:
+    panels = _chart_panels({"*": _TRACKS, "pie": _TRACKS_BY_LANGUAGE})
+    path = store.parent / "explore-panels.json"
+    path.write_text(json.dumps({"dashboards": [{"id": "d", "name": "D", "panels": panels}]}))
+    stat = next(p for p in PanelsFile(path).read_or_seed()[0].panels if p.chart == "stat")
+    (store.parent / "panel-history.json").write_text(
+        json.dumps(
+            {
+                "series": {
+                    series_key(stat): [
+                        {"day": "2026-10-20", "value": 5},
+                        {"day": "2026-10-21", "value": 8},
+                    ]
+                }
+            }
+        )
+    )
+    page = _open_dashboard(browser, base_url, store, panels)
+
+    def tile(title: str) -> Any:
+        return page.locator(".tile", has=page.locator("h3", has_text=title))
+
+    assert tile("stat").locator("svg polyline.spark").count() == 1
+    assert "+3 since Oct 20" in tile("stat").inner_text()
+    legend = tile("pie").locator(".pielegend")
+    assert legend.locator("span:not(.n):not(.pc)").all_inner_texts() == [
+        "eng", "jpn", "fre", "spa", "ger", "other",
+    ]  # fmt: skip
+    assert legend.locator(".n").all_inner_texts() == ["19", "4", "3", "2", "1", "2"]
+    assert legend.locator(".pc").all_inner_texts() == ["61%", "13%", "10%", "6%", "3%", "6%"]
+    assert tile("pie").locator("svg path").count() == 6
+    assert tile("table").locator("th").all_inner_texts() == ["lang", "kind", "n"]
+    assert tile("table").locator("tbody tr").count() == 8
+    heat = tile("heatmap")
+    assert heat.locator(".hx").all_inner_texts() == ["audio", "subtitle"]
+    assert heat.locator(".hy").all_inner_texts() == [
+        "eng",
+        "jpn",
+        "fre",
+        "spa",
+        "ger",
+        "ita",
+        "por",
+    ]
+    assert heat.locator(".hc").first.inner_text() == "10"
+    assert heat.locator(".hc.none").count() == 6
+    assert heat.locator(".hc.hot").count() == 2
+
+
+def test_a_panel_of_every_type_with_no_rows_says_so(
+    browser: Browser, base_url: str, store: Path
+) -> None:
+    empty = f"SELECT * FROM ({_TRACKS}) WHERE n < 0"
+    panels = _chart_panels({"*": empty}, value="column:n")
+    panels.append(
+        {
+            "id": "gauge",
+            "title": "gauge",
+            "chart": "gauge",
+            "sql": empty,
+            "value": "column:n",
+            "total": "n",
+            "width": 1,
+            "height": "short",
+        }
+    )
+    page = _open_dashboard(browser, base_url, store, panels)
+
+    assert page.locator(".tile").count() == 7
+    assert page.locator(".tile .tilenote", has_text="No rows tonight.").count() == 7
+
+
 def test_clip_seek_draws_the_same_frame_at_t_and_t_plus_period(
     browser: Browser, store: Path, base_url: str
 ) -> None:
