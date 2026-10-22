@@ -1775,6 +1775,17 @@ def test_pie_table_and_heatmap_draw_their_rows_and_stat_draws_a_sparkline(
     assert legend.locator(".n").all_inner_texts() == ["19", "4", "3", "2", "1", "2"]
     assert legend.locator(".pc").all_inner_texts() == ["61%", "13%", "10%", "6%", "3%", "6%"]
     assert tile("pie").locator("svg path").count() == 6
+    for width in (1280, 1000, 800):
+        page.set_viewport_size({"width": width, "height": 800})
+        pie = tile("pie").locator(".pie svg").bounding_box()
+        side = legend.bounding_box()
+        assert pie is not None and side is not None
+        assert side["x"] >= pie["x"] + pie["width"]  # the legend sits beside the pie
+        assert abs((side["y"] + side["height"] / 2) - (pie["y"] + pie["height"] / 2)) < 2
+        tall = max(
+            (tile(t).bounding_box() or {"height": 0})["height"] for t in ("bar", "heatmap", "table")
+        )
+        assert (tile("pie").bounding_box() or {"height": 999})["height"] <= tall
     assert tile("table").locator("th").all_inner_texts() == ["lang", "kind", "n"]
     assert tile("table").locator("tbody tr").count() == 8
     heat = tile("heatmap")
