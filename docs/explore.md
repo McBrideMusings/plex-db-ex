@@ -248,8 +248,14 @@ for (let i = 0; i < Math.round(period * fps); i++) {
 The Query tab opens on **Dashboard**; the **Editor** side holds the SQL box, saved queries and
 recipes. The switch is at the top of the tab, and **Add panel** opens the Editor with an empty panel.
 
-The Dashboard side draws each dashboard of `explore-panels.json` ([`schema.md`](./schema.md))
-from `/api/dashboards` as a four-column grid in stored order, a panel `width` 1 to 4 columns wide
+The Dashboard side draws one dashboard of `explore-panels.json` ([`schema.md`](./schema.md))
+from `/api/dashboards`. The header holds a picker of every dashboard and the buttons **New
+dashboard**, **Rename** and **Delete**; the choice is in the URL as `#tab=query&dash=<id>`, so a
+reload reopens it. **New dashboard** and **Rename** swap the picker for a name field (Enter saves,
+Escape cancels); a new dashboard opens on "This dashboard has no panels." **Delete** takes two
+presses, and the first names how many panels go with it; it is disabled while one dashboard is
+left. Every dashboard write and tile move reports its result, or its error, on one status line
+under the header. The grid is four columns in stored order, a panel `width` 1 to 4 columns wide
 and `short` or `tall`; under 900px it is one column. A tile's **Edit** opens the panel in the Editor. **←** and **→** on a tile move it one place earlier or later
 (disabled at the ends), and **Add panel** opens the panel editor with an empty `line` panel that
 records a row count, 2 wide and short.

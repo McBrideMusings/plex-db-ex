@@ -62,6 +62,8 @@ CHARTS = ("line", "stat", "gauge", "bar", "pie", "table", "heatmap")
 #: `SavedQueries` puts on its file: Plex DB-EX has no login.
 MAX_TOTAL_BYTES = 1 << 20
 HEIGHTS = ("short", "tall")
+#: The longest dashboard name `PanelsFile.put_dashboard` keeps.
+MAX_NAME = 80
 WIDTHS = range(1, 5)
 #: How many hex digits of the SQL-and-value hash a series key keeps.
 HASH_DIGITS = 12
@@ -332,6 +334,45 @@ class PanelsFile:
             panels.insert(to, panels.pop(at))
             self._save(raw)
             return [p["id"] for p in panels]
+
+    def put_dashboard(self, dashboard_id: object, name: object) -> Dashboard:
+        """Create a dashboard (no `dashboard_id`: a new uuid, appended, with no panels) or rename
+        the one with that id. Returns it."""
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("name must be text")
+        name = name.strip()
+        if len(name) > MAX_NAME:
+            raise ValueError(f"name is over {MAX_NAME} characters")
+        if dashboard_id is not None and (
+            not isinstance(dashboard_id, str) or not dashboard_id or ":" in dashboard_id
+        ):
+            raise ValueError("id must be text without a colon")
+        with _FILE_LOCK:
+            raw = self._edit()
+            if dashboard_id is None:
+                entry: dict[str, Any] = {"id": uuid.uuid4().hex, "name": name, "panels": []}
+                raw["dashboards"].append(entry)
+            else:
+                entry = next((d for d in raw["dashboards"] if d["id"] == dashboard_id), {})
+                if not entry:
+                    raise NoSuchPanel(f"dashboard {dashboard_id}")
+                entry["name"] = name
+            self._save(raw)
+        return self._dashboard(0, entry)
+
+    def delete_dashboard(self, dashboard_id: str) -> list[str]:
+        """Remove the dashboard; returns the ids of the panels that went with it. The last
+        dashboard is refused."""
+        with _FILE_LOCK:
+            raw = self._edit()
+            at = next((i for i, d in enumerate(raw["dashboards"]) if d["id"] == dashboard_id), None)
+            if at is None:
+                raise NoSuchPanel(f"dashboard {dashboard_id}")
+            if len(raw["dashboards"]) == 1:
+                raise ValueError("the last dashboard cannot be deleted")
+            gone = raw["dashboards"].pop(at)
+            self._save(raw)
+        return [p["id"] for p in gone["panels"]]
 
     def delete(self, panel_id: str) -> None:
         """Remove the panel from whichever dashboard holds it."""

@@ -1467,6 +1467,12 @@ tab's guarded `run_query` now or `{error}` when that fails, and `series`, the pa
 `panel-history.json` under `series_key`, oldest night first. A dashboard's `panels` list is in
 stored order.
 
+`PUT /api/dashboards` takes `{"id"?, "name"}` and creates a dashboard (no `id`: a new uuid, no
+panels, appended) or renames the one with that `id`; the name is trimmed text of 1 to 80
+characters. `DELETE /api/dashboards/<id>` removes the dashboard and, from `panel-history.json`,
+every series of each of its panels, answering `{"deleted", "panels", "series_dropped"}`; the last
+remaining dashboard answers 400 and nothing changes. An unknown `id` answers 404.
+
 `PUT /api/panels` takes `{"dashboard_id", "panel"}` and creates the panel (no `id`: a new uuid,
 appended to the dashboard) or replaces the one with that `id` in place. It runs the panel's SQL once
 through `run_query` first; a query that fails, or a `column:<name>` value the result lacks, answers

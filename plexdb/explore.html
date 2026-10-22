@@ -287,6 +287,11 @@
   #qtitle h2 { font-size: 15px; margin: 0; }
   #qtitle .sub { color: var(--muted); }
   #querywrap.dashmode #qmain, #querywrap.dashmode #qside { display: none; }
+  #dashstatus { grid-column: 1 / -1; padding: 6px 20px 0; color: var(--muted); }
+  #dashstatus:empty, #querywrap:not(.dashmode) #dashstatus { display: none; }
+  #dashstatus.bad { color: var(--noise); }
+  #qtitle select, #qtitle input[type="text"] { font: inherit; max-width: 100%; }
+  #qtitle input[type="text"] { width: 18em; }
   #querywrap:not(.dashmode) #dashwrap { display: none; }
   #dashwrap { grid-column: 1 / -1; padding: 6px 20px 24px; min-width: 0; }
   .dashhead { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; margin: 8px 0; }
@@ -733,6 +738,7 @@
     <span class="qspacer"></span>
     <button type="button" class="primary" id="qaddpanel">Add panel</button>
   </div>
+  <div id="dashstatus" role="status"></div>
   <div id="dashwrap"></div>
   <div id="qmain">
     <textarea id="sql" spellcheck="false" aria-label="SQL"
@@ -986,12 +992,14 @@ function readHash() {
   if (VIEWS.includes(p.get("view"))) state.view = p.get("view");
   if (["lists", "query", "merges", "roles", "search", "doctor"].includes(p.get("tab"))) state.tab = p.get("tab");
   state.tag = p.get("tag");
+  state.dash = p.get("dash");
   doctor.itemId = p.get("item"); doctor.row = p.get("row");
 }
 function writeHash() {
   const p = new URLSearchParams({ kind: state.kind, view: state.view });
   if (state.tab !== "tags") p.set("tab", state.tab);
   if (state.tag) p.set("tag", state.tag);
+  if (state.tab === "query" && state.dash) p.set("dash", state.dash);
   if (state.tab === "doctor" && doctor.itemId) p.set("item", doctor.itemId);
   if (state.tab === "doctor" && doctor.row) p.set("row", doctor.row);
   history.replaceState(null, "", "#" + p.toString());
@@ -4124,24 +4132,104 @@ function paintTile(panel, dashboard, at) {
   return tile;
 }
 
+const selectedDashboard = () => q.dashboards.find(d => d.id === state.dash) || q.dashboards[0];
+
+function dashStatus(text, bad = false) {
+  const n = qEl("dashstatus");
+  n.className = bad ? "bad" : "";
+  n.textContent = text;
+}
+
+// The header: a picker of every dashboard and its three buttons, or the name field while a
+// dashboard is being created or renamed.
+function paintDashHeader(d) {
+  const title = qEl("qtitle");
+  if (q.dashEdit) {
+    const input = el("input", { type: "text", id: "dashname", autocomplete: "off", maxLength: 80, placeholder: "Dashboard name" });
+    input.setAttribute("aria-label", "Dashboard name");
+    if (q.dashEdit === "rename") input.value = d.name;
+    const save = el("button", { type: "button", className: "primary" }, q.dashEdit === "rename" ? "Rename" : "Create");
+    const cancel = el("button", { type: "button", className: "plain" }, "Cancel");
+    const finish = () => saveDashboard(input.value);
+    save.addEventListener("click", finish);
+    cancel.addEventListener("click", () => { q.dashEdit = null; paintDashboards(q.dashboards); });
+    input.addEventListener("keydown", e => {
+      if (e.key === "Enter") finish();
+      else if (e.key === "Escape") cancel.click();
+    });
+    title.replaceChildren(input, save, cancel);
+    input.focus();
+    return;
+  }
+  const pick = el("select", { id: "dashpick" }, ...q.dashboards.map(x => el("option", { value: x.id }, x.name)));
+  pick.setAttribute("aria-label", "Dashboard");
+  pick.value = d.id;
+  pick.addEventListener("change", () => { state.dash = pick.value; dashStatus(""); paintDashboards(q.dashboards); });
+  const make = el("button", { type: "button", className: "plain", id: "dashnew" }, "New dashboard");
+  make.addEventListener("click", () => { q.dashEdit = "new"; paintDashboards(q.dashboards); });
+  const rename = el("button", { type: "button", className: "plain", id: "dashrename" }, "Rename");
+  rename.addEventListener("click", () => { q.dashEdit = "rename"; paintDashboards(q.dashboards); });
+  const del = el("button", { type: "button", className: "plain danger", id: "dashdelete" }, "Delete");
+  del.disabled = q.dashboards.length < 2;
+  if (del.disabled) del.title = "The last dashboard cannot be deleted";
+  del.addEventListener("click", () => {
+    if (del.dataset.armed !== "1") {
+      const n = d.panels.length;
+      del.dataset.armed = "1"; del.textContent = n ? `Delete it and its ${n} panel${n === 1 ? "" : "s"}?` : "Delete it?";
+      setTimeout(() => { del.dataset.armed = ""; del.textContent = "Delete"; }, 3000);
+      return;
+    }
+    deleteDashboard(d);
+  });
+  const sub = d.panels.length ? [el("span", { className: "sub" }, `${d.panels.length} panels \u00b7 recorded nightly by the sweep`)] : [];
+  title.replaceChildren(pick, ...sub, make, rename, del);
+}
+
+async function saveDashboard(name) {
+  if (q.dashBusy) return;
+  const d = selectedDashboard();
+  const renaming = q.dashEdit === "rename";
+  if (!name.trim()) { dashStatus("Give the dashboard a name.", true); return; }
+  let out;
+  q.dashBusy = true;
+  try { out = await sendJSON("PUT", "/api/dashboards", renaming ? { id: d.id, name } : { name }); }
+  catch (err) { dashStatus(err.message, true); return; }
+  finally { q.dashBusy = false; }
+  q.dashEdit = null;
+  state.dash = out.dashboard.id;
+  await initDashboards();
+  dashStatus(`${renaming ? "Renamed to" : "Created"} \u201c${out.dashboard.name}\u201d.`);
+}
+
+async function deleteDashboard(d) {
+  if (q.dashBusy) return;
+  let out;
+  q.dashBusy = true;
+  try { out = await sendJSON("DELETE", `/api/dashboards/${encodeURIComponent(d.id)}`); }
+  catch (err) { dashStatus(err.message, true); return; }
+  finally { q.dashBusy = false; }
+  state.dash = null;
+  await initDashboards();
+  dashStatus(`Deleted \u201c${d.name}\u201d and its ${out.panels} panel${out.panels === 1 ? "" : "s"}.`);
+}
+
 function paintDashboards(dashboards) {
   q.dashboards = dashboards;
   const box = qEl("dashwrap");
   qEl("qtitle").replaceChildren();
   if (!dashboards.length) { box.replaceChildren(el("p", { className: "empty" }, "No dashboards.")); return; }
-  box.replaceChildren(...dashboards.flatMap((d, i) => {
-    const head = el("div", { className: "dashhead" }, el("h2", {}, d.name));
-    if (d.panels.length) head.append(el("span", { className: "sub" }, `${d.panels.length} panels \u00b7 recorded nightly by the sweep`));
-    if (i === 0) { qEl("qtitle").replaceChildren(...head.childNodes); head.remove(); }
-    const lead = i === 0 ? [] : [head];
-    if (!d.panels.length) {
-      const add = el("button", { type: "button", className: "primary" }, "Add panel");
-      add.addEventListener("click", () => addPanel(d));
-      return [...lead, el("div", { className: "dashempty" }, el("h3", {}, "This dashboard has no panels."),
-        el("p", {}, "A panel is a saved query with a chart. The sweep records its value each night, so a line chart fills in from the first night after you add it."), add)];
-    }
-    return [...lead, el("div", { className: "dashgrid" }, ...d.panels.map((p, at) => paintTile(p, d, at)))];
-  }));
+  const d = selectedDashboard();
+  state.dash = d.id;
+  if (state.tab === "query") writeHash();
+  paintDashHeader(d);
+  if (!d.panels.length) {
+    const add = el("button", { type: "button", className: "primary" }, "Add panel");
+    add.addEventListener("click", () => addPanel(d));
+    box.replaceChildren(el("div", { className: "dashempty" }, el("h3", {}, "This dashboard has no panels."),
+      el("p", {}, "A panel is a saved query with a chart. The sweep records its value each night, so a line chart fills in from the first night after you add it."), add));
+    return;
+  }
+  box.replaceChildren(el("div", { className: "dashgrid" }, ...d.panels.map((p, at) => paintTile(p, d, at))));
 }
 
 function setQueryMode(mode) {
@@ -4208,7 +4296,7 @@ async function editPanel(dashboard, panel) {
   setQueryMode("editor");
   await runQuery();
 }
-function addPanel(dashboard = q.dashboards[0]) {
+function addPanel(dashboard = selectedDashboard()) {
   if (!dashboard) { qStatus("There is no dashboard to add a panel to.", true); return; }
   beginPanelEdit(dashboard, null);
   setQueryMode("editor");
@@ -4251,7 +4339,7 @@ async function deletePanel() {
 
 async function movePanel(dashboard, panel, to) {
   try { await sendJSON("POST", "/api/panels/move", { dashboard_id: dashboard.id, panel_id: panel.id, to }); }
-  catch (err) { qStatus(err.message, true); }
+  catch (err) { await initDashboards(); dashStatus(err.message, true); return; }
   await initDashboards();
 }
 

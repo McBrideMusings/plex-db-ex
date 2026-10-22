@@ -2331,6 +2331,17 @@ def make_server(
             if path == "/api/panels":
                 self._put_panel()
                 return
+            if path == "/api/dashboards":
+                body = self._body()
+                panels_file, _ = panel_files()
+                dashboard = panels_file.put_dashboard(body.get("id"), body.get("name"))
+                print(
+                    f"explore: dashboard saved {dashboard.id!r} name={dashboard.name!r} "
+                    f"-> {panels_file.path}",
+                    file=sys.stderr,
+                )
+                self._json({"dashboard": {"id": dashboard.id, "name": dashboard.name}})
+                return
             if path != "/api/saved":
                 self._json({"error": f"no route {self.path}"}, HTTPStatus.NOT_FOUND)
                 return
@@ -2376,6 +2387,20 @@ def make_server(
                     file=sys.stderr,
                 )
                 self._json({"deleted": panel_id, "series_dropped": dropped})
+                return
+            if url.path.startswith("/api/dashboards/"):
+                dashboard_id = unquote(url.path[len("/api/dashboards/") :])
+                panels_file, panel_history = panel_files()
+                panel_ids = panels_file.delete_dashboard(dashboard_id)
+                dropped = sum(panel_history.drop_panel(p) for p in panel_ids)
+                print(
+                    f"explore: dashboard deleted {dashboard_id!r} with {len(panel_ids)} panels "
+                    f"{panel_ids}, dropped {dropped} series",
+                    file=sys.stderr,
+                )
+                self._json(
+                    {"deleted": dashboard_id, "panels": len(panel_ids), "series_dropped": dropped}
+                )
                 return
             if url.path != "/api/saved":
                 self._json({"error": f"no route {url.path}"}, HTTPStatus.NOT_FOUND)

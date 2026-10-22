@@ -1416,6 +1416,71 @@ def test_panel_writes_name_what_they_cannot_find(base_url: str) -> None:
     assert status == 400 and "needs text total" in str(body["error"])
 
 
+def _dashboards(base_url: str) -> list[dict[str, Any]]:
+    _, body = _send("GET", f"{base_url}/api/dashboards")
+    return body["dashboards"]  # type: ignore[return-value]
+
+
+def test_dashboards_are_created_renamed_and_deleted_with_their_series(
+    base_url: str, store: Path
+) -> None:
+    _dashboards(base_url)
+
+    status, body = _send("PUT", f"{base_url}/api/dashboards", {"name": "  Second  "})
+    assert status == 200
+    second = body["dashboard"]["id"]  # type: ignore[index]
+    assert len(second) == 32 and body["dashboard"]["name"] == "Second"  # type: ignore[index]
+    assert [(d["id"], len(d["panels"])) for d in _dashboards(base_url)] == [
+        ("library-health", 4),
+        (second, 0),
+    ]
+
+    status, body = _send("PUT", f"{base_url}/api/dashboards", {"id": second, "name": "Renamed"})
+    assert status == 200 and body["dashboard"] == {"id": second, "name": "Renamed"}
+    assert [d["name"] for d in _dashboards(base_url)] == ["Library health", "Renamed"]
+
+    panel: dict[str, object] = {"title": "T", "sql": "SELECT 1", "chart": "line", "value": "rows"}
+    panel |= {"width": 1, "height": "short"}
+    _, saved = _send("PUT", f"{base_url}/api/panels", {"dashboard_id": second, "panel": panel})
+    pid = saved["panel"]["id"]  # type: ignore[index]
+    history = store.parent / "panel-history.json"
+    history.write_text(
+        json.dumps(
+            {
+                "series": {
+                    f"{pid}:aaaaaaaaaaaa": [{"day": "2026-10-20", "value": 1}],
+                    f"{pid}:bbbbbbbbbbbb": [{"day": "2026-10-21", "value": 1}],
+                    "damaged-files:cccccccccccc": [{"day": "2026-10-20", "value": 2}],
+                }
+            }
+        )
+    )
+
+    status, body = _send("DELETE", f"{base_url}/api/dashboards/{second}")
+    assert status == 200
+    assert body == {"deleted": second, "panels": 1, "series_dropped": 2}
+    assert [d["id"] for d in _dashboards(base_url)] == ["library-health"]
+    assert list(json.loads(history.read_text())["series"]) == ["damaged-files:cccccccccccc"]
+
+
+def test_the_last_dashboard_cannot_be_deleted_and_bad_dashboard_writes_are_named(
+    base_url: str, store: Path
+) -> None:
+    _dashboards(base_url)
+    before = (store.parent / "explore-panels.json").read_text()
+
+    status, body = _send("DELETE", f"{base_url}/api/dashboards/library-health")
+    assert status == 400 and "last dashboard" in str(body["error"])
+    assert (store.parent / "explore-panels.json").read_text() == before
+
+    assert _send("DELETE", f"{base_url}/api/dashboards/ghost")[0] == 404
+    assert _send("PUT", f"{base_url}/api/dashboards", {"id": "ghost", "name": "X"})[0] == 404
+    assert _send("PUT", f"{base_url}/api/dashboards", {"name": "   "})[0] == 400
+    assert _send("PUT", f"{base_url}/api/dashboards", {"name": "x" * 81})[0] == 400
+    assert _send("PUT", f"{base_url}/api/dashboards", {"id": 3, "name": "X"})[0] == 400
+    assert (store.parent / "explore-panels.json").read_text() == before
+
+
 def test_the_library_health_group_is_gone_from_the_recipes(base_url: str) -> None:
     _, body = _send("GET", f"{base_url}/api/recipes")
 
@@ -1788,7 +1853,7 @@ def test_the_dashboard_draws_the_four_seeded_panels_and_edit_opens_the_editor(
         "Decode progress",
         "Tracks per language",
     ]
-    assert page.inner_text("#qtitle h2") == "Library health"
+    assert page.locator("#dashpick option:checked").inner_text() == "Library health"
     assert page.inner_text("#qtitle .sub") == "4 panels \u00b7 recorded nightly by the sweep"
     assert page.is_hidden("#sql")
 
