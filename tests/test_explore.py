@@ -2317,7 +2317,7 @@ def _related_note(page: Page, df: int, co: list[list[object]]) -> str | None:
         """([df, co]) => {
           showTag("probe");
           Object.assign(cotags, { tag: "probe", kind: state.kind, token: cotags.token + 1,
-            data: { tag: "probe", df, titles: 1000, co } });
+            data: { tag: "probe", df, titles: 1000, co, stamp: state.data && state.data.stamp } });
           paintCotags();
           const n = document.querySelector("#cobox .cothin");
           return n ? n.textContent : null;
