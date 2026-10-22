@@ -13,7 +13,8 @@ import pytest
 from tmdb_fixtures import load
 
 from plexdb.enrich_tmdb_language import NAMESPACE, SOURCE, enrich_tmdb_language, wipe
-from plexdb.explore import RECIPES, run_query
+from plexdb.explore import run_query
+from plexdb.panels import DEFAULT_DASHBOARDS
 from plexdb.store import init, open_store
 from plexdb.tmdb_client import LiveTMDbClient
 
@@ -61,6 +62,10 @@ def conn(tmp_path: Path) -> Iterator[sqlite3.Connection]:
         _item(connection, "m:no-id", "movie", "No Id")
         connection.commit()
         yield connection
+
+
+def _health_panel(title: str) -> dict[str, Any]:
+    return next(p for d in DEFAULT_DASHBOARDS for p in d["panels"] if p["title"] == title)
 
 
 def _languages(conn: sqlite3.Connection) -> dict[str, str]:
@@ -164,8 +169,7 @@ def test_the_recipe_returns_english_originals_with_no_english_subtitle(
     _part(conn, 6, "e:2", "eng")
     _part(conn, 7, "e:j")
     conn.commit()
-    recipe = next(r for r in RECIPES if r["name"] == "English original, no English subtitle")
-    assert recipe["group"] == "Library health"
+    recipe = _health_panel("English original, no English subtitle")
 
     store = Path(conn.execute("PRAGMA database_list").fetchone()["file"])
     result: Any = run_query(store, recipe["sql"])

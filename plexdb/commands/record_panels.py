@@ -19,12 +19,7 @@ def _cmd_record_panels(_args: argparse.Namespace) -> int:
     config = Config.from_env()
     path = panels_path(config)
     stats = record_panels(config.store_path, PanelsFile(path), PanelHistory(history_path(config)))
-    if not stats.file_found:
-        print(f"panels: no file at {path}")
-    else:
-        print(
-            f"panels: {stats.recorded} recorded, {stats.failed} failed, in {history_path(config)}"
-        )
+    print(f"panels: {stats.recorded} recorded, {stats.failed} failed, in {history_path(config)}")
     return 0
 
 

@@ -8,13 +8,14 @@ import sqlite3
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from plexdb.errors import MediaTimeout
-from plexdb.explore import RECIPES
 from plexdb.frame_harvest import FfmpegMedia
 from plexdb.media_check import check_files
+from plexdb.panels import DEFAULT_DASHBOARDS
 from plexdb.store import init, open_store
 
 pytestmark = pytest.mark.skipif(
@@ -190,11 +191,14 @@ def test_the_damaged_files_recipe_lists_the_bad_file_and_not_the_good_one(
     _add_part(conn, 2, clips["truncated"], DURATION_MS)
     _run(conn)
 
-    recipe = next(r for r in RECIPES if r["name"] == "Damaged or rule-breaking files")
-    assert recipe["group"] == "Library health"
+    recipe = _health_panel("Damaged or rule-breaking files")
     rows = conn.execute(recipe["sql"]).fetchall()
 
     assert [str(clips["truncated"]) in " ".join(map(str, row)) for row in rows] == [True]
+
+
+def _health_panel(title: str) -> dict[str, Any]:
+    return next(p for d in DEFAULT_DASHBOARDS for p in d["panels"] if p["title"] == title)
 
 
 def _decode_rows(conn: sqlite3.Connection) -> dict[int, tuple[int, str | None, str]]:
@@ -265,8 +269,7 @@ def test_decode_progress_recipe_counts_decoded_parts_and_the_oldest_date(
     )
     conn.commit()
 
-    recipe = next(r for r in RECIPES if r["name"] == "Decode progress")
-    assert recipe["group"] == "Library health"
+    recipe = _health_panel("Decode progress")
     row = conn.execute(recipe["sql"]).fetchone()
     assert tuple(row) == (2, 3, "2026-10-01T00:00:00+00:00")
 

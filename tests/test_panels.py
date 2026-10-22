@@ -130,13 +130,50 @@ def test_a_failing_panel_records_an_error_and_the_others_still_record(
     assert _series_of(history, "good") == [[{"day": "2026-10-01", "value": 3}]]
 
 
-def test_a_missing_panels_file_records_nothing(store: Path, tmp_path: Path) -> None:
+def test_a_missing_panels_file_is_seeded_with_the_four_library_health_panels(
+    tmp_path: Path,
+) -> None:
+    panels = PanelsFile(tmp_path / "explore-panels.json")
+
+    dashboards = panels.read_or_seed()
+
+    assert [d.name for d in dashboards] == ["Library health"]
+    assert [(p.title, p.chart, p.width) for p in dashboards[0].panels] == [
+        ("Damaged or rule-breaking files", "line", 2),
+        ("English original, no English subtitle", "line", 2),
+        ("Decode progress", "gauge", 1),
+        ("Tracks per language", "bar", 3),
+    ]
+    assert panels.read() == dashboards
+
+
+def test_a_panels_file_with_no_panels_is_never_reseeded(tmp_path: Path) -> None:
+    path = tmp_path / "explore-panels.json"
+    path.write_text(json.dumps({"dashboards": [{"id": "d", "name": "D", "panels": []}]}))
+
+    dashboards = PanelsFile(path).read_or_seed()
+
+    assert [(d.id, d.panels) for d in dashboards] == [("d", ())]
+
+    path.write_text(json.dumps({"dashboards": []}))
+    assert PanelsFile(path).read_or_seed() == []
+
+
+def test_the_sweep_seeds_a_missing_panels_file_and_records_its_panels(
+    store: Path, tmp_path: Path
+) -> None:
     history = PanelHistory(tmp_path / "panel-history.json")
 
-    stats = record_panels(store, PanelsFile(tmp_path / "explore-panels.json"), history)
+    stats = record_panels(
+        store,
+        PanelsFile(tmp_path / "explore-panels.json"),
+        history,
+        today=lambda: DAY1,
+        log=lambda _line: None,
+    )
 
-    assert not stats.file_found
-    assert not history.path.exists()
+    assert (stats.recorded, stats.failed) == (4, 0)
+    assert len(history.read()) == 4
 
 
 def test_a_malformed_panels_file_is_refused_whole(tmp_path: Path) -> None:

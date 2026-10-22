@@ -1390,7 +1390,8 @@ appended twice. A record whose listing now names no file loses its parts without
 record commits on its own, so an interrupted run keeps what it fetched. Neither table is read by
 `plexdb-reader`; `READER_SHAPE` stays.
 
-Plex DB-EX's Query tab carries the recipe "Tracks per language" in a "Library health" group.
+Plex DB-EX's Query tab draws "Tracks per language" as a bar panel on the seeded Library health
+dashboard (see `explore-panels.json` below).
 
 ## Version 24 — the verdict of checking each file
 
@@ -1431,10 +1432,10 @@ changed record's parts whole, so a part that is new, or that Plex re-read becaus
 judge (its file is not on the media mount, or ffprobe is missing or ran past its time limit) gets no
 row, so the next run tries it again. Neither `plexdb-reader` nor `READER_SHAPE` reads the table.
 
-Plex DB-EX's Query tab carries the recipe "Damaged or rule-breaking files" in the "Library health"
-group: every check with `ok = 0`, newest first, with the title, the file and the error. The recipe
-"Decode progress" in the same group is one row: `parts_decoded`, `parts_total` and `oldest_decode`
-(the oldest `checked_at` of a `decode` row).
+Plex DB-EX's seeded Library health dashboard draws "Damaged or rule-breaking files" as a line panel:
+every check with `ok = 0`, with the title, the file and the error, newest first. "Decode progress"
+is a gauge panel over one row: `parts_decoded`, `parts_total` and `oldest_decode` (the oldest
+`checked_at` of a `decode` row).
 
 ### `explore-panels.json` and `panel-history.json`
 
@@ -1444,9 +1445,26 @@ else beside the snapshot, else beside the store).
 
 `explore-panels.json` is `{"dashboards": [{"id", "name", "panels": [Panel]}]}`. A Panel has text
 `id`, `title`, `sql` and `chart`; `value`, either `rows` or `column:<name>`; `width` 1 to 4; and
-`height`, `short` or `tall`. It may also carry `total`, `label`, `number`, `x` and `y`, which the
+`height`, `short` or `tall`. It may also carry `total`, `label`, `number`, `unit`, `x` and `y`, which the
 dashboard reads and the sweep ignores. A file that is not valid JSON or breaks this shape is
-refused whole. A missing file means no dashboards.
+refused whole. A missing file is created with the Library health dashboard, the first time the
+explorer's `/api/dashboards` or the sweep's `record-panels` reads it: four panels, in this order.
+
+| Panel | `chart` | `value` | Other settings | `width` |
+|---|---|---|---|---|
+| Damaged or rule-breaking files | `line` | `rows` | `unit` `files` | 2 |
+| English original, no English subtitle | `line` | `rows` | `unit` `titles` | 2 |
+| Decode progress | `gauge` | `column:parts_decoded` | `total` `parts_total`, `unit` `parts decoded in full` | 1 |
+| Tracks per language | `bar` | `rows` | `label` `lang`, `number` `tracks`, `unit` `audio and subtitle tracks` | 3 |
+
+A file that exists is never seeded again, even with a dashboard that holds no panels or a
+`dashboards` list that is empty.
+
+`GET /api/dashboards` returns `{"dashboards": [{"id", "name", "panels": [...]}]}`. Each panel
+carries its stored fields plus `live`, `{columns, rows}` from running its SQL through the Query
+tab's guarded `run_query` now or `{error}` when that fails, and `series`, the panel's entries in
+`panel-history.json` under `series_key`, oldest night first. A dashboard's `panels` list is in
+stored order.
 
 `panel-history.json` is `{"series": {"<panel id>:<hash12>": [{"day", "value"} | {"day", "error"}]}}`,
 oldest day first, one entry per UTC `day` (`YYYY-MM-DD`). `<hash12>` is the first 12 hex digits of

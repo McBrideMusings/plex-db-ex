@@ -28,6 +28,7 @@ from .errors import PanelsFileError
 from .explore import QueryError, TooManyQueries, run_query
 
 __all__ = [
+    "DEFAULT_DASHBOARDS",
     "HISTORY_FILE",
     "PANELS_FILE",
     "Dashboard",
@@ -35,6 +36,7 @@ __all__ = [
     "PanelHistory",
     "PanelsFile",
     "RecordStats",
+    "dashboards_json",
     "history_path",
     "panels_path",
     "record_panels",
@@ -51,6 +53,92 @@ HEIGHTS = ("short", "tall")
 WIDTHS = range(1, 5)
 #: How many hex digits of the SQL-and-value hash a series key keeps.
 HASH_DIGITS = 12
+
+
+#: What `explore-panels.json` holds when the file is first created: the Library health
+#: dashboard. An existing file, even one with no dashboards, is never seeded again.
+DEFAULT_DASHBOARDS: tuple[dict[str, Any], ...] = (
+    {
+        "id": "library-health",
+        "name": "Library health",
+        "panels": [
+            {
+                "id": "damaged-files",
+                "title": "Damaged or rule-breaking files",
+                "sql": (
+                    "SELECT i.title, p.file, c.kind, c.error, c.checked_at\n"
+                    "FROM media_check c\n"
+                    "JOIN media_part p ON p.part_id = c.part_id\n"
+                    "JOIN items i ON i.item_id = p.item_id\n"
+                    "WHERE c.ok = 0\n"
+                    "ORDER BY c.checked_at DESC, i.title, p.file"
+                ),
+                "chart": "line",
+                "value": "rows",
+                "unit": "files",
+                "width": 2,
+                "height": "short",
+            },
+            {
+                "id": "english-no-english-subtitle",
+                "title": "English original, no English subtitle",
+                "sql": (
+                    "SELECT i.item_id, i.type, i.title, l.value AS original_language\n"
+                    "FROM items i\n"
+                    "JOIN enrichment l ON l.item_id = COALESCE(i.show_item_id, i.item_id)\n"
+                    "                 AND l.namespace = 'tmdb' AND l.key = 'original_language'\n"
+                    "WHERE i.type IN ('movie', 'episode')\n"
+                    "  AND l.value = 'en'\n"
+                    "  AND EXISTS (SELECT 1 FROM media_part p WHERE p.item_id = i.item_id)\n"
+                    "  AND NOT EXISTS (\n"
+                    "    SELECT 1 FROM media_part p\n"
+                    "    JOIN media_stream s ON s.part_id = p.part_id\n"
+                    "    WHERE p.item_id = i.item_id AND s.kind = 'subtitle' AND s.lang = 'eng')\n"
+                    "ORDER BY i.title, i.item_id"
+                ),
+                "chart": "line",
+                "value": "rows",
+                "unit": "titles",
+                "width": 2,
+                "height": "short",
+            },
+            {
+                "id": "decode-progress",
+                "title": "Decode progress",
+                "sql": (
+                    "SELECT COUNT(c.part_id) AS parts_decoded, COUNT(*) AS parts_total,\n"
+                    "       MIN(c.checked_at) AS oldest_decode\n"
+                    "FROM media_part p\n"
+                    "LEFT JOIN media_check c ON c.part_id = p.part_id AND c.kind = 'decode'"
+                ),
+                "chart": "gauge",
+                "value": "column:parts_decoded",
+                "total": "parts_total",
+                "unit": "parts decoded in full",
+                "width": 1,
+                "height": "short",
+            },
+            {
+                "id": "tracks-per-language",
+                "title": "Tracks per language",
+                "sql": (
+                    "SELECT COALESCE(s.lang, '(untagged)') AS lang, COUNT(*) AS tracks\n"
+                    "FROM media_stream s\n"
+                    "WHERE s.kind IN ('audio', 'subtitle')\n"
+                    "GROUP BY lang\n"
+                    "ORDER BY tracks DESC"
+                ),
+                "chart": "bar",
+                "value": "rows",
+                "label": "lang",
+                "number": "tracks",
+                "unit": "audio and subtitle tracks",
+                "width": 3,
+                "height": "tall",
+            },
+        ],
+    },
+)
 
 
 def panels_path(config: Config) -> Path:
@@ -103,14 +191,37 @@ def _text(where: str, entry: dict[str, Any], field: str) -> str:
 class PanelsFile:
     """Reads `explore-panels.json`: `{dashboards: [{id, name, panels: [Panel]}]}`."""
 
-    OPTIONAL = ("total", "label", "number", "x", "y")
+    OPTIONAL = ("total", "label", "number", "unit", "x", "y")
 
     def __init__(self, path: Path) -> None:
         self._path = path
+        self._lock = threading.Lock()
 
     @property
     def path(self) -> Path:
         return self._path
+
+    def read_or_seed(self) -> list[Dashboard]:
+        """The dashboards; a missing file is first written with `DEFAULT_DASHBOARDS`. A file
+        that exists is read as it is, so one with no dashboards stays empty."""
+        with self._lock:
+            dashboards = self.read()
+            if dashboards is not None:
+                return dashboards
+            self._write({"dashboards": list(DEFAULT_DASHBOARDS)})
+            dashboards = self.read()
+        assert dashboards is not None
+        return dashboards
+
+    def _write(self, raw: dict[str, Any]) -> None:
+        tmp = self._path.with_name(self._path.name + ".tmp")
+        try:
+            tmp.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
+            os.replace(tmp, self._path)
+        except OSError as err:
+            raise PanelsFileError(f"cannot write {self._path}: {err}") from None
+        finally:
+            tmp.unlink(missing_ok=True)
 
     def read(self) -> list[Dashboard] | None:
         """The dashboards, or None when there is no file. A file that is not valid JSON or
@@ -230,7 +341,6 @@ class PanelHistory:
 
 @dataclass
 class RecordStats:
-    file_found: bool = False
     recorded: int = 0
     failed: int = 0
 
@@ -269,13 +379,10 @@ def record_panels(
     today: Callable[[], date] = lambda: datetime.now(UTC).date(),
     log: Callable[[str], None] = print,
 ) -> RecordStats:
-    """Record every panel's value for today's UTC date. A panel whose query fails records
-    `{day, error}` and the rest still run."""
+    """Record every panel's value for today's UTC date, seeding the panels file first when it is
+    missing. A panel whose query fails records `{day, error}` and the rest still run."""
     stats = RecordStats()
-    dashboards = panels_file.read()
-    if dashboards is None:
-        return stats
-    stats.file_found = True
+    dashboards = panels_file.read_or_seed()
     day = today().isoformat()
     results: dict[str, Entry] = {}
     for dashboard in dashboards:
@@ -297,3 +404,35 @@ def record_panels(
     if results:
         history.record(results)
     return stats
+
+
+def dashboards_json(
+    store_path: Path, dashboards: list[Dashboard], history: dict[str, list[Entry]]
+) -> list[dict[str, Any]]:
+    """The `/api/dashboards` body: each panel with the rows its SQL returns now (`live`) and
+    its recorded `series`, oldest night first."""
+    out: list[dict[str, Any]] = []
+    for dashboard in dashboards:
+        panels = []
+        for panel in dashboard.panels:
+            try:
+                result = run_query(store_path, panel.sql)
+                live: dict[str, Any] = {"columns": result["columns"], "rows": result["rows"]}
+            except (QueryError, TooManyQueries) as err:
+                live = {"error": str(err)}
+            panels.append(
+                {
+                    "id": panel.id,
+                    "title": panel.title,
+                    "sql": panel.sql,
+                    "chart": panel.chart,
+                    "value": panel.value,
+                    "width": panel.width,
+                    "height": panel.height,
+                    **panel.options,
+                    "live": live,
+                    "series": history.get(series_key(panel), []),
+                }
+            )
+        out.append({"id": dashboard.id, "name": dashboard.name, "panels": panels})
+    return out

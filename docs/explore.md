@@ -242,3 +242,24 @@ for (let i = 0; i < Math.round(period * fps); i++) {
   await page.screenshot({ path: `frame-${String(i).padStart(4, "0")}.png` });
 }
 ```
+
+## Dashboard
+
+The Query tab opens on **Dashboard**; the **Editor** side holds the SQL box, saved queries and
+recipes. The switch is at the top of the tab, and **Add panel** opens the Editor with an empty box.
+
+The Dashboard side draws each dashboard of `explore-panels.json` ([`schema.md`](./schema.md))
+from `/api/dashboards` as a four-column grid in stored order, a panel `width` 1 to 4 columns wide
+and `short` or `tall`; under 900px it is one column. A tile's **Edit** loads the panel's SQL into
+the Editor.
+
+- **Line** panels show a headline value (the last recorded night, else the SQL's value now), the
+  change since the previous recorded night (`−2 since Oct 20`), and the line with a y axis and
+  three dates. One recorded night shows a single point at the right edge and "first night
+  recorded". With no recorded night the tile shows the live value and "History starts with
+  tonight's sweep."
+- **Gauge** panels show `value` as a share of the `total` column of the first row.
+- **Bar** panels draw one bar per row, from the `label` and `number` columns.
+- A panel whose latest night is an error shows "The query failed tonight." with SQLite's message and
+  the last recorded value; a panel whose SQL fails now shows "The query failed." with the message.
+- A dashboard with no panels shows "This dashboard has no panels." and an **Add panel** button.

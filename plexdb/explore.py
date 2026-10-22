@@ -42,7 +42,7 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 
 from .decisions import SAVED_FILE
-from .errors import ConfigError, DecisionsFileError, StoreError
+from .errors import ConfigError, DecisionsFileError, PanelsFileError, StoreError
 from .explore_search import EncoderDown, NoFrame, SearchTab, SearchUnavailable
 from .identity import PRIORITY
 from .keywords import is_carried, keyword_spellings
@@ -1810,59 +1810,6 @@ RECIPES: tuple[dict[str, str], ...] = (
             "ORDER BY e.item_id, e.namespace, e.key, e.value"
         ),
     },
-    {
-        "group": "Library health",
-        "name": "Tracks per language",
-        "sql": (
-            "SELECT COALESCE(s.lang, '(untagged)') AS lang, s.kind,\n"
-            "       COUNT(*) AS tracks, COUNT(DISTINCT p.item_id) AS titles\n"
-            "FROM media_stream s\n"
-            "JOIN media_part p ON p.part_id = s.part_id\n"
-            "WHERE s.kind IN ('audio', 'subtitle')\n"
-            "GROUP BY lang, s.kind\n"
-            "ORDER BY s.kind, tracks DESC"
-        ),
-    },
-    {
-        "group": "Library health",
-        "name": "English original, no English subtitle",
-        "sql": (
-            "SELECT i.item_id, i.type, i.title, l.value AS original_language\n"
-            "FROM items i\n"
-            "JOIN enrichment l ON l.item_id = COALESCE(i.show_item_id, i.item_id)\n"
-            "                 AND l.namespace = 'tmdb' AND l.key = 'original_language'\n"
-            "WHERE i.type IN ('movie', 'episode')\n"
-            "  AND l.value = 'en'\n"
-            "  AND EXISTS (SELECT 1 FROM media_part p WHERE p.item_id = i.item_id)\n"
-            "  AND NOT EXISTS (\n"
-            "    SELECT 1 FROM media_part p\n"
-            "    JOIN media_stream s ON s.part_id = p.part_id\n"
-            "    WHERE p.item_id = i.item_id AND s.kind = 'subtitle' AND s.lang = 'eng')\n"
-            "ORDER BY i.title, i.item_id"
-        ),
-    },
-    {
-        "group": "Library health",
-        "name": "Damaged or rule-breaking files",
-        "sql": (
-            "SELECT i.title, p.file, c.kind, c.error, c.checked_at\n"
-            "FROM media_check c\n"
-            "JOIN media_part p ON p.part_id = c.part_id\n"
-            "JOIN items i ON i.item_id = p.item_id\n"
-            "WHERE c.ok = 0\n"
-            "ORDER BY c.checked_at DESC, i.title, p.file"
-        ),
-    },
-    {
-        "group": "Library health",
-        "name": "Decode progress",
-        "sql": (
-            "SELECT COUNT(c.part_id) AS parts_decoded, COUNT(*) AS parts_total,\n"
-            "       MIN(c.checked_at) AS oldest_decode\n"
-            "FROM media_part p\n"
-            "LEFT JOIN media_check c ON c.part_id = p.part_id AND c.kind = 'decode'"
-        ),
-    },
 )
 
 
@@ -2173,6 +2120,8 @@ def _error_reply(err: Exception, store_path: Path) -> tuple[str, HTTPStatus] | N
         return f"saved queries: {err}", HTTPStatus.INTERNAL_SERVER_ERROR
     if isinstance(err, DecisionsFileError):
         return f"decisions file: {err}", HTTPStatus.INTERNAL_SERVER_ERROR
+    if isinstance(err, PanelsFileError):
+        return f"panels file: {err}", HTTPStatus.INTERNAL_SERVER_ERROR
     if isinstance(err, OSError):
         return f"could not read the store: {err}", HTTPStatus.INTERNAL_SERVER_ERROR
     return None
@@ -2460,6 +2409,19 @@ def make_server(
                     self._json({"error": f"no list {ref}"}, HTTPStatus.NOT_FOUND)
                 else:
                     self._json(detail)
+            elif url.path == "/api/dashboards":
+                from .panels import (
+                    HISTORY_FILE,
+                    PANELS_FILE,
+                    PanelHistory,
+                    PanelsFile,
+                    dashboards_json,
+                )
+
+                dir_ = data_dir(store_path, saved_path)
+                dashboards = PanelsFile(dir_ / PANELS_FILE).read_or_seed()
+                history = PanelHistory(dir_ / HISTORY_FILE).read()
+                self._json({"dashboards": dashboards_json(store_path, dashboards, history)})
             elif url.path == "/api/recipes":
                 self._json({"recipes": list(RECIPES)})
             elif url.path == "/api/title":

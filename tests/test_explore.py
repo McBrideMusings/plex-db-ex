@@ -50,6 +50,7 @@ from plexdb.explore import (
 )
 from plexdb.merge_review import merge_map
 from plexdb.names import display_labels
+from plexdb.panels import PanelsFile, series_key
 from plexdb.store import init, open_readonly, open_store, publish
 from plexdb.tagnetwork import refresh_tag_networks
 from plexdb.titlemap import refresh_title_maps
@@ -1238,6 +1239,91 @@ def test_every_recipe_runs_against_the_schema(store: Path) -> None:
         run_query(store, recipe["sql"])
 
 
+def test_dashboards_return_each_seeded_panel_with_its_live_rows_and_its_series(
+    base_url: str, store: Path
+) -> None:
+    with open_store(store) as conn:
+        conn.execute(
+            "INSERT INTO media_part (part_id, item_id, rating_key, file, fetched_at) "
+            "VALUES (1, 'imdb:tt1', '1', '/m/1.mkv', '2026-01-01T00:00:00+00:00')"
+        )
+        conn.executemany(
+            "INSERT INTO media_stream (part_id, idx, kind, lang, forced) VALUES (1, ?, ?, ?, 0)",
+            [(0, "audio", "eng"), (1, "audio", "jpn"), (2, "subtitle", "eng")],
+        )
+        conn.commit()
+    seeded = PanelsFile(store.parent / "scratch-panels.json").read_or_seed()
+    key = series_key(next(p for p in seeded[0].panels if p.id == "tracks-per-language"))
+    (store.parent / "panel-history.json").write_text(
+        json.dumps(
+            {
+                "series": {
+                    key: [{"day": "2026-10-20", "value": 2}, {"day": "2026-10-21", "error": "x"}]
+                }
+            }
+        )
+    )
+
+    status, body = _send("GET", f"{base_url}/api/dashboards")
+
+    assert status == 200
+    dashboards = cast("list[dict[str, Any]]", body["dashboards"])
+    assert [d["name"] for d in dashboards] == ["Library health"]
+    panels = {p["id"]: p for p in dashboards[0]["panels"]}
+    assert list(panels) == [
+        "damaged-files",
+        "english-no-english-subtitle",
+        "decode-progress",
+        "tracks-per-language",
+    ]
+    assert panels["tracks-per-language"]["live"] == {
+        "columns": ["lang", "tracks"],
+        "rows": [["eng", 2], ["jpn", 1]],
+    }
+    assert panels["tracks-per-language"]["series"] == [
+        {"day": "2026-10-20", "value": 2},
+        {"day": "2026-10-21", "error": "x"},
+    ]
+    assert panels["decode-progress"]["live"]["rows"] == [[0, 1, None]]
+    assert panels["decode-progress"]["total"] == "parts_total"
+    assert panels["damaged-files"]["series"] == []
+    assert (store.parent / "explore-panels.json").exists()
+
+
+def test_a_dashboard_panel_whose_sql_fails_carries_the_error_not_rows(
+    base_url: str, store: Path
+) -> None:
+    broken = {
+        "id": "p",
+        "title": "P",
+        "sql": "SELECT nope FROM items",
+        "chart": "line",
+        "value": "rows",
+        "width": 1,
+        "height": "short",
+    }
+    (store.parent / "explore-panels.json").write_text(
+        json.dumps({"dashboards": [{"id": "d", "name": "D", "panels": [broken]}]})
+    )
+
+    _, body = _send("GET", f"{base_url}/api/dashboards")
+
+    live = body["dashboards"][0]["panels"][0]["live"]  # type: ignore[index]
+    assert "no such column" in live["error"] and "rows" not in live
+
+
+def test_an_empty_dashboards_file_stays_empty(base_url: str, store: Path) -> None:
+    (store.parent / "explore-panels.json").write_text(json.dumps({"dashboards": []}))
+
+    assert _send("GET", f"{base_url}/api/dashboards") == (200, {"dashboards": []})
+
+
+def test_the_library_health_group_is_gone_from_the_recipes(base_url: str) -> None:
+    _, body = _send("GET", f"{base_url}/api/recipes")
+
+    assert "Library health" not in {r["group"] for r in body["recipes"]}  # type: ignore[attr-defined]
+
+
 def test_saved_queries_round_trip_through_the_server(base_url: str, store: Path) -> None:
     url = f"{base_url}/api/saved"
     assert _send("GET", url) == (200, {"queries": []})
@@ -1571,6 +1657,30 @@ def _open_clip(browser: Browser, store: Path, url: str, ready: str = CLIP_READY)
 def _seek(page: Page, t: float) -> dict[str, Any]:
     page.evaluate("t => window.__clip.seek(t)", t)
     return dict(page.evaluate(CLIP_FRAME))
+
+
+def test_the_dashboard_draws_the_four_seeded_panels_and_edit_opens_the_editor(
+    browser: Browser, base_url: str
+) -> None:
+    page = browser.new_page(viewport={"width": 1280, "height": 800})
+    page.goto(base_url)
+    page.click('button[data-tab="query"]')
+    page.wait_for_selector(".tile")
+
+    assert page.locator(".tile h3").all_inner_texts() == [
+        "Damaged or rule-breaking files",
+        "English original, no English subtitle",
+        "Decode progress",
+        "Tracks per language",
+    ]
+    assert page.inner_text("#qtitle h2") == "Library health"
+    assert page.inner_text("#qtitle .sub") == "4 panels \u00b7 recorded nightly by the sweep"
+    assert page.is_hidden("#sql")
+
+    page.locator(".tile button", has_text="Edit").nth(2).click()
+
+    assert page.is_visible("#sql") and page.is_hidden("#dashwrap")
+    assert "parts_decoded" in page.input_value("#sql")
 
 
 def test_clip_seek_draws_the_same_frame_at_t_and_t_plus_period(

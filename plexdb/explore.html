@@ -279,6 +279,53 @@
   }
   #querywrap { display: grid; grid-template-columns: minmax(0, 1fr) 320px; align-items: start; }
   @media (max-width: 900px) { #querywrap { grid-template-columns: 1fr; } #qside { border-left: 0 !important; border-top: 1px solid var(--line); } }
+  #qtop { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; padding: 12px 20px 0; }
+  #qtop .qspacer { flex: 1; }
+  #qtitle { display: flex; gap: 4px 12px; align-items: baseline; flex-wrap: wrap; }
+  #qtitle h2 { font-size: 15px; margin: 0; }
+  #qtitle .sub { color: var(--muted); }
+  #querywrap.dashmode #qmain, #querywrap.dashmode #qside { display: none; }
+  #querywrap:not(.dashmode) #dashwrap { display: none; }
+  #dashwrap { grid-column: 1 / -1; padding: 6px 20px 24px; min-width: 0; }
+  .dashhead { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; margin: 8px 0; }
+  .dashhead h2 { font-size: 15px; margin: 0; }
+  .dashhead .sub { color: var(--muted); }
+  .dashgrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+  @media (max-width: 900px) { .dashgrid { grid-template-columns: 1fr; } .dashgrid > .tile { grid-column: auto !important; } }
+  .tile { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; min-width: 0;
+          display: flex; flex-direction: column; gap: 6px; min-height: 190px; }
+  .tile.tall { min-height: 250px; }
+  .tilehead { display: flex; gap: 8px; align-items: baseline; }
+  .tilehead h3 { font-size: 13px; margin: 0; flex: none; max-width: 70%; }
+  .tilehead .since { color: var(--muted); font-size: 11px; flex: 1; min-width: 0; }
+  .tilehead button.plain { padding: 1px 8px; font-size: 11px; }
+  .tilehead .grow { flex: 1; }
+  .headline { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+  .headline .big { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .headline .delta { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .tile svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .tile svg.gauge { max-width: 180px; margin: 0 auto; }
+  .tile svg text { fill: var(--muted); font-size: 9px; font-variant-numeric: tabular-nums; }
+  .tile svg .grid { stroke: var(--line); stroke-width: 1; }
+  .tile svg .ln { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
+  .tile svg .dot { fill: var(--accent); }
+  .tile svg .track { fill: none; stroke: var(--chip); stroke-width: 14; }
+  .tile svg .fill { fill: none; stroke: var(--accent); stroke-width: 14; }
+  .tile svg text.pct { fill: var(--ink); font-size: 18px; font-weight: 700; text-anchor: middle; }
+  .gaugecap { text-align: center; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .gaugecap b { color: var(--ink); }
+  .bars { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 5px 8px; align-items: center; }
+  .bars .bl { color: var(--ink); }
+  .bars .bt { background: var(--chip); border-radius: 2px; height: 8px; }
+  .bars .bf { background: var(--accent); border-radius: 2px; height: 8px; }
+  .bars .bv { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+  .tileerr { margin: auto 0; background: var(--noise-bg); color: var(--noise); border-radius: 5px; padding: 9px 11px; overflow-wrap: anywhere; }
+  .tileerr p { margin: 0; }
+  .tileerr .last { color: var(--muted); margin-top: 4px; font-size: 12px; }
+  .tilenote { color: var(--muted); }
+  .dashempty { border: 1px dashed var(--line); border-radius: 6px; padding: 24px 28px; max-width: 320px; font-size: 13px; display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+  .dashempty p { margin: 0; color: var(--muted); }
+  .dashempty h3 { margin: 0; font-size: 13px; }
   #qmain { padding: 14px 20px 24px; min-width: 0; }
   textarea#sql { display: block; width: 100%; height: 11em; resize: vertical; font: 13px/1.45 ui-monospace, Menlo, monospace;
                  color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
@@ -627,7 +674,17 @@
   </section>
   <section id="linspect"></section>
 </div>
-<div id="querywrap" hidden>
+<div id="querywrap" class="dashmode" hidden>
+  <div id="qtop">
+    <div class="seg" role="group" aria-label="Query view">
+      <button type="button" data-qmode="dashboard" aria-pressed="true">Dashboard</button>
+      <button type="button" data-qmode="editor" aria-pressed="false">Editor</button>
+    </div>
+    <span id="qtitle"></span>
+    <span class="qspacer"></span>
+    <button type="button" class="primary" id="qaddpanel">Add panel</button>
+  </div>
+  <div id="dashwrap"></div>
   <div id="qmain">
     <textarea id="sql" spellcheck="false" aria-label="SQL"
               placeholder="SELECT … — one read-only statement. Cmd/Ctrl+Enter runs it."></textarea>
@@ -3770,9 +3827,170 @@ async function saveQuery() {
   } catch (err) { qStatus(err.message, true); }
 }
 
+// ---- Dashboard side of the Query tab ----
+// `/api/dashboards` sends each panel with the rows its SQL returns now (`live`) and the nightly
+// values the sweep recorded (`series`); this draws them.
+const SVGNS = "http://www.w3.org/2000/svg";
+const svg = (tag, attrs = {}, ...kids) => {
+  const node = document.createElementNS(SVGNS, tag);
+  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, String(v));
+  for (const kid of kids) node.append(kid);
+  return node;
+};
+const dayMs = day => Date.parse(day + "T00:00:00Z");
+const dayLabel = day => new Date(dayMs(day)).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+const signed = n => (n > 0 ? "+" : n < 0 ? "\u2212" : "") + fmt(Math.abs(n));
+
+// A panel's value now: the row count, or one column of the first row.
+function liveValue(panel) {
+  const { columns, rows } = panel.live;
+  if (panel.value === "rows") return rows.length;
+  const at = columns.indexOf(panel.value.slice("column:".length));
+  const cell = rows.length && at >= 0 ? rows[0][at] : null;
+  return typeof cell === "number" ? cell : null;
+}
+
+const NICE = [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10];
+// Three y ticks that bracket the values: from zero when the values are small or span a lot,
+// else a tight band on a round step.
+function axisTicks(values) {
+  let lo = Math.min(...values), hi = Math.max(...values);
+  if (lo === hi) { const pad = hi <= 20 ? 0 : Math.max(1, Math.round(hi * 0.005)); return hi <= 20 ? [0, hi / 2, hi] : [hi - pad, hi, hi + pad]; }
+  if (lo >= 0 && lo <= hi / 2) lo = 0;
+  const raw = (hi - lo) / 2, mag = 10 ** Math.floor(Math.log10(raw));
+  let step = NICE.map(m => m * mag).find(x => x >= raw);
+  const base = Math.floor(lo / step) * step;
+  while (base + 2 * step < hi) step *= 1.25;
+  return [base, base + step, base + 2 * step];
+}
+
+function lineChart(points) {
+  const W = 420, H = 76, L = 38, R = 8, T = 8, B = 20;
+  const ticks = axisTicks(points.map(p => p.value));
+  const [lo, , hi] = ticks;
+  const t0 = dayMs(points[0].day), t1 = dayMs(points[points.length - 1].day);
+  const x = p => points.length === 1 ? W - R : L + (dayMs(p.day) - t0) / (t1 - t0) * (W - R - L);
+  const y = v => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
+  const root = svg("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Value by night" });
+  for (const t of ticks) {
+    root.append(svg("line", { class: "grid", x1: L, x2: W - R, y1: y(t), y2: y(t) }));
+    root.append(svg("text", { x: L - 5, y: y(t) + 3, "text-anchor": "end" }, fmt(Math.round(t * 10) / 10)));
+  }
+  const mid = points[Math.floor((points.length - 1) / 2)];
+  const days = points.length === 1 ? [[points[0].day, "end", W - R]]
+    : [[points[0].day, "start", L], ...(points.length > 2 ? [[mid.day, "middle", x(mid)]] : []), [points[points.length - 1].day, "end", W - R]];
+  for (const [day, anchor, at] of days) root.append(svg("text", { x: at, y: H - 5, "text-anchor": anchor }, dayLabel(day)));
+  if (points.length > 1) root.append(svg("polyline", { class: "ln", points: points.map(p => `${x(p)},${y(p.value)}`).join(" ") }));
+  const last = points[points.length - 1];
+  root.append(svg("circle", { class: "dot", cx: x(last), cy: y(last.value), r: 3.5 }));
+  return root;
+}
+
+function gaugeChart(value, total, unit) {
+  const share = total > 0 ? Math.min(1, value / total) : 0;
+  const cx = 70, cy = 70, r = 56;
+  const arc = f => { const a = Math.PI * (1 - f); return `M ${cx - r} ${cy} A ${r} ${r} 0 ${f > 0.5 ? 1 : 0} 1 ${cx + r * Math.cos(a)} ${cy - r * Math.sin(a)}`; };
+  const root = svg("svg", { class: "gauge", viewBox: "0 0 140 84", role: "img", "aria-label": `${Math.round(share * 100)}%` });
+  root.append(svg("path", { class: "track", d: `M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${cx + r} ${cy}` }));
+  if (share > 0) root.append(svg("path", { class: "fill", d: arc(share) }));
+  root.append(svg("text", { class: "pct", x: cx, y: cy - 8 }, `${Math.round(share * 100)}%`));
+  const cap = el("div", { className: "gaugecap" }, el("b", {}, fmt(value)), ` of ${fmt(total)} ${unit}`);
+  return el("div", {}, root, cap);
+}
+
+function barChart(panel) {
+  const { columns, rows } = panel.live;
+  const label = columns.indexOf(panel.label), num = columns.indexOf(panel.number);
+  if (label < 0 || num < 0) return el("div", { className: "tilenote" }, `The query has no ${label < 0 ? "column " + panel.label : "column " + panel.number}.`);
+  const top = Math.max(1, ...rows.map(r => Number(r[num]) || 0));
+  const box = el("div", { className: "bars" });
+  for (const r of rows) {
+    const n = Number(r[num]) || 0;
+    const fill = el("div", { className: "bf" });
+    fill.style.width = `${n / top * 100}%`;
+    box.append(el("span", { className: "bl" }, String(r[label])), el("div", { className: "bt" }, fill), el("span", { className: "bv" }, fmt(n)));
+  }
+  return box;
+}
+
+function tileError(heading, message, last) {
+  const box = el("div", { className: "tileerr", role: "alert" }, el("p", {}, el("strong", {}, heading + " "), message));
+  if (last) box.append(el("p", { className: "last" }, `Last recorded value: ${fmt(last.value)} on ${dayLabel(last.day)}. Edit the panel to fix its SQL.`));
+  return box;
+}
+
+function paintTile(panel) {
+  const values = panel.series.filter(e => "value" in e);
+  const failed = panel.live.error || (panel.series.length && "error" in panel.series[panel.series.length - 1]);
+  const since = values.length && !failed ? el("span", { className: "since" }, `history since ${dayLabel(values[0].day)}`) : el("span", { className: "grow" });
+  const edit = el("button", { type: "button", className: "plain" }, "Edit");
+  edit.addEventListener("click", () => { loadIntoEditor(panel.sql, "", ""); setQueryMode("editor"); });
+  const tile = el("section", { className: "tile " + panel.height }, el("div", { className: "tilehead" }, el("h3", {}, panel.title), since, edit));
+  tile.style.gridColumn = `span ${panel.width}`;
+  const latest = panel.series[panel.series.length - 1];
+  if (panel.live.error) { tile.append(tileError("The query failed.", panel.live.error, values[values.length - 1])); return tile; }
+  if (panel.chart === "line") {
+    if (latest && "error" in latest) { tile.append(tileError("The query failed tonight.", latest.error, values[values.length - 1])); return tile; }
+    const now = values.length ? values[values.length - 1].value : liveValue(panel);
+    const head = el("div", { className: "headline" }, el("span", { className: "big" }, now === null ? "\u2014" : fmt(now)));
+    if (panel.unit) head.append(el("span", { className: "delta" }, panel.unit));
+    if (values.length > 1) {
+      const prev = values[values.length - 2];
+      head.append(el("span", { className: "delta" }, `${signed(now - prev.value)} since ${dayLabel(prev.day)}`));
+    } else if (values.length === 1) head.append(el("span", { className: "delta" }, "first night recorded"));
+    tile.append(head);
+    if (values.length) tile.append(lineChart(values));
+    else tile.append(el("div", { className: "tilenote" }, "History starts with tonight\u2019s sweep."));
+  } else if (panel.chart === "gauge") {
+    const value = liveValue(panel);
+    const at = panel.live.columns.indexOf(panel.total);
+    const total = at >= 0 && panel.live.rows.length ? panel.live.rows[0][at] : null;
+    if (value === null || typeof total !== "number") tile.append(el("div", { className: "tilenote" }, "The query does not return the value and total columns."));
+    else tile.append(gaugeChart(value, total, panel.unit || panel.value.slice("column:".length).replace(/_/g, " ")));
+  } else if (panel.chart === "bar") {
+    tile.append(barChart(panel));
+    if (panel.unit) tile.append(el("div", { className: "tilenote" }, panel.unit));
+  }
+  else tile.append(el("div", { className: "tilenote" }, `No ${panel.chart} chart yet.`));
+  return tile;
+}
+
+function paintDashboards(dashboards) {
+  const box = qEl("dashwrap");
+  qEl("qtitle").replaceChildren();
+  if (!dashboards.length) { box.replaceChildren(el("p", { className: "empty" }, "No dashboards.")); return; }
+  box.replaceChildren(...dashboards.flatMap((d, i) => {
+    const head = el("div", { className: "dashhead" }, el("h2", {}, d.name));
+    if (d.panels.length) head.append(el("span", { className: "sub" }, `${d.panels.length} panels \u00b7 recorded nightly by the sweep`));
+    if (i === 0) { qEl("qtitle").replaceChildren(...head.childNodes); head.remove(); }
+    const lead = i === 0 ? [] : [head];
+    if (!d.panels.length) {
+      const add = el("button", { type: "button", className: "primary" }, "Add panel");
+      add.addEventListener("click", addPanel);
+      return [...lead, el("div", { className: "dashempty" }, el("h3", {}, "This dashboard has no panels."),
+        el("p", {}, "A panel is a saved query with a chart. The sweep records its value each night, so a line chart fills in from the first night after you add it."), add)];
+    }
+    return [...lead, el("div", { className: "dashgrid" }, ...d.panels.map(paintTile))];
+  }));
+}
+
+function setQueryMode(mode) {
+  qEl("querywrap").classList.toggle("dashmode", mode === "dashboard");
+  document.querySelectorAll("button[data-qmode]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.qmode === mode)));
+}
+function addPanel() { loadIntoEditor("", "", ""); setQueryMode("editor"); }
+
+async function initDashboards() {
+  try { paintDashboards((await getJSON("/api/dashboards")).dashboards); }
+  catch (err) { qEl("dashwrap").replaceChildren(el("div", { className: "tileerr", role: "alert" }, `Could not load the dashboards: ${err.message}`)); }
+}
+document.querySelectorAll("button[data-qmode]").forEach(b => b.addEventListener("click", () => setQueryMode(b.dataset.qmode)));
+qEl("qaddpanel").addEventListener("click", addPanel);
+
 async function initQuery() {
   if (q.ready) return;
   q.ready = true;
+  initDashboards();
   try {
     paintSaved((await getJSON("/api/saved")).queries);
     const box = qEl("qrecipes");
