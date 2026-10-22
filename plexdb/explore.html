@@ -325,8 +325,9 @@
   .bars .bv { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
   .tile svg.spark { height: 34px; }
   .tile svg .spark { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
-  .pie { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
-  .pie svg { width: 110px; flex: none; }
+  .pie { display: flex; gap: 16px; align-items: center; justify-content: center; flex: 1; min-width: 0; }
+  .pie svg { width: 130px; max-width: 45%; flex: none; }
+  .pielegend { min-width: 0; }
   .pie .s0 { fill: var(--accent); } .pie .s1 { fill: var(--centre); } .pie .s2 { fill: var(--noise); }
   .pie .s3 { fill: var(--green); } .pie .s4 { fill: var(--purple); } .pie .other { fill: var(--edge); }
   .pie svg path, .pie svg circle { stroke: var(--panel); stroke-width: 0.02; }
