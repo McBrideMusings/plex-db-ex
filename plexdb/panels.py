@@ -16,6 +16,7 @@ import json
 import os
 import threading
 import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -24,7 +25,7 @@ from typing import Any
 
 from .config import Config
 from .decisions import decisions_dir
-from .errors import PanelsFileError
+from .errors import NoSuchPanel, PanelsFileError
 from .explore import QueryError, TooManyQueries, run_query
 
 __all__ = [
@@ -50,12 +51,23 @@ HISTORY_FILE = "panel-history.json"
 ROWS = "rows"
 COLUMN_PREFIX = "column:"
 #: The display settings a chart cannot draw without.
-CHART_SETTINGS = {"gauge": ("total",), "bar": ("label", "number")}
+CHART_SETTINGS = {
+    "gauge": ("total",),
+    "bar": ("label", "number"),
+    "pie": ("label", "number"),
+    "heatmap": ("x", "y", "number"),
+}
+CHARTS = ("line", "stat", "gauge", "bar", "pie", "table", "heatmap")
+#: `PanelsFile.upsert` and `move` refuse a file that would pass this size, the bound
+#: `SavedQueries` puts on its file: Plex DB-EX has no login.
+MAX_TOTAL_BYTES = 1 << 20
 HEIGHTS = ("short", "tall")
 WIDTHS = range(1, 5)
 #: How many hex digits of the SQL-and-value hash a series key keeps.
 HASH_DIGITS = 12
 
+
+_PANEL_FIELDS = ("id", "title", "sql", "chart", "value", "width", "height")
 
 #: What `explore-panels.json` holds when the file is first created: the Library health
 #: dashboard. An existing file, even one with no dashboards, is never seeded again.
@@ -143,9 +155,9 @@ DEFAULT_DASHBOARDS: tuple[dict[str, Any], ...] = (
 )
 
 
-#: Serializes seeding across the explorer's request threads, which each build their own
-#: `PanelsFile`; the sweep, a separate process, relies on the rename being atomic.
-_SEED_LOCK = threading.Lock()
+#: Serializes seeding and every edit across the explorer's request threads, which each build
+#: their own `PanelsFile`; the sweep, a separate process, relies on the rename being atomic.
+_FILE_LOCK = threading.Lock()
 
 
 def panels_path(config: Config) -> Path:
@@ -210,7 +222,7 @@ class PanelsFile:
     def read_or_seed(self) -> list[Dashboard]:
         """The dashboards; a missing file is first written with `DEFAULT_DASHBOARDS`. A file
         that exists is read as it is, so one with no dashboards stays empty."""
-        with _SEED_LOCK:
+        with _FILE_LOCK:
             dashboards = self.read()
             if dashboards is not None:
                 return dashboards
@@ -232,6 +244,12 @@ class PanelsFile:
     def read(self) -> list[Dashboard] | None:
         """The dashboards, or None when there is no file. A file that is not valid JSON or
         breaks the shape raises `PanelsFileError`."""
+        raw = self._load()
+        if raw is None:
+            return None
+        return [self._dashboard(i, d) for i, d in enumerate(raw["dashboards"])]
+
+    def _load(self) -> dict[str, Any] | None:
         try:
             text = self._path.read_text(encoding="utf-8")
         except FileNotFoundError:
@@ -244,7 +262,88 @@ class PanelsFile:
             raise PanelsFileError(f"{self._path} is not valid JSON: {err}") from None
         if not isinstance(raw, dict) or not isinstance(raw.get("dashboards"), list):
             raise PanelsFileError(f"{self._path} does not hold a dashboards list")
-        return [self._dashboard(i, d) for i, d in enumerate(raw["dashboards"])]
+        return raw
+
+    def _edit(self) -> dict[str, Any]:
+        """The raw file for an edit, seeded first when it is missing. Hold `_FILE_LOCK`."""
+        raw = self._load()
+        if raw is None:
+            return {"dashboards": json.loads(json.dumps(DEFAULT_DASHBOARDS))}
+        for i, d in enumerate(raw["dashboards"]):
+            self._dashboard(i, d)  # the whole file must hold the shape before an edit rewrites it
+        return raw
+
+    def _save(self, raw: dict[str, Any]) -> None:
+        if len((json.dumps(raw, indent=2) + "\n").encode()) > MAX_TOTAL_BYTES:
+            raise ValueError(f"the panels would exceed {MAX_TOTAL_BYTES} bytes")
+        self._write(raw)
+
+    @staticmethod
+    def _find(raw: dict[str, Any], dashboard_id: str) -> list[dict[str, Any]]:
+        for d in raw["dashboards"]:
+            if d["id"] == dashboard_id:
+                return d["panels"]  # type: ignore[no-any-return]
+        raise NoSuchPanel(f"dashboard {dashboard_id}")
+
+    def upsert(self, dashboard_id: object, panel: object) -> dict[str, Any]:
+        """Create `panel` in the dashboard (no `id`: a new uuid, appended) or replace the one
+        with its `id` in place. Returns the stored panel."""
+        if not isinstance(dashboard_id, str) or not isinstance(panel, dict):
+            raise ValueError("dashboard_id must be text and panel an object")
+        entry = {k: panel[k] for k in (*_PANEL_FIELDS, *self.OPTIONAL) if k in panel}
+        given = entry.get("id")
+        entry["id"] = uuid.uuid4().hex if given is None else given
+        if not isinstance(entry["id"], str) or ":" in entry["id"]:
+            raise ValueError("id must be text without a colon")
+        try:
+            self._panel("panel", entry)
+        except PanelsFileError as err:
+            raise ValueError(str(err)) from None
+        for k in self.OPTIONAL:
+            if k in entry and (not isinstance(entry[k], str) or not entry[k]):
+                raise ValueError(f"{k} must be text")
+        with _FILE_LOCK:
+            raw = self._edit()
+            panels = self._find(raw, dashboard_id)
+            at = next((i for i, p in enumerate(panels) if p["id"] == entry["id"]), None)
+            if at is not None:
+                panels[at] = entry
+            elif given is not None:
+                raise NoSuchPanel(f"panel {given}")
+            else:
+                panels.append(entry)
+            self._save(raw)
+        return entry
+
+    def move(self, dashboard_id: object, panel_id: object, to: object) -> list[str]:
+        """Put the panel at index `to` of its dashboard; returns the dashboard's panel ids."""
+        if not isinstance(dashboard_id, str) or not isinstance(panel_id, str):
+            raise ValueError("dashboard_id and panel_id must be text")
+        if isinstance(to, bool) or not isinstance(to, int):
+            raise ValueError("to must be a whole number")
+        with _FILE_LOCK:
+            raw = self._edit()
+            panels = self._find(raw, dashboard_id)
+            at = next((i for i, p in enumerate(panels) if p["id"] == panel_id), None)
+            if at is None:
+                raise NoSuchPanel(f"panel {panel_id}")
+            if not 0 <= to < len(panels):
+                raise ValueError(f"to must be 0 to {len(panels) - 1}")
+            panels.insert(to, panels.pop(at))
+            self._save(raw)
+            return [p["id"] for p in panels]
+
+    def delete(self, panel_id: str) -> None:
+        """Remove the panel from whichever dashboard holds it."""
+        with _FILE_LOCK:
+            raw = self._edit()
+            for d in raw["dashboards"]:
+                kept = [p for p in d["panels"] if p["id"] != panel_id]
+                if len(kept) != len(d["panels"]):
+                    d["panels"] = kept
+                    self._save(raw)
+                    return
+        raise NoSuchPanel(f"panel {panel_id}")
 
     def _dashboard(self, index: int, raw: Any) -> Dashboard:
         where = f"{self._path} dashboard {index}"
@@ -271,6 +370,8 @@ class PanelsFile:
         if height not in HEIGHTS:
             raise PanelsFileError(f"{where} has height {height!r}, expected one of {HEIGHTS}")
         chart = _text(where, raw, "chart")
+        if chart not in CHARTS:
+            raise PanelsFileError(f"{where} has chart {chart!r}, expected one of {CHARTS}")
         for needed in CHART_SETTINGS.get(chart, ()):
             _text(where, raw, needed)
         return Panel(
@@ -336,6 +437,15 @@ class PanelHistory:
                 entries.append(entry)
                 series[key] = sorted(entries, key=lambda e: e["day"])
             self._write(series)
+
+    def drop_panel(self, panel_id: str) -> int:
+        """Remove every series whose key starts with `<panel id>:`; returns how many went."""
+        with self._lock:
+            series = self.read()
+            gone = [k for k in series if k.startswith(f"{panel_id}:")]
+            if gone:
+                self._write({k: v for k, v in series.items() if k not in gone})
+            return len(gone)
 
     def _write(self, series: dict[str, list[Entry]]) -> None:
         tmp = self._path.with_name(self._path.name + ".tmp")

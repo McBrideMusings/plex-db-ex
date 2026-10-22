@@ -1447,8 +1447,8 @@ else beside the snapshot, else beside the store).
 `id`, `title`, `sql` and `chart`; `value`, either `rows` or `column:<name>`; `width` 1 to 4; and
 `height`, `short` or `tall`. It may also carry `total`, `label`, `number`, `unit`, `x` and `y`, which the
 dashboard reads and the sweep ignores. A file that is not valid JSON or breaks this shape is
-refused whole; so is a `gauge` panel without `total` and a `bar` panel without `label` and
-`number`. A missing file is created with the Library health dashboard, the first time the
+refused whole; so is an unknown `chart`, a `gauge` panel without `total`, a `bar` or `pie` panel
+without `label` and `number`, and a `heatmap` panel without `x`, `y` and `number`. A missing file is created with the Library health dashboard, the first time the
 explorer's `/api/dashboards` or the sweep's `record-panels` reads it: four panels, in this order.
 
 | Panel | `chart` | `value` | Other settings | `width` |
@@ -1466,6 +1466,16 @@ carries its stored fields plus `live`, `{columns, rows, truncated}` from running
 tab's guarded `run_query` now or `{error}` when that fails, and `series`, the panel's entries in
 `panel-history.json` under `series_key`, oldest night first. A dashboard's `panels` list is in
 stored order.
+
+`PUT /api/panels` takes `{"dashboard_id", "panel"}` and creates the panel (no `id`: a new uuid,
+appended to the dashboard) or replaces the one with that `id` in place. It runs the panel's SQL once
+through `run_query` first; a query that fails, or a `column:<name>` value the result lacks, answers
+400 with the message and writes nothing. `chart` is one of `line`, `stat`, `gauge`, `bar`, `pie`,
+`table`, `heatmap`; `pie` needs `label` and `number`, `heatmap` needs `x`, `y` and `number`. An
+unknown dashboard or panel `id` answers 404. `POST /api/panels/move` takes `{"dashboard_id",
+"panel_id", "to"}` and puts the panel at index `to` of its dashboard. `DELETE /api/panels/<id>`
+removes the panel and every series in `panel-history.json` whose key starts with `<id>:`. Each write
+replaces `explore-panels.json` by rename and refuses a file over 1 MiB.
 
 `panel-history.json` is `{"series": {"<panel id>:<hash12>": [{"day", "value"} | {"day", "error"}]}}`,
 oldest day first, one entry per UTC `day` (`YYYY-MM-DD`). `<hash12>` is the first 12 hex digits of

@@ -205,3 +205,15 @@ def test_series_key_names_the_series_the_explorer_reads(tmp_path: Path) -> None:
     dashboards = panels.read()
     assert dashboards is not None
     assert series_key(dashboards[0].panels[0]) == "a:2ae978d15fa2"
+
+
+def test_a_panel_edit_that_would_pass_the_size_limit_is_refused_and_leaves_the_file(
+    tmp_path: Path,
+) -> None:
+    panels = _write_panels(tmp_path, _panel("a", "SELECT 1"))
+    before = panels.path.read_text()
+
+    with pytest.raises(ValueError, match="exceed"):
+        panels.upsert("d", {**_panel("b", "SELECT 1"), "id": None, "sql": "x" * (1 << 20)})
+
+    assert panels.path.read_text() == before

@@ -246,12 +246,21 @@ for (let i = 0; i < Math.round(period * fps); i++) {
 ## Dashboard
 
 The Query tab opens on **Dashboard**; the **Editor** side holds the SQL box, saved queries and
-recipes. The switch is at the top of the tab, and **Add panel** opens the Editor with an empty box.
+recipes. The switch is at the top of the tab, and **Add panel** opens the Editor with an empty panel.
 
 The Dashboard side draws each dashboard of `explore-panels.json` ([`schema.md`](./schema.md))
 from `/api/dashboards` as a four-column grid in stored order, a panel `width` 1 to 4 columns wide
-and `short` or `tall`; under 900px it is one column. A tile's **Edit** loads the panel's SQL into
-the Editor.
+and `short` or `tall`; under 900px it is one column. A tile's **Edit** opens the panel in the Editor. **←** and **→** on a tile move it one place earlier or later
+(disabled at the ends), and **Add panel** opens the panel editor with an empty `line` panel that
+records a row count, 2 wide and short.
+
+The panel editor replaces the Name, Note and Save fields with a settings row: Title, Chart, Records
+(`row count`, or `column: <each result column>`), Width 1 to 4, Height short or tall, and the
+chart's own columns (gauge: total; bar and pie: label, number; heatmap: x, y, number). It runs the
+SQL when it opens. **Save panel** runs the SQL once more; a failing query shows its SQLite error in
+red beside Run and saves nothing. **Delete panel** takes two presses ("Sure?") and drops the
+panel's recorded history. **Back to dashboard** leaves without saving. Changing the SQL or what the
+panel records starts a new history line ([`schema.md`](./schema.md)).
 
 - **Line** panels show a headline value (the last recorded night, else the SQL's value now), the
   change since the previous recorded night (`−2 since Oct 20`), and the line with a y axis and

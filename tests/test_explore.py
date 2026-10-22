@@ -1319,6 +1319,103 @@ def test_an_empty_dashboards_file_stays_empty(base_url: str, store: Path) -> Non
     assert _send("GET", f"{base_url}/api/dashboards") == (200, {"dashboards": []})
 
 
+def _panel_ids(base_url: str) -> list[str]:
+    _, body = _send("GET", f"{base_url}/api/dashboards")
+    return [p["id"] for p in body["dashboards"][0]["panels"]]  # type: ignore[index]
+
+
+def test_panel_writes_create_replace_move_and_delete(base_url: str, store: Path) -> None:
+    mk: dict[str, object] = {"title": "T", "sql": "SELECT 1 AS n", "chart": "line", "value": "rows"}
+    mk |= {"width": 2, "height": "short"}
+
+    status, body = _send(
+        "PUT", f"{base_url}/api/panels", {"dashboard_id": "library-health", "panel": mk}
+    )
+    assert status == 200
+    new_id = body["panel"]["id"]  # type: ignore[index]
+    assert len(new_id) == 32
+    assert _panel_ids(base_url)[-1] == new_id
+
+    replaced = {
+        **mk,
+        "id": new_id,
+        "title": "T2",
+        "chart": "gauge",
+        "total": "n",
+        "value": "column:n",
+    }
+    status, body = _send(
+        "PUT", f"{base_url}/api/panels", {"dashboard_id": "library-health", "panel": replaced}
+    )
+    assert status == 200 and body["panel"]["title"] == "T2"  # type: ignore[index]
+    assert _panel_ids(base_url).count(new_id) == 1
+
+    status, body = _send(
+        "POST",
+        f"{base_url}/api/panels/move",
+        {"dashboard_id": "library-health", "panel_id": new_id, "to": 0},
+    )
+    assert status == 200 and body["panel_ids"][0] == new_id  # type: ignore[index]
+    assert _panel_ids(base_url)[0] == new_id
+
+    history = store.parent / "panel-history.json"
+    history.write_text(
+        json.dumps(
+            {
+                "series": {
+                    f"{new_id}:aaaaaaaaaaaa": [{"day": "2026-10-20", "value": 1}],
+                    "damaged-files:bbbbbbbbbbbb": [{"day": "2026-10-20", "value": 2}],
+                }
+            }
+        )
+    )
+    status, body = _send("DELETE", f"{base_url}/api/panels/{new_id}")
+    assert status == 200 and body["series_dropped"] == 1
+    assert new_id not in _panel_ids(base_url)
+    assert list(json.loads(history.read_text())["series"]) == ["damaged-files:bbbbbbbbbbbb"]
+
+
+def test_a_panel_save_with_failing_sql_is_refused_and_writes_nothing(
+    base_url: str, store: Path
+) -> None:
+    _send("GET", f"{base_url}/api/dashboards")
+    before = (store.parent / "explore-panels.json").read_text()
+    panel: dict[str, object] = {"title": "T", "sql": "SELECT nope FROM items", "chart": "line"}
+    panel["value"] = "rows"
+    panel |= {"width": 1, "height": "short"}
+
+    status, body = _send(
+        "PUT", f"{base_url}/api/panels", {"dashboard_id": "library-health", "panel": panel}
+    )
+
+    assert status == 400 and "no such column" in str(body["error"])
+    assert (store.parent / "explore-panels.json").read_text() == before
+    ok = {**panel, "sql": "SELECT 1 AS n", "value": "column:missing"}
+    status, body = _send(
+        "PUT", f"{base_url}/api/panels", {"dashboard_id": "library-health", "panel": ok}
+    )
+    assert status == 400 and "no column missing" in str(body["error"])
+
+
+def test_panel_writes_name_what_they_cannot_find(base_url: str) -> None:
+    _send("GET", f"{base_url}/api/dashboards")
+    panel: dict[str, object] = {"title": "T", "sql": "SELECT 1", "chart": "line"}
+    panel |= {"value": "rows", "width": 1}
+    panel |= {"height": "short"}
+
+    assert (
+        _send("PUT", f"{base_url}/api/panels", {"dashboard_id": "nope", "panel": panel})[0] == 404
+    )
+    ghost = {"dashboard_id": "library-health", "panel": {**panel, "id": "ghost"}}
+    assert _send("PUT", f"{base_url}/api/panels", ghost)[0] == 404
+    assert _send("DELETE", f"{base_url}/api/panels/ghost")[0] == 404
+    bad_to = {"dashboard_id": "library-health", "panel_id": "damaged-files", "to": 9}
+    assert _send("POST", f"{base_url}/api/panels/move", bad_to)[0] == 400
+    no_total = {"dashboard_id": "library-health", "panel": {**panel, "chart": "gauge"}}
+    status, body = _send("PUT", f"{base_url}/api/panels", no_total)
+    assert status == 400 and "needs text total" in str(body["error"])
+
+
 def test_the_library_health_group_is_gone_from_the_recipes(base_url: str) -> None:
     _, body = _send("GET", f"{base_url}/api/recipes")
 

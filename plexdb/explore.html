@@ -298,7 +298,9 @@
   .tilehead { display: flex; gap: 8px; align-items: baseline; }
   .tilehead h3 { font-size: 13px; margin: 0; flex: none; max-width: 70%; }
   .tilehead .since { color: var(--muted); font-size: 11px; flex: 1; min-width: 0; }
-  .tilehead button.plain { padding: 1px 8px; font-size: 11px; }
+  .tilehead button.plain { padding: 2px 10px; font-size: 12px; }
+  .tilehead button.plain:disabled { opacity: 0.4; cursor: default; }
+  .tilehead button.plain:disabled:hover { border-color: var(--line); }
   .tilehead .grow { flex: 1; }
   .headline { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
   .headline .big { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
@@ -326,6 +328,26 @@
   .dashempty { border: 1px dashed var(--line); border-radius: 6px; padding: 24px 28px; max-width: 320px; font-size: 13px; display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
   .dashempty p { margin: 0; color: var(--muted); }
   .dashempty h3 { margin: 0; font-size: 13px; }
+  #querywrap:not(.panelmode) #panelcard, #querywrap:not(.panelmode) #qedittitle { display: none; }
+  #querywrap.panelmode .qsave, #querywrap.panelmode #qtitle, #querywrap.panelmode #qaddpanel { display: none; }
+  #qedittitle { font-size: 14px; }
+  @media (min-width: 901px) {
+    #querywrap:not(.dashmode) { grid-template-rows: auto 1fr; }
+    #querywrap:not(.dashmode) #qtop { grid-column: 1; grid-row: 1; }
+    #querywrap:not(.dashmode) #qside { grid-column: 2; grid-row: 1 / span 2; }
+    #querywrap:not(.dashmode) #qmain { grid-column: 1; grid-row: 2; }
+  }
+  #panelcard { border: 1px solid var(--line); border-radius: 6px; background: var(--panel); padding: 10px 12px; margin: 0 0 10px;
+               display: flex; flex-direction: column; gap: 10px; }
+  #panelcard .prow { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+  #panelcard label { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 12px; }
+  #panelcard input[type="text"], #panelcard select { font: inherit; color: var(--ink); background: var(--panel);
+                                                     border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; }
+  #ptitle { width: 233px; max-width: 100%; }
+  #panelcard .pfoot { display: flex; flex-direction: column; gap: 8px; }
+  #panelcard .phint { color: var(--muted); font-size: 11px; }
+  #panelcard .pbtns { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+  button.danger { color: var(--noise); }
   #qmain { padding: 14px 20px 24px; min-width: 0; }
   textarea#sql { display: block; width: 100%; height: 11em; resize: vertical; font: 13px/1.45 ui-monospace, Menlo, monospace;
                  color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
@@ -681,6 +703,7 @@
       <button type="button" data-qmode="editor" aria-pressed="false">Editor</button>
     </div>
     <span id="qtitle"></span>
+    <span id="qedittitle"></span>
     <span class="qspacer"></span>
     <button type="button" class="primary" id="qaddpanel">Add panel</button>
   </div>
@@ -696,6 +719,24 @@
         <input type="text" id="qnote" placeholder="Note (optional)" aria-label="Saved query note" autocomplete="off">
         <button type="button" class="plain" id="qsavebtn">Save</button>
       </span>
+    </div>
+    <div id="panelcard">
+      <div class="prow">
+        <label>Title <input type="text" id="ptitle" placeholder="Panel title" autocomplete="off"></label>
+        <label>Chart <select id="pchart"></select></label>
+        <label>Records <select id="pvalue"></select></label>
+        <label>Width <select id="pwidth"></select></label>
+        <label>Height <select id="pheight"></select></label>
+        <span class="prow" id="pextra"></span>
+      </div>
+      <div class="pfoot">
+        <span class="phint">Changing the SQL or what it records starts a new history line.</span>
+        <span class="pbtns">
+          <button type="button" class="plain" id="pback">Back to dashboard</button>
+          <button type="button" class="plain danger" id="pdelete">Delete panel</button>
+          <button type="button" class="primary" id="psave">Save panel</button>
+        </span>
+      </div>
     </div>
     <div id="qresult" hidden></div>
   </div>
@@ -3727,7 +3768,7 @@ function paintWhy() {
 // ---- Query tab ----
 // The server holds the guards (read-only, one statement, 5 s, 500 rows). Saved queries live in a
 // JSON file beside the store, so they follow the server rather than this browser.
-const q = { ready: false, running: false };
+const q = { ready: false, running: false, panel: null, dashboards: [], columns: [] };
 const qEl = id => document.getElementById(id);
 
 function setTab(tab) {
@@ -3768,7 +3809,7 @@ async function runQuery() {
   qStatus("Running…");
   let out;
   try { out = await sendJSON("POST", "/api/query", { sql }); }
-  catch (err) { qStatus(err.message, true); qEl("qresult").hidden = true; return; }
+  catch (err) { qStatus(err.message, true); qEl("qresult").hidden = true; return false; }
   finally { q.running = false; qEl("qrun").disabled = false; }
   const head = el("tr", {}, ...out.columns.map(c => el("th", {}, c)));
   const body = el("tbody");
@@ -3788,8 +3829,11 @@ async function runQuery() {
   }
   qEl("qresult").replaceChildren(el("table", {}, el("thead", {}, head), body));
   qEl("qresult").hidden = false;
+  q.columns = out.columns;
+  if (q.panel) paintPanelColumns();
   qStatus(`${fmt(out.row_count)} row${out.row_count === 1 ? "" : "s"} · ${fmt(out.elapsed_ms)} ms`, false,
     ...(out.truncated ? [el("span", { className: "warn" }, ` · truncated: more rows exist, only the first ${fmt(out.row_count)} are shown`)] : []));
+  return true;
 }
 
 function loadIntoEditor(sql, name = "", note = "") {
@@ -3923,13 +3967,21 @@ function tileError(heading, message, last) {
   return box;
 }
 
-function paintTile(panel) {
+function paintTile(panel, dashboard, at) {
   const values = panel.series.filter(e => "value" in e);
   const failed = panel.live.error || (panel.series.length && "error" in panel.series[panel.series.length - 1]);
   const since = values.length && !failed ? el("span", { className: "since" }, `history since ${dayLabel(values[0].day)}`) : el("span", { className: "grow" });
   const edit = el("button", { type: "button", className: "plain" }, "Edit");
-  edit.addEventListener("click", () => { loadIntoEditor(panel.sql, "", ""); setQueryMode("editor"); });
-  const tile = el("section", { className: "tile " + panel.height }, el("div", { className: "tilehead" }, el("h3", {}, panel.title), since, edit));
+  edit.addEventListener("click", () => editPanel(dashboard, panel));
+  const mover = (label, text, to) => {
+    const b = el("button", { type: "button", className: "plain", title: label }, text);
+    b.setAttribute("aria-label", label);
+    b.disabled = to < 0 || to >= dashboard.panels.length;
+    b.addEventListener("click", () => movePanel(dashboard, panel, to));
+    return b;
+  };
+  const tile = el("section", { className: "tile " + panel.height }, el("div", { className: "tilehead" }, el("h3", {}, panel.title), since,
+    mover("Move one place earlier", "\u2190", at - 1), mover("Move one place later", "\u2192", at + 1), edit));
   tile.style.gridColumn = `span ${panel.width}`;
   const latest = panel.series[panel.series.length - 1];
   if (panel.live.error) { tile.append(tileError("The query failed.", panel.live.error, values[values.length - 1])); return tile; }
@@ -3961,6 +4013,7 @@ function paintTile(panel) {
 }
 
 function paintDashboards(dashboards) {
+  q.dashboards = dashboards;
   const box = qEl("dashwrap");
   qEl("qtitle").replaceChildren();
   if (!dashboards.length) { box.replaceChildren(el("p", { className: "empty" }, "No dashboards.")); return; }
@@ -3971,26 +4024,140 @@ function paintDashboards(dashboards) {
     const lead = i === 0 ? [] : [head];
     if (!d.panels.length) {
       const add = el("button", { type: "button", className: "primary" }, "Add panel");
-      add.addEventListener("click", addPanel);
+      add.addEventListener("click", () => addPanel(d));
       return [...lead, el("div", { className: "dashempty" }, el("h3", {}, "This dashboard has no panels."),
         el("p", {}, "A panel is a saved query with a chart. The sweep records its value each night, so a line chart fills in from the first night after you add it."), add)];
     }
-    return [...lead, el("div", { className: "dashgrid" }, ...d.panels.map(paintTile))];
+    return [...lead, el("div", { className: "dashgrid" }, ...d.panels.map((p, at) => paintTile(p, d, at)))];
   }));
 }
 
 function setQueryMode(mode) {
+  if (mode === "dashboard") endPanelEdit();
   qEl("querywrap").classList.toggle("dashmode", mode === "dashboard");
   document.querySelectorAll("button[data-qmode]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.qmode === mode)));
 }
-function addPanel() { loadIntoEditor("", "", ""); setQueryMode("editor"); }
+
+// ---- Panel editor: the Editor side with a settings row in place of Name/Note/Save ----
+const CHART_COLUMNS = { gauge: ["total"], bar: ["label", "number"], pie: ["label", "number"], heatmap: ["x", "y", "number"] };
+const CHARTS = ["line", "stat", "gauge", "bar", "pie", "table", "heatmap"];
+const COLUMN_DEFAULT = { total: 1, label: 0, number: 1, x: 0, y: 1 };
+function fillSelect(select, pairs, current) {
+  const have = pairs.some(([v]) => v === current);
+  const all = have || current === undefined ? pairs : [...pairs, [current, current]];
+  select.replaceChildren(...all.map(([v, label]) => el("option", { value: v }, label)));
+  if (current !== undefined) select.value = current;
+}
+
+function paintPanelColumns() {
+  const cols = q.columns;
+  fillSelect(qEl("pvalue"), [["rows", "row count"], ...cols.map(c => ["column:" + c, "column: " + c])], qEl("pvalue").value || q.panel.value);
+  const box = qEl("pextra");
+  const kept = Object.fromEntries([...box.querySelectorAll("select")].map(sel => [sel.dataset.field, sel.value]));
+  box.replaceChildren(...(CHART_COLUMNS[qEl("pchart").value] || []).map((field, i) => {
+    const sel = el("select");
+    sel.setAttribute("aria-label", field);
+    sel.dataset.field = field;
+    const want = kept[field] || q.panel.options[field] || cols[Math.min(COLUMN_DEFAULT[field] ?? i, cols.length - 1)];
+    fillSelect(sel, cols.map(c => [c, c]), want);
+    return el("label", {}, field, " ", sel);
+  }));
+}
+
+function beginPanelEdit(dashboard, panel) {
+  q.panel = { dashboardId: dashboard.id, id: panel ? panel.id : null,
+    value: panel ? panel.value : "rows", options: panel ? panel : {} };
+  qEl("querywrap").classList.add("panelmode");
+  qEl("qedittitle").textContent = `${panel ? "Editing" : "Adding"} panel \u00b7 ${dashboard.name}`;
+  qEl("sql").value = panel ? panel.sql : "";
+  qEl("ptitle").value = panel ? panel.title : "";
+  fillSelect(qEl("pchart"), CHARTS.map(c => [c, c]), panel ? panel.chart : "line");
+  fillSelect(qEl("pwidth"), [1, 2, 3, 4].map(n => [String(n), String(n)]), String(panel ? panel.width : 2));
+  fillSelect(qEl("pheight"), [["short", "short"], ["tall", "tall"]], panel ? panel.height : "short");
+  qEl("pdelete").hidden = !panel;
+  qEl("pdelete").textContent = "Delete panel";
+  qEl("pdelete").dataset.armed = "";
+  clearTimeout(q.disarm);
+  q.columns = [];
+  qEl("pvalue").replaceChildren();
+  qEl("pextra").replaceChildren();
+  qEl("qresult").hidden = true;
+  qStatus("");
+  paintPanelColumns();
+}
+
+function endPanelEdit() {
+  q.panel = null;
+  qEl("querywrap").classList.remove("panelmode");
+}
+
+async function editPanel(dashboard, panel) {
+  beginPanelEdit(dashboard, panel);
+  setQueryMode("editor");
+  await runQuery();
+}
+function addPanel(dashboard = q.dashboards[0]) {
+  if (!dashboard) { qStatus("There is no dashboard to add a panel to.", true); return; }
+  beginPanelEdit(dashboard, null);
+  setQueryMode("editor");
+  qEl("sql").focus();
+}
+
+function readPanel() {
+  const chart = qEl("pchart").value;
+  const panel = { title: qEl("ptitle").value.trim(), sql: qEl("sql").value, chart, value: qEl("pvalue").value,
+    width: Number(qEl("pwidth").value), height: qEl("pheight").value };
+  if (q.panel.id) panel.id = q.panel.id;
+  if (q.panel.options.unit) panel.unit = q.panel.options.unit;
+  for (const sel of qEl("pextra").querySelectorAll("select")) panel[sel.dataset.field] = sel.value;
+  return panel;
+}
+
+async function savePanel() {
+  const panel = readPanel();
+  if (!panel.title) { qStatus("Give the panel a title to save it.", true); qEl("ptitle").focus(); return; }
+  const need = (CHART_COLUMNS[panel.chart] || []).find(f => !panel[f]);
+  if (need) { qStatus(`Run the query, then pick the ${need} column.`, true); return; }
+  qStatus("Saving\u2026");
+  try { await sendJSON("PUT", "/api/panels", { dashboard_id: q.panel.dashboardId, panel }); }
+  catch (err) { qStatus(err.message, true); return; }
+  await backToDashboard();
+}
+
+async function deletePanel() {
+  const button = qEl("pdelete");
+  if (button.dataset.armed !== "1") {
+    button.dataset.armed = "1"; button.textContent = "Sure?";
+    clearTimeout(q.disarm);
+    q.disarm = setTimeout(() => { button.dataset.armed = ""; button.textContent = "Delete panel"; }, 3000);
+    return;
+  }
+  try { await sendJSON("DELETE", `/api/panels/${encodeURIComponent(q.panel.id)}`); }
+  catch (err) { qStatus(err.message, true); return; }
+  await backToDashboard();
+}
+
+async function movePanel(dashboard, panel, to) {
+  try { await sendJSON("POST", "/api/panels/move", { dashboard_id: dashboard.id, panel_id: panel.id, to }); }
+  catch (err) { qStatus(err.message, true); }
+  await initDashboards();
+}
+
+async function backToDashboard() {
+  setQueryMode("dashboard");
+  await initDashboards();
+}
 
 async function initDashboards() {
   try { paintDashboards((await getJSON("/api/dashboards")).dashboards); }
   catch (err) { qEl("dashwrap").replaceChildren(el("div", { className: "tileerr", role: "alert" }, `Could not load the dashboards: ${err.message}`)); }
 }
 document.querySelectorAll("button[data-qmode]").forEach(b => b.addEventListener("click", () => setQueryMode(b.dataset.qmode)));
-qEl("qaddpanel").addEventListener("click", addPanel);
+qEl("qaddpanel").addEventListener("click", () => addPanel());
+qEl("pchart").addEventListener("change", paintPanelColumns);
+qEl("pback").addEventListener("click", backToDashboard);
+qEl("pdelete").addEventListener("click", deletePanel);
+qEl("psave").addEventListener("click", savePanel);
 
 async function initQuery() {
   if (q.ready) return;

@@ -36,13 +36,13 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path
-from typing import Any, NamedTuple, cast
-from urllib.parse import parse_qs, urlparse
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
+from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
 
 from .decisions import SAVED_FILE
-from .errors import ConfigError, DecisionsFileError, PanelsFileError, StoreError
+from .errors import ConfigError, DecisionsFileError, NoSuchPanel, PanelsFileError, StoreError
 from .explore_search import EncoderDown, NoFrame, SearchTab, SearchUnavailable
 from .identity import PRIORITY
 from .keywords import is_carried, keyword_spellings
@@ -91,6 +91,9 @@ CO_TAGS = 5
 #: The evidence the table's related-tag chips demand, as a z in `cautious_lift`: the
 #: middle of the page's weak-to-strong slider (0 to 4), which is also where it starts.
 CO_STRENGTH = 2.0
+
+if TYPE_CHECKING:
+    from .panels import PanelHistory, PanelsFile
 
 
 def cautious_lift(shared: int, titles: int, df_anchor: int, df_other: int, z: float) -> float:
@@ -2087,6 +2090,8 @@ def _error_reply(err: Exception, store_path: Path) -> tuple[str, HTTPStatus] | N
         return f"no keyword role {err.args[0]!r} in the store", HTTPStatus.NOT_FOUND
     if isinstance(err, NoSuchKeyword):
         return f"no title carries the keyword {err.args[0]!r}", HTTPStatus.NOT_FOUND
+    if isinstance(err, NoSuchPanel):
+        return f"no {err.args[0]} in the panels file", HTTPStatus.NOT_FOUND
     if isinstance(err, NoSuchQuery):
         return f"no saved query named {err.args[0]!r}", HTTPStatus.NOT_FOUND
     if isinstance(err, TooManyTitleRequests):
@@ -2178,6 +2183,13 @@ def make_server(
     list_decisions = ListDecisions(saved_file.with_name(LIST_DECISIONS_FILE))
     posters = PosterProxy(store_path, plex_url, plex_token, poster_http)
 
+    def panel_files() -> tuple[PanelsFile, PanelHistory]:
+        # `panels` imports this module, so it is imported where it is used.
+        from .panels import HISTORY_FILE, PANELS_FILE, PanelHistory, PanelsFile
+
+        dir_ = data_dir(store_path, saved_path)
+        return PanelsFile(dir_ / PANELS_FILE), PanelHistory(dir_ / HISTORY_FILE)
+
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802 — the stdlib's name
             self._serve(self._get)
@@ -2222,6 +2234,19 @@ def make_server(
 
         def _post(self) -> None:
             path = urlparse(self.path).path
+            if path == "/api/panels/move":
+                body = self._body()
+                panels_file, _ = panel_files()
+                order = panels_file.move(
+                    body.get("dashboard_id"), body.get("panel_id"), body.get("to")
+                )
+                print(
+                    f"explore: panel move {body['panel_id']!r} to {body['to']} "
+                    f"in {body['dashboard_id']!r} -> {order}",
+                    file=sys.stderr,
+                )
+                self._json({"panel_ids": order})
+                return
             if path == "/api/merges":
                 body = self._body()
                 a, b, decision = merges.check(*(body.get(k) for k in MERGE_FIELDS))
@@ -2302,7 +2327,11 @@ def make_server(
             self._json(run_query(store_path, sql))
 
         def _put(self) -> None:
-            if urlparse(self.path).path != "/api/saved":
+            path = urlparse(self.path).path
+            if path == "/api/panels":
+                self._put_panel()
+                return
+            if path != "/api/saved":
                 self._json({"error": f"no route {self.path}"}, HTTPStatus.NOT_FOUND)
                 return
             body = self._body()
@@ -2310,8 +2339,44 @@ def make_server(
                 {"queries": saved.upsert(body.get("name"), body.get("sql"), body.get("note"))}
             )
 
+        def _put_panel(self) -> None:
+            body = self._body()
+            panel = body.get("panel")
+            if not isinstance(panel, dict):
+                raise ValueError("panel must be an object")
+            sql = panel.get("sql")
+            if not isinstance(sql, str) or not sql.strip():
+                raise ValueError("sql must be text")
+            # A panel whose query fails is not saved; the error is the query's own.
+            result = run_query(store_path, sql)
+            value = panel.get("value")
+            if isinstance(value, str) and value.startswith("column:"):
+                column = value[len("column:") :]
+                if column not in result["columns"]:  # type: ignore[operator]
+                    raise ValueError(f"the query has no column {column}")
+            panels_file, _ = panel_files()
+            stored = panels_file.upsert(body.get("dashboard_id"), panel)
+            print(
+                f"explore: panel saved {stored['id']!r} in {body['dashboard_id']!r} "
+                f"chart={stored['chart']} value={stored['value']} "
+                f"rows={result['row_count']} -> {panels_file.path}",
+                file=sys.stderr,
+            )
+            self._json({"panel": stored})
+
         def _delete(self) -> None:
             url = urlparse(self.path)
+            if url.path.startswith("/api/panels/"):
+                panel_id = unquote(url.path[len("/api/panels/") :])
+                panels_file, panel_history = panel_files()
+                panels_file.delete(panel_id)
+                dropped = panel_history.drop_panel(panel_id)
+                print(
+                    f"explore: panel deleted {panel_id!r}, dropped {dropped} series",
+                    file=sys.stderr,
+                )
+                self._json({"deleted": panel_id, "series_dropped": dropped})
+                return
             if url.path != "/api/saved":
                 self._json({"error": f"no route {url.path}"}, HTTPStatus.NOT_FOUND)
                 return
@@ -2410,17 +2475,11 @@ def make_server(
                 else:
                     self._json(detail)
             elif url.path == "/api/dashboards":
-                from .panels import (
-                    HISTORY_FILE,
-                    PANELS_FILE,
-                    PanelHistory,
-                    PanelsFile,
-                    dashboards_json,
-                )
+                from .panels import dashboards_json
 
-                dir_ = data_dir(store_path, saved_path)
-                dashboards = PanelsFile(dir_ / PANELS_FILE).read_or_seed()
-                history = PanelHistory(dir_ / HISTORY_FILE).read()
+                panels_file, panel_history = panel_files()
+                dashboards = panels_file.read_or_seed()
+                history = panel_history.read()
                 self._json({"dashboards": dashboards_json(store_path, dashboards, history)})
             elif url.path == "/api/recipes":
                 self._json({"recipes": list(RECIPES)})
