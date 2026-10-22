@@ -30,9 +30,18 @@ from plexdb.plex_client import (
 #: server actually returned for these section/type combinations.
 _RECORDED = {
     ("/library/sections", ""): "sections.json",
-    ("/library/sections/1/all", "type=1&includeGuids=1"): "section_1_type_1.json",
-    ("/library/sections/2/all", "type=2&includeGuids=1"): "section_2_type_2.json",
-    ("/library/sections/2/all", "type=4&includeGuids=1"): "section_2_type_4.json",
+    (
+        "/library/sections/1/all",
+        "type=1&includeGuids=1&X-Plex-Container-Start=0&X-Plex-Container-Size=500",
+    ): "section_1_type_1.json",
+    (
+        "/library/sections/2/all",
+        "type=2&includeGuids=1&X-Plex-Container-Start=0&X-Plex-Container-Size=500",
+    ): "section_2_type_2.json",
+    (
+        "/library/sections/2/all",
+        "type=4&includeGuids=1&X-Plex-Container-Start=0&X-Plex-Container-Size=500",
+    ): "section_2_type_4.json",
     ("/devices", ""): "devices.json",
     (
         "/status/sessions/history/all",
@@ -256,6 +265,47 @@ def test_valid_accounts_excludes_the_id_zero_placeholder_and_blank_names() -> No
         {"id": 1, "name": "server-owner"},
         {"id": 4242424, "name": "shared-user"},
     ]
+
+
+def test_items_pages_a_section_and_joins_to_the_unpaged_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(plex_client, "_SECTION_PAGE_SIZE", 2)
+    everything = [{"ratingKey": str(n), "title": f"episode {n}"} for n in range(5)]
+    starts: list[int] = []
+
+    def _paged(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["X-Plex-Container-Size"] == "2"
+        assert request.url.params["type"] == "4"
+        start = int(request.url.params["X-Plex-Container-Start"])
+        starts.append(start)
+        return httpx.Response(
+            200,
+            json={"MediaContainer": {"totalSize": 5, "Metadata": everything[start : start + 2]}},
+        )
+
+    http = httpx.Client(transport=httpx.MockTransport(_paged))
+    client = LivePlexClient("http://plex.example:32400", "t", http=http)
+
+    assert client.items("2", PLEX_TYPE_EPISODE) == everything
+    assert starts == [0, 2, 4]
+
+
+def test_items_keeps_paging_past_a_short_page_while_total_size_says_more() -> None:
+    everything = [{"ratingKey": str(n)} for n in range(4)]
+
+    def _capped(request: httpx.Request) -> httpx.Response:
+        start = int(request.url.params["X-Plex-Container-Start"])
+        # The server hands back at most one row per request, whatever size was asked.
+        return httpx.Response(
+            200,
+            json={"MediaContainer": {"totalSize": 4, "Metadata": everything[start : start + 1]}},
+        )
+
+    http = httpx.Client(transport=httpx.MockTransport(_capped))
+    client = LivePlexClient("http://plex.example:32400", "t", http=http)
+
+    assert client.items("2", PLEX_TYPE_EPISODE) == everything
 
 
 def test_history_paginates_until_total_size_is_reached(
