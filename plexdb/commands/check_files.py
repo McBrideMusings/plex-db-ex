@@ -37,7 +37,7 @@ def _cmd_check_files(args: argparse.Namespace) -> int:
     )
     print(
         f"decode: {stats.decoded} decoded in full, {stats.decode_failed} failed, "
-        f"{stats.decode_skipped} left for the next run"
+        f"{stats.decode_timed_out} timed out, {stats.decode_skipped} left for the next run"
     )
     return 0
 

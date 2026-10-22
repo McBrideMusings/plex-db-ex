@@ -35,6 +35,11 @@ from typing import Any
 from .errors import MediaError, MediaTimeout
 from .frame_harvest import FfmpegMedia
 
+#: The `error` a decode that ran past its time limit leaves on its `ok = 0` row. The row
+#: orders the part to the back of the next batch; it is a slow mount, not a damaged file, so
+#: the seeded damaged-files panel and `decode_failed` leave it out.
+DECODE_TIMED_OUT = "ffmpeg timed out"
+
 #: A file's duration may differ from Plex's by this fraction before it fails.
 DURATION_TOLERANCE = 0.02
 
@@ -50,6 +55,8 @@ class CheckStats:
     skipped: int = 0
     decoded: int = 0
     decode_failed: int = 0
+    #: Parts whose decode ran past the time limit: recorded, but not counted as damaged.
+    decode_timed_out: int = 0
     #: Parts the decode pass could not judge (not on the mount, ffmpeg missing).
     decode_skipped: int = 0
 
@@ -161,10 +168,10 @@ def _decode_batch(
             path = locate(file)
             path.stat()  # raises OSError for a file not on the mount, before ffmpeg runs
             error = media.decode(path)
-        except MediaTimeout as err:
+        except MediaTimeout:
             # Record the timeout so the part moves to the back of the order instead of
             # heading every night's batch.
-            error = err.reason
+            error = DECODE_TIMED_OUT
         except (MediaError, OSError):
             stats.decode_skipped += 1
             continue
@@ -175,5 +182,7 @@ def _decode_batch(
                 (part_id, now, 0 if error else 1, error or None),
             )
         stats.decoded += 1
-        if error:
+        if error == DECODE_TIMED_OUT:
+            stats.decode_timed_out += 1
+        elif error:
             stats.decode_failed += 1

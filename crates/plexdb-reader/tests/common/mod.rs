@@ -2,7 +2,7 @@
 //!
 //! Per issue #11, the crate is "tested against a fixture store built by
 //! this repository's own writer" — so schema creation goes through the real
-//! `plexdb init` CLI (via `uv run`), never a hand-copied version of
+//! `plexdb migrate` CLI (via `uv run`), never a hand-copied version of
 //! `plexdb/schema.py`'s DDL that could drift out of sync with it. Seed rows
 //! beyond the bare schema are plain `INSERT`s against that same schema,
 //! exactly as `plexdb`'s own Python test suite builds its fixtures
@@ -14,8 +14,14 @@ use std::process::Command;
 use rusqlite::Connection;
 
 /// The plex-db-ex repo root, two levels above this crate's manifest.
+///
+/// Read at run time: `cargo test` sets `CARGO_MANIFEST_DIR` for the checkout
+/// running it. The compile-time `env!` bakes in the checkout that built the
+/// binary, and workers sharing one `CARGO_TARGET_DIR` reuse that binary.
 pub fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
+        .expect("CARGO_MANIFEST_DIR is set by cargo test; run the tests through cargo");
+    Path::new(&manifest_dir)
         .parent()
         .and_then(Path::parent)
         .expect("crates/plexdb-reader sits two levels under the repo root")
@@ -28,19 +34,17 @@ pub fn repo_root() -> PathBuf {
 /// mutate the fixture further, e.g. to force a schema-version mismatch.
 ///
 /// `migrate` against a path that does not exist creates the store at the
-/// current schema version, which is what this needs. The subcommand used to be
-/// `init`; nothing failed loudly when it went away, because a missing
-/// subcommand only surfaces as every fixture-backed test panicking at once.
+/// current schema version, which is what this needs.
 pub fn build_fixture(path: &Path) -> Connection {
     let status = Command::new("uv")
         .args(["run", "plexdb", "migrate"])
         .env("PLEXDB_PATH", path)
         .current_dir(repo_root())
         .status()
-        .expect("failed to run `uv run plexdb init` — is uv on PATH?");
+        .expect("failed to run `uv run plexdb migrate` — is uv on PATH?");
     assert!(
         status.success(),
-        "plexdb init failed to build the fixture schema"
+        "plexdb migrate failed to build the fixture schema"
     );
 
     let conn = Connection::open(path).expect("open the freshly-created fixture for seeding");
