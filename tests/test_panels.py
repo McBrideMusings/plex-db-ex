@@ -176,6 +176,21 @@ def test_the_sweep_seeds_a_missing_panels_file_and_records_its_panels(
     assert len(history.read()) == 4
 
 
+@pytest.mark.parametrize(
+    ("chart", "settings"),
+    [("bar", {"label": "lang"}), ("bar", {"number": "n"}), ("gauge", {})],
+)
+def test_a_chart_missing_the_settings_it_draws_from_is_refused(
+    tmp_path: Path, chart: str, settings: dict[str, str]
+) -> None:
+    path = tmp_path / "explore-panels.json"
+    panel = {**_panel("x", "SELECT 1"), "chart": chart, **settings}
+    path.write_text(json.dumps({"dashboards": [{"id": "d", "name": "D", "panels": [panel]}]}))
+
+    with pytest.raises(PanelsFileError, match="needs text"):
+        PanelsFile(path).read()
+
+
 def test_a_malformed_panels_file_is_refused_whole(tmp_path: Path) -> None:
     path = tmp_path / "explore-panels.json"
     path.write_text(json.dumps({"dashboards": [{"id": "d", "name": "D", "panels": [{"id": "x"}]}]}))

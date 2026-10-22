@@ -1447,7 +1447,8 @@ else beside the snapshot, else beside the store).
 `id`, `title`, `sql` and `chart`; `value`, either `rows` or `column:<name>`; `width` 1 to 4; and
 `height`, `short` or `tall`. It may also carry `total`, `label`, `number`, `unit`, `x` and `y`, which the
 dashboard reads and the sweep ignores. A file that is not valid JSON or breaks this shape is
-refused whole. A missing file is created with the Library health dashboard, the first time the
+refused whole; so is a `gauge` panel without `total` and a `bar` panel without `label` and
+`number`. A missing file is created with the Library health dashboard, the first time the
 explorer's `/api/dashboards` or the sweep's `record-panels` reads it: four panels, in this order.
 
 | Panel | `chart` | `value` | Other settings | `width` |
@@ -1461,7 +1462,7 @@ A file that exists is never seeded again, even with a dashboard that holds no pa
 `dashboards` list that is empty.
 
 `GET /api/dashboards` returns `{"dashboards": [{"id", "name", "panels": [...]}]}`. Each panel
-carries its stored fields plus `live`, `{columns, rows}` from running its SQL through the Query
+carries its stored fields plus `live`, `{columns, rows, truncated}` from running its SQL through the Query
 tab's guarded `run_query` now or `{error}` when that fails, and `series`, the panel's entries in
 `panel-history.json` under `series_key`, oldest night first. A dashboard's `panels` list is in
 stored order.

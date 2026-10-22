@@ -1279,6 +1279,7 @@ def test_dashboards_return_each_seeded_panel_with_its_live_rows_and_its_series(
     assert panels["tracks-per-language"]["live"] == {
         "columns": ["lang", "tracks"],
         "rows": [["eng", 2], ["jpn", 1]],
+        "truncated": False,
     }
     assert panels["tracks-per-language"]["series"] == [
         {"day": "2026-10-20", "value": 2},
@@ -1657,6 +1658,23 @@ def _open_clip(browser: Browser, store: Path, url: str, ready: str = CLIP_READY)
 def _seek(page: Page, t: float) -> dict[str, Any]:
     page.evaluate("t => window.__clip.seek(t)", t)
     return dict(page.evaluate(CLIP_FRAME))
+
+
+def test_a_line_panel_whose_every_night_is_zero_still_draws_its_point(
+    browser: Browser, base_url: str, store: Path
+) -> None:
+    seeded = PanelsFile(store.parent / "explore-panels.json").read_or_seed()
+    damaged = seeded[0].panels[0]
+    (store.parent / "panel-history.json").write_text(
+        json.dumps({"series": {series_key(damaged): [{"day": "2026-10-21", "value": 0}]}})
+    )
+    page = browser.new_page(viewport={"width": 1280, "height": 800})
+    page.goto(base_url)
+    page.click('button[data-tab="query"]')
+    page.wait_for_selector("circle.dot")
+
+    assert page.get_attribute("circle.dot", "cy") != "NaN"
+    assert page.locator("svg text", has_text="NaN").count() == 0
 
 
 def test_the_dashboard_draws_the_four_seeded_panels_and_edit_opens_the_editor(

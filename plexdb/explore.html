@@ -3844,7 +3844,7 @@ const signed = n => (n > 0 ? "+" : n < 0 ? "\u2212" : "") + fmt(Math.abs(n));
 // A panel's value now: the row count, or one column of the first row.
 function liveValue(panel) {
   const { columns, rows } = panel.live;
-  if (panel.value === "rows") return rows.length;
+  if (panel.value === "rows") return rows.length;  // capped at the Query tab's row limit; see `capped`
   const at = columns.indexOf(panel.value.slice("column:".length));
   const cell = rows.length && at >= 0 ? rows[0][at] : null;
   return typeof cell === "number" ? cell : null;
@@ -3855,7 +3855,11 @@ const NICE = [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10];
 // else a tight band on a round step.
 function axisTicks(values) {
   let lo = Math.min(...values), hi = Math.max(...values);
-  if (lo === hi) { const pad = hi <= 20 ? 0 : Math.max(1, Math.round(hi * 0.005)); return hi <= 20 ? [0, hi / 2, hi] : [hi - pad, hi, hi + pad]; }
+  if (lo === hi) {
+    if (hi <= 20) { const top = Math.max(hi, 2); return [0, top / 2, top]; }
+    const pad = Math.max(1, Math.round(hi * 0.005));
+    return [hi - pad, hi, hi + pad];
+  }
   if (lo >= 0 && lo <= hi / 2) lo = 0;
   const raw = (hi - lo) / 2, mag = 10 ** Math.floor(Math.log10(raw));
   let step = NICE.map(m => m * mag).find(x => x >= raw);
@@ -3932,7 +3936,8 @@ function paintTile(panel) {
   if (panel.chart === "line") {
     if (latest && "error" in latest) { tile.append(tileError("The query failed tonight.", latest.error, values[values.length - 1])); return tile; }
     const now = values.length ? values[values.length - 1].value : liveValue(panel);
-    const head = el("div", { className: "headline" }, el("span", { className: "big" }, now === null ? "\u2014" : fmt(now)));
+    const capped = !values.length && panel.live.truncated;
+    const head = el("div", { className: "headline" }, el("span", { className: "big" }, now === null ? "\u2014" : fmt(now) + (capped ? "+" : "")));
     if (panel.unit) head.append(el("span", { className: "delta" }, panel.unit));
     if (values.length > 1) {
       const prev = values[values.length - 2];

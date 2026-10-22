@@ -49,6 +49,8 @@ HISTORY_FILE = "panel-history.json"
 #: A panel's `value` setting: every row counted, or one column of the first row.
 ROWS = "rows"
 COLUMN_PREFIX = "column:"
+#: The display settings a chart cannot draw without.
+CHART_SETTINGS = {"gauge": ("total",), "bar": ("label", "number")}
 HEIGHTS = ("short", "tall")
 WIDTHS = range(1, 5)
 #: How many hex digits of the SQL-and-value hash a series key keeps.
@@ -141,6 +143,11 @@ DEFAULT_DASHBOARDS: tuple[dict[str, Any], ...] = (
 )
 
 
+#: Serializes seeding across the explorer's request threads, which each build their own
+#: `PanelsFile`; the sweep, a separate process, relies on the rename being atomic.
+_SEED_LOCK = threading.Lock()
+
+
 def panels_path(config: Config) -> Path:
     return decisions_dir(config) / PANELS_FILE
 
@@ -195,7 +202,6 @@ class PanelsFile:
 
     def __init__(self, path: Path) -> None:
         self._path = path
-        self._lock = threading.Lock()
 
     @property
     def path(self) -> Path:
@@ -204,7 +210,7 @@ class PanelsFile:
     def read_or_seed(self) -> list[Dashboard]:
         """The dashboards; a missing file is first written with `DEFAULT_DASHBOARDS`. A file
         that exists is read as it is, so one with no dashboards stays empty."""
-        with self._lock:
+        with _SEED_LOCK:
             dashboards = self.read()
             if dashboards is not None:
                 return dashboards
@@ -214,7 +220,7 @@ class PanelsFile:
         return dashboards
 
     def _write(self, raw: dict[str, Any]) -> None:
-        tmp = self._path.with_name(self._path.name + ".tmp")
+        tmp = self._path.with_name(f"{self._path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
         try:
             tmp.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
             os.replace(tmp, self._path)
@@ -264,11 +270,14 @@ class PanelsFile:
         height = raw.get("height")
         if height not in HEIGHTS:
             raise PanelsFileError(f"{where} has height {height!r}, expected one of {HEIGHTS}")
+        chart = _text(where, raw, "chart")
+        for needed in CHART_SETTINGS.get(chart, ()):
+            _text(where, raw, needed)
         return Panel(
             id=_text(where, raw, "id"),
             title=_text(where, raw, "title"),
             sql=_text(where, raw, "sql"),
-            chart=_text(where, raw, "chart"),
+            chart=chart,
             value=value,
             width=width,
             height=height,
@@ -417,7 +426,11 @@ def dashboards_json(
         for panel in dashboard.panels:
             try:
                 result = run_query(store_path, panel.sql)
-                live: dict[str, Any] = {"columns": result["columns"], "rows": result["rows"]}
+                live: dict[str, Any] = {
+                    "columns": result["columns"],
+                    "rows": result["rows"],
+                    "truncated": result["truncated"],
+                }
             except (QueryError, TooManyQueries) as err:
                 live = {"error": str(err)}
             panels.append(
