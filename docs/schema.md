@@ -1435,6 +1435,30 @@ group: every check with `ok = 0`, newest first, with the title, the file and the
 "Decode progress" in the same group is one row: `parts_decoded`, `parts_total` and `oldest_decode`
 (the oldest `checked_at` of a `decode` row).
 
+### `explore-panels.json` and `panel-history.json`
+
+Neither file is in `plexdb.db` ([ADR-0029](./adr/0029-a-dashboard-panel-is-a-persons-saved-query-and-its-nightly-value-lives-beside-the-store.md)).
+Both sit in the directory Plex DB-EX's other files use (`PLEXDB_EXPLORE_SAVED_PATH`'s directory,
+else beside the snapshot, else beside the store).
+
+`explore-panels.json` is `{"dashboards": [{"id", "name", "panels": [Panel]}]}`. A Panel has text
+`id`, `title`, `sql` and `chart`; `value`, either `rows` or `column:<name>`; `width` 1 to 4; and
+`height`, `short` or `tall`. It may also carry `total`, `label`, `number`, `x` and `y`, which the
+dashboard reads and the sweep ignores. A file that is not valid JSON or breaks this shape is
+refused whole. A missing file means no dashboards.
+
+`panel-history.json` is `{"series": {"<panel id>:<hash12>": [{"day", "value"} | {"day", "error"}]}}`,
+oldest day first, one entry per UTC `day` (`YYYY-MM-DD`). `<hash12>` is the first 12 hex digits of
+`sha256(sql + NUL + value)`, so editing a panel's SQL or `value` starts a new series.
+
+`plexdb record-panels` (sweep step 23, best effort, right after `check-files`) runs every panel
+through the Query tab's guarded `run_query` (read-only, 5 s, 500 rows). A `rows` panel records
+`SELECT COUNT(*) FROM (<sql>)`; a `column:<name>` panel records that column of the first row. A
+query that fails, a first row with no such column, no rows at all, and a cell that is not a number
+(`column <name> is not a number`) each record `{day, error}`, and the other panels still run. A
+second run on the same UTC day replaces that day's entry. The step logs one line per panel: the
+dashboard and panel id, the series key, the value or error, and the elapsed milliseconds.
+
 ## The original language of a title
 
 `enrich-tmdb-language` writes one `enrichment` row per movie and show carrying a `tmdb` external id:

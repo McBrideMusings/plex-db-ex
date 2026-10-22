@@ -150,3 +150,8 @@ class NameDecisionsError(DecisionsFileError):
 
 class ListDecisionsError(DecisionsFileError):
     """`list_decisions.json` is not valid JSON or does not hold the documented shape."""
+
+
+class PanelsFileError(PlexdbError):
+    """`explore-panels.json` or `panel-history.json` cannot be read or written, is not valid
+    JSON, or does not hold the documented shape."""
