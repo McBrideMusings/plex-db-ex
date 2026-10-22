@@ -209,6 +209,9 @@ class PanelHistory:
         with self._lock:
             series = self.read()
             for key, entry in results.items():
+                same_day = [e for e in series.get(key, []) if e["day"] == entry["day"]]
+                if "error" in entry and any("value" in e for e in same_day):
+                    continue  # a rerun that failed never erases the day's recorded number
                 entries = [e for e in series.get(key, []) if e["day"] != entry["day"]]
                 entries.append(entry)
                 series[key] = sorted(entries, key=lambda e: e["day"])

@@ -87,6 +87,16 @@ def test_a_second_run_on_the_same_day_replaces_that_days_entry(store: Path, tmp_
     assert [e["day"] for e in _series_of(history, "count")[0]] == ["2026-10-01", "2026-10-02"]
 
 
+def test_a_failed_rerun_keeps_the_days_recorded_value(store: Path, tmp_path: Path) -> None:
+    history = PanelHistory(tmp_path / "panel-history.json")
+    _record(store, _write_panels(tmp_path, _panel("p", "SELECT item_id FROM items")), history)
+    key = next(iter(history.read()))
+
+    history.record({key: {"day": "2026-10-01", "error": "query stopped after 5 seconds"}})
+
+    assert history.read()[key] == [{"day": "2026-10-01", "value": 3}]
+
+
 def test_editing_a_panels_sql_starts_a_second_series(store: Path, tmp_path: Path) -> None:
     history = PanelHistory(tmp_path / "panel-history.json")
     _record(store, _write_panels(tmp_path, _panel("p", "SELECT item_id FROM items")), history)
@@ -138,7 +148,7 @@ def test_a_malformed_panels_file_is_refused_whole(tmp_path: Path) -> None:
 
 
 def test_series_key_names_the_series_the_explorer_reads(tmp_path: Path) -> None:
-    # The explorer reads the history by this key, so the hash is a published contract.
+    # The dashboard (plex-db-ex-80d.5) finds a panel's series by this key: a contract.
     panels = _write_panels(tmp_path, _panel("a", "SELECT 1"))
     dashboards = panels.read()
     assert dashboards is not None
