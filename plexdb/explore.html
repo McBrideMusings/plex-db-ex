@@ -197,6 +197,7 @@
   .cotable td.nm button { all: unset; cursor: pointer; }
   .cotable tbody tr.hot { background: var(--selected); }
   .cotable tbody tr.noise td.nm button { color: var(--noise); text-decoration: line-through; }
+  .cothin { color: var(--ink); border-left: 2px solid var(--accent); margin: 0 0 6px; }
   .comore, .costat { color: var(--muted); font-size: 12px; padding: 4px 6px; }
   /* The panel's two tabs, Related tags and Titles, each with its count. */
   .ptabs { display: flex; gap: 2px; margin: 10px 0 8px; border-bottom: 1px solid var(--line); }
@@ -2344,13 +2345,14 @@ function render() {
 const CO_STRENGTH_KEY = "plexdb-explore:co-strength", CO_SORT_KEY = "plexdb-explore:co-sort";
 const CO_ROWS = 400;   // rows the table renders; a weak setting can list thousands
 const CO_STRENGTH_MAX = 4;
+const CO_THIN_TOP = 10, CO_THIN_SHARED = 3;   // the note: the top 10 rows by lift all rest on 3 titles or fewer
 function loadPref(key, fallback, ok) {
   try { const v = JSON.parse(localStorage.getItem(key)); return ok(v) ? v : fallback; } catch { return fallback; }
 }
 function savePref(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* storage off */ } }
 const CO_COLUMNS = { tag: 0, lift: 1, shared: 2 };
 const cotags = {
-  kind: null, tag: null, data: null, error: null, token: 0, hot: null, ranked: null, lit: new Set(), all: new Set(), dropped: 0,
+  kind: null, tag: null, data: null, error: null, token: 0, hot: null, ranked: null, lit: new Set(), all: new Set(), dropped: 0, thin: null,
   strength: loadPref(CO_STRENGTH_KEY, 2, v => typeof v === "number" && v >= 0 && v <= CO_STRENGTH_MAX),
   sort: loadPref(CO_SORT_KEY, { key: "lift", dir: -1 }, v => v && v.key in CO_COLUMNS && (v.dir === 1 || v.dir === -1)),
 };
@@ -2388,13 +2390,17 @@ function coPool(d) {
 // the strength, the sort, the view or the network's drawn nodes.
 function coRerank() {
   const d = coLive();
-  if (!d) { cotags.ranked = null; cotags.lit = new Set(); cotags.all = new Set(); cotags.dropped = 0; return; }
+  if (!d) { cotags.ranked = null; cotags.lit = new Set(); cotags.all = new Set(); cotags.dropped = 0; cotags.thin = null; return; }
   const pool = coPool(d);
   const rows = [];
   for (const [value, shared, dfOther] of pool) {
     const lifted = cautiousLift(shared, d.titles, d.df, dfOther, cotags.strength);
     if (lifted > 1) rows.push([value, lifted, shared]);
   }
+  // Whatever the sort, the rows the person should trust first are the ones with the highest lift;
+  // when even those rest on a few titles, the whole table does, and the panel says so.
+  const top = rows.slice().sort((a, b) => b[1] - a[1] || b[2] - a[2]).slice(0, CO_THIN_TOP);
+  cotags.thin = top.length && top.every(r => r[2] <= CO_THIN_SHARED) ? Math.max(...top.map(r => r[2])) : null;
   const { key, dir } = cotags.sort, col = CO_COLUMNS[key];
   rows.sort((a, b) => {
     const c = col === 0 ? a[0].localeCompare(b[0]) : a[col] - b[col];
@@ -2500,7 +2506,12 @@ function paintCotags() {
     btn.addEventListener("blur", () => setCoHot(null));
     body.append(tr);
   }
-  const parts = rows.length ? [el("table", { className: "cotable" }, el("thead", {}, head), body)] : [];
+  const parts = [];
+  if (cotags.thin !== null) {
+    parts.push(el("p", { className: "costat cothin" },
+      `Its strongest pairings rest on ${cotags.thin === 1 ? "1" : `1–${cotags.thin}`} ${cotags.thin === 1 ? noun().slice(0, -1) : noun()} each (${d.tag} is on ${fmt(d.df)} ${noun()}).`));
+  }
+  if (rows.length) parts.push(el("table", { className: "cotable" }, el("thead", {}, head), body));
   if (!rows.length) {
     parts.push(el("p", { className: "costat" }, graph && !net.full ? "Loading the network…"
       : cotags.dropped ? `At this evidence, every tag it shares a ${noun().slice(0, -1)} with could be chance. Slide toward weak to see them.`

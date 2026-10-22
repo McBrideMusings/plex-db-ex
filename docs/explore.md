@@ -32,6 +32,11 @@ bound with `z` standard errors of evidence.
 - **A tag is listed when its cautious lift is above 1×.** Below that, the pairing could be chance.
   Heist lists 400 tags at weak, 134 at the middle and 61 at strong, at the network's default minimum
   of 25 titles per tag.
+- **A note above the table says when the best pairings rest on few titles.** It appears when the ten
+  listed tags with the highest cautious lift, whatever the sort, each share three titles or fewer
+  with the selected tag, and names the largest share and the tag's own title count. On the 2026-10
+  store, show "science fiction" (31 shows) gets it at every slider position, its top ten sharing one
+  or two shows; movie "heist" (184) and movie "science fiction" (1,232) get none at the middle.
 - **The table sorts by any column.** Its columns are Tag, Lift (the cautious lift) and Shared.
   Clicking a header sorts by it, and clicking it again reverses the order. Ties go to more shared
   titles.

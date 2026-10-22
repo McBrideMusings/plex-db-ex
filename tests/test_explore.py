@@ -2241,6 +2241,41 @@ def test_cautious_lift_marks_down_few_titles_and_the_page_agrees(
         assert js == pytest.approx(explore.cautious_lift(*args), rel=1e-12), args
 
 
+def _related_note(page: Page, df: int, co: list[list[object]]) -> str | None:
+    """The caveat text the Related tags tab shows for a tag on `df` titles whose co-occurrence
+    is `co` (`[tag, shared, df]` rows), or None when it shows none."""
+    return page.evaluate(
+        """([df, co]) => {
+          showTag("probe");
+          Object.assign(cotags, { tag: "probe", kind: state.kind, token: cotags.token + 1,
+            data: { tag: "probe", df, titles: 1000, co } });
+          paintCotags();
+          const n = document.querySelector("#cobox .cothin");
+          return n ? n.textContent : null;
+        }""",
+        [df, co],
+    )
+
+
+def test_related_tags_say_when_the_top_pairings_rest_on_a_few_titles(
+    browser: Browser, base_url: str
+) -> None:
+    """A tag on 31 titles whose best pairings share 1-2 titles gets a caveat naming the count;
+    a tag whose best pairings share 10 or more gets none."""
+    page = browser.new_page()
+    page.goto(base_url)
+    page.wait_for_function("() => typeof showTag === 'function'")
+    small = [[f"rare{i}", 1 + i % 2, 1 + i % 2] for i in range(12)]
+    note = _related_note(page, 31, small)
+    assert note is not None
+    assert "1\u20132" in note and "(probe is on 31" in note, note
+    big = [[f"solid{i}", 10 + i, 12 + i] for i in range(12)]
+    assert _related_note(page, 184, big) is None
+    # The rule's edges: shared 3 is thin, shared 4 is not.
+    assert _related_note(page, 40, [[f"t{i}", 3, 3] for i in range(12)]) is not None
+    assert _related_note(page, 40, [[f"t{i}", 4, 4] for i in range(12)]) is None
+
+
 # ---- the Lists tab ----
 
 
