@@ -16,6 +16,11 @@ from (`_IndexCache.cotags`), so the counts agree with the table's df and a reque
 store. On the 2026-10 movie store a request takes 13–300 ms; the slowest is science fiction, with
 5,904 co-tags.
 
+`/api/tags`, `/api/cotags` and the `done` line of `/api/tagnetwork` each carry `stamp`, the store
+file's `<mtime_ns>:<size>` the answer was cached under. When the page holds answers with different
+stamps, it refetches the older ones (`reconcileStamps`) and shows no related rows built from a
+different snapshot than the tag table.
+
 Each row the server sends is `[tag, shared, df]`, unfiltered and unranked; the page does the rest,
 so moving the slider never asks the server again.
 

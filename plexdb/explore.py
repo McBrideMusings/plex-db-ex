@@ -24,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import sqlite3
 import sys
 import threading
@@ -1290,6 +1291,14 @@ class _KeyedCache:
             return
 
 
+def _store_stamp(stat: os.stat_result) -> str:
+    """The store file's modification time and size as `<mtime_ns>:<size>`, the
+    generation every cache here is keyed on. `/api/tags`, `/api/cotags` and the
+    done line of `/api/tagnetwork` carry it, so the page can tell answers built
+    from different snapshots apart."""
+    return f"{stat.st_mtime_ns}:{stat.st_size}"
+
+
 class _IndexCache:
     """One `TagIndex` per kind, rebuilt when the store file changes.
 
@@ -1313,9 +1322,12 @@ class _IndexCache:
         index's own, from the same file stamp."""
         entry = self._entry(kind)
         sets = cast(KeywordSets, entry["sets"])
-        return cotags_json(
-            cast(dict[str, object], entry["index"]), value, co_occurrence(sets, value)
-        )
+        return {
+            **cotags_json(
+                cast(dict[str, object], entry["index"]), value, co_occurrence(sets, value)
+            ),
+            "stamp": cast(dict[str, object], entry["index"])["stamp"],
+        }
 
     def _entry(self, kind: str) -> dict[str, object]:
         stat = self._path.stat()
@@ -1324,7 +1336,10 @@ class _IndexCache:
             with open_readonly(self._path) as conn:
                 rows = keyword_rows(conn, kind)
                 return {
-                    "index": index_json(build_index(conn, kind, rows=rows)),
+                    "index": {
+                        **index_json(build_index(conn, kind, rows=rows)),
+                        "stamp": _store_stamp(stat),
+                    },
                     "sets": keyword_sets(rows),
                 }
 
@@ -1439,7 +1454,14 @@ class _TagNetworkCache:
                         return {"stage": "done", **stored}
                 return tag_network_streaming(conn, kind, exclude, emit_stage)
 
-        self._cache.get_streaming((kind, exclude), (stat.st_mtime_ns, stat.st_size), stages, emit)
+        stamp = _store_stamp(stat)
+
+        def emit_stamped(chunk: dict[str, object]) -> None:
+            emit({**chunk, "stamp": stamp} if chunk.get("stage") == "done" else chunk)
+
+        self._cache.get_streaming(
+            (kind, exclude), (stat.st_mtime_ns, stat.st_size), stages, emit_stamped
+        )
 
 
 #: The Query tab's limits. Plex DB-EX has no login, locally or deployed, so
