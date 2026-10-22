@@ -4349,8 +4349,13 @@ async function backToDashboard() {
 }
 
 async function initDashboards() {
+  const box = qEl("dashwrap");
+  if (!q.dashboards.length) box.replaceChildren(el("p", { className: "empty", id: "dashloading" }, "Loading dashboards…"));
   try { paintDashboards((await getJSON("/api/dashboards")).dashboards); }
-  catch (err) { qEl("dashwrap").replaceChildren(el("div", { className: "tileerr", role: "alert" }, `Could not load the dashboards: ${err.message}`)); }
+  catch (err) {
+    box.replaceChildren();
+    dashStatus(`Could not load the dashboards: ${err.message}`, true);
+  }
 }
 document.querySelectorAll("button[data-qmode]").forEach(b => b.addEventListener("click", () => setQueryMode(b.dataset.qmode)));
 qEl("qaddpanel").addEventListener("click", () => addPanel());
