@@ -2031,6 +2031,25 @@ def test_pie_table_and_heatmap_draw_their_rows_and_stat_draws_a_sparkline(
     assert heat.locator(".hc.hot").count() == 2
 
 
+def test_a_table_panel_over_more_than_50_rows_says_how_many_it_shows(
+    browser: Browser, base_url: str, store: Path
+) -> None:
+    def note(rows: int) -> tuple[int, str]:
+        sql = (
+            "WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s "
+            f"WHERE n < {rows}) SELECT n AS lang, n AS kind, n FROM s"
+        )
+        page = _open_dashboard(browser, base_url, store, [_chart_panels({"*": sql})[4]])
+        tile = page.locator(".tile")
+        out = (tile.locator("tbody tr").count(), tile.locator(".tilenote").all_inner_texts())
+        page.close()
+        return out[0], " ".join(out[1])
+
+    assert note(120) == (50, "First 50 of 120 rows")
+    assert note(50) == (50, "")
+    assert note(600) == (50, "First 50 of 500+ rows")
+
+
 def test_a_panel_of_every_type_with_no_rows_says_so(
     browser: Browser, base_url: str, store: Path
 ) -> None:

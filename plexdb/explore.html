@@ -4043,7 +4043,9 @@ function tableChart(panel) {
   const { columns, rows } = panel.live;
   const cell = v => v === null || v === undefined ? "" : typeof v === "number" ? fmt(v) : String(v);
   const body = rows.slice(0, 50).map(r => el("tr", {}, ...r.map(v => el("td", { title: cell(v) }, cell(v)))));
-  return el("div", { className: "tabwrap" }, el("table", {}, el("thead", {}, el("tr", {}, ...columns.map(c => el("th", {}, c)))), el("tbody", {}, ...body)));
+  const wrap = el("div", { className: "tabwrap" }, el("table", {}, el("thead", {}, el("tr", {}, ...columns.map(c => el("th", {}, c)))), el("tbody", {}, ...body)));
+  if (rows.length <= 50 && !panel.live.truncated) return wrap;
+  return el("div", {}, wrap, el("div", { className: "tilenote" }, `First 50 of ${fmt(rows.length)}${panel.live.truncated ? "+" : ""} rows`));
 }
 
 function heatmapChart(panel) {
