@@ -1421,8 +1421,9 @@ file (`-v error -f null`) and the file fails when ffmpeg prints anything, `error
 output (at most five lines, the path shown as `<file>`; `moov atom not found` for a file cut short). A run
 decodes at most `PLEXDB_DECODE_BATCH` parts (default 50, 0 turns the pass off): parts with no
 `decode` row first, then the one whose row is oldest. A re-decode replaces the row, so the library
-cycles through the batch. A part the run could not decode (not on the mount, ffmpeg missing or past
-its time limit) gets no row.
+cycles through the batch. A decode that runs past its six-hour limit fails the part (`ok` 0,
+`error` `ffmpeg timed out`), so it moves to the back of the order. A part the run could not decode
+(not on the mount, ffmpeg missing) gets no row.
 
 **Refresh rule.** `check-files` probes only a part with no `header` row. `media-walk` replaces a
 changed record's parts whole, so a part that is new, or that Plex re-read because its size or

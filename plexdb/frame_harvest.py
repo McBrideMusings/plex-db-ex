@@ -52,7 +52,14 @@ from typing import Any, Protocol
 
 from . import frame_quant, frames
 from .config import Config
-from .errors import ConfigError, EncoderError, EncoderUnavailable, MediaError, PlexdbError
+from .errors import (
+    ConfigError,
+    EncoderError,
+    EncoderUnavailable,
+    MediaError,
+    MediaTimeout,
+    PlexdbError,
+)
 from .frame_encoder import EncoderClient
 from .identity import canonical_path
 from .plex_client import PLEX_TYPE_EPISODE, PLEX_TYPE_MOVIE, PlexSource
@@ -269,14 +276,15 @@ class FfmpegMedia:
                 f"{what}: {argv[0]} is not installed", "ffmpeg or ffprobe not installed"
             ) from None
         except subprocess.TimeoutExpired:
-            raise MediaError(
+            raise MediaTimeout(
                 f"{what}: {argv[0]} ran past {timeout_s:.0f} s", f"{Path(argv[0]).name} timed out"
             ) from None
 
     def probe(self, path: Path) -> tuple[dict[str, Any] | None, str]:
         """ffprobe's streams and format for `path`: `(report, "")`, or `(None, why)` when
         ffprobe ran and rejected the file (`why` is its last stderr line, without the path).
-        A missing binary or a run past the time limit is a `MediaError`, since the file
+        A missing binary or a run past the time limit (`MediaTimeout`) is a `MediaError`,
+        since the file
         itself was not judged."""
         argv = [
             self._ffprobe, "-v", "error", "-show_format", "-show_streams",
@@ -295,8 +303,9 @@ class FfmpegMedia:
 
     def decode(self, path: Path) -> str:
         """Decode every frame of `path` and throw it away: `""` when ffmpeg reported nothing,
-        else its error output with the path replaced by `<file>`. A missing binary or a run
-        past the time limit is a `MediaError`, since the file itself was not judged."""
+        else its error output with the path replaced by `<file>`. A missing binary is a
+        `MediaError`, since the file itself was not judged; a run past the time limit is a
+        `MediaTimeout`."""
         argv = [
             self._ffmpeg, "-nostdin", "-v", "error", "-i", str(path), "-f", "null", "-",
         ]  # fmt: skip
