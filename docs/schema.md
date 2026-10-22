@@ -1456,7 +1456,8 @@ through the Query tab's guarded `run_query` (read-only, 5 s, 500 rows). A `rows`
 `SELECT COUNT(*) FROM (<sql>)`; a `column:<name>` panel records that column of the first row. A
 query that fails, a first row with no such column, no rows at all, and a cell that is not a number
 (`column <name> is not a number`) each record `{day, error}`, and the other panels still run. A
-second run on the same UTC day replaces that day's entry. The step logs one line per panel: the
+second run on the same UTC day replaces that day's entry, except that a failed rerun never replaces a
+recorded `value`. The step logs one line per panel: the
 dashboard and panel id, the series key, the value or error, and the elapsed milliseconds.
 
 ## The original language of a title
