@@ -343,7 +343,9 @@ def test_server_serves_the_page_and_both_endpoints(base_url: str) -> None:
     # Every tag sharing a movie with superhero (df 3 of N 4), most shared first, each with
     # its own df: the counts the page's evidence slider computes cautious lifts from.
     status, body = _get(f"{base_url}/api/cotags?kind=movie&tag=superhero")
-    assert status == 200 and json.loads(body) == {
+    cotags = json.loads(body)
+    assert status == 200 and cotags.pop("stamp") == tags["stamp"]
+    assert cotags == {
         "kind": "movie",
         "tag": "superhero",
         "df": 3,
@@ -2242,6 +2244,54 @@ CAUTIOUS_CASES = [
     ((2, 11533, 184, 2, 4.0), 6.338),
     ((92, 11533, 184, 297, 4.0), 13.924),
 ]
+
+
+def _add_superhero_film(store: Path) -> None:
+    with open_store(store) as conn:
+        conn.execute(
+            "INSERT INTO items (item_id, type, title) VALUES ('imdb:tt5', 'movie', 'Hancock')"
+        )
+        for keyword in ("superhero", "stinger"):
+            conn.execute(
+                "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) "
+                "VALUES ('imdb:tt5', 'keywords', 'tmdb', 'keyword', ?, ?)",
+                (keyword, FETCHED),
+            )
+        conn.commit()
+
+
+def test_every_answer_carries_the_snapshot_it_was_built_from(store: Path, base_url: str) -> None:
+    before = json.loads(_get(f"{base_url}/api/tags?kind=movie")[1])["stamp"]
+    co = json.loads(_get(f"{base_url}/api/cotags?kind=movie&tag=superhero")[1])
+    net = _last_ndjson(_get(f"{base_url}/api/tagnetwork?kind=movie")[1])
+    assert co["stamp"] == net["stamp"] == before
+    stat = store.stat()
+    assert before == f"{stat.st_mtime_ns}:{stat.st_size}"
+
+    _add_superhero_film(store)
+    after = json.loads(_get(f"{base_url}/api/tags?kind=movie")[1])
+    assert after["stamp"] != before and after["titles"] == 5
+
+
+def test_the_page_refetches_tags_when_cotags_come_from_a_newer_snapshot(
+    browser: Browser, store: Path, base_url: str
+) -> None:
+    page = browser.new_page()
+    page.goto(base_url)
+    page.wait_for_function("() => state.data && state.data.stamp")
+    old = page.evaluate("state.data.stamp")
+    assert page.evaluate("state.data.titles") == 4
+
+    # The snapshot is replaced between the page's /api/tags and its /api/cotags.
+    _add_superhero_film(store)
+    page.evaluate("state.tag = 'superhero'; loadCotags('superhero')")
+    page.wait_for_function("old => state.data.stamp !== old", arg=old)
+    page.wait_for_function(
+        "() => cotags.data && cotags.data.stamp === state.data.stamp && coLive() !== null"
+    )
+    assert page.evaluate("state.data.titles") == 5
+    assert page.evaluate("cotags.data.titles") == 5
+    page.close()
 
 
 def test_cautious_lift_marks_down_few_titles_and_the_page_agrees(

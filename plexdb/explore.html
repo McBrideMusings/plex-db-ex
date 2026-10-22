@@ -1014,6 +1014,35 @@ async function getJSON(url) {
   return body;
 }
 
+// The store snapshot an answer was built from (`<mtime_ns>:<size>`). /api/tags, /api/tagnetwork's
+// done line and /api/cotags each carry one; a view is only drawn from answers that share it.
+function stampNewer(a, b) {
+  const [ma, sa] = a.split(":").map(BigInt), [mb, sb] = b.split(":").map(BigInt);
+  return ma !== mb ? ma > mb : sa > sb;
+}
+
+// When the tag list, the network and the selected tag's related rows disagree on the snapshot,
+// refetches whichever are older than the newest, so a publish between the requests never leaves
+// a df or lift from one snapshot drawn against nodes from another.
+const asked = {};
+function reconcileStamps() {
+  const held = [];
+  if (state.data) held.push(["tags", state.data.stamp]);
+  if (net.key && net.full) held.push(["net", net.full.stamp]);
+  if (cotags.data && cotags.tag === state.tag && cotags.kind === state.kind) held.push(["cotags", cotags.data.stamp]);
+  let newest = null;
+  for (const [, s] of held) if (s && (!newest || stampNewer(s, newest))) newest = s;
+  for (const [what, s] of held) {
+    if (!s || s === newest || asked[what] === newest) continue;
+    // One refetch per answer per snapshot: a second answer landing while this one is still in
+    // flight sees the same mismatch and must not start it again.
+    asked[what] = newest;
+    if (what === "tags") loadKind();
+    else if (what === "net") { net.key = null; loadNetwork(); }
+    else loadCotags(state.tag);
+  }
+}
+
 async function loadKind() {
   document.querySelectorAll(".seg button[data-kind]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.kind === state.kind)));
   document.getElementById("stats").textContent = "Loading…";
@@ -1038,6 +1067,7 @@ async function loadKind() {
   if (state.view === "map") drawMap();
   if (state.view === "graph") loadNetwork();
   if (state.tag) showTag(state.tag); else writeHash();
+  reconcileStamps();
 }
 
 function setView(view) {
@@ -1924,7 +1954,7 @@ async function loadNetwork() {
         paintNetwork();
       } else if (msg.stage === "done") {
         if (placeholders) startNetworkTween(msg, key);
-        else { net.full = { kind: msg.kind, nodes: msg.nodes, edges: msg.edges }; net.key = key; paintNetwork(); }
+        else { net.full = { kind: msg.kind, nodes: msg.nodes, edges: msg.edges, stamp: msg.stamp }; net.key = key; paintNetwork(); reconcileStamps(); }
       }
     }, isStale);
   } catch (err) {
@@ -1958,10 +1988,11 @@ function startNetworkTween(done, key) {
       requestAnimationFrame(step);
     } else {
       net.tween = null;
-      net.full = { kind: done.kind, nodes: done.nodes, edges: done.edges };
+      net.full = { kind: done.kind, nodes: done.nodes, edges: done.edges, stamp: done.stamp };
       net.key = key;
       net.itemsOf = null;
       paintNetwork();
+      reconcileStamps();
     }
   }
   requestAnimationFrame(step);
@@ -2371,7 +2402,8 @@ function coTitle(value, shared, anchor) {
 
 // The data for the tag the page shows, or null while it loads or after it failed.
 function coLive() {
-  return cotags.data && cotags.tag === state.tag && cotags.kind === state.kind ? cotags.data : null;
+  return cotags.data && cotags.tag === state.tag && cotags.kind === state.kind
+    && (!state.data || cotags.data.stamp === state.data.stamp) ? cotags.data : null;
 }
 // The tag the page shows is selected but its related tags have not arrived (loading or failed).
 function coPending() {
@@ -2431,6 +2463,7 @@ async function loadCotags(value) {
   paintCotags();
   netVP.redraw();
   paintNetworkNote();
+  reconcileStamps();
 }
 
 // The tag under the pointer, from the list (`cotags.hot`) or else the graph (`netVP.hover`).
