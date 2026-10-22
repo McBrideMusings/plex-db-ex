@@ -302,9 +302,9 @@
   .tile { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; min-width: 0;
           display: flex; flex-direction: column; gap: 6px; min-height: 190px; }
   .tile.tall { min-height: 250px; }
-  .tilehead { display: flex; gap: 8px; align-items: baseline; }
+  .tilehead { display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: baseline; }
   .tilehead h3 { font-size: 13px; margin: 0; flex: 0 1 auto; min-width: 0; max-width: 70%; overflow-wrap: anywhere; }
-  .tilehead .since { color: var(--muted); font-size: 11px; flex: 1; min-width: 0; }
+  .tilehead .since { color: var(--muted); font-size: 11px; flex: 1 0 auto; white-space: nowrap; }
   .tilehead button.plain { padding: 2px 10px; font-size: 12px; }
   .tilehead button.plain:disabled { opacity: 0.4; cursor: default; }
   .tilehead button.plain:disabled:hover { border-color: var(--line); }
@@ -4080,7 +4080,7 @@ function tileError(heading, message, last) {
 function paintTile(panel, dashboard, at) {
   const values = panel.series.filter(e => "value" in e);
   const failed = panel.live.error || (panel.series.length && "error" in panel.series[panel.series.length - 1]);
-  const since = values.length && !failed ? el("span", { className: "since" }, `history since ${dayLabel(values[0].day)}`) : el("span", { className: "grow" });
+  const since = values.length && !failed && (panel.chart === "line" || panel.chart === "stat") ? el("span", { className: "since" }, `history since ${dayLabel(values[0].day)}`) : el("span", { className: "grow" });
   const edit = el("button", { type: "button", className: "plain" }, "Edit");
   edit.addEventListener("click", () => editPanel(dashboard, panel));
   const mover = (label, text, to) => {
