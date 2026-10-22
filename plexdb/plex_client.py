@@ -34,6 +34,9 @@ _DEFAULT_TIMEOUT = 60.0
 #: everything in one response the way `/library/sections/<key>/all` does — a
 #: real server has tens of thousands of history rows.
 _HISTORY_PAGE_SIZE = 200
+#: Page size for `/library/sections/<key>/all`, small enough that each response
+#: with `includeGuids=1` stays well inside `_DEFAULT_TIMEOUT`.
+_SECTION_PAGE_SIZE = 500
 
 
 @dataclass(frozen=True)
@@ -150,12 +153,32 @@ class LivePlexClient:
         return sections
 
     def items(self, section_key: str, type_: int) -> list[dict[str, Any]]:
-        container = self._get(
-            f"/library/sections/{section_key}/all",
-            {"type": type_, "includeGuids": 1},
-        )
-        metadata: list[dict[str, Any]] = container.get("Metadata", [])
-        return metadata
+        """Every record of one Plex type in a section, fetched a page at a time so
+        no single response runs into the client timeout. Stops at the container's
+        `totalSize`, or on a short page when Plex reports none."""
+        records: list[dict[str, Any]] = []
+        start = 0
+        while True:
+            container = self._get(
+                f"/library/sections/{section_key}/all",
+                {
+                    "type": type_,
+                    "includeGuids": 1,
+                    "X-Plex-Container-Start": start,
+                    "X-Plex-Container-Size": _SECTION_PAGE_SIZE,
+                },
+            )
+            page: list[dict[str, Any]] = container.get("Metadata", [])
+            records.extend(page)
+            start += len(page)
+            total = container.get("totalSize")
+            # `totalSize` is authoritative: a server that caps its page below the size
+            # asked for must not truncate the list. Without it, a short page is the end.
+            if not page or (
+                start >= total if total is not None else len(page) < _SECTION_PAGE_SIZE
+            ):
+                break
+        return records
 
     def collections(self, section_key: str) -> list[dict[str, Any]]:
         """Every collection Plex lists for one section, smart and regular alike.
