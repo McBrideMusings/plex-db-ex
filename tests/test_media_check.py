@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from plexdb.errors import MediaTimeout
 from plexdb.explore import RECIPES
 from plexdb.frame_harvest import FfmpegMedia
 from plexdb.media_check import check_files
@@ -281,3 +282,36 @@ def test_parts_missing_from_the_mount_do_not_use_up_the_decode_batch(
 
     assert (stats.decoded, stats.decode_skipped) == (1, 2)
     assert set(_decode_rows(conn)) == {3}
+
+
+class SlowFirstPartMedia(CountingMedia):
+    """Decoding the first file it is handed runs past the time limit."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.decoded_files: list[Path] = []
+
+    def decode(self, path: Path) -> str:
+        self.decoded_files.append(path)
+        if len(self.decoded_files) == 1:
+            raise MediaTimeout(f"{path}: decode: ffmpeg ran past 21600 s", "ffmpeg timed out")
+        return super().decode(path)
+
+
+def test_a_decode_that_times_out_is_recorded_and_the_next_run_starts_elsewhere(
+    conn: sqlite3.Connection, clips: dict[str, Path]
+) -> None:
+    for part_id, name in ((1, "valid"), (2, "silent")):
+        _add_part(conn, part_id, clips[name], DURATION_MS)
+
+    first = SlowFirstPartMedia()
+    stats = check_files(conn, first, Path, decode_batch=1)
+
+    assert first.decoded_files == [clips["valid"]]
+    assert (stats.decoded, stats.decode_failed, stats.decode_skipped) == (1, 1, 0)
+    assert _decode_rows(conn)[1][:2] == (0, "ffmpeg timed out")
+
+    second = SlowFirstPartMedia()
+    check_files(conn, second, Path, decode_batch=1)
+
+    assert second.decoded_files == [clips["silent"]]

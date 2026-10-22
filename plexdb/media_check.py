@@ -32,7 +32,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from .errors import MediaError
+from .errors import MediaError, MediaTimeout
 from .frame_harvest import FfmpegMedia
 
 #: A file's duration may differ from Plex's by this fraction before it fails.
@@ -50,7 +50,7 @@ class CheckStats:
     skipped: int = 0
     decoded: int = 0
     decode_failed: int = 0
-    #: Parts the decode pass could not judge (not on the mount, ffmpeg missing or timed out).
+    #: Parts the decode pass could not judge (not on the mount, ffmpeg missing).
     decode_skipped: int = 0
 
 
@@ -161,6 +161,10 @@ def _decode_batch(
             path = locate(file)
             path.stat()  # raises OSError for a file not on the mount, before ffmpeg runs
             error = media.decode(path)
+        except MediaTimeout as err:
+            # Record the timeout so the part moves to the back of the order instead of
+            # heading every night's batch.
+            error = err.reason
         except (MediaError, OSError):
             stats.decode_skipped += 1
             continue

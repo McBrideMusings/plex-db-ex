@@ -122,6 +122,11 @@ class MediaError(PlexdbError):
         self.reason = reason
 
 
+class MediaTimeout(MediaError):
+    """ffmpeg or ffprobe ran past its time limit on a file. Unlike a missing binary, this
+    says something about the file, so a caller may record it."""
+
+
 class JevError(PlexdbError):
     """Jev could not be reached, kept answering 429, or returned something unusable."""
 
