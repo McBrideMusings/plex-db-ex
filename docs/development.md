@@ -126,6 +126,11 @@ admin backup-baseline    # consistent copy, left on the host in backups/
 admin backups            # what the host is holding
 ```
 
+`backup-baseline` also copies the explore directory's `*decisions.json` and `explore-queries.json`
+into `backups/` as `plexdb.manual-<stamp>.<name>`, under the same stamp as the store copy. Those
+files hold accept/reject decisions not yet folded into the store, so they exist nowhere else.
+Pruning a stamp's store copy removes its decision copies with it.
+
 ## A migration takes a copy first, and rolls back if the result is wrong
 
 `schema.apply` wraps every pending migration and the version row in one transaction, so a process

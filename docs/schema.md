@@ -1422,8 +1422,10 @@ file (`-v error -f null`) and the file fails when ffmpeg prints anything, `error
 output (at most five lines, the path shown as `<file>`; `moov atom not found` for a file cut short). A run
 decodes at most `PLEXDB_DECODE_BATCH` parts (default 50, 0 turns the pass off): parts with no
 `decode` row first, then the one whose row is oldest. A re-decode replaces the row, so the library
-cycles through the batch. A decode that runs past its six-hour limit fails the part (`ok` 0,
-`error` `ffmpeg timed out`), so it moves to the back of the order. A part the run could not decode
+cycles through the batch. A decode that runs past its six-hour limit writes `ok` 0 with `error`
+`ffmpeg timed out`, so the part moves to the back of the order and gets a full decode again on a
+later night. That row means a slow mount, not a damaged file: the seeded damaged-files panel
+leaves it out, and `check-files` counts it as `decode_timed_out`, not `decode_failed`. A part the run could not decode
 (not on the mount, ffmpeg missing) gets no row.
 
 **Refresh rule.** `check-files` probes only a part with no `header` row. `media-walk` replaces a
@@ -1433,7 +1435,7 @@ judge (its file is not on the media mount, or ffprobe is missing or ran past its
 row, so the next run tries it again. Neither `plexdb-reader` nor `READER_SHAPE` reads the table.
 
 Plex DB-EX's seeded Library health dashboard draws "Damaged or rule-breaking files" as a line panel:
-every check with `ok = 0`, with the title, the file and the error, newest first. "Decode progress"
+every check with `ok = 0` except a timed-out decode, with the title, the file and the error, newest first. "Decode progress"
 is a gauge panel over one row: `parts_decoded`, `parts_total` and `oldest_decode` (the oldest
 `checked_at` of a `decode` row).
 
