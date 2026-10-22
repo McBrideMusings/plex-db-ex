@@ -1863,6 +1863,24 @@ def test_the_dashboard_draws_the_four_seeded_panels_and_edit_opens_the_editor(
     assert "parts_decoded" in page.input_value("#sql")
 
 
+def test_the_dashboard_shows_a_loading_line_until_the_request_answers(
+    browser: Browser, base_url: str
+) -> None:
+    held: dict[str, Any] = {}
+    page = browser.new_page(viewport={"width": 1280, "height": 800})
+    page.route(lambda u: "/api/dashboards" in u, lambda r: held.update(req=r))
+    page.goto(base_url)
+    page.click('button[data-tab="query"]')
+    page.wait_for_selector("#dashloading")
+
+    assert page.inner_text("#dashloading") == "Loading dashboards…"
+    assert page.locator(".tile").count() == 0
+
+    held.pop("req").continue_()
+    page.wait_for_selector(".tile")
+    assert page.locator("#dashloading").count() == 0
+
+
 _TRACKS = (
     "SELECT 'eng' AS lang, 'audio' AS kind, 10 AS n UNION ALL SELECT 'eng', 'subtitle', 9 "
     "UNION ALL SELECT 'jpn', 'audio', 4 UNION ALL SELECT 'fre', 'audio', 3 "
