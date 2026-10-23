@@ -7,7 +7,6 @@ description = "The plexdb writer's sweep steps that have moved from the Python p
 [dependencies]
 plexdb-store = { path = "../plexdb-store" }
 rusqlite = { workspace = true }
-serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 

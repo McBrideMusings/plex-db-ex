@@ -4,7 +4,7 @@ The order is each command module's own `ORDER`, and whether a step's failure
 ends the run is each command module's own `SWEEP`. Nothing here holds a list of
 command names — a module that declares `SWEEP` is in the sweep, and one that
 does not is out (ADR-0014). A step that has moved to Rust declares the same two
-facts in `plexdb-rs steps --json` (`plexdb/rust.py`), and the plan merges them.
+facts in `plexdb/rust_steps.json` (`plexdb/rust.py`), and the plan merges them.
 
 The distinction between a source that is *not configured* and one that is *not
 reachable* is already in the exception taxonomy: `ConfigError` means a setting
@@ -82,9 +82,8 @@ def plan(
 
     A module declares `SWEEP` to opt in. Absence is the default and means out,
     so a new command cannot silently join a nightly run that writes to
-    consumers. `rust_steps` defaults to what `plexdb-rs` declares. A Rust step
-    takes the place of a Python module of the same name, which stays only until
-    `admin parity` has compared the two.
+    consumers. `rust_steps` defaults to what `rust_steps.json` declares. A Rust step
+    takes the place of a Python module of the same name, if one exists.
 
     Equal orders run by name with `-` read as `_`, the module-name order the
     Python steps always had.

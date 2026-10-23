@@ -400,7 +400,6 @@ version = "0.1.0"
 dependencies = [
  "plexdb-store",
  "rusqlite",
- "serde",
  "serde_json",
  "tempfile",
  "thiserror",

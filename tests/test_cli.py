@@ -33,6 +33,7 @@ from plexdb.walk import walk_all
 EXPECTED_COMMANDS = {
     "check",
     "idle",
+    "steps",
     "sweep",
     "migrate",
     "film-suffix-verdicts",
@@ -56,7 +57,6 @@ EXPECTED_COMMANDS = {
     "fold-merge-decisions",
     "fold-role-decisions",
     "fold-name-decisions",
-    "fold-list-decisions",
     "prune-keyword-verdicts",
     "judge-keyword-pairs",
     "judge-keyword-roles",
@@ -87,12 +87,13 @@ EXPECTED_COMMAND_ORDER = [
     # Beside it, and read-only too: whether nothing holds the store now
     # (`plexdb/commands/idle.py`).
     "idle",
+    # Every sweep step and which implementation runs it (`plexdb/commands/steps.py`).
+    "steps",
     "sweep",
     "migrate",
     "fold-merge-decisions",
     "fold-role-decisions",
     "fold-name-decisions",
-    "fold-list-decisions",
     "walk",
     "media-walk",
     "check-files",

@@ -1,10 +1,12 @@
 """The sweep steps that have moved to Rust, run through the `plexdb-rs` binary.
 
 The writer is moving to one Rust binary a sweep step at a time (ADR-0001). Until
-the move ends, `plexdb-rs steps --json` declares each moved step's name, order and
-failure policy, the sweep merges them into its plan (`sweep.plan`), and `plexdb
-<step>` hands a moved step to the binary (`cli.main`), so `plexdb idle <step>` and
-`admin host-exec <step>` keep working.
+the move ends, `rust_steps.json` beside this module declares each moved step's
+name, order and failure policy, the sweep merges them into its plan
+(`sweep.plan`), and `plexdb <step>` hands a moved step to the binary
+(`cli.main`), so `plexdb idle <step>` and `admin host-exec <step>` keep working.
+Planning reads that file and starts no process, so a missing or broken binary
+fails only the steps it runs, each under its own policy.
 
 Both implementations take the same writer lock (`store.writing`). A store this
 process holds exclusive (`store.holding`, as `plexdb idle <command>` does) is
@@ -21,18 +23,29 @@ import subprocess
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
 from .config import Config
 from .errors import ConfigError, PlexdbError
 from .store import held_path
 
-__all__ = ["HELD_STORE_VAR", "NOT_CONFIGURED", "RustStep", "RustStepError", "run", "steps"]
+__all__ = [
+    "HELD_STORE_VAR",
+    "NOT_CONFIGURED",
+    "STEPS_FILE",
+    "RustStep",
+    "RustStepError",
+    "run",
+    "steps",
+]
 
 #: The exit code `plexdb-rs` uses for a setting that is absent (`EX_CONFIG`); the
 #: sweep reports the step as skipped, as it does a Python step's `ConfigError`.
 NOT_CONFIGURED = 78
 
 HELD_STORE_VAR = "PLEXDB_HELD_STORE"
+
+STEPS_FILE = Path(__file__).with_name("rust_steps.json")
 
 
 class RustStepError(PlexdbError):
@@ -59,18 +72,10 @@ def binary(config: Config) -> str:
     return found
 
 
-def steps(config: Config | None = None) -> list[RustStep]:
-    """Every step `plexdb-rs` declares, as `plexdb-rs steps --json` lists them."""
-    config = config or Config.from_env()
-    argv = [binary(config), "steps", "--json"]
-    done = subprocess.run(argv, capture_output=True, text=True, check=False)
-    if done.returncode != 0:
-        raise RustStepError(f"{' '.join(argv)} exited {done.returncode}: {done.stderr.strip()}")
-    try:
-        declared = json.loads(done.stdout)
-        return [RustStep(str(s["name"]), int(s["order"]), str(s["policy"])) for s in declared]
-    except (ValueError, KeyError, TypeError) as err:
-        raise RustStepError(f"{' '.join(argv)} printed no step list: {err}") from None
+def steps() -> list[RustStep]:
+    """Every step `rust_steps.json` declares, in the order it lists them."""
+    declared = json.loads(STEPS_FILE.read_text(encoding="utf-8"))["steps"]
+    return [RustStep(str(s["name"]), int(s["order"]), str(s["policy"])) for s in declared]
 
 
 def run(args: Sequence[str], config: Config | None = None) -> int:

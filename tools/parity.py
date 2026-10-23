@@ -42,9 +42,10 @@ def _python_commands() -> set[str]:
     return _command_names(build_parser())
 
 
-def _rust_steps(rs_bin: str) -> set[str]:
-    out = subprocess.run([rs_bin, "steps", "--json"], capture_output=True, text=True, check=True)
-    return {step["name"] for step in json.loads(out.stdout)}
+def _rust_steps() -> set[str]:
+    from plexdb.rust import steps
+
+    return {step.name for step in steps()}
 
 
 def _copy(source: Path, target: Path) -> None:
@@ -102,7 +103,11 @@ def diff(python_store: Path, rust_store: Path) -> dict[str, Any]:
                     keys.append(key)
         differing += [{"table": table, "key": _jsonable(key)} for key in keys]
     conn.close()
-    return {"tables": len(py_tables.keys() | rs_tables.keys()), "rows": rows, "differing": differing}
+    return {
+        "tables": len(py_tables.keys() | rs_tables.keys()),
+        "rows": rows,
+        "differing": differing,
+    }
 
 
 def _jsonable(key: dict[str, Any]) -> dict[str, Any]:
@@ -123,8 +128,8 @@ def main() -> int:
     if args.step not in _python_commands():
         print(f"error: Python has no {args.step} left to compare", file=sys.stderr)
         return 1
-    if args.step not in _rust_steps(rs_bin):
-        print(f"error: plexdb-rs declares no step {args.step}", file=sys.stderr)
+    if args.step not in _rust_steps():
+        print(f"error: plexdb/rust_steps.json declares no step {args.step}", file=sys.stderr)
         return 1
     store = args.store.resolve()
     if not store.is_file():

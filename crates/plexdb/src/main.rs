@@ -1,7 +1,8 @@
 //! `plexdb-rs` — the writer's sweep steps that have moved to Rust.
 //!
-//! `plexdb-rs steps --json` lists them; `plexdb-rs <step>` runs one. A person
-//! runs neither directly: `plexdb <step>` and the sweep hand a moved step here.
+//! `plexdb-rs <step>` runs one. A person runs it through `plexdb <step>`, and the
+//! sweep runs it in the place `plexdb/rust_steps.json` gives it; `plexdb steps`
+//! lists both implementations' steps.
 //!
 //! Exit codes: 0 when the step ran, 1 when it failed, 2 for a usage error, and
 //! 78 (`EX_CONFIG`) when a setting it needs is absent, which the sweep reports as
@@ -15,28 +16,8 @@ use plexdb::steps::{self, Failure, STEPS};
 const NOT_CONFIGURED: u8 = 78;
 
 fn usage() -> String {
-    let names: Vec<&str> = STEPS.iter().map(|step| step.name).collect();
-    format!(
-        "usage: plexdb-rs steps [--json]\n       plexdb-rs <step>\n\nsteps: {}",
-        names.join(", ")
-    )
-}
-
-fn list_steps(json: bool) -> ExitCode {
-    if json {
-        match serde_json::to_string(STEPS) {
-            Ok(text) => println!("{text}"),
-            Err(err) => {
-                eprintln!("error: {err}");
-                return ExitCode::FAILURE;
-            }
-        }
-    } else {
-        for step in STEPS {
-            println!("{:>3}  {:<24} {:?}", step.order, step.name, step.policy);
-        }
-    }
-    ExitCode::SUCCESS
+    let names: Vec<&str> = STEPS.iter().map(|(name, _)| *name).collect();
+    format!("usage: plexdb-rs <step>\n\nsteps: {}", names.join(", "))
 }
 
 fn main() -> ExitCode {
@@ -51,14 +32,8 @@ fn main() -> ExitCode {
             println!("{}", usage());
             ExitCode::SUCCESS
         }
-        ["steps"] => list_steps(false),
-        ["steps", "--json"] => list_steps(true),
-        ["steps", ..] => {
-            eprintln!("error: steps takes only --json\n{}", usage());
-            ExitCode::from(2)
-        }
         [name, rest @ ..] => {
-            let Some(step) = steps::find(name) else {
+            let Some(run) = steps::find(name) else {
                 eprintln!("error: no command {name:?}\n{}", usage());
                 return ExitCode::from(2);
             };
@@ -66,7 +41,7 @@ fn main() -> ExitCode {
                 eprintln!("error: {name} takes no arguments, got {}", rest.join(" "));
                 return ExitCode::from(2);
             }
-            match (step.run)() {
+            match run() {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(Failure::Config(message)) => {
                     eprintln!("error: {message}");

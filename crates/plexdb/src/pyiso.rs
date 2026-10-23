@@ -3,11 +3,14 @@
 //! refuses while the other folds it puts different rows in the store. The value
 //! is stored as written, so this only answers yes or no.
 //!
-//! CPython runs the C implementation (`Modules/_datetimemodule.c`, 3.14), which
-//! accepts more than the pure-Python one: a fraction with no decimal mark, junk
-//! between a fraction and its offset, a separator that is any one character.
-//! This follows the C byte for byte over the UTF-8 text with a trailing NUL, the
-//! buffer it reads.
+//! CPython runs the C implementation (`Modules/_datetimemodule.c`), which accepts
+//! more than the pure-Python one: a fraction with no decimal mark, junk between a
+//! fraction and its offset, a separator that is any one character. This follows
+//! the C of Python 3.12, the version the image runs and `.python-version` pins,
+//! byte for byte over the UTF-8 text with a trailing NUL, the buffer it reads.
+//! 3.13 and later differ: they accept `T24:00:00` as the next midnight and refuse
+//! a decimal mark on the hour or minute. `tests/fixtures/decided_at.json` is
+//! checked against the running Python, so a version bump fails a test here.
 
 const MAX_YEAR: i32 = 9999;
 
@@ -189,12 +192,7 @@ fn parse_clock(s: &Buf, start: usize, end: usize) -> Option<Clock> {
         if i == 0 {
             has_separator = c == b':';
         }
-        if c == b'.' || c == b',' {
-            if i < 2 || p >= end {
-                return None;
-            }
-            break;
-        } else if p >= end {
+        if p >= end {
             let [hour, minute, second] = vals;
             return Some(Clock {
                 hour,
@@ -204,20 +202,20 @@ fn parse_clock(s: &Buf, start: usize, end: usize) -> Option<Clock> {
                 trailing: c != 0,
             });
         } else if has_separator && c == b':' {
-            if i == 2 {
-                return None;
-            }
             continue;
+        } else if c == b'.' || c == b',' {
+            break;
         } else if !has_separator {
             p -= 1;
         } else {
             return None;
         }
     }
+    // Every path out of the loop leaves `p` before `end`, so at least one digit.
     let to_parse = end.saturating_sub(p).min(6);
     let (mut micro, mut p) = s.digits(p, to_parse)?;
-    if to_parse < 6 {
-        micro *= [100_000, 10_000, 1_000, 100, 10].get(to_parse.wrapping_sub(1))?;
+    if let Some(scale) = [100_000, 10_000, 1_000, 100, 10].get(to_parse.wrapping_sub(1)) {
+        micro *= scale;
     }
     while s.at(p).is_ascii_digit() {
         p += 1;
@@ -257,8 +255,12 @@ fn parse_time(s: &Buf, start: usize, end: usize) -> Option<(Clock, Option<i64>)>
     if offset.trailing {
         return None;
     }
-    let seconds = i64::from(offset.hour) * 3600 + i64::from(offset.minute) * 60 + i64::from(offset.second);
-    Some((clock, Some(sign * (seconds * 1_000_000 + i64::from(offset.micro)))))
+    let seconds =
+        i64::from(offset.hour) * 3600 + i64::from(offset.minute) * 60 + i64::from(offset.second);
+    Some((
+        clock,
+        Some(sign * (seconds * 1_000_000 + i64::from(offset.micro))),
+    ))
 }
 
 /// Whether `datetime.fromisoformat(text)` returns rather than raises.
@@ -272,7 +274,7 @@ pub fn is_isoformat(text: &str) -> bool {
     let Some(separator) = separator_at(&s, len) else {
         return false;
     };
-    let Some((mut year, mut month, mut day)) = parse_date(&s, separator) else {
+    let Some((year, month, day)) = parse_date(&s, separator) else {
         return false;
     };
     let (mut hour, mut minute, mut second, mut micro) = (0, 0, 0, 0);
@@ -295,21 +297,6 @@ pub fn is_isoformat(text: &str) -> bool {
             return false;
         }
         (hour, minute, second, micro) = (clock.hour, clock.minute, clock.second, clock.micro);
-    }
-    if hour == 24 && (1..=12).contains(&month) && day <= days_in_month(year, month) {
-        if minute != 0 || second != 0 || micro != 0 {
-            return false;
-        }
-        hour = 0;
-        day += 1;
-        if day > days_in_month(year, month) {
-            day = 1;
-            month += 1;
-            if month > 12 {
-                month = 1;
-                year += 1;
-            }
-        }
     }
     (1..=MAX_YEAR).contains(&year)
         && (1..=12).contains(&month)

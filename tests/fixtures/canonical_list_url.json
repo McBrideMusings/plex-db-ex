@@ -1,0 +1,188 @@
+{
+  "_comment": [
+    "SPECIFICATION of canonical_list_url: the one spelling of a crowd-list URL the store",
+    "keys list_decision, list_attempt and collection.url on. Each case is a raw URL and",
+    "the canonical URL it must give, or null for text that names no MDBList or",
+    "Letterboxd list. `plexdb list-decide` and the list harvests compute it in Python",
+    "(tests/test_list_decisions.py) and `fold-list-decisions` in Rust",
+    "(crates/plexdb/src/list_decisions.rs); both run every case here."
+  ],
+  "version": 1,
+  "cases": [
+    {
+      "name": "the stored spelling",
+      "raw": "https://mdblist.com/lists/lina/top-watched",
+      "canonical": "https://mdblist.com/lists/lina/top-watched"
+    },
+    {
+      "name": "www, mixed case and a trailing slash",
+      "raw": "https://www.mdblist.com/lists/Lina/Top-Watched/",
+      "canonical": "https://mdblist.com/lists/lina/top-watched"
+    },
+    {
+      "name": "http with a query",
+      "raw": "http://mdblist.com/lists/lina/top-watched?x=1",
+      "canonical": "https://mdblist.com/lists/lina/top-watched"
+    },
+    {
+      "name": "a fragment",
+      "raw": "https://mdblist.com/lists/lina/top-watched#top",
+      "canonical": "https://mdblist.com/lists/lina/top-watched"
+    },
+    {
+      "name": "surrounding whitespace",
+      "raw": "  https://mdblist.com/lists/lina/top-watched\n",
+      "canonical": "https://mdblist.com/lists/lina/top-watched"
+    },
+    {
+      "name": "a port",
+      "raw": "https://mdblist.com:443/lists/lina/top-watched",
+      "canonical": "https://mdblist.com/lists/lina/top-watched"
+    },
+    {
+      "name": "userinfo",
+      "raw": "https://user:pw@mdblist.com/lists/lina/top-watched",
+      "canonical": "https://mdblist.com/lists/lina/top-watched"
+    },
+    {
+      "name": "an uppercase host and scheme",
+      "raw": "HTTPS://MDBLIST.COM/lists/lina/top-watched",
+      "canonical": "https://mdblist.com/lists/lina/top-watched"
+    },
+    {
+      "name": "a percent-encoded slug",
+      "raw": "https://mdblist.com/lists/lina/top%20watched",
+      "canonical": "https://mdblist.com/lists/lina/top watched"
+    },
+    {
+      "name": "an encoded slash inside the slug",
+      "raw": "https://mdblist.com/lists/lina/a%2Fb",
+      "canonical": "https://mdblist.com/lists/lina/a/b"
+    },
+    {
+      "name": "doubled slashes",
+      "raw": "https://mdblist.com//lists//lina//top-watched",
+      "canonical": "https://mdblist.com/lists/lina/top-watched"
+    },
+    {
+      "name": "params after the last slash",
+      "raw": "https://mdblist.com/lists/lina/top-watched;v=1",
+      "canonical": "https://mdblist.com/lists/lina/top-watched"
+    },
+    {
+      "name": "a tab inside the URL",
+      "raw": "https://mdblist.com/lists/li\tna/top-watched",
+      "canonical": "https://mdblist.com/lists/lina/top-watched"
+    },
+    {
+      "name": "a non-ASCII slug",
+      "raw": "https://mdblist.com/lists/lina/Ünïcode-Liste",
+      "canonical": "https://mdblist.com/lists/lina/ünïcode-liste"
+    },
+    {
+      "name": "LISTS in capitals",
+      "raw": "https://mdblist.com/LISTS/lina/top-watched",
+      "canonical": "https://mdblist.com/lists/lina/top-watched"
+    },
+    {
+      "name": "a user but no slug",
+      "raw": "https://mdblist.com/lists/lina",
+      "canonical": null
+    },
+    {
+      "name": "one part too many",
+      "raw": "https://mdblist.com/lists/lina/top-watched/extra",
+      "canonical": null
+    },
+    {
+      "name": "another host",
+      "raw": "https://example.com/lists/lina/top-watched",
+      "canonical": null
+    },
+    {
+      "name": "a lookalike host",
+      "raw": "https://mdblist.com.evil.example/lists/lina/top-watched",
+      "canonical": null
+    },
+    {
+      "name": "ftp",
+      "raw": "ftp://mdblist.com/lists/lina/top-watched",
+      "canonical": null
+    },
+    {
+      "name": "no scheme",
+      "raw": "mdblist.com/lists/lina/top-watched",
+      "canonical": null
+    },
+    {
+      "name": "a collection id, not a URL",
+      "raw": "mdblist:14",
+      "canonical": null
+    },
+    {
+      "name": "empty",
+      "raw": "",
+      "canonical": null
+    },
+    {
+      "name": "an unclosed IPv6 bracket",
+      "raw": "https://[::1/lists/lina/top-watched",
+      "canonical": null
+    },
+    {
+      "name": "a fullwidth slash in the host",
+      "raw": "https://mdblist.com／x/lists/a/b",
+      "canonical": null
+    },
+    {
+      "name": "a Letterboxd list",
+      "raw": "https://letterboxd.com/adaydreaming/list/feeling-lost-in-your-20s/",
+      "canonical": "https://letterboxd.com/adaydreaming/list/feeling-lost-in-your-20s"
+    },
+    {
+      "name": "a Letterboxd list with www and capitals",
+      "raw": "https://www.letterboxd.com/AdayDreaming/List/Feeling-Lost/",
+      "canonical": "https://letterboxd.com/adaydreaming/list/feeling-lost"
+    },
+    {
+      "name": "a Letterboxd page suffix",
+      "raw": "https://letterboxd.com/a/list/b/page/3/",
+      "canonical": "https://letterboxd.com/a/list/b"
+    },
+    {
+      "name": "a Letterboxd page suffix with no number",
+      "raw": "https://letterboxd.com/a/list/b/page/",
+      "canonical": null
+    },
+    {
+      "name": "a Letterboxd page number that is not ASCII",
+      "raw": "https://letterboxd.com/a/list/b/page/٣/",
+      "canonical": null
+    },
+    {
+      "name": "a Letterboxd page number that is not a number",
+      "raw": "https://letterboxd.com/a/list/b/page/x/",
+      "canonical": null
+    },
+    {
+      "name": "Letterboxd's lists index",
+      "raw": "https://letterboxd.com/lists/a/b",
+      "canonical": null
+    },
+    {
+      "name": "a Letterboxd film page",
+      "raw": "https://letterboxd.com/film/heat-1995/",
+      "canonical": null
+    },
+    {
+      "name": "a Letterboxd list with something after it",
+      "raw": "https://letterboxd.com/a/list/b/likes/",
+      "canonical": null
+    },
+    {
+      "name": "an MDBList path on the Letterboxd host",
+      "raw": "https://letterboxd.com/lists/lina/top-watched",
+      "canonical": null
+    }
+  ]
+}

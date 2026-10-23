@@ -10,7 +10,7 @@
 
 use std::path::Path;
 
-use plexdb_store::{Config, StoreError, open_store, py_strip, schema_version};
+use plexdb_store::{Config, StoreError, open_store, py_strip};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use crate::decisions::{self, DecisionsFileError, FoldStats, Spec, thousands};
@@ -18,9 +18,6 @@ use crate::pyurl::{unquote, urlparse};
 
 pub const NAME: &str = "fold-list-decisions";
 pub const LIST_DECISIONS_FILE: &str = "list_decisions.json";
-
-/// The version that added `list_decision`.
-const SINCE_SCHEMA: i64 = 22;
 
 const MDBLIST_HOSTS: &[&str] = &["mdblist.com", "www.mdblist.com"];
 const LETTERBOXD_HOSTS: &[&str] = &["letterboxd.com", "www.letterboxd.com"];
@@ -171,14 +168,6 @@ pub fn run() -> Result<(), FoldError> {
     let config = Config::from_env()?;
     let path = config.decisions_file(LIST_DECISIONS_FILE);
     let mut store = open_store(&config.store_path)?;
-    let version = schema_version(&store.conn)?;
-    if version < SINCE_SCHEMA {
-        return Err(StoreError::Store(format!(
-            "{} is at schema v{version}, before list_decision (v{SINCE_SCHEMA}) — run `plexdb migrate` first",
-            config.store_path.display()
-        ))
-        .into());
-    }
     let stats = fold(&mut store.conn, &path)?;
     println!("{}", describe(&stats, &path));
     Ok(())

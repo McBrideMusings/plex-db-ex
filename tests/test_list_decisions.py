@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -19,7 +20,6 @@ from plexdb.list_decisions import (
     UnknownList,
     canonical_list_url,
     decide,
-    fold_list_decisions,
 )
 from plexdb.lists import list_table, with_pending
 from plexdb.store import init, open_readonly, open_store
@@ -51,24 +51,36 @@ def _write(path: Path, *entries: tuple[str, str, str]) -> Path:
     return path
 
 
-@pytest.mark.parametrize(
-    "raw",
-    [
-        MINE,
-        "https://www.mdblist.com/lists/Lina/Top-Watched/",
-        "http://mdblist.com/lists/lina/top-watched?x=1",
-    ],
-)
-def test_one_list_has_one_canonical_url(raw: str) -> None:
-    assert canonical_list_url(raw) == MINE
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def _cases(name: str) -> list[dict[str, Any]]:
+    cases: list[dict[str, Any]] = json.loads((FIXTURES / name).read_text(encoding="utf-8"))["cases"]
+    return cases
 
 
 @pytest.mark.parametrize(
-    "raw",
-    ["https://letterboxd.com/lists/a/b", "https://mdblist.com/lists/lina", "mdblist:14", ""],
+    "case", _cases("canonical_list_url.json"), ids=lambda case: str(case["name"])
 )
-def test_text_that_is_not_an_mdblist_list_has_no_canonical_url(raw: str) -> None:
-    assert canonical_list_url(raw) is None
+def test_every_canonical_list_url_case_gives_the_specified_key(case: dict[str, Any]) -> None:
+    """The specification the Rust fold follows too (`crates/plexdb/tests/spec.rs`):
+    `list-decide` writes a spelling, and the fold must key it on the same row."""
+    assert canonical_list_url(case["raw"]) == case["canonical"]
+
+
+@pytest.mark.parametrize("case", _cases("decided_at.json"), ids=lambda case: repr(case["text"]))
+def test_every_decided_at_case_is_valid_exactly_when_the_file_check_accepts_it(
+    tmp_path: Path, case: dict[str, Any]
+) -> None:
+    """The Rust folds refuse a file whose `decided_at` this check would refuse, and no
+    other (`crates/plexdb/tests/spec.rs`)."""
+    path = tmp_path / "list_decisions.json"
+    path.write_text(json.dumps([{"url": MINE, "decision": "added", "decided_at": case["text"]}]))
+    if case["valid"]:
+        ListDecisions.load(path)
+    else:
+        with pytest.raises(ListDecisionsError, match="expected an ISO 8601 time"):
+            ListDecisions.load(path)
 
 
 def test_the_last_decision_per_list_wins_and_the_file_keeps_one_entry_per_list(
@@ -86,35 +98,6 @@ def test_a_file_naming_something_that_is_not_a_list_is_refused(tmp_path: Path) -
     path = _write(tmp_path / "list_decisions.json", ("https://example.com/x", "added", AT))
     with pytest.raises(ListDecisionsError, match="not an MDBList or Letterboxd list"):
         ListDecisions.load(path)
-
-
-def test_the_fold_keeps_a_lists_added_flag_through_a_refetch_and_ends_it_on_removal(
-    store: Path, tmp_path: Path
-) -> None:
-    path = tmp_path / "list_decisions.json"
-    with open_store(store) as conn:
-        _write(path, (MINE, "added", AT))
-        stats = fold_list_decisions(conn, path)
-        assert (stats.entries, stats.matched, stats.unmatched) == (1, 1, 0)
-
-        _write(path, (MINE, "refetch", LATER))
-        fold_list_decisions(conn, path)
-        assert tuple(conn.execute("SELECT decision, added FROM list_decision").fetchone()) == (
-            "refetch",
-            1,
-        )
-
-        _write(path, (MINE, "removed", LATER))
-        fold_list_decisions(conn, path)
-        assert tuple(conn.execute("SELECT decision, added FROM list_decision").fetchone()) == (
-            "removed",
-            0,
-        )
-
-
-def test_a_missing_file_is_no_decisions(store: Path, tmp_path: Path) -> None:
-    with open_store(store) as conn:
-        assert not fold_list_decisions(conn, tmp_path / "none.json").file_found
 
 
 def test_deciding_a_list_the_store_never_heard_of_is_refused_except_to_add_or_exclude(

@@ -2,10 +2,10 @@
 
 Plex DB-EX never writes `plexdb.db` (ADR-0007, ADR-0017), so a decision made on its
 Lists tab, or by `plexdb list-decide`, goes into `list_decisions.json` beside the other
-decisions files (`decisions.py`), and `plexdb fold-list-decisions` folds it into
-`list_decision` at the next sweep. The list harvest reads that table
-(`collections.refresh_mdblist`, `letterboxd_lists.refresh_letterboxd_lists`); this module
-only records and folds.
+decisions files (`decisions.py`), and `plexdb fold-list-decisions`, a Rust step
+(`crates/plexdb/src/list_decisions.rs`), folds it into `list_decision` at the next sweep.
+The list harvest reads that table (`collections.refresh_mdblist`,
+`letterboxd_lists.refresh_letterboxd_lists`); this module only records.
 
 An entry names a list by URL. The URL is canonical (`canonical_list_url`), so
 `https://www.mdblist.com/lists/Lina/Top-Watched/` and the stored
@@ -27,14 +27,13 @@ from typing import ClassVar
 from urllib.parse import unquote, urlparse
 
 from .config import Config
-from .decisions import DecisionsFile, FoldStats, decisions_dir
+from .decisions import DecisionsFile, decisions_dir
 from .errors import ListDecisionsError
 
 __all__ = [
     "LIST_DECISIONS_FILE",
     "ListDecisions",
     "canonical_list_url",
-    "fold_list_decisions",
     "is_before",
     "letterboxd_list_parts",
     "list_decisions_path",
@@ -176,42 +175,6 @@ class ListDecisions(DecisionsFile):
 def list_decisions_path(config: Config) -> Path:
     """`list_decisions.json`, beside Plex DB-EX's saved-queries file."""
     return decisions_dir(config) / LIST_DECISIONS_FILE
-
-
-def fold_list_decisions(conn: sqlite3.Connection, path: Path) -> FoldStats:
-    """Apply `path` to `list_decision`; a missing file is no decisions.
-
-    The file is a list of `{url, decision, decided_at}`. Entries apply in list order, so
-    the last entry per canonical URL wins. `added` sets the row's `added` flag; `excluded`
-    and `removed` clear it; `refetch` and `retry` keep what the row said. The whole file is
-    validated before the first row changes and applied in one transaction, every run, so
-    the file stays the record of the latest decision per list. Whether a decision has had
-    its effect is the harvest's to work out from `decided_at`.
-    """
-    stats = FoldStats()
-    entries = ListDecisions.load(path)
-    if entries is None:
-        return stats
-    stats.file_found = True
-    stats.entries = len(entries)
-    with conn:
-        for key, entry in ListDecisions.resolved(entries):
-            if key is None:
-                stats.unmatched += 1
-                continue
-            stats.matched += 1
-            decision = entry["decision"]
-            held = conn.execute("SELECT added FROM list_decision WHERE url = ?", key).fetchone()
-            added = {"added": 1, "excluded": 0, "removed": 0}.get(
-                decision, 0 if held is None else held[0]
-            )
-            conn.execute(
-                "INSERT INTO list_decision (url, decision, decided_at, added) VALUES (?, ?, ?, ?) "
-                "ON CONFLICT (url) DO UPDATE SET decision = excluded.decision, "
-                "decided_at = excluded.decided_at, added = excluded.added",
-                (*key, decision, entry["decided_at"], added),
-            )
-    return stats
 
 
 class UnknownList(LookupError):
