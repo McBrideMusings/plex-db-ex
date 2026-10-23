@@ -3,7 +3,8 @@
 The order is each command module's own `ORDER`, and whether a step's failure
 ends the run is each command module's own `SWEEP`. Nothing here holds a list of
 command names — a module that declares `SWEEP` is in the sweep, and one that
-does not is out (ADR-0014).
+does not is out (ADR-0014). A step that has moved to Rust declares the same two
+facts in `plexdb-rs steps --json` (`plexdb/rust.py`), and the plan merges them.
 
 The distinction between a source that is *not configured* and one that is *not
 reachable* is already in the exception taxonomy: `ConfigError` means a setting
@@ -16,15 +17,16 @@ from __future__ import annotations
 
 import sqlite3
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from types import ModuleType
 
+from . import rust
 from .commands import iter_command_modules
 from .errors import ConfigError, PlexdbError
 
-__all__ = ["Outcome", "PlannedStep", "Status", "Step", "plan", "run_sweep"]
+__all__ = ["Impl", "Outcome", "PlannedStep", "Status", "Step", "plan", "run_sweep"]
 
 
 class Step(Enum):
@@ -58,37 +60,59 @@ class Outcome:
     detail: str = ""
 
 
+class Impl(Enum):
+    """Which implementation runs a step while the writer moves to Rust (ADR-0001)."""
+
+    PYTHON = "python"
+    RUST = "rust"
+
+
 @dataclass(frozen=True)
 class PlannedStep:
     name: str
     step: Step
-    module: ModuleType
+    order: int
+    impl: Impl = Impl.PYTHON
 
 
-def plan(package: ModuleType | None = None) -> list[PlannedStep]:
+def plan(
+    package: ModuleType | None = None, rust_steps: Sequence[rust.RustStep] | None = None
+) -> list[PlannedStep]:
     """Every command taking part in a sweep, in the order it runs.
 
     A module declares `SWEEP` to opt in. Absence is the default and means out,
     so a new command cannot silently join a nightly run that writes to
-    consumers.
+    consumers. `rust_steps` defaults to what `plexdb-rs` declares. A Rust step
+    takes the place of a Python module of the same name, which stays only until
+    `admin parity` has compared the two.
+
+    Equal orders run by name with `-` read as `_`, the module-name order the
+    Python steps always had.
     """
+    declared = rust.steps() if rust_steps is None else rust_steps
+    moved = {s.name for s in declared}
     planned = [
-        PlannedStep(name=module.NAME, step=module.SWEEP, module=module)
+        PlannedStep(name=module.NAME, step=module.SWEEP, order=module.ORDER)
         for module in iter_command_modules(package)
-        if hasattr(module, "SWEEP")
+        if hasattr(module, "SWEEP") and module.NAME not in moved
     ]
-    return sorted(planned, key=lambda step: (step.module.ORDER, step.module.__name__))
+    planned += [PlannedStep(s.name, Step(s.policy), s.order, Impl.RUST) for s in declared]
+    return sorted(planned, key=lambda step: (step.order, step.name.replace("-", "_")))
 
 
-def _run_through_the_cli() -> Callable[[str], int]:
+def _run_through_the_cli(steps: list[PlannedStep]) -> Callable[[str], int]:
     """Run a step the way a person would: `plexdb <name>`, with every flag at
     its declared default. Building the parser once means argparse fills those
-    defaults, so the sweep never has to know a command's options."""
+    defaults, so the sweep never has to know a command's options. A Rust step
+    runs as `plexdb-rs <name>`."""
     from .cli import build_parser
 
     parser = build_parser()
+    moved = {s.name for s in steps if s.impl is Impl.RUST}
 
     def invoke(name: str) -> int:
+        if name in moved:
+            return rust.run([name])
         args = parser.parse_args([name])
         return int(args.func(args))
 
@@ -115,7 +139,7 @@ def run_sweep(
     says what was missing.
     """
     steps = plan() if steps is None else steps
-    invoke = _run_through_the_cli() if invoke is None else invoke
+    invoke = _run_through_the_cli(steps) if invoke is None else invoke
     outcomes: list[Outcome] = []
 
     for planned in steps:
