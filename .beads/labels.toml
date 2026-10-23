@@ -20,7 +20,7 @@ about = "crates/plexdb-reader, the read-only Rust crate etv-station vendors: tas
 about = "The plexdb schema, migrations, publish/snapshot, and the store's invariants."
 
 [labels.tooling]
-about = "Tests, admin.toml tasks, tools/, verify-project, the Dockerfile and deploy."
+about = "Tests, admin.toml tasks, tools/, the project skill, the Dockerfile and deploy."
 
 [labels.docs]
 about = "docs/ (PRD, spec, schema, ADRs, CONTEXT.md), CLAUDE.md."

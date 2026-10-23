@@ -15,8 +15,9 @@ Reddit — is an optional source behind an adapter. Code that assumes Tautulli i
 bug (ADR-0004). A consumer talks to Plex directly for anything Plex can answer and reaches this
 store only for what Plex cannot carry (ADR-0005).
 
-**One writer.** The Python package here is the only thing that writes `plexdb.db`. Every other
-consumer opens it read-only. The schema is the public API — a schema change breaks every
+**One writer.** The `plexdb` writer is the only thing that writes `plexdb.db`. It is moving
+from the Python package to one Rust binary a sweep step at a time, and both take the same writer
+lock, so one process writes at a time (ADR-0001). Every other consumer opens it read-only. The schema is the public API — a schema change breaks every
 consumer at once, with no version negotiation (ADR-0001).
 
 **`item_id` is not a TMDb id.** It is the opaque first-hit-wins string
@@ -51,7 +52,8 @@ because `enrichment_cursor` carries a `fetched_at` per title. See
 ## Layout
 
 ```
-plexdb/            the Python package — the only writer
+crates/            the Rust workspace: plexdb-reader, and the writer's steps as they move
+plexdb/            the Python package — runs the sweep steps not yet ported to Rust
 docs/              CONTEXT.md, adr/, PRD.md, ROADMAP.md
 data/              plexdb.db lives here (gitignored)
 ```
@@ -71,9 +73,8 @@ Keep these in sync as you work:
 | `docs/roadmap.md` | Direction shifts, something ships, or a question gets answered |
 | `docs/file-map.md` | Major files or folders are added, removed, or moved |
 
-Don't write new top-level planning or phase docs in `docs/` — file an issue on
-[the tracker](https://github.com/McBrideMusings/plex-db-ex/issues) instead. `roadmap.md` is the
-only forward-looking doc.
+Don't write new top-level planning or phase docs in `docs/` — file a bead (`bd`) instead.
+`roadmap.md` is the only forward-looking doc.
 
 ## Tasks
 
