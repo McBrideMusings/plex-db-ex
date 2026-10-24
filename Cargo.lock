@@ -395,6 +395,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 
 [[package]]
+name = "plexdb"
+version = "0.1.0"
+dependencies = [
+ "plexdb-store",
+ "rusqlite",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "plexdb-reader"
 version = "0.1.0"
 dependencies = [
@@ -406,6 +417,15 @@ dependencies = [
  "thiserror",
  "ureq",
  "url",
+]
+
+[[package]]
+name = "plexdb-store"
+version = "0.1.0"
+dependencies = [
+ "rusqlite",
+ "tempfile",
+ "thiserror",
 ]
 
 [[package]]

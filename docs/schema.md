@@ -1265,7 +1265,7 @@ did, and the reason. A fetch that succeeds deletes the row. It is bookkeeping, n
 ([ADR-0023](./adr/0023-the-store-holds-facts-about-plex-library-items-and-nothing-else),
 [ADR-0028](./adr/0028-list-decisions-and-fetch-attempts-are-keyed-by-list-url)).
 
-**Refresh rule.** Only `plexdb fold-list-decisions` writes `list_decision`, from
+**Refresh rule.** Only the Rust writer's `fold-list-decisions` step (`plexdb-rs`) writes `list_decision`, from
 [`list_decisions.json`](#list-decisions-json), as the sweep step after `fold-name-decisions`. Only
 `harvest-mdblist` (MDBList URLs) and `harvest-letterboxd-lists` (Letterboxd URLs) act on it and write
 `list_attempt`, each ignoring the other's lists:

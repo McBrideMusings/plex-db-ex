@@ -111,7 +111,7 @@ def test_a_new_command_declaring_sweep_joins_with_no_other_file_edited(
         "SWEEP = Step.BEST_EFFORT\n\n\ndef register(sub):\n    pass\n",
     )
 
-    assert [step.name for step in plan(package)] == ["newcomer"]
+    assert [step.name for step in plan(package, rust_steps=[])] == ["newcomer"]
 
 
 def test_a_new_command_declaring_no_sweep_stays_out(
@@ -126,11 +126,11 @@ def test_a_new_command_declaring_no_sweep_stays_out(
         'NAME = "newcomer"\nORDER = 42\n\n\ndef register(sub):\n    pass\n',
     )
 
-    assert plan(package) == []
+    assert plan(package, rust_steps=[]) == []
 
 
 def _steps(*spec: tuple[str, Step]) -> list[PlannedStep]:
-    return [PlannedStep(name=name, step=step, module=ModuleType(name)) for name, step in spec]
+    return [PlannedStep(name=name, step=step, order=0) for name, step in spec]
 
 
 def test_a_required_step_failing_stops_the_run_and_publishes_nothing(

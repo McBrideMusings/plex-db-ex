@@ -104,6 +104,14 @@ def _is_held(path: Path) -> bool:
     return path.resolve() in _held
 
 
+def held_path(path: Path) -> Path | None:
+    """The resolved path of `path` when this process holds it through `holding`,
+    else `None`. A child process that writes the store is told it (`rust.run`), so
+    it stands down rather than wait on this process's exclusive lock."""
+    resolved = path.resolve()
+    return resolved if resolved in _held else None
+
+
 @contextmanager
 def holding(path: Path) -> Iterator[str | None]:
     """Claim the whole store for this process, or say what stops it.

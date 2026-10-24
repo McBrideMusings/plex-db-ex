@@ -90,6 +90,8 @@ admin fmt        ruff format
 admin vet        lint + typecheck + test, plus the reader crate's cargo tests
 admin pull-baseline  copy the host store down into ./data
 admin host-exec <...> run one plexdb command in the deployed container, now
+admin parity <step>  run a step in Python and in Rust on two copies of the pulled store and list every row they wrote differently
+admin dev steps  list every sweep step in order with its failure policy and whether Python or plexdb-rs runs it
 admin dev check  report the store's health read-only; non-zero if it is behind or damaged
 admin logs live  tail the container on the host
 admin diff       show run-config drift between the container and the last deploy

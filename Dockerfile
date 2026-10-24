@@ -13,14 +13,16 @@
 # and nowhere before it.
 
 # `plexdb-read` is the reader crate's command line, and the one search
-# implementation `plexdb search` runs (ADR-0026). Built on Debian bookworm so its
-# glibc is no newer than the Python image's.
-FROM --platform=linux/amd64 rust:1.97-slim-bookworm AS reader
+# implementation `plexdb search` runs (ADR-0026). `plexdb-rs` is the Rust writer,
+# which runs the sweep steps moved from Python (ADR-0001); without it those steps
+# fail and the sweep reports them. Built on Debian bookworm so their glibc is no
+# newer than the Python image's.
+FROM --platform=linux/amd64 rust:1.97-slim-bookworm AS rust
 
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-RUN cargo build --release --locked -p plexdb-reader --bin plexdb-read
+RUN cargo build --release --locked -p plexdb-reader --bin plexdb-read -p plexdb --bin plexdb-rs
 
 FROM --platform=linux/amd64 python:3.12-slim
 
@@ -39,7 +41,8 @@ RUN apt-get update \
 
 WORKDIR /app
 
-COPY --from=reader /build/target/release/plexdb-read /usr/local/bin/plexdb-read
+COPY --from=rust /build/target/release/plexdb-read /usr/local/bin/plexdb-read
+COPY --from=rust /build/target/release/plexdb-rs /usr/local/bin/plexdb-rs
 
 # The lockfile and the package, and nothing else — no tests, no docs, no `data/`. `.dockerignore` is what keeps a 75 MB store out of the
 # build context by accident.
@@ -49,7 +52,8 @@ COPY plexdb ./plexdb
 RUN uv sync --frozen --no-dev
 
 ENV PATH="/app/.venv/bin:$PATH" \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PLEXDB_RS_BIN=/usr/local/bin/plexdb-rs
 
 # Paths inside the container, mounted from the host. Not secrets, so unlike
 # every URL and token they may carry a real value here: `/data` is the store's

@@ -1,0 +1,12 @@
+[package]
+name = "plexdb-store"
+version = "0.1.0"
+edition = "2024"
+description = "What every writer of plexdb.db shares: where the store is, how it opens, and its writer lock (ADR-0001)."
+
+[dependencies]
+rusqlite = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

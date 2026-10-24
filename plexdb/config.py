@@ -155,6 +155,10 @@ class Config:
     #: `PLEXDB_READ_BIN`, the `plexdb-read` binary `plexdb search` runs: a path,
     #: or a name looked up on `PATH`. The container's image carries it.
     read_bin: str
+    #: `PLEXDB_RS_BIN`, the `plexdb-rs` binary that runs the sweep steps moved to
+    #: Rust (ADR-0001): a path, or a name looked up on `PATH`. The container's
+    #: image carries it; `admin dev` builds it and points this at the build.
+    rs_bin: str
 
     @property
     def phrase_cache_path(self) -> Path | None:
@@ -230,6 +234,7 @@ class Config:
                 else None
             ),
             read_bin=os.environ.get("PLEXDB_READ_BIN", "").strip() or "plexdb-read",
+            rs_bin=os.environ.get("PLEXDB_RS_BIN", "").strip() or "plexdb-rs",
             ffmpeg=os.environ.get("PLEXDB_FFMPEG", "").strip() or "ffmpeg",
             ffprobe=os.environ.get("PLEXDB_FFPROBE", "").strip() or "ffprobe",
             decode_batch=_decode_batch(),

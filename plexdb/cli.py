@@ -1,7 +1,9 @@
 """The `plexdb` command line.
 
 Subcommands live under `plexdb/commands/`, one module per command. Adding a
-command is one new file there; this module discovers it and never changes.
+command is one new file there; this module discovers it and never changes. A
+sweep step that has moved to Rust has no module here: `main` hands its name to
+`plexdb-rs` (`plexdb/rust.py`).
 """
 
 from __future__ import annotations
@@ -12,7 +14,7 @@ import sys
 from collections.abc import Sequence
 from types import ModuleType
 
-from . import __version__, commands, schema
+from . import __version__, commands, rust, schema
 from .commands import iter_command_modules
 from .errors import PlexdbError
 
@@ -49,6 +51,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="plexdb",
         description="Extended Plex metadata and affinity store — the writer.",
+        epilog="Sweep steps that have moved to Rust run through plexdb-rs; "
+        "`plexdb steps` lists every step and which implementation runs it.",
     )
     parser.add_argument(
         "--version",
@@ -60,9 +64,23 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _command_names(parser: argparse.ArgumentParser) -> set[str]:
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            return set(action.choices)
+    return set()
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    argv = list(sys.argv[1:] if argv is None else argv)
+    parser = build_parser()
     try:
+        if argv and not argv[0].startswith("-") and argv[0] not in _command_names(parser):
+            # A name no Python module claims: a step that has moved to Rust, or
+            # a typo argparse should report.
+            if argv[0] in {step.name for step in rust.steps()}:
+                return rust.run(argv)
+        args = parser.parse_args(argv)
         result: int = args.func(args)
         return result
     except (PlexdbError, OSError, sqlite3.Error) as err:

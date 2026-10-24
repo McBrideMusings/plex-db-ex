@@ -1,0 +1,15 @@
+{
+  "_comment": [
+    "The sweep steps that have moved to Rust (ADR-0001), each with the order and failure policy",
+    "it had as a Python command module (ORDER, SWEEP, ADR-0014). The sweep merges these into its",
+    "plan without running anything (plexdb/rust.py), so a missing or broken plexdb-rs fails only",
+    "its own steps, each under its policy. plexdb-rs runs every name here",
+    "(crates/plexdb/src/steps.rs); its test checks that it has one for each.",
+    "fold-list-decisions: right after fold-name-decisions, because a sweep starts by applying what",
+    "a person decided since the last one; best-effort, because a malformed file costs the sweep",
+    "one step's report, not a night's library read."
+  ],
+  "steps": [
+    {"name": "fold-list-decisions", "order": 14, "policy": "best-effort"}
+  ]
+}

@@ -1,0 +1,151 @@
+{
+  "_comment": [
+    "Which `decided_at` texts a decisions file may carry: exactly those Python's",
+    "datetime.fromisoformat accepts (plexdb/decisions.py). Plex DB-EX and the",
+    "Python commands write the file; the Rust folds read it (crates/plexdb/src/pyiso.rs).",
+    "Both suites run every case, so a fold never refuses a file the writer thought valid."
+  ],
+  "version": 1,
+  "cases": [
+    {
+      "text": "2026-10-01T00:00:00+00:00",
+      "valid": true
+    },
+    {
+      "text": "2026-10-01T00:00:00Z",
+      "valid": true
+    },
+    {
+      "text": "2026-10-01T00:00:00",
+      "valid": true
+    },
+    {
+      "text": "2026-10-01",
+      "valid": true
+    },
+    {
+      "text": "2026-10-01 00:00",
+      "valid": true
+    },
+    {
+      "text": "2026-10-01T00",
+      "valid": true
+    },
+    {
+      "text": "2026-10-01T00:00:00.5",
+      "valid": true
+    },
+    {
+      "text": "2026-10-01T00:00:00.123456789",
+      "valid": true
+    },
+    {
+      "text": "2026-10-01T00:00:00,5+05:30",
+      "valid": true
+    },
+    {
+      "text": "20261001T000000",
+      "valid": true
+    },
+    {
+      "text": "2026-W40-4",
+      "valid": true
+    },
+    {
+      "text": "2026-274",
+      "valid": false
+    },
+    {
+      "text": "2026-10-01T24:00:00",
+      "valid": false
+    },
+    {
+      "text": "2026-10-01T23:59:60",
+      "valid": false
+    },
+    {
+      "text": "2026-02-29",
+      "valid": false
+    },
+    {
+      "text": "2024-02-29T12:00:00-08:00",
+      "valid": true
+    },
+    {
+      "text": "2026-13-01",
+      "valid": false
+    },
+    {
+      "text": "2026-10-01T00:00:00+25:00",
+      "valid": false
+    },
+    {
+      "text": "2026-10-01T00:00:00+05:30:15.25",
+      "valid": true
+    },
+    {
+      "text": "",
+      "valid": false
+    },
+    {
+      "text": "yesterday",
+      "valid": false
+    },
+    {
+      "text": " 2026-10-01",
+      "valid": false
+    },
+    {
+      "text": "2026-10-01T00:00:00 ",
+      "valid": false
+    },
+    {
+      "text": "2026-10-1",
+      "valid": false
+    },
+    {
+      "text": "٢026-10-01",
+      "valid": false
+    },
+    {
+      "text": "2026-10-01T00:00:00+0530",
+      "valid": true
+    },
+    {
+      "text": "2026-10-01t00:00:00",
+      "valid": true
+    },
+    {
+      "text": "2026-10-01T0000",
+      "valid": true
+    },
+    {
+      "text": "02610201T0000.0",
+      "valid": true
+    },
+    {
+      "text": "2026-10-01T10.5",
+      "valid": true
+    },
+    {
+      "text": "2026-10-01T10:30.5",
+      "valid": true
+    },
+    {
+      "text": "2026-10-01T10:00:00:5",
+      "valid": true
+    },
+    {
+      "text": "2026-10-01T10:00:00.5+05:30:00:25",
+      "valid": true
+    },
+    {
+      "text": "2026-10-31T24:00:00",
+      "valid": false
+    },
+    {
+      "text": "2026-10-01T24:00:00.000001",
+      "valid": false
+    }
+  ]
+}

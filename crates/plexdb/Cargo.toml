@@ -1,0 +1,24 @@
+[package]
+name = "plexdb"
+version = "0.1.0"
+edition = "2024"
+description = "The plexdb writer's sweep steps that have moved from the Python package (ADR-0001)."
+
+[dependencies]
+plexdb-store = { path = "../plexdb-store" }
+rusqlite = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+# Named `plexdb-rs` while the Python package still owns `plexdb` on PATH; the
+# last slice of the move renames it.
+[[bin]]
+name = "plexdb-rs"
+path = "src/main.rs"
+
+[lib]
+name = "plexdb"
+path = "src/lib.rs"
