@@ -8,8 +8,12 @@ description = "The plexdb writer's sweep steps that have moved from the Python p
 plexdb-schema = { path = "../plexdb-schema" }
 plexdb-store = { path = "../plexdb-store" }
 rusqlite = { workspace = true }
-serde_json = { workspace = true }
+# `preserve_order`: a list's JSON keeps the key order `plexdb lists --json` prints it in.
+serde_json = { workspace = true, features = ["preserve_order"] }
 thiserror = { workspace = true }
+# The list harvests' HTTP calls to MDBList and Letterboxd, both https. Only this crate
+# turns TLS on; the reader stays plain http (ADR-0026).
+ureq = { workspace = true, features = ["rustls"] }
 
 [dev-dependencies]
 tempfile = "3"

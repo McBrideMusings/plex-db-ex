@@ -35,6 +35,8 @@ __all__ = [
     "STEPS_FILE",
     "RustStep",
     "RustStepError",
+    "commands",
+    "names",
     "run",
     "steps",
 ]
@@ -76,6 +78,18 @@ def steps() -> list[RustStep]:
     """Every step `rust_steps.json` declares, in the order it lists them."""
     declared = json.loads(STEPS_FILE.read_text(encoding="utf-8"))["steps"]
     return [RustStep(str(s["name"]), int(s["order"]), str(s["policy"])) for s in declared]
+
+
+def commands() -> list[str]:
+    """The commands outside the sweep that have moved to Rust: reports and decisions a
+    person runs, which no sweep plans."""
+    declared = json.loads(STEPS_FILE.read_text(encoding="utf-8")).get("commands", [])
+    return [str(name) for name in declared]
+
+
+def names() -> set[str]:
+    """Every name `plexdb-rs` runs: the sweep's steps and the commands outside it."""
+    return {step.name for step in steps()} | set(commands())
 
 
 def run(args: Sequence[str], config: Config | None = None) -> int:

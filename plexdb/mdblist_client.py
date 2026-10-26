@@ -1,10 +1,11 @@
 """Reading MDBList's top lists and their entries over its HTTP API — read-only,
 GET requests only.
 
-`collections.py` depends on `MDBListSource`, not on `LiveMDBListClient`
-directly, so a recorded-response test can substitute a fake returning the same
-shapes without a socket — same split as `plex_client.py`/`PlexSource` and
-`tmdb_client.py`/`TMDbSource`.
+The crowd-list harvests that read lists through this client now run in Rust
+(`crates/plexdb/src/mdblist.rs`); the ratings sweep still uses it, and the list methods
+below go with it when the ratings sweep moves (plex-db-ex-f58.6). A recorded-response
+test can substitute a fake returning the same shapes without a socket — same split as
+`plex_client.py`/`PlexSource` and `tmdb_client.py`/`TMDbSource`.
 
 Verified against the live endpoints (2026-08-11):
 
@@ -70,6 +71,7 @@ defaults to.
 
 from __future__ import annotations
 
+import os
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -81,6 +83,14 @@ import httpx
 from .errors import MDBListError, MDBListQuotaError, MDBListUnreachable
 
 _BASE = "https://api.mdblist.com"
+#: Point the client at another server, for a recorded one (`tools/parity.py`).
+BASE_VAR = "MDBLIST_BASE_URL"
+
+
+def _base() -> str:
+    return os.environ.get(BASE_VAR, "").strip().rstrip("/") or _BASE
+
+
 _DEFAULT_TIMEOUT = 30.0
 
 #: Sent on every request. See the module docstring: without an explicit agent
@@ -319,7 +329,7 @@ class LiveMDBListClient:
         deeper: a chained cause keeps that key-bearing message reachable
         through `__cause__` and any traceback that walks it.
         """
-        url = f"{_BASE}{path}"
+        url = f"{_base()}{path}"
         params = {"apikey": self._key}
         if extra:
             params.update(extra)

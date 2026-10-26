@@ -295,6 +295,32 @@ pub fn open_store(path: &Path) -> Result<Store, StoreError> {
     connect(path)
 }
 
+/// Open the store read-only (`store.open_readonly`): any write fails rather than being
+/// applied, and the writer lock is not taken, so a reader never waits on a sweep.
+pub fn open_readonly(path: &Path) -> Result<Connection, StoreError> {
+    if path.is_dir() {
+        return Err(StoreError::Store(format!(
+            "{} is a directory, not a store — point PLEXDB_PATH at a file",
+            path.display()
+        )));
+    }
+    if !path.exists() {
+        return Err(StoreError::Store(format!("no store at {}", path.display())));
+    }
+    let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|err| {
+            StoreError::Store(format!("cannot open {} read-only: {err}", path.display()))
+        })?;
+    conn.busy_timeout(Duration::from_millis(BUSY_TIMEOUT_MS))?;
+    conn.query_row("SELECT 1 FROM sqlite_master LIMIT 1", [], |_| Ok(()))
+        .or_else(|err| match err {
+            rusqlite::Error::QueryReturnedNoRows => Ok(()),
+            other => Err(other),
+        })
+        .map_err(|err| StoreError::Store(format!("cannot read {}: {err}", path.display())))?;
+    Ok(conn)
+}
+
 /// Open the store for writing, creating the file and its directory when absent.
 /// Only a migration creates a store: anything else meeting a missing file is a
 /// typo'd path, and [`open_store`] says so.

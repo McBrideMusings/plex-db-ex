@@ -67,6 +67,13 @@ fn this_binary_runs_exactly_the_steps_the_sweep_plans_for_it() {
         .expect("a steps list")
         .iter()
         .map(|step| step["name"].as_str().expect("a name"))
+        .chain(
+            declared["commands"]
+                .as_array()
+                .expect("a commands list")
+                .iter()
+                .map(|name| name.as_str().expect("a name")),
+        )
         .collect();
     let mut here: Vec<&str> = STEPS.iter().map(|(name, _)| *name).collect();
     planned.sort_unstable();

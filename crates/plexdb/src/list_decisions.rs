@@ -19,6 +19,9 @@ use crate::pyurl::{unquote, urlparse};
 pub const NAME: &str = "fold-list-decisions";
 pub const LIST_DECISIONS_FILE: &str = "list_decisions.json";
 
+pub const MDBLIST: &str = "mdblist";
+pub const LETTERBOXD: &str = "letterboxd";
+
 const MDBLIST_HOSTS: &[&str] = &["mdblist.com", "www.mdblist.com"];
 const LETTERBOXD_HOSTS: &[&str] = &["letterboxd.com", "www.letterboxd.com"];
 
@@ -95,6 +98,14 @@ pub fn canonical_list_url(raw: &str) -> Option<String> {
     }
     letterboxd_list_parts(raw)
         .map(|(user, slug)| format!("https://letterboxd.com/{user}/list/{slug}"))
+}
+
+/// `collection.source` of the list a URL names, or `None` for text that is neither.
+pub fn list_source(raw: &str) -> Option<&'static str> {
+    if list_url_parts(raw).is_some() {
+        return Some(MDBLIST);
+    }
+    letterboxd_list_parts(raw).map(|_| LETTERBOXD)
 }
 
 #[derive(Debug, thiserror::Error)]

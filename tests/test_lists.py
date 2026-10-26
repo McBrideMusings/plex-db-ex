@@ -14,10 +14,8 @@ from typing import Any
 
 import pytest
 from fixture_store import init as init_store
-from mdblist_fixtures import FakeMDBListSource, a_list, an_entry
 
 from plexdb import cli
-from plexdb.collections import refresh_mdblist
 from plexdb.health import inspect
 from plexdb.lists import MIN_KEYWORD_TITLES, find_list, list_detail, list_table
 from plexdb.store import open_store
@@ -54,6 +52,41 @@ def _play(conn: sqlite3.Connection, item_id: str) -> None:
     )
 
 
+def _list(
+    conn: sqlite3.Connection,
+    list_id: int,
+    name: str,
+    path: str,
+    size: int | None,
+    entries: list[tuple[str, str, str | None, int | None]],
+    kind: str = "movie",
+) -> None:
+    """A fetched list as the harvest writes it (`crates/plexdb/src/collections.rs`): the
+    collection row, every entry by position, and a membership for each entry the library owns."""
+    collection_id = f"mdblist:{list_id}"
+    conn.execute(
+        "INSERT INTO collection (collection_id, source, name, url, size, likes, observed_at) "
+        "VALUES (?, 'mdblist', ?, ?, ?, NULL, ?)",
+        (collection_id, name, f"https://mdblist.com/lists/{path}", size, NOW),
+    )
+    for rank, (ns, value, title, year) in enumerate(entries, start=1):
+        conn.execute(
+            "INSERT INTO collection_entry (collection_id, rank, ns, value, kind, title, year) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (collection_id, rank, ns, value, kind, title, year),
+        )
+        owned = conn.execute(
+            "SELECT item_id FROM external_ids WHERE ns = ? AND value = ? AND kind = ?",
+            (ns, value, kind),
+        ).fetchone()
+        if owned is not None:
+            conn.execute(
+                "INSERT INTO collection_membership (collection_id, item_id, rank, observed_at) "
+                "VALUES (?, ?, ?, ?)",
+                (collection_id, owned[0], rank, NOW),
+            )
+
+
 @pytest.fixture
 def store(tmp_path: Path) -> Path:
     path = tmp_path / "plexdb.db"
@@ -71,21 +104,22 @@ def store(tmp_path: Path) -> Path:
             _keyword(conn, f"imdb:tt{number}", "everywhere")
         _play(conn, "imdb:tt1")
         _play(conn, "imdb:tt2")
-        source = FakeMDBListSource(
-            lists=[a_list(3892, name="Mindfuck Movies", slug="mindfuck", user_name="lina", size=7)],
-            entries_by_list={
-                3892: [
-                    an_entry(imdb="tt1", title="Owned 1", year=2001),
-                    an_entry(imdb="tt9001", title="Unowned One", year=1999),
-                    an_entry(imdb="tt2", title="Owned 2", year=2002),
-                    an_entry(imdb="tt3", title="Owned 3", year=2003),
-                    an_entry(imdb="tt9002", title="Unowned Two", year=2010),
-                    an_entry(imdb="tt4", title="Owned 4", year=2004),
-                    an_entry(imdb="tt5", title="Owned 5", year=2005),
-                ]
-            },
+        _list(
+            conn,
+            3892,
+            "Mindfuck Movies",
+            "lina/mindfuck",
+            7,
+            [
+                ("imdb", "tt1", "Owned 1", 2001),
+                ("imdb", "tt9001", "Unowned One", 1999),
+                ("imdb", "tt2", "Owned 2", 2002),
+                ("imdb", "tt3", "Owned 3", 2003),
+                ("imdb", "tt9002", "Unowned Two", 2010),
+                ("imdb", "tt4", "Owned 4", 2004),
+                ("imdb", "tt5", "Owned 5", 2005),
+            ],
         )
-        refresh_mdblist(conn, source)
         conn.commit()
     return path
 
@@ -173,13 +207,15 @@ def test_a_list_is_found_by_id_or_url_and_an_unknown_one_is_none(store: Path) ->
         assert list_detail(conn, "mdblist:1") is None
 
 
-def _run(capsys: pytest.CaptureFixture[str], *argv: str) -> tuple[int, str]:
+def _run(capfd: pytest.CaptureFixture[str], *argv: str) -> tuple[int, str]:
+    """Run a command; `capfd`, because `plexdb lists` is `plexdb-rs`, a child process that
+    writes to the real stdout."""
     code = cli.main(list(argv))
-    return code, capsys.readouterr().out
+    return code, capfd.readouterr().out
 
 
 def test_the_commands_print_exactly_what_the_functions_return(
-    store: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    store: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setenv("PLEXDB_PATH", str(store))
     with open_store(store) as conn:
@@ -187,13 +223,13 @@ def test_the_commands_print_exactly_what_the_functions_return(
         table: Any = list_table(conn)
         detail: Any = list_detail(conn, "mdblist:3892")
 
-    code, out = _run(capsys, "lists", "--json")
+    code, out = _run(capfd, "lists", "--json")
     assert (code, json.loads(out)) == (0, table)
-    code, out = _run(capsys, "list", "mdblist:3892", "--json")
+    code, out = _run(capfd, "list", "mdblist:3892", "--json")
     assert (code, json.loads(out)) == (0, detail)
-    code, out = _run(capsys, "lists")
+    code, out = _run(capfd, "lists")
     assert code == 0 and "Mindfuck Movies" in out and "owned 5/7" in out
-    code, out = _run(capsys, "list", "mdblist:3892")
+    code, out = _run(capfd, "list", "mdblist:3892")
     assert code == 0 and "Unowned One (1999)  [not owned]" in out
 
 
@@ -220,10 +256,7 @@ def test_a_show_is_watched_when_any_of_its_episodes_has_a_play(tmp_path: Path) -
             (NOW,),
         )
         _play(conn, "plex:ep1")
-        refresh_mdblist(
-            conn,
-            FakeMDBListSource(lists=[a_list(7)], entries_by_list={7: [an_entry("show", tvdb="1")]}),
-        )
+        _list(conn, 7, "A List", "someone/a-list", None, [("tvdb", "1", None, None)], "show")
         conn.commit()
 
         assert list_table(conn)[0]["watched"] == 1

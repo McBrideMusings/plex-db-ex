@@ -45,6 +45,7 @@ bounded number of times; a 403 is a Cloudflare challenge and fails the title.
 from __future__ import annotations
 
 import math
+import os
 import re
 import time
 from collections.abc import Callable
@@ -60,6 +61,10 @@ from .errors import LetterboxdError
 
 BASE_URL = "https://letterboxd.com"
 _HOST = "letterboxd.com"
+#: Point the client at another server, and set the pause after each request, for a recorded
+#: one (`tools/parity.py`). Unset, the client reads letterboxd.com and pauses `_PAUSE_SECONDS`.
+BASE_VAR = "LETTERBOXD_BASE_URL"
+PAUSE_VAR = "LETTERBOXD_PAUSE_SECONDS"
 #: The `<title>` text of the page `/tmdb/<id>/` answers for an id with no film.
 _IMPORT_RESULT_TITLE = "TMDB Import Result"
 ROBOTS_PATH = "/robots.txt"
@@ -73,6 +78,21 @@ USER_AGENT = (
 _TIMEOUT = 30.0
 #: Pause after every request; two requests per title.
 _PAUSE_SECONDS = 1.0
+
+
+def _env_base() -> str:
+    raw = os.environ.get(BASE_VAR, "").strip().rstrip("/")
+    return raw or BASE_URL
+
+
+def _env_pause() -> float:
+    try:
+        pause = float(os.environ.get(PAUSE_VAR, "").strip())
+    except ValueError:
+        return _PAUSE_SECONDS
+    return pause if math.isfinite(pause) and pause >= 0 else _PAUSE_SECONDS
+
+
 #: 429s honoured for one request before the title counts as failed.
 _MAX_RETRIES = 3
 #: A `Retry-After` longer than this fails the title rather than stalling a sweep.
@@ -377,6 +397,9 @@ class LiveLetterboxdClient:
     ) -> None:
         self._http = http or httpx.Client(timeout=_TIMEOUT)
         self._sleep = sleep
+        self._base = _env_base()
+        self._host = httpx.URL(self._base).host
+        self._pause = _env_pause()
         self._disallowed: list[str] | None = None
         #: Every path this client sent a request for, in order.
         self.requested: list[str] = []
@@ -404,8 +427,8 @@ class LiveLetterboxdClient:
                 + (" without the TMDB Import Result page" if resp.status_code == 200 else "")
             )
         location = resp.headers.get("Location", "")
-        target = httpx.URL(BASE_URL).join(location)
-        path = target.path if target.host == _HOST else location
+        target = httpx.URL(self._base).join(location)
+        path = target.path if target.host == self._host else location
         if not _FILM_PATH.match(path):
             raise LetterboxdError(
                 f"Letterboxd redirected tmdb {tmdb_id} to {location!r}, not a film page"
@@ -469,8 +492,8 @@ class LiveLetterboxdClient:
         resp = self._get(path)
         if resp.status_code in (301, 302, 303, 307, 308):
             location = resp.headers.get("Location", "")
-            target = httpx.URL(BASE_URL).join(location)
-            moved = target.path if target.host == _HOST else location
+            target = httpx.URL(self._base).join(location)
+            moved = target.path if target.host == self._host else location
             if not _FILM_PATH.match(moved):
                 raise LetterboxdError(f"Letterboxd redirected {path} to {location!r}")
             path = moved
@@ -507,20 +530,20 @@ class LiveLetterboxdClient:
             self.requested.append(path)
             try:
                 resp = self._http.get(
-                    BASE_URL + path,
+                    self._base + path,
                     headers={"User-Agent": USER_AGENT},
                     follow_redirects=False,
                 )
             except httpx.HTTPError as err:
                 raise LetterboxdError(
-                    f"cannot reach Letterboxd at {BASE_URL}{path}: {type(err).__name__}"
+                    f"cannot reach Letterboxd at {self._base}{path}: {type(err).__name__}"
                 ) from None
             if resp.status_code == 429 and attempt < _MAX_RETRIES:
                 wait = _retry_after(resp)
                 print(f"letterboxd: 429 on {path}, waiting {wait:.0f} s", flush=True)
                 self._sleep(wait)
                 continue
-            self._sleep(_PAUSE_SECONDS)
+            self._sleep(self._pause)
             if resp.status_code == 429:
                 break
             if resp.status_code == 403:

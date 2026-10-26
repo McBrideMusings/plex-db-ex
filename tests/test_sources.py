@@ -14,9 +14,6 @@ from plexdb.commands import enrich_mdblist_ratings as enrich_mdblist_ratings_cmd
 from plexdb.commands import enrich_tmdb_edges as enrich_tmdb_edges_cmd
 from plexdb.commands import enrich_tmdb_keywords as enrich_tmdb_keywords_cmd
 from plexdb.commands import enrich_wikidata as enrich_wikidata_cmd
-from plexdb.commands import harvest_letterboxd_lists as harvest_letterboxd_lists_cmd
-from plexdb.commands import harvest_mdblist as harvest_mdblist_cmd
-from plexdb.commands import harvest_mdblist_search as harvest_mdblist_search_cmd
 from plexdb.errors import ConfigError
 from plexdb.sources import GatedSource
 from plexdb.staleness import DEFAULT_STALE_DAYS
@@ -25,9 +22,6 @@ from plexdb.staleness import DEFAULT_STALE_DAYS
 SOURCES = [
     (enrich_tmdb_keywords_cmd.SOURCE, "TMDB_KEYWORDS_STALE_DAYS"),
     (enrich_tmdb_edges_cmd.SOURCE, "TMDB_EDGES_STALE_DAYS"),
-    (harvest_mdblist_cmd.SOURCE, "MDBLIST_STALE_DAYS"),
-    (harvest_letterboxd_lists_cmd.SOURCE, "LETTERBOXD_LISTS_STALE_DAYS"),
-    (harvest_mdblist_search_cmd.SOURCE, "MDBLIST_SEARCH_STALE_DAYS"),
     (enrich_wikidata_cmd.SOURCE, "WIKIDATA_STALE_DAYS"),
     (enrich_anilist_cmd.SOURCE, "ANILIST_STALE_DAYS"),
     (enrich_letterboxd_cmd.SOURCE, "LETTERBOXD_STALE_DAYS"),

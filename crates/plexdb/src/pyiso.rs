@@ -265,19 +265,46 @@ fn parse_time(s: &Buf, start: usize, end: usize) -> Option<(Clock, Option<i64>)>
 
 /// Whether `datetime.fromisoformat(text)` returns rather than raises.
 pub fn is_isoformat(text: &str) -> bool {
+    parse(text).is_some()
+}
+
+/// `datetime.fromisoformat(text)` as microseconds since the Unix epoch; a time with
+/// no offset is read as UTC, as `list_decisions.is_before` reads it. `None` where
+/// Python raises.
+pub fn isoformat_micros(text: &str) -> Option<i128> {
+    let (year, month, day, hour, minute, second, micro, offset) = parse(text)?;
+    let days = days_from_civil(i64::from(year), i64::from(month), i64::from(day));
+    let seconds = i128::from(days) * 86_400
+        + i128::from(hour) * 3600
+        + i128::from(minute) * 60
+        + i128::from(second);
+    Some(seconds * 1_000_000 + i128::from(micro) - i128::from(offset.unwrap_or(0)))
+}
+
+/// Days from 1970-01-01 to a proleptic Gregorian date (Howard Hinnant's algorithm).
+pub fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (month + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+type Parsed = (i32, i32, i32, i32, i32, i32, i32, Option<i64>);
+
+fn parse(text: &str) -> Option<Parsed> {
     if text.chars().count() < 7 {
-        return false;
+        return None;
     }
     let bytes = text.as_bytes();
     let s = Buf(bytes);
     let len = bytes.len();
-    let Some(separator) = separator_at(&s, len) else {
-        return false;
-    };
-    let Some((year, month, day)) = parse_date(&s, separator) else {
-        return false;
-    };
+    let separator = separator_at(&s, len)?;
+    let (year, month, day) = parse_date(&s, separator)?;
     let (mut hour, mut minute, mut second, mut micro) = (0, 0, 0, 0);
+    let mut utc_offset = None;
     if len > separator {
         // Step over the separator, one UTF-8 character as its lead byte says.
         let lead = s.at(separator);
@@ -290,20 +317,20 @@ pub fn is_isoformat(text: &str) -> bool {
                 _ => 2,
             }
         };
-        let Some((clock, offset)) = parse_time(&s, separator + width, len) else {
-            return false;
-        };
+        let (clock, offset) = parse_time(&s, separator + width, len)?;
         if offset.is_some_and(|micros| micros.abs() >= 86_400 * 1_000_000) {
-            return false;
+            return None;
         }
+        utc_offset = offset;
         (hour, minute, second, micro) = (clock.hour, clock.minute, clock.second, clock.micro);
     }
-    (1..=MAX_YEAR).contains(&year)
+    let valid = (1..=MAX_YEAR).contains(&year)
         && (1..=12).contains(&month)
         && day >= 1
         && day <= days_in_month(year, month)
         && (0..=23).contains(&hour)
         && (0..=59).contains(&minute)
         && (0..=59).contains(&second)
-        && (0..=999_999).contains(&micro)
+        && (0..=999_999).contains(&micro);
+    valid.then_some((year, month, day, hour, minute, second, micro, utc_offset))
 }

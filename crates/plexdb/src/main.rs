@@ -32,17 +32,18 @@ fn main() -> ExitCode {
             println!("{}", usage());
             ExitCode::SUCCESS
         }
-        [name, rest @ ..] => {
+        [name, ..] => {
+            let rest = &args[1..];
             let Some(run) = steps::find(name) else {
                 eprintln!("error: no command {name:?}\n{}", usage());
                 return ExitCode::from(2);
             };
-            if !rest.is_empty() {
-                eprintln!("error: {name} takes no arguments, got {}", rest.join(" "));
-                return ExitCode::from(2);
-            }
-            match run() {
+            match run(rest) {
                 Ok(()) => ExitCode::SUCCESS,
+                Err(Failure::Usage(message)) => {
+                    eprintln!("error: {message}");
+                    ExitCode::from(2)
+                }
                 Err(Failure::Config(message)) => {
                     eprintln!("error: {message}");
                     ExitCode::from(NOT_CONFIGURED)

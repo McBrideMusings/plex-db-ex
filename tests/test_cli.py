@@ -50,9 +50,6 @@ EXPECTED_COMMANDS = {
     "refresh-map",
     "refresh-tagnetwork",
     "enrich-mdblist-ratings",
-    "harvest-mdblist",
-    "harvest-letterboxd-lists",
-    "harvest-mdblist-search",
     "fold-merge-decisions",
     "fold-role-decisions",
     "fold-name-decisions",
@@ -62,9 +59,6 @@ EXPECTED_COMMANDS = {
     "ingest-plays",
     "enrich-tautulli-plays",
     "latent-users",
-    "lists",
-    "list",
-    "list-decide",
     "explore",
     "repair-identities",
     "repair-fs-identities",
@@ -108,9 +102,6 @@ EXPECTED_COMMAND_ORDER = [
     "enrich-letterboxd",
     "enrich-wikidata",
     "enrich-mdblist-ratings",
-    "harvest-mdblist",
-    "harvest-letterboxd-lists",
-    "harvest-mdblist-search",
     "prune-keyword-verdicts",
     "film-suffix-verdicts",
     "judge-keyword-pairs",
@@ -118,12 +109,6 @@ EXPECTED_COMMAND_ORDER = [
     "refresh-map",
     "refresh-tagnetwork",
     "latent-users",
-    # Read-only reports on the crowd lists the harvest stored
-    # (`plexdb/commands/lists.py`, `plexdb/commands/list_one.py`).
-    "lists",
-    "list",
-    # Records a decision about one of them (`plexdb/commands/list_decide.py`).
-    "list-decide",
     # The Frame index's status, queue and migration (`plexdb/commands/frames.py`).
     "frames",
     # Fills the Frame index through Plex; not a step of the sweep

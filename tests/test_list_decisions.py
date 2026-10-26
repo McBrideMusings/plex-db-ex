@@ -12,7 +12,6 @@ from typing import Any
 import pytest
 from fixture_store import init
 
-from plexdb import cli
 from plexdb.commands.check import render
 from plexdb.errors import ListDecisionsError
 from plexdb.health import inspect
@@ -117,24 +116,6 @@ def test_deciding_a_list_the_store_never_heard_of_is_refused_except_to_add_or_ex
             decide(conn, decisions, "https://example.com/x", "added")
         with pytest.raises(ValueError, match="decision must be one of"):
             decide(conn, decisions, MINE, "deleted")
-
-
-def test_list_decide_writes_the_file_the_explorer_reads(
-    store: Path,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    monkeypatch.setenv("PLEXDB_PATH", str(store))
-    monkeypatch.delenv("PLEXDB_EXPLORE_SAVED_PATH", raising=False)
-
-    assert cli.main(["list-decide", MINE, "excluded"]) == 0
-    assert "excluded " + MINE in capsys.readouterr().out
-    entries = json.loads((store.parent / "list_decisions.json").read_text())
-    assert [(e["url"], e["decision"]) for e in entries] == [(MINE, "excluded")]
-
-    assert cli.main(["list-decide", "https://mdblist.com/lists/no/one", "retry"]) == 1
-    assert cli.main(["list-decide", "https://example.com/x", "added"]) == 1
 
 
 def _attempt(conn: sqlite3.Connection, key: str, attempts: int) -> None:

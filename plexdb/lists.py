@@ -24,8 +24,11 @@ from typing import Any
 from urllib.parse import urlparse
 
 from . import keywords
-from .collections import MAX_FAILURES
 from .list_decisions import canonical_list_url, is_before, letterboxd_list_parts, list_source
+
+#: Failures in a row after which a list is left alone until a `retry` decision
+#: (`crates/plexdb/src/collections.rs` `MAX_FAILURES`, which stops the fetching).
+MAX_FAILURES = 3
 
 #: A keyword is reported for a list when at least this many of the list's owned
 #: titles carry it …
