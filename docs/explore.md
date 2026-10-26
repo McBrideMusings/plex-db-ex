@@ -9,10 +9,20 @@ on `http://localhost:5194`. Its server is `plexdb/explore.py` and its one page i
 `plexdb-rs explore [--host H] [--port N] [--store PATH] [--fallback URL]` serves the same page and
 the read-only keyword routes (`/api/tags`, `/api/titles`, `/api/cotags`, `/api/map`,
 `/api/tagnetwork`, `/api/title`) from Rust, with the same answers byte for byte
-(`crates/plexdb/src/explore.rs`). Every other route is forwarded to the Python explorer at
+(`crates/plexdb/src/explore.rs`). It also serves the decision routes: the Merges tab
+(`GET`/`POST /api/merges`), the Roles tab (`GET`/`POST /api/roles`), display names
+(`POST /api/names`), the Lists tab (`/api/lists`, `/api/list`, `POST /api/list-decisions`) and the tag
+doctor (`/api/doctor`, `/api/keywords`, `/api/doctor/titles`). A `POST` writes `merge_decisions.json`,
+`role_decisions.json`, `name_decisions.json` or `list_decisions.json` beside the saved-queries file
+(`PLEXDB_EXPLORE_SAVED_PATH`) as the Python explorer does, one entry per key, replaced by rename;
+it never writes the store (`crates/plexdb/src/decision_book.rs` writes the files and
+`decision_views.rs` lays them over the tables). The doctor's `forms` and `names` objects list their
+keys in sorted order, where Python lists them in set order. A body that is not JSON gets a 400 whose
+message is serde's, not Python's. Every other route is forwarded to the Python explorer at
 `--fallback` (or `PLEXDB_EXPLORE_FALLBACK`) until its slice moves; with none set it answers 404.
 `admin parity explore` starts both over one copy of the pulled store and lists every route whose
-answer differs. A map or network drawn live with noise excluded is laid out by holomap in Rust and
+answer differs; it also posts the same decisions to both and compares the replies, the reads after
+them and the four decision files, with the time of each decision masked. A map or network drawn live with noise excluded is laid out by holomap in Rust and
 UMAP in Python, so that comparison leaves out positions and region labels. The page names the layout
 "holomap". The container still runs the Python explorer.
 

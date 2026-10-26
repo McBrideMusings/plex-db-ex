@@ -5,7 +5,8 @@
 
 use std::path::Path;
 
-use plexdb::list_file::{DecideError, ListFile, decide};
+use plexdb::decision_book::Book;
+use plexdb::list_file::{DecideError, decide, list_book};
 use plexdb::lists::{list_detail, list_table};
 use plexdb::migrate::migrate;
 use rusqlite::Connection;
@@ -163,8 +164,8 @@ fn a_list_detail_names_every_entry_and_the_keywords_the_list_over_represents() {
     );
 }
 
-fn decisions_file(dir: &Path) -> ListFile {
-    ListFile::new(dir.join("list_decisions.json"))
+fn decisions_file(dir: &Path) -> Book {
+    list_book(dir.join("list_decisions.json"))
 }
 
 #[test]
@@ -181,7 +182,7 @@ fn a_decision_replaces_the_lists_earlier_entry_and_is_written_as_python_writes_i
     )
     .expect("exclude");
     let entry = decide(&conn, &file, URL, "refetch").expect("refetch");
-    assert_eq!(entry["url"], json!(URL));
+    assert_eq!(entry.key, [URL]);
     let written: Value =
         serde_json::from_str(&std::fs::read_to_string(file.path()).expect("the file"))
             .expect("json");
@@ -235,5 +236,8 @@ fn a_refetch_cannot_replace_an_add_the_sweep_has_not_folded() {
         "{err}"
     );
     let latest = file.latest().expect("latest");
-    assert_eq!(latest[new].0, "added");
+    assert_eq!(
+        latest.get(&[new.to_string()]).expect("entry").decision,
+        "added"
+    );
 }

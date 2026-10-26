@@ -13,7 +13,7 @@ use plexdb::refresh_map;
 use plexdb::refresh_tagnetwork;
 use plexdb::staleness::Now;
 use rusqlite::Connection;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 fn add_title(conn: &Connection, id: &str, kind: &str, keywords: &[&str]) {
     conn.execute(
@@ -380,5 +380,212 @@ fn a_route_not_yet_moved_goes_to_the_python_explorer() {
     assert_eq!(
         (status, body.as_str()),
         (404, r#"{"error":"no route /api/saved"}"#)
+    );
+}
+
+impl Explorer {
+    /// POST `body` as `content_type`; the status and the body text.
+    fn post(&self, route: &str, content_type: &str, body: &str) -> (u16, String) {
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .http_status_as_error(false)
+            .build()
+            .into();
+        let mut answer = agent
+            .post(&format!("{}{route}", self.base))
+            .header("Content-Type", content_type)
+            .send(body.as_bytes())
+            .expect("the explorer answers");
+        let status = answer.status().as_u16();
+        (status, answer.body_mut().read_to_string().expect("a body"))
+    }
+
+    fn post_json(&self, route: &str, body: &Value) -> (u16, Value) {
+        let (status, text) = self.post(route, "application/json", &body.to_string());
+        (status, serde_json::from_str(&text).expect("JSON"))
+    }
+}
+
+fn read_file(dir: &Path, name: &str) -> Value {
+    let text = std::fs::read_to_string(dir.join(name)).expect("the decisions file");
+    assert!(text.ends_with("\n"), "json.dumps(indent=2) plus a newline");
+    serde_json::from_str(&text).expect("JSON")
+}
+
+#[test]
+fn a_name_shows_at_once_and_is_written_to_the_decisions_file() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    library(dir.path());
+    let explorer = Explorer::start(dir.path(), None);
+
+    let (status, reply) = explorer.post_json(
+        "/api/names",
+        &json!({"keyword": "theme0", "name": "  Theme   Zero "}),
+    );
+    assert_eq!(status, 200, "{reply}");
+    assert_eq!(reply["label"], "Theme Zero");
+    assert_eq!(reply["name"]["name"], "Theme Zero");
+    assert_eq!(reply["name"]["pending"], true);
+    assert_eq!(reply["entry"]["name"], "Theme Zero");
+    let file = read_file(dir.path(), "name_decisions.json");
+    assert_eq!(file.as_array().map(Vec::len), Some(1));
+    assert_eq!(file[0]["surface"], "theme0");
+    assert_eq!(file[0]["decision"], "named");
+
+    let card = explorer.json("/api/title?item_id=fs:0-00");
+    let label = card["keywords"]
+        .as_array()
+        .expect("keywords")
+        .iter()
+        .find(|k| k["value"] == "theme0")
+        .expect("theme0");
+    assert_eq!(label["label"], "Theme Zero");
+
+    // A blank name clears it, and a second decision replaces the first entry.
+    let (status, reply) =
+        explorer.post_json("/api/names", &json!({"keyword": "theme0", "name": "   "}));
+    assert_eq!(status, 200, "{reply}");
+    assert_eq!(reply["label"], "theme0");
+    let file = read_file(dir.path(), "name_decisions.json");
+    assert_eq!(file.as_array().map(Vec::len), Some(1));
+    assert_eq!(file[0]["decision"], "cleared");
+    assert!(file[0].get("name").is_none());
+}
+
+#[test]
+fn a_decision_post_refuses_what_it_cannot_record() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    library(dir.path());
+    let explorer = Explorer::start(dir.path(), None);
+
+    let (status, text) = explorer.post("/api/names", "text/plain", "{}");
+    assert_eq!(status, 400);
+    assert_eq!(text, r#"{"error":"Content-Type must be application/json"}"#);
+    let (status, reply) = explorer.post_json("/api/names", &json!({"keyword": "theme0"}));
+    assert_eq!(
+        (status, reply["error"].as_str()),
+        (
+            400,
+            Some("name is required; a null or blank name clears it")
+        )
+    );
+    let (status, reply) =
+        explorer.post_json("/api/names", &json!({"keyword": "no such", "name": "x"}));
+    assert_eq!(
+        (status, reply["error"].as_str()),
+        (404, Some("no title carries the keyword 'no such'"))
+    );
+    let (status, reply) = explorer.post_json(
+        "/api/merges",
+        &json!({"keyword_a": "b", "keyword_b": "a", "decision": "accepted"}),
+    );
+    assert_eq!(
+        (status, reply["error"].as_str()),
+        (400, Some("keyword_a must sort before keyword_b"))
+    );
+    assert!(!dir.path().join("name_decisions.json").exists());
+    assert!(!dir.path().join("merge_decisions.json").exists());
+}
+
+#[test]
+fn a_merge_decision_lays_over_the_pair_until_the_sweep_folds_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    library(dir.path());
+    Connection::open(dir.path().join("plexdb.db"))
+        .expect("store")
+        .execute(
+            "INSERT INTO keyword_pairs (keyword_a, keyword_b, jev_score, jev_model, judged_at) \
+             VALUES ('theme0', 'theme1', 0.7, 'm', '2026-01-01T00:00:00+00:00')",
+            [],
+        )
+        .expect("pair");
+    let explorer = Explorer::start(dir.path(), None);
+
+    let before = explorer.json("/api/merges");
+    assert_eq!(before["proposed"][0]["keyword_a"], "theme0");
+    assert_eq!(before["proposed"][0]["bucket"], "proposed");
+
+    let (status, reply) = explorer.post_json(
+        "/api/merges",
+        &json!({"keyword_a": "theme0", "keyword_b": "theme1", "decision": "accepted"}),
+    );
+    assert_eq!(status, 200, "{reply}");
+    assert_eq!(reply["pair"]["bucket"], "merged");
+    assert_eq!(reply["pair"]["pending"], true);
+    let after = explorer.json("/api/merges");
+    assert_eq!(after["proposed"].as_array().map(Vec::len), Some(0));
+    assert_eq!(after["decided"][0]["decision"], "accepted");
+    let file = read_file(dir.path(), "merge_decisions.json");
+    assert_eq!(file[0]["surface_a"], "theme0");
+    assert_eq!(file[0]["surface_b"], "theme1");
+
+    let (status, reply) = explorer.post_json(
+        "/api/merges",
+        &json!({"keyword_a": "nope1", "keyword_b": "nope2", "decision": "accepted"}),
+    );
+    assert_eq!(
+        (status, reply["error"].as_str()),
+        (404, Some("no keyword pair ('nope1', 'nope2') in the store"))
+    );
+}
+
+#[test]
+fn a_role_decision_and_a_list_decision_wait_for_the_sweep() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    library(dir.path());
+    Connection::open(dir.path().join("plexdb.db"))
+        .expect("store")
+        .execute(
+            "INSERT INTO keyword_roles (keyword, role, source, score, model, stated_at) \
+             VALUES ('theme0', 'tone', 'jev', 0.8, 'm', '2026-01-01T00:00:00+00:00')",
+            [],
+        )
+        .expect("role");
+    let explorer = Explorer::start(dir.path(), None);
+
+    let listing = explorer.json("/api/roles");
+    assert_eq!(listing["keywords"][0]["keyword"], "theme0");
+    assert_eq!(
+        listing["keywords"][0]["cells"]["tone"]["decision"],
+        Value::Null
+    );
+    let (status, reply) = explorer.post_json(
+        "/api/roles",
+        &json!({"keyword": "theme0", "role": "tone", "decision": "rejected"}),
+    );
+    assert_eq!(status, 200, "{reply}");
+    assert_eq!(reply["cell"]["decision"], "rejected");
+    assert_eq!(reply["cell"]["pending"], true);
+    assert_eq!(reply["entry"]["surface"], "theme0");
+    let listing = explorer.json("/api/roles");
+    assert_eq!(listing["decided"][0]["role"], "tone");
+
+    let url = "https://mdblist.com/lists/someone/new-list";
+    let (status, reply) = explorer.post_json(
+        "/api/list-decisions",
+        &json!({"url": url, "decision": "added"}),
+    );
+    assert_eq!(status, 200, "{reply}");
+    assert_eq!(reply["entry"]["url"], url);
+    let lists = explorer.json("/api/lists");
+    let row = &lists["lists"][0];
+    assert_eq!(
+        (row["url"].as_str(), row["pending"].as_str()),
+        (Some(url), Some("Waiting for sweep"))
+    );
+    let (status, reply) = explorer.post_json(
+        "/api/list-decisions",
+        &json!({"url": url, "decision": "refetch"}),
+    );
+    assert_eq!(status, 400, "{reply}");
+    let (status, reply) = explorer.post_json(
+        "/api/list-decisions",
+        &json!({"url": "https://mdblist.com/lists/no/body", "decision": "retry"}),
+    );
+    assert_eq!(
+        (status, reply["error"].as_str()),
+        (
+            404,
+            Some("no stored list has the URL https://mdblist.com/lists/no/body")
+        )
     );
 }

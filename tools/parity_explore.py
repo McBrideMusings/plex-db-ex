@@ -4,7 +4,16 @@ Starts the Python explorer and `plexdb-rs explore` on one copy of the store (the
 forwards the routes it has not taken over to the Python one), asks both for every route Rust
 answers, and lists the routes whose answers differ. The page, `/api/tags`, `/api/titles`,
 `/api/cotags`, `/api/title`, the default `/api/map` and `/api/tagnetwork` and every error
-reply must match byte for byte.
+reply must match byte for byte. So must the decision tabs' reads (`/api/merges`, `/api/roles`,
+`/api/lists`, `/api/list`) and the tag doctor (`/api/doctor`, `/api/keywords`,
+`/api/doctor/titles`), except that the doctor's objects are compared as parsed JSON: Python
+builds them from sets, so their key order changes from one run to the next.
+
+The decision writes (`POST /api/merges`, `/api/roles`, `/api/names`, `/api/list-decisions`)
+run against a Python explorer and a Rust one that each keep their decisions files in a
+directory of their own, seeded alike. The replies must match with the time of each decision
+(`decided_at` of today) masked, the reads after the writes must match the same way, and so
+must the four decision files at the end.
 
 A map or network drawn live with tags excluded is laid out by UMAP in Python and by holomap in
 Rust, so only the positions differ there: those routes are compared without positions and
@@ -23,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import datetime
 import json
 import os
 import re
@@ -45,12 +55,29 @@ TIMEOUT = 900
 URL_LINE = re.compile(r"Plex DB-EX on (http://\S+?)/ reading")
 
 
-def fetch(base: str, route: str) -> tuple[int, str, bytes]:
+def fetch(
+    base: str,
+    route: str,
+    body: bytes | None = None,
+    content_type: str | None = "application/json",
+    method: str | None = None,
+) -> tuple[int, str, bytes]:
+    request = urllib.request.Request(base + route, data=body, method=method)
+    if body is not None and content_type is not None:
+        request.add_header("Content-Type", content_type)
     try:
-        with urllib.request.urlopen(base + route, timeout=TIMEOUT) as reply:
+        with urllib.request.urlopen(request, timeout=TIMEOUT) as reply:
             return reply.status, reply.headers.get("Content-Type", ""), reply.read()
     except urllib.error.HTTPError as err:
         return err.code, err.headers.get("Content-Type", ""), err.read()
+
+
+def today_mask(body: bytes) -> bytes:
+    """`body` with the time of every decision made today replaced, so two servers that made
+    the same decision a second apart agree."""
+    today = datetime.datetime.now(datetime.UTC).date().isoformat()
+    pattern = rb'"decided_at":\s*"' + today.encode() + rb'T[^"]*"'
+    return re.sub(pattern, b'"decided_at":"<now>"', body)
 
 
 @contextlib.contextmanager
@@ -88,11 +115,20 @@ def structure(route: str, body: bytes) -> object:
     return payload
 
 
+#: Routes whose objects Python builds from sets, so only their parsed JSON is comparable.
+UNORDERED = ("/api/doctor?",)
+
+
 def compare(route: str, python: tuple[int, str, bytes], rust: tuple[int, str, bytes]) -> str | None:
     if python[0] != rust[0]:
         return f"status {python[0]} in Python, {rust[0]} in Rust"
     if python[1] != rust[1]:
         return f"content type {python[1]!r} in Python, {rust[1]!r} in Rust"
+    if route.startswith(UNORDERED) and python[1] == "application/json":
+        same = json.loads(today_mask(python[2])) == json.loads(today_mask(rust[2]))
+        return None if same else "parsed JSON differs"
+    python = (python[0], python[1], today_mask(python[2]))
+    rust = (rust[0], rust[1], today_mask(rust[2]))
     if "exclude=" in route:
         return None if structure(route, python[2]) == structure(route, rust[2]) else "structure"
     if python[2] == rust[2]:
@@ -138,7 +174,143 @@ def routes(python: str, kinds: tuple[str, ...]) -> list[str]:
             excludes += [
                 f"/api/tagnetwork?kind={kind}&exclude={quote(tags[0])}&exclude={quote(tags[2])}"
             ]
-    return asked + excludes
+    return asked + excludes + decision_reads(python, kinds)
+
+
+_ASKED: dict[str, dict[str, object]] = {}
+
+
+def get_json(base: str, route: str) -> dict[str, object]:
+    """The Python explorer's answer, asked once: `/api/lists` takes minutes on a real store,
+    and the routes are built from the answers as they were before any write."""
+    if route not in _ASKED:
+        _ASKED[route] = json.loads(fetch(base, route)[2])
+    return _ASKED[route]
+
+
+def decision_reads(python: str, kinds: tuple[str, ...]) -> list[str]:
+    """The decision tabs' reads and the tag doctor, built from what the store holds."""
+    asked = ["/api/merges", "/api/roles", "/api/roles?q=zz", "/api/lists", "/api/list"]
+    asked += ["/api/list?ref=" + "x" * 201, "/api/list?ref=no%3Asuch", "/api/lists?source=mdblist"]
+    asked += ["/api/doctor", "/api/doctor?item_id=" + "x" * 201, "/api/doctor?item_id=no%3Asuch"]
+    asked += ["/api/keywords", "/api/keywords?q=a", "/api/doctor/titles", "/api/doctor/titles?q=a"]
+    roles = get_json(python, "/api/roles")
+    for entry in roles["keywords"][:3]:  # type: ignore[index]
+        asked.append("/api/roles?q=" + quote(entry["form"][:4]))
+    lists = get_json(python, "/api/lists")["lists"]
+    for row in lists[:4]:  # type: ignore[index]
+        asked.append("/api/list?ref=" + quote(row["collection_id"] or row["url"]))
+    merges = get_json(python, "/api/merges")
+    for pair in [*merges["proposed"][:3], *merges["decided"][:3]]:  # type: ignore[index]
+        asked.append("/api/keywords?q=" + quote(pair["form_a"][:5]))
+    kind = kinds[0]
+    tags = [t["value"] for t in get_json(python, f"/api/tags?kind={kind}")["tags"]]  # type: ignore[union-attr]
+    for tag in tags[:3]:
+        asked.append("/api/keywords?q=" + quote(tag[:6]))
+    _, _, titles_body = fetch(python, f"/api/titles?kind={kind}&tag={quote(tags[0])}")
+    for title in json.loads(titles_body)["titles"][:6]:
+        asked.append("/api/doctor?item_id=" + quote(title["item_id"]))
+        asked.append("/api/doctor/titles?q=" + quote(title["title"][:6]))
+    return asked
+
+
+def writes(python: str) -> list[tuple[str, dict[str, object] | bytes, str | None]]:
+    """The decision POSTs to make, in order, as `(route, body, content type)`; a body that is
+    bytes is sent as it is."""
+    json_type: str | None = "application/json"
+    merges = get_json(python, "/api/merges")
+    proposed = merges["proposed"]
+    decided = merges["decided"]
+    steps: list[tuple[str, dict[str, object] | bytes, str | None]] = []
+    if proposed:
+        pair = proposed[0]  # type: ignore[index]
+        base = {"keyword_a": pair["keyword_a"], "keyword_b": pair["keyword_b"]}
+        steps += [
+            ("/api/merges", {**base, "decision": d}, json_type) for d in ("accepted", "rejected")
+        ]
+        steps.append(("/api/merges", {**base, "decision": "cleared"}, json_type))
+    if decided:
+        pair = decided[0]  # type: ignore[index]
+        base = {"keyword_a": pair["keyword_a"], "keyword_b": pair["keyword_b"]}
+        steps.append(("/api/merges", {**base, "decision": "rejected"}, json_type))
+        steps.append(("/api/merges", {**base, "decision": "cleared"}, json_type))
+    steps += [
+        ("/api/merges", {"keyword_a": "b", "keyword_b": "a", "decision": "accepted"}, json_type),
+        ("/api/merges", {"keyword_a": "", "keyword_b": "a", "decision": "accepted"}, json_type),
+        ("/api/merges", {"keyword_a": "a", "keyword_b": "b", "decision": "maybe"}, json_type),
+        (
+            "/api/merges",
+            {"keyword_a": "zzzq1", "keyword_b": "zzzq2", "decision": "accepted"},
+            json_type,
+        ),
+        ("/api/merges", {"keyword_a": 1, "keyword_b": "a", "decision": "accepted"}, json_type),
+        ("/api/merges", b"[1]", json_type),
+        ("/api/merges", b"{}", "text/plain"),
+        ("/api/merges", b"{}", None),
+    ]
+    roles = get_json(python, "/api/roles")["keywords"]
+    for entry in roles[:2]:  # type: ignore[index]
+        role = next(iter(entry["cells"]))
+        base = {"keyword": entry["keyword"], "role": role}
+        steps += [
+            ("/api/roles", {**base, "decision": d}, json_type) for d in ("accepted", "rejected")
+        ]
+        steps.append(("/api/roles", {**base, "decision": "cleared"}, json_type))
+        steps.append(("/api/roles", {**base, "decision": "accepted"}, json_type))
+    steps += [
+        ("/api/roles", {"keyword": "zzzq1", "role": "tone", "decision": "accepted"}, json_type),
+        ("/api/roles", {"keyword": "a", "role": "mood", "decision": "accepted"}, json_type),
+        ("/api/roles", {"keyword": "a", "role": "tone", "decision": "x"}, json_type),
+    ]
+    tags = [t["value"] for t in get_json(python, "/api/tags?kind=movie")["tags"]]  # type: ignore[union-attr]
+    for tag in tags[:2]:
+        steps.append(("/api/names", {"keyword": tag, "name": "  Parity   Name  "}, json_type))
+    steps += [
+        ("/api/names", {"keyword": tags[0], "name": "Second\tName"}, json_type),
+        ("/api/names", {"keyword": tags[2], "name": "Héllo \U0001f600"}, json_type),
+        ("/api/names", {"keyword": tags[1], "name": None}, json_type),
+        ("/api/names", {"keyword": tags[2], "name": "   "}, json_type),
+        ("/api/names", {"keyword": tags[3]}, json_type),
+        ("/api/names", {"keyword": tags[3], "name": 5}, json_type),
+        ("/api/names", {"keyword": tags[3], "name": "x" * 201}, json_type),
+        ("/api/names", {"keyword": "zzzq1", "name": "x"}, json_type),
+    ]
+    lists = get_json(python, "/api/lists")["lists"]
+    new = "https://mdblist.com/lists/parity/new-list"
+    steps += [
+        ("/api/list-decisions", {"url": new, "decision": "added"}, json_type),
+        ("/api/list-decisions", {"url": new, "decision": "refetch"}, json_type),
+        (
+            "/api/list-decisions",
+            {"url": "https://mdblist.com/lists/nobody/unknown", "decision": "retry"},
+            json_type,
+        ),
+        ("/api/list-decisions", {"url": "https://example.com/x", "decision": "added"}, json_type),
+        ("/api/list-decisions", {"url": new, "decision": "bogus"}, json_type),
+        ("/api/list-decisions", {"url": "", "decision": "added"}, json_type),
+        (
+            "/api/list-decisions",
+            {"url": "https://letterboxd.com/Parity/list/Some-List/", "decision": "excluded"},
+            json_type,
+        ),
+    ]
+    for row in lists[:2]:  # type: ignore[index]
+        if row["url"]:
+            steps.append(
+                ("/api/list-decisions", {"url": row["url"], "decision": "refetch"}, json_type)
+            )
+            steps.append(
+                ("/api/list-decisions", {"url": row["url"], "decision": "excluded"}, json_type)
+            )
+    return steps
+
+
+def send(
+    base: str, step: tuple[str, dict[str, object] | bytes, str | None]
+) -> tuple[int, str, bytes]:
+    route, body, content_type = step
+    data = body if isinstance(body, bytes) else json.dumps(body).encode()
+    return fetch(base, route, data, content_type, "POST")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -163,14 +335,18 @@ def main(argv: list[str] | None = None) -> int:
     with tempfile.TemporaryDirectory(prefix="plexdb-parity-explore.") as scratch:
         root = Path(scratch)
         shutil.copyfile(store, root / "plexdb.db")
-        for name in sorted(decisions.glob("*.json")):
-            shutil.copy(name, root / name.name)
-        env = {
-            **os.environ,
-            "PLEXDB_PATH": str(root / "plexdb.db"),
-            "PLEXDB_EXPLORE_SAVED_PATH": str(root / "explore-queries.json"),
-        }
+        # Each explorer keeps its decisions files in a directory of its own, so the writes of
+        # one never reach the other; both start from the same files. `plexdb explore` keeps
+        # them beside the store and ignores PLEXDB_EXPLORE_SAVED_PATH; `plexdb-rs explore`
+        # reads it.
+        homes = {"python": root, "rust": root / "rust"}
+        homes["rust"].mkdir()
+        for home in homes.values():
+            for name in sorted(decisions.glob("*.json")):
+                shutil.copy(name, home / name.name)
+        env = {**os.environ, "PLEXDB_PATH": str(root / "plexdb.db")}
         env.pop("PLEXDB_SNAPSHOT_PATH", None)
+        rust_env = {**env, "PLEXDB_EXPLORE_SAVED_PATH": str(homes["rust"] / "explore-queries.json")}
         for step in ("refresh-map", "refresh-tagnetwork"):
             done = subprocess.run([rs_bin, step], env=env, capture_output=True, text=True)
             if done.returncode != 0:
@@ -178,13 +354,43 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
         with (
             serve([sys.executable, "-m", "plexdb.cli", "explore", "--port", "0"], env) as python,
-            serve([rs_bin, "explore", "--port", "0", "--fallback", python], env) as rust,
+            serve([rs_bin, "explore", "--port", "0", "--fallback", python], rust_env) as rust,
         ):
             asked = routes(python, kinds)
             for route in asked:
                 why = compare(route, fetch(python, route), fetch(rust, route))
                 if why is not None:
                     differing.append({"route": route, "why": why})
+            posted = writes(python)
+            for step in posted:
+                label = f"POST {step[0]} {step[1]!r}"[:200]
+                why = compare("POST", send(python, step), send(rust, step))
+                if why is not None:
+                    differing.append({"route": label, "why": why})
+            after = [
+                route
+                for route in decision_reads(python, kinds)
+                if not route.startswith(("/api/list?", "/api/lists?"))
+            ]
+            for route in ["/api/merges", "/api/roles", *after]:
+                why = compare(route, fetch(python, route), fetch(rust, route))
+                if why is not None:
+                    differing.append({"route": f"after the writes: {route}", "why": why})
+            asked += [f"POST {step[0]}" for step in posted]
+            asked += after
+        for name in sorted(
+            {
+                *(p.name for p in homes["python"].glob("*.json")),
+                *(p.name for p in homes["rust"].glob("*.json")),
+            }
+        ):
+            files = [
+                today_mask((home / name).read_bytes()) if (home / name).exists() else None
+                for home in homes.values()
+            ]
+            asked.append(f"file {name}")
+            if files[0] != files[1]:
+                differing.append({"route": f"file {name}", "why": "the decisions files differ"})
     print(json.dumps({"routes": len(asked), "differing": differing}, indent=2))
     return 1 if differing else 0
 

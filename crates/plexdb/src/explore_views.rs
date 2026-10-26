@@ -449,7 +449,7 @@ fn read_stored_map(
     }))
 }
 
-fn optional<T>(result: rusqlite::Result<T>) -> rusqlite::Result<Option<T>> {
+pub(crate) fn optional<T>(result: rusqlite::Result<T>) -> rusqlite::Result<Option<T>> {
     match result {
         Ok(value) => Ok(Some(value)),
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
@@ -666,18 +666,26 @@ pub fn draw_network(
 /// The names a person gave keywords in `name_decisions.json`, by stored keyword: the name
 /// (`None` where the file clears it) and when it was decided. The last entry for a keyword
 /// wins; an entry whose spelling normalizes to nothing names no keyword.
-pub struct Overlay(HashMap<String, (Option<String>, String)>);
+pub struct Overlay(pub(crate) Vec<(String, (Option<String>, String))>);
 
 impl Overlay {
+    /// The keywords in the order the file first names them.
     pub fn read(path: &Path) -> Result<Self, ExploreError> {
-        let mut latest = HashMap::new();
+        let mut latest: Vec<(String, (Option<String>, String))> = Vec::new();
+        let mut at: HashMap<String, usize> = HashMap::new();
         for entry in decisions::load(&NAME_SPEC, path)?.unwrap_or_default() {
             let keyword = normalize_keyword(&entry.key[0]);
             if keyword.is_empty() {
                 continue;
             }
             let name = (entry.decision != "cleared").then(|| entry.values[0].clone());
-            latest.insert(keyword, (name, entry.decided_at));
+            match at.get(&keyword) {
+                Some(&index) => latest[index].1 = (name, entry.decided_at),
+                None => {
+                    at.insert(keyword.clone(), latest.len());
+                    latest.push((keyword, (name, entry.decided_at)));
+                }
+            }
         }
         Ok(Overlay(latest))
     }
@@ -685,7 +693,7 @@ impl Overlay {
 
 /// For each keyword with a `keyword_forms` row, the spelling a person reads: the shortest
 /// surface, ties by text.
-fn readable_forms(conn: &Connection) -> rusqlite::Result<HashMap<String, String>> {
+pub(crate) fn readable_forms(conn: &Connection) -> rusqlite::Result<HashMap<String, String>> {
     let mut chosen: HashMap<String, String> = HashMap::new();
     let mut statement = conn.prepare("SELECT surface, keyword FROM keyword_forms")?;
     for row in statement.query_map([], |row| {
@@ -704,7 +712,7 @@ fn readable_forms(conn: &Connection) -> rusqlite::Result<HashMap<String, String>
 
 /// Each keyword with a name in the store or in the overlay, with its decision time; a name
 /// the file clears is absent.
-fn named(
+pub(crate) fn named(
     conn: &Connection,
     overlay: &Overlay,
 ) -> rusqlite::Result<HashMap<String, (String, String)>> {

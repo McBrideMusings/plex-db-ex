@@ -25,18 +25,27 @@ use axum::body::{Body, Bytes};
 use axum::extract::{RawQuery, Request, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::response::Response;
-use axum::routing::get;
+use axum::routing::{get, post};
 use futures_core::Stream;
 use plexdb_store::{Config, EXPLORE_SAVED_PATH_VAR, py_path, py_strip};
 use tokio::sync::mpsc;
 
+use crate::decision_book::{Book, Latest};
+use crate::decision_views::{
+    check_merge, check_name, check_role, doctor_titles, is_carried, keyword_search,
+    keyword_spellings, merge_book, merges_json, name_book, name_view_json, names_json,
+    names_object, own_labels, require_pair, require_role, review_pair, review_rows, role_book,
+    role_cell, roles_json, title_doctor,
+};
+use crate::decisions::py_repr;
 use crate::explore_views::{
     ExploreError, KeywordSpace, MAX_ITEM_ID, MapPayload, Overlay, TagIndex, build_index,
     check_kind, cotags_json, display_labels, draw_map, draw_network, map_json, network_done_json,
     stored_map, stored_network, title_details, title_kind, titles_json,
 };
 use crate::keyword_views::{keyword_rows, merge_map};
-use crate::name_decisions::NAME_DECISIONS_FILE;
+use crate::list_file::{DecideError, decide as decide_list, list_book_in};
+use crate::lists::{list_detail, list_table, with_pending};
 use crate::pyjson::{Json, dumps_compact};
 use crate::refresh_tagnetwork::Network;
 use crate::steps::Failure;
@@ -49,8 +58,14 @@ const DEFAULT_PORT: u16 = 5194;
 /// The page: the one file `plexdb/explore.py` also serves.
 const PAGE: &str = include_str!("../../../plexdb/explore.html");
 
-/// Concurrent `/api/title` and `/api/titles` requests; a fifth is told to retry.
+/// Concurrent `/api/title`, `/api/titles` and `/api/doctor` requests; a fifth is told to retry.
 const TITLE_SLOTS: usize = 4;
+
+/// Concurrent `/api/keywords` and `/api/doctor/titles` requests.
+const KEYWORD_SLOTS: usize = 2;
+
+/// The longest request body a decision POST may carry.
+const MAX_BODY: usize = 1 << 20;
 
 /// How long a forwarded request may take: the Search tab's runs are the slow ones.
 const FALLBACK_TIMEOUT: Duration = Duration::from_secs(600);
@@ -137,6 +152,10 @@ struct App {
     store: PathBuf,
     /// Where `name_decisions.json` sits.
     names: PathBuf,
+    merges: Book,
+    roles: Book,
+    name_decisions: Book,
+    list_decisions: Book,
     fallback: Option<String>,
     indexes: Keyed<String, TagIndex>,
     spaces: Keyed<String, KeywordSpace>,
@@ -144,6 +163,7 @@ struct App {
     stale_maps: Keyed<String, Option<MapPayload>>,
     networks: Keyed<(String, BTreeSet<String>), Network>,
     title_slots: AtomicUsize,
+    keyword_slots: AtomicUsize,
 }
 
 type Shared = Arc<App>;
@@ -285,7 +305,7 @@ async fn cotags(State(app): State<Shared>, RawQuery(raw): RawQuery) -> Response 
     .await
 }
 
-fn too_many() -> ExploreError {
+fn too_many_titles() -> ExploreError {
     ExploreError::Busy("too many title requests are already running; try again in a moment".into())
 }
 
@@ -296,7 +316,7 @@ async fn titles(State(app): State<Shared>, RawQuery(raw): RawQuery) -> Response 
         let Some(tag) = query.first("tag") else {
             return Err(ExploreError::Invalid("tag is required".into()));
         };
-        let _slot = Slot::take(&app.title_slots, TITLE_SLOTS).ok_or_else(too_many)?;
+        let _slot = Slot::take(&app.title_slots, TITLE_SLOTS).ok_or_else(too_many_titles)?;
         let conn = app.open()?;
         titles_json(&conn, &kind, tag)
     })
@@ -314,7 +334,7 @@ async fn title(State(app): State<Shared>, RawQuery(raw): RawQuery) -> Response {
                 "item_id is over {MAX_ITEM_ID} characters"
             )));
         }
-        let _slot = Slot::take(&app.title_slots, TITLE_SLOTS).ok_or_else(too_many)?;
+        let _slot = Slot::take(&app.title_slots, TITLE_SLOTS).ok_or_else(too_many_titles)?;
         let conn = app.open()?;
         let space = match title_kind(&conn, item_id)? {
             Some(kind) => Some(app.space(&kind)?),
@@ -482,6 +502,311 @@ impl App {
     }
 }
 
+// ---------------------------------------------------------------------------------------
+// The decision tabs and the tag doctor
+
+fn too_many_requests() -> ExploreError {
+    ExploreError::Busy("too many requests are already running; try again in a moment".into())
+}
+
+type JsonBody = serde_json::Map<String, serde_json::Value>;
+
+/// A decision POST's JSON object (`_body`). A page on another site can send `text/plain`
+/// without a preflight; `application/json` it cannot, so requiring it keeps such a page out.
+async fn read_body(request: Request) -> Result<JsonBody, ExploreError> {
+    let invalid = |message: &str| ExploreError::Invalid(message.to_string());
+    let headers = request.headers();
+    let media = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.split(';').next().unwrap_or("").trim().to_lowercase());
+    if media.as_deref() != Some("application/json") {
+        return Err(invalid("Content-Type must be application/json"));
+    }
+    let length = headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()))
+        .map(str::to_string);
+    let Some(length) = length else {
+        return Err(invalid("a JSON body with a Content-Length is required"));
+    };
+    if length.len() > 12 || length.parse::<usize>().unwrap_or(usize::MAX) > MAX_BODY {
+        return Err(ExploreError::Invalid(format!(
+            "body is over {MAX_BODY} bytes"
+        )));
+    }
+    let bytes = axum::body::to_bytes(request.into_body(), MAX_BODY)
+        .await
+        .map_err(|err| ExploreError::Invalid(format!("body is not JSON: {err}")))?;
+    match serde_json::from_slice::<serde_json::Value>(&bytes) {
+        Ok(serde_json::Value::Object(body)) => Ok(body),
+        Ok(_) => Err(invalid("body must be a JSON object")),
+        Err(err) => Err(ExploreError::Invalid(format!("body is not JSON: {err}"))),
+    }
+}
+
+/// Run a decision POST: read its body, then `work` off the async threads.
+async fn decide<F>(request: Request, work: F) -> Response
+where
+    F: FnOnce(JsonBody) -> Result<Json, ExploreError> + Send + 'static,
+{
+    match read_body(request).await {
+        Ok(body) => blocking(move || work(body)).await,
+        Err(err) => failed(&err),
+    }
+}
+
+fn log_decision(line: String) {
+    eprintln!("explore: {line}");
+}
+
+async fn merges_get(State(app): State<Shared>) -> Response {
+    blocking(move || {
+        let conn = app.open()?;
+        let overlay = Overlay::read(&app.names)?;
+        // Each side's own label, not its group's: both sides can already sit in one merge
+        // group, and the group label would name them alike.
+        let labels = own_labels(&conn, &overlay)?;
+        let pairs = review_rows(&conn, &app.merges.latest()?, &labels)?;
+        // Each named keyword's own name, so a side's rename box starts from it.
+        let named = names_json(&conn, &overlay)?;
+        let mut body = merges_json(&pairs);
+        body.push(("names", names_object(&named)));
+        Ok(Json::object_from(body))
+    })
+    .await
+}
+
+async fn merges_post(State(app): State<Shared>, request: Request) -> Response {
+    decide(request, move |body| {
+        let (a, b, decision) = check_merge(&body)?;
+        // Only a pair the table holds, or two keywords some title carries, may be decided,
+        // so an anonymous caller cannot grow the file with made-up names.
+        let conn = app.open()?;
+        require_pair(&conn, &a, &b)?;
+        let spellings = keyword_spellings(&conn, &[&a, &b])?;
+        let key = vec![a.clone(), b.clone()];
+        let (_, entry) = app.merges.record(&key, &decision, &spellings, &[])?;
+        let labels = own_labels(&conn, &Overlay::read(&app.names)?)?;
+        let pair = review_pair(&conn, &Latest::single(key.clone(), entry), &labels, &key)?;
+        log_decision(format!(
+            "merge decision {} {} {decision} -> {}",
+            py_repr(&a),
+            py_repr(&b),
+            app.merges.path().display()
+        ));
+        Ok(Json::object([("pair", pair.json())]))
+    })
+    .await
+}
+
+async fn roles_get(State(app): State<Shared>, RawQuery(raw): RawQuery) -> Response {
+    let query = Query(parse_query(raw));
+    blocking(move || {
+        let conn = app.open()?;
+        let overlay = Overlay::read(&app.names)?;
+        let labels = display_labels(&conn, &overlay, &merge_map(&conn)?)?;
+        Ok(roles_json(
+            &conn,
+            &app.roles.latest()?,
+            &labels,
+            query.first("q").unwrap_or(""),
+        )?)
+    })
+    .await
+}
+
+async fn roles_post(State(app): State<Shared>, request: Request) -> Response {
+    decide(request, move |body| {
+        let (keyword, role, decision) = check_role(&body)?;
+        // As for a pair: only a (keyword, role) the table holds may be decided.
+        let conn = app.open()?;
+        require_role(&conn, &keyword, &role)?;
+        let spellings = keyword_spellings(&conn, &[&keyword])?;
+        let key = vec![keyword.clone(), role.clone()];
+        let (entry, _) = app.roles.record(&key, &decision, &spellings, &[])?;
+        let overlay = Overlay::read(&app.names)?;
+        let labels = display_labels(&conn, &overlay, &merge_map(&conn)?)?;
+        let cell = role_cell(&conn, &app.roles.latest()?, &labels, &keyword, &role)?;
+        log_decision(format!(
+            "role decision {} {role} {decision} -> {}",
+            py_repr(&keyword),
+            app.roles.path().display()
+        ));
+        Ok(Json::object([("cell", cell), ("entry", entry)]))
+    })
+    .await
+}
+
+async fn names_post(State(app): State<Shared>, request: Request) -> Response {
+    decide(request, move |body| {
+        let (keyword, decision, name) = check_name(&body)?;
+        // Only a keyword some title carries may be named, so an anonymous caller cannot grow
+        // the file with made-up keywords.
+        let conn = app.open()?;
+        if !is_carried(&conn, &keyword)? {
+            return Err(ExploreError::NotFound(format!(
+                "no title carries the keyword {}",
+                py_repr(&keyword)
+            )));
+        }
+        let spellings = keyword_spellings(&conn, &[&keyword])?;
+        let (entry, _) = app.name_decisions.record(
+            std::slice::from_ref(&keyword),
+            &decision,
+            &spellings,
+            std::slice::from_ref(&name),
+        )?;
+        let overlay = Overlay::read(&app.names)?;
+        let shown = names_json(&conn, &overlay)?
+            .into_iter()
+            .find(|(k, _)| *k == keyword)
+            .map_or(Json::Null, |(_, view)| name_view_json(&view));
+        let labels = display_labels(&conn, &overlay, &merge_map(&conn)?)?;
+        let label = labels.get(&keyword).unwrap_or(&keyword).clone();
+        log_decision(format!(
+            "name decision {} {decision} {} -> {}",
+            py_repr(&keyword),
+            py_repr(&name),
+            app.name_decisions.path().display()
+        ));
+        Ok(Json::object([
+            ("keyword", Json::Str(keyword)),
+            ("label", Json::Str(label)),
+            ("name", shown),
+            ("entry", entry),
+        ]))
+    })
+    .await
+}
+
+async fn lists_get(State(app): State<Shared>, RawQuery(raw): RawQuery) -> Response {
+    let query = Query(parse_query(raw));
+    blocking(move || {
+        let conn = app.open()?;
+        let rows = list_table(&conn, query.first("source"))?;
+        let rows = with_pending(rows, &app.list_decisions.latest()?);
+        let lists = serde_json::Value::Array(rows.into_iter().map(Into::into).collect());
+        Ok(Json::object([("lists", Json::from(&lists))]))
+    })
+    .await
+}
+
+async fn list_get(State(app): State<Shared>, RawQuery(raw): RawQuery) -> Response {
+    let query = Query(parse_query(raw));
+    blocking(move || {
+        let Some(reference) = query.first("ref") else {
+            return Err(ExploreError::Invalid("ref is required".into()));
+        };
+        if reference.chars().count() > MAX_ITEM_ID {
+            return Err(ExploreError::Invalid(format!(
+                "ref is over {MAX_ITEM_ID} characters"
+            )));
+        }
+        let conn = app.open()?;
+        match list_detail(&conn, reference)? {
+            Some(detail) => Ok(Json::from(&serde_json::Value::Object(detail))),
+            None => Err(ExploreError::NotFound(format!("no list {reference}"))),
+        }
+    })
+    .await
+}
+
+async fn list_decisions_post(State(app): State<Shared>, request: Request) -> Response {
+    decide(request, move |body| {
+        let text = |field: &str| {
+            body.get(field)
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+        };
+        let conn = app.open()?;
+        let entry = decide_list(&conn, &app.list_decisions, text("url"), text("decision"))
+            .map_err(|err| match err {
+                DecideError::Invalid(message) => ExploreError::Invalid(message),
+                DecideError::Unknown(url) => {
+                    ExploreError::NotFound(format!("no stored list has the URL {url}"))
+                }
+                DecideError::File(err) => ExploreError::from(err),
+                DecideError::Sqlite(err) => ExploreError::from(err),
+            })?;
+        log_decision(format!(
+            "list decision {} {} -> {}",
+            py_repr(&entry.key[0]),
+            entry.decision,
+            app.list_decisions.path().display()
+        ));
+        Ok(Json::object([(
+            "entry",
+            Json::object([
+                ("url", Json::Str(entry.key[0].clone())),
+                ("decision", Json::Str(entry.decision.clone())),
+                ("decided_at", Json::Str(entry.decided_at.clone())),
+            ]),
+        )]))
+    })
+    .await
+}
+
+/// The tag doctor's routes share one shape: a slot, the store, the display labels.
+async fn doctor_route(app: Shared, raw: Option<String>, which: Doctor) -> Response {
+    let query = Query(parse_query(raw));
+    blocking(move || {
+        let (slots, limit, busy) = match which {
+            Doctor::Title => (&app.title_slots, TITLE_SLOTS, too_many_requests()),
+            Doctor::Keywords | Doctor::Titles => {
+                (&app.keyword_slots, KEYWORD_SLOTS, too_many_requests())
+            }
+        };
+        let _slot = Slot::take(slots, limit).ok_or(busy)?;
+        let conn = app.open()?;
+        let overlay = Overlay::read(&app.names)?;
+        let labels = display_labels(&conn, &overlay, &merge_map(&conn)?)?;
+        match which {
+            Doctor::Keywords => Ok(Json::object([(
+                "keywords",
+                keyword_search(&conn, query.first("q").unwrap_or(""), &labels)?,
+            )])),
+            Doctor::Titles => Ok(Json::object([(
+                "titles",
+                doctor_titles(&conn, query.first("q").unwrap_or(""))?,
+            )])),
+            Doctor::Title => {
+                let Some(item_id) = query.first("item_id") else {
+                    return Err(ExploreError::Invalid("item_id is required".into()));
+                };
+                if item_id.chars().count() > MAX_ITEM_ID {
+                    return Err(ExploreError::Invalid(format!(
+                        "item_id is over {MAX_ITEM_ID} characters"
+                    )));
+                }
+                let named = names_json(&conn, &overlay)?;
+                title_doctor(&conn, item_id, &app.merges.latest()?, &labels, &named)
+            }
+        }
+    })
+    .await
+}
+
+#[derive(Clone, Copy)]
+enum Doctor {
+    Title,
+    Keywords,
+    Titles,
+}
+
+async fn doctor(State(app): State<Shared>, RawQuery(raw): RawQuery) -> Response {
+    doctor_route(app, raw, Doctor::Title).await
+}
+
+async fn doctor_keywords(State(app): State<Shared>, RawQuery(raw): RawQuery) -> Response {
+    doctor_route(app, raw, Doctor::Keywords).await
+}
+
+async fn doctor_title_search(State(app): State<Shared>, RawQuery(raw): RawQuery) -> Response {
+    doctor_route(app, raw, Doctor::Titles).await
+}
+
 /// Forward a request this server does not answer to the Python explorer.
 async fn forward(State(app): State<Shared>, request: Request) -> Response {
     let path = request.uri().path().to_string();
@@ -584,6 +909,27 @@ fn router(app: Shared) -> Router {
         .route("/api/map", get(map))
         .route("/api/tagnetwork", get(tagnetwork))
         .route("/api/title", get(title))
+        .route(
+            "/api/merges",
+            get(merges_get).post(merges_post).fallback(forward),
+        )
+        .route(
+            "/api/roles",
+            get(roles_get).post(roles_post).fallback(forward),
+        )
+        .route("/api/names", post(names_post).fallback(forward))
+        .route("/api/lists", get(lists_get).fallback(forward))
+        .route("/api/list", get(list_get).fallback(forward))
+        .route(
+            "/api/list-decisions",
+            post(list_decisions_post).fallback(forward),
+        )
+        .route("/api/doctor", get(doctor).fallback(forward))
+        .route("/api/keywords", get(doctor_keywords).fallback(forward))
+        .route(
+            "/api/doctor/titles",
+            get(doctor_title_search).fallback(forward),
+        )
         .fallback(forward)
         .with_state(app)
 }
@@ -646,7 +992,7 @@ pub fn run(args: &[String]) -> Result<(), Failure> {
             store.display()
         )));
     }
-    let names = decisions_dir(&store).join(NAME_DECISIONS_FILE);
+    let dir = decisions_dir(&store);
     let fallback = options
         .fallback
         .or_else(|| std::env::var("PLEXDB_EXPLORE_FALLBACK").ok())
@@ -654,7 +1000,11 @@ pub fn run(args: &[String]) -> Result<(), Failure> {
         .filter(|url| !url.is_empty());
     let app = Arc::new(App {
         store: store.clone(),
-        names,
+        names: name_book(&dir).path().to_path_buf(),
+        merges: merge_book(&dir),
+        roles: role_book(&dir),
+        name_decisions: name_book(&dir),
+        list_decisions: list_book_in(&dir),
         fallback,
         indexes: Keyed::new(2),
         spaces: Keyed::new(2),
@@ -662,6 +1012,7 @@ pub fn run(args: &[String]) -> Result<(), Failure> {
         stale_maps: Keyed::new(6),
         networks: Keyed::new(6),
         title_slots: AtomicUsize::new(0),
+        keyword_slots: AtomicUsize::new(0),
     });
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

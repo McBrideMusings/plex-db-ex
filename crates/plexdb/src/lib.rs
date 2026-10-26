@@ -8,6 +8,8 @@ pub mod backoff;
 pub mod clock;
 pub mod collections;
 pub mod cursors;
+pub mod decision_book;
+pub mod decision_views;
 pub mod decisions;
 pub mod embed;
 pub mod enrich_anilist;

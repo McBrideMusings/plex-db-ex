@@ -29,6 +29,11 @@ impl Json {
         Json::Object(pairs.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
     }
 
+    /// An object from pairs known only at run time.
+    pub fn object_from(pairs: Vec<(&str, Json)>) -> Json {
+        Json::Object(pairs.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
+    }
+
     pub fn opt_str(text: Option<String>) -> Json {
         text.map_or(Json::Null, Json::Str)
     }

@@ -16,7 +16,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use rusqlite::{Connection, Row, params};
 use serde_json::{Map, Value, json};
 
+use crate::clock::is_before;
 use crate::collections::MAX_FAILURES;
+use crate::decision_book::Latest;
 use crate::list_decisions::{canonical_list_url, letterboxd_list_parts, list_source};
 use crate::pyurl::urlparse;
 
@@ -283,6 +285,74 @@ pub fn list_table(conn: &Connection, source: Option<&str>) -> rusqlite::Result<V
             .filter(|row| row.get("source").and_then(Value::as_str) == Some(source))
             .collect(),
     })
+}
+
+/// Lay `list_decisions.json` over the table. Each row's `decision` becomes the file's entry
+/// when there is one, and `pending` says in words what the next sweep will do about it, or is
+/// null when it has nothing left to do. A list the file adds that the store knows nothing of
+/// gets a row of its own (`lists.with_pending`).
+pub fn with_pending(mut rows: Vec<Obj>, latest: &Latest) -> Vec<Obj> {
+    let mut known: BTreeSet<String> = BTreeSet::new();
+    for row in &mut rows {
+        let key = key(row);
+        if let Some(entry) = latest.get(std::slice::from_ref(&key)) {
+            row.insert(
+                "decision".into(),
+                json!({"decision": entry.decision, "decided_at": entry.decided_at}),
+            );
+        }
+        known.insert(key);
+        let pending = pending(row);
+        row.insert("pending".into(), pending);
+    }
+    for (key, entry) in &latest.entries {
+        if known.contains(&key[0]) || entry.decision != "added" {
+            continue;
+        }
+        let decision = json!({"decision": entry.decision, "decided_at": entry.decided_at});
+        let mut row = unfetched_row(&key[0], decision, Value::Null);
+        let pending = pending(&row);
+        row.insert("pending".into(), pending);
+        rows.push(row);
+    }
+    rows
+}
+
+fn pending(row: &Obj) -> Value {
+    let Some(decided) = row.get("decision").filter(|d| !d.is_null()) else {
+        return Value::Null;
+    };
+    let text =
+        |value: &Value, name: &str| value.get(name).and_then(Value::as_str).map(String::from);
+    let (Some(verdict), Some(when)) = (text(decided, "decision"), text(decided, "decided_at"))
+    else {
+        return Value::Null;
+    };
+    let failure = row.get("failure").filter(|f| !f.is_null());
+    let waiting = match verdict.as_str() {
+        "excluded" => return "Excluded · next sweep removes it".into(),
+        "removed" => {
+            let stored = !row["collection_id"].is_null() || failure.is_some();
+            return if row["provenance"] == "added" && stored {
+                "Removed · next sweep drops it".into()
+            } else {
+                Value::Null
+            };
+        }
+        "added" => row["collection_id"].is_null(),
+        "refetch" => row["fetched_at"]
+            .as_str()
+            .is_none_or(|fetched| is_before(fetched, &when)),
+        "retry" => failure
+            .and_then(|f| f.get("attempted_at").and_then(Value::as_str))
+            .is_some_and(|attempted| is_before(attempted, &when)),
+        _ => false,
+    };
+    if waiting {
+        "Waiting for sweep".into()
+    } else {
+        Value::Null
+    }
 }
 
 /// The `collection_id` a reference names: an id, or the list's URL with or without a

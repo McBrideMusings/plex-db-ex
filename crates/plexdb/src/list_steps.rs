@@ -16,7 +16,7 @@ use crate::gated::{
 use crate::letterboxd::LiveLbClient;
 use crate::letterboxd_lists::refresh_letterboxd_lists;
 use crate::list_decisions::LIST_DECISIONS_FILE;
-use crate::list_file::{DecideError, ListFile, decide};
+use crate::list_file::{DecideError, decide, list_book};
 use crate::list_search::{
     self, DEFAULT_MAX_LISTS, DEFAULT_MAX_SEEDS, DEFAULT_MIN_TITLES, Options, refresh_list_search,
     wipe_searched,
@@ -346,7 +346,7 @@ pub fn list_decide(args: &[String]) -> Result<(), Failure> {
         )));
     }
     let config = Config::from_env().map_err(crate::steps::failure)?;
-    let file = ListFile::new(config.decisions_file(LIST_DECISIONS_FILE));
+    let file = list_book(config.decisions_file(LIST_DECISIONS_FILE));
     let conn = open_readonly(&config.store_path).map_err(crate::steps::failure)?;
     let entry = match decide(&conn, &file, &parsed.positionals[0], decision) {
         Ok(entry) => entry,
@@ -359,8 +359,8 @@ pub fn list_decide(args: &[String]) -> Result<(), Failure> {
     };
     println!(
         "{} {} -> {} (applied at the next sweep)",
-        entry.get("decision").and_then(Value::as_str).unwrap_or(""),
-        entry.get("url").and_then(Value::as_str).unwrap_or(""),
+        entry.decision,
+        entry.key[0],
         file.path().display()
     );
     Ok(())
