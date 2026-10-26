@@ -7,13 +7,13 @@
 //! command byte for byte, and `admin parity latent-users --fake plex` checks it.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::time::Duration;
 
 use plexdb_store::{Config, StoreError, open_readonly, py_strip};
 use rusqlite::Connection;
 use serde_json::Value;
 
 use crate::decisions::py_repr;
+use crate::plex::{PlexClient, PlexSource};
 use crate::pyval::py_int_text;
 use crate::steps::Failure;
 
@@ -33,7 +33,6 @@ const KEYWORD_KEY: &str = "keyword";
 const DEFAULT_SHARED_ACCOUNT_IDS: &str = "1,3670670";
 /// Variables bound per `IN (...)` query, well under SQLite's limit.
 const IN_CHUNK: usize = 500;
-const PLEX_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Cluster {
@@ -651,51 +650,6 @@ fn account_names(accounts: &[Value]) -> HashMap<i64, String> {
         .collect()
 }
 
-/// `GET <base>/accounts` (`LivePlexClient.accounts`): the token rides in a header.
-fn fetch_accounts(base: &str, token: &str) -> Result<Vec<Value>, Failure> {
-    let url = format!("{}/accounts", base.trim_end_matches('/'));
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(PLEX_TIMEOUT))
-        .max_redirects(0)
-        .max_redirects_will_error(false)
-        .http_status_as_error(false)
-        .build()
-        .into();
-    let mut response = agent
-        .get(&url)
-        .header("Accept", "application/json")
-        .header("X-Plex-Token", token)
-        .call()
-        .map_err(|err| {
-            Failure::Failed(format!(
-                "cannot reach Plex at {url}: {}",
-                crate::frame_encoder::error_kind(&err)
-            ))
-        })?;
-    let status = response.status().as_u16();
-    if !(200..300).contains(&status) {
-        return Err(Failure::Failed(format!(
-            "cannot reach Plex at {url}: HTTP {status}"
-        )));
-    }
-    let body: Value = response.body_mut().read_json().map_err(|_| {
-        Failure::Failed(format!(
-            "Plex returned a response that is not JSON for {url}"
-        ))
-    })?;
-    let Value::Object(body) = body else {
-        return Err(Failure::Failed(format!(
-            "Plex returned a body for {url} that is not an object"
-        )));
-    };
-    Ok(body
-        .get("MediaContainer")
-        .and_then(|container| container.get("Account"))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default())
-}
-
 fn parse_accounts(args: &[String]) -> Result<Vec<i64>, Failure> {
     let usage = || Failure::Usage("usage: latent-users [--account PLEX_ACCOUNT_ID]...".into());
     let mut ids = Vec::new();
@@ -729,7 +683,11 @@ pub fn run(args: &[String]) -> Result<(), Failure> {
         ));
     }
     let shared = shared_account_ids_from_env().map_err(crate::steps::failure)?;
-    let names = account_names(&fetch_accounts(url, token)?);
+    let names = account_names(
+        &PlexClient::new(url, token)
+            .and_then(|plex| plex.accounts())
+            .map_err(crate::steps::failure)?,
+    );
     let store = Config::from_env().map_err(crate::steps::failure)?;
     let conn = open_readonly(&store.store_path).map_err(crate::steps::failure)?;
     let ids = (!accounts.is_empty()).then_some(accounts.as_slice());
@@ -855,6 +813,95 @@ mod tests {
         assert!(
             report.contains("pairwise overlap: n/a (fewer than two clusters)"),
             "{report}"
+        );
+    }
+
+    #[test]
+    fn a_device_joins_through_a_chain_of_ips_into_one_cluster() {
+        let conn = store();
+        for n in 0..2 {
+            play(&conn, &format!("a{n}"), 1, Some("a"), Some("10.0.0.1"));
+            play(&conn, &format!("b{n}"), 1, Some("b"), Some("10.0.0.1"));
+            play(&conn, &format!("c{n}"), 1, Some("c"), Some("10.0.0.2"));
+        }
+        play(&conn, "b9", 1, Some("b"), Some("10.0.0.2"));
+        let account = cluster_account_plays(&conn, 1).expect("cluster");
+        assert_eq!(account.clusters.len(), 1);
+        assert_eq!(account.clusters[0].key_value.as_deref(), Some("a"));
+        assert_eq!(account.clusters[0].client_identifiers, ["a", "b", "c"]);
+        assert_eq!(account.clusters[0].joined_by_ips, ["10.0.0.1", "10.0.0.2"]);
+    }
+
+    #[test]
+    fn account_flags_report_only_the_named_accounts() {
+        let conn = store();
+        play(&conn, "m1", 7, Some("a"), None);
+        play(&conn, "m2", 8, Some("b"), None);
+        let only_seven = render_report(&conn, Some(&[7]), &[], &HashMap::new()).expect("report");
+        assert!(only_seven.contains("== account 7 =="), "{only_seven}");
+        assert!(!only_seven.contains("account 8"), "{only_seven}");
+        let all = render_report(&conn, None, &[], &HashMap::new()).expect("report");
+        assert!(
+            all.contains("== account 7 ==") && all.contains("== account 8 =="),
+            "{all}"
+        );
+
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            parse_accounts(&args(&["--account", "7", "--account=8"])).expect("ids"),
+            [7, 8]
+        );
+        assert!(parse_accounts(&args(&["--account"])).is_err());
+        assert!(parse_accounts(&args(&["--account", "x"])).is_err());
+    }
+
+    #[test]
+    fn keywords_rank_by_count_then_name_and_keep_twenty() {
+        let conn = store();
+        let kw = |item: &str, value: &str| {
+            conn.execute(
+                "INSERT INTO enrichment VALUES (?1, 'keywords', 'keyword', ?2)",
+                [item, value],
+            )
+            .expect("keyword");
+        };
+        for item in ["u1", "u2"] {
+            kw(item, "heist");
+        }
+        kw("u1", "zebra");
+        kw("u1", "apple");
+        for n in 0..25 {
+            kw("u2", &format!("tie{n:02}"));
+        }
+        conn.execute(
+            "INSERT INTO enrichment VALUES ('u1', 'mood', 'keyword', 'ignored')",
+            [],
+        )
+        .expect("other namespace");
+        let units = vec![
+            ("u1".to_string(), 3),
+            ("u2".to_string(), 1),
+            ("u3".to_string(), 1),
+        ];
+        let profile = build_keyword_profile(&conn, &units).expect("profile");
+        assert_eq!(profile.top_keywords.len(), TOP_N_KEYWORDS);
+        assert_eq!(profile.top_keywords[0], ("heist".to_string(), 2));
+        assert_eq!(profile.top_keywords[1], ("apple".to_string(), 1));
+        assert_eq!(profile.top_keywords[2], ("tie00".to_string(), 1));
+        assert!(
+            profile
+                .top_keywords
+                .iter()
+                .all(|(k, _)| k != "ignored" && k != "zebra")
+        );
+        assert_eq!(
+            (
+                profile.units_total,
+                profile.units_with_coverage,
+                profile.total_depth,
+                profile.covered_depth
+            ),
+            (3, 2, 5, 4)
         );
     }
 }
