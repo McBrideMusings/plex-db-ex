@@ -80,6 +80,7 @@ OUTPUT_STEPS = frozenset(
         "judge-keyword-pairs",
         "judge-keyword-roles",
         "latent-users",
+        "record-panels",
         "enrich-anilist",
         "enrich-wikidata",
         "enrich-mdblist-ratings",
@@ -87,13 +88,15 @@ OUTPUT_STEPS = frozenset(
     }
 )
 #: Decisions files a step may write, compared after it ran.
-DECISIONS_FILES = ("list_decisions.json",)
+DECISIONS_FILES = ("list_decisions.json", "explore-panels.json", "panel-history.json")
 
 _TIME = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?\+00:00")
 #: How long a harvest stage took, which differs by milliseconds between two runs.
 _STAGE_SECONDS = re.compile(r"\b((?:decode|scan|extract|encode)_s)=\d+\.\d\b")
 #: The seconds a client reports a request took, which differ between two runs by nature.
 _TOOK = re.compile(r"\b(in|after) \d+\.\d s\b")
+#: The milliseconds a panel's query took.
+_MS = re.compile(r"\(\d+ ms\)")
 
 
 def _python_commands() -> set[str]:
@@ -125,9 +128,12 @@ def _run(argv: list[str], env: dict[str, str], side: str) -> tuple[int, str]:
 
 def _lines(text: str, scratch: str) -> list[str]:
     return [
-        _STAGE_SECONDS.sub(
-            r"\1=<s>",
-            _TOOK.sub(r"\1 <t> s", _TIME.sub("<time>", line.replace(scratch, "<run>"))),
+        _MS.sub(
+            "(<t> ms)",
+            _STAGE_SECONDS.sub(
+                r"\1=<s>",
+                _TOOK.sub(r"\1 <t> s", _TIME.sub("<time>", line.replace(scratch, "<run>"))),
+            ),
         )
         for line in text.splitlines()
     ]

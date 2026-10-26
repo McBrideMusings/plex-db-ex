@@ -2,8 +2,10 @@
 
 `explore-panels.json` holds the Query tab's dashboards, each a grid of panels, each panel a
 saved query with a chart. The sweep runs every panel's SQL once a night through the Query tab's
-own guarded `run_query` and keeps the value in `panel-history.json`. Both files sit in
-`decisions_dir`, never in `plexdb.db`: a count this project computed is not a fact about a title.
+own guarded `run_query` and keeps the value in `panel-history.json`. The sweep step that
+records it is `record-panels` in `crates/plexdb/src/record_panels.rs`; Plex DB-EX reads and edits
+the files here. Both files sit in `decisions_dir`, never in `plexdb.db`: a count this project
+computed is not a fact about a title.
 
 A panel's series is named by `series_key`, which hashes the SQL and the value setting, so an
 edit starts a new series and a line never joins two different measurements.
@@ -15,11 +17,8 @@ import hashlib
 import json
 import os
 import threading
-import time
 import uuid
-from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -37,11 +36,9 @@ __all__ = [
     "Panel",
     "PanelHistory",
     "PanelsFile",
-    "RecordStats",
     "dashboards_json",
     "history_path",
     "panels_path",
-    "record_panels",
     "series_key",
 ]
 
@@ -467,20 +464,6 @@ class PanelHistory:
             raise PanelsFileError(f"{self._path} does not hold a series map of day entries")
         return {str(k): v for k, v in series.items()}
 
-    def record(self, results: dict[str, Entry]) -> None:
-        """Put each key's entry in its series: the one for that entry's day is replaced, else
-        the entry is appended. One atomic write for the lot."""
-        with self._lock:
-            series = self.read()
-            for key, entry in results.items():
-                same_day = [e for e in series.get(key, []) if e["day"] == entry["day"]]
-                if "error" in entry and any("value" in e for e in same_day):
-                    continue  # a rerun that failed never erases the day's recorded number
-                entries = [e for e in series.get(key, []) if e["day"] != entry["day"]]
-                entries.append(entry)
-                series[key] = sorted(entries, key=lambda e: e["day"])
-            self._write(series)
-
     def drop_panel(self, panel_id: str) -> int:
         """Remove every series whose key starts with `<panel id>:`; returns how many went."""
         with self._lock:
@@ -499,73 +482,6 @@ class PanelHistory:
             raise PanelsFileError(f"cannot write {self._path}: {err}") from None
         finally:
             tmp.unlink(missing_ok=True)
-
-
-@dataclass
-class RecordStats:
-    recorded: int = 0
-    failed: int = 0
-
-
-def _measure(store_path: Path, panel: Panel) -> float | int:
-    """The panel's value now. Raises `QueryError` for anything that is not one number."""
-    column = panel.column
-    if column is None:
-        body = panel.sql.strip().rstrip(";")
-        result = run_query(store_path, f"SELECT COUNT(*) FROM (\n{body}\n)")
-        return _number(result["rows"][0][0])  # type: ignore[index]
-    result = run_query(store_path, panel.sql)
-    columns: list[str] = result["columns"]  # type: ignore[assignment]
-    rows: list[list[object]] = result["rows"]  # type: ignore[assignment]
-    if not rows:
-        raise QueryError("the query returned no rows")
-    if column not in columns:
-        raise QueryError(f"the first row has no column {column}")
-    cell = rows[0][columns.index(column)]
-    if isinstance(cell, bool) or not isinstance(cell, int | float):
-        raise QueryError(f"column {column} is not a number")
-    return cell
-
-
-def _number(cell: object) -> float | int:
-    if isinstance(cell, bool) or not isinstance(cell, int | float):
-        raise QueryError("the count is not a number")
-    return cell
-
-
-def record_panels(
-    store_path: Path,
-    panels_file: PanelsFile,
-    history: PanelHistory,
-    *,
-    today: Callable[[], date] = lambda: datetime.now(UTC).date(),
-    log: Callable[[str], None] = print,
-) -> RecordStats:
-    """Record every panel's value for today's UTC date, seeding the panels file first when it is
-    missing. A panel whose query fails records `{day, error}` and the rest still run."""
-    stats = RecordStats()
-    dashboards = panels_file.read_or_seed()
-    day = today().isoformat()
-    results: dict[str, Entry] = {}
-    for dashboard in dashboards:
-        for panel in dashboard.panels:
-            key = series_key(panel)
-            started = time.monotonic()
-            try:
-                value = _measure(store_path, panel)
-                entry: Entry = {"day": day, "value": value}
-                shown = f"value {value}"
-                stats.recorded += 1
-            except (QueryError, TooManyQueries) as err:
-                entry = {"day": day, "error": str(err)}
-                shown = f"error {err}"
-                stats.failed += 1
-            elapsed_ms = round((time.monotonic() - started) * 1000)
-            results[key] = entry
-            log(f"panel {dashboard.id}/{panel.id} {key}: {shown} ({elapsed_ms} ms)")
-    if results:
-        history.record(results)
-    return stats
 
 
 def dashboards_json(

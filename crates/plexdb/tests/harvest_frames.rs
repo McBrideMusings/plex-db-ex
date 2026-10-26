@@ -587,3 +587,48 @@ fn a_second_harvester_is_refused_while_one_holds_the_slot() {
         "{err}"
     );
 }
+
+#[test]
+fn a_panic_mid_title_leaves_no_title_in_hand() {
+    let world = world(
+        &[("a", "1", "movie")],
+        vec![movie_record("1", 100, 11, "/media/a.mkv")],
+    );
+    let frames = world.dir.path().join("frames/frames.db");
+    let media = FakeMedia {
+        scanned: RefCell::new(Vec::new()),
+    };
+    let encoder = FakeEncoder {
+        answer: Answer::Vectors,
+        requests: Cell::new(0),
+    };
+    let locate = |file: &str| -> Result<PathBuf, MediaError> {
+        Ok(PathBuf::from("/library").join(file.trim_start_matches('/')))
+    };
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = harvest(
+            &frames,
+            &Inputs {
+                plex: &world.plex,
+                media: &media,
+                encoder: &encoder,
+                locate: &locate,
+                store_path: &world.dir.path().join("plexdb.db"),
+                hours: None,
+                now: &|| at(3),
+            },
+            &Options {
+                ignore_hours: true,
+                ..Options::default()
+            },
+            &mut |line| {
+                if line.contains("stage=scan start") {
+                    panic!("stdout closed");
+                }
+            },
+        );
+    }));
+    assert!(panicked.is_err(), "the panic still reaches the caller");
+    let conn = open_frames(&frames).expect("open");
+    assert_eq!(count(&conn, "SELECT count(*) FROM frame_harvest"), 0);
+}

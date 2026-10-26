@@ -18,7 +18,6 @@ EXPECTED_COMMANDS = {
     "steps",
     "sweep",
     "check-files",
-    "record-panels",
     "publish",
     "refresh-map",
     "refresh-tagnetwork",
@@ -41,7 +40,6 @@ EXPECTED_COMMAND_ORDER = [
     "steps",
     "sweep",
     "check-files",
-    "record-panels",
     "refresh-map",
     "refresh-tagnetwork",
     # Not a step of the sweep: a read-only browser view of what the steps above
