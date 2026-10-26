@@ -184,3 +184,83 @@ pub fn preflight(conn: &Connection, chain: &[Migration]) -> Result<i64, SchemaEr
     }
     Ok(start)
 }
+
+/// The Frame index's own chain (ADR-0024): `frames.db` is a second file with its own
+/// schema version, applied by [`apply_chain`] like the store's. Its `frame_vec` table is a
+/// `vec0` virtual table, so a connection applying it needs the `sqlite-vec` extension
+/// registered first.
+pub mod frames {
+    use rusqlite::Transaction;
+
+    use super::Migration::{self, Sql, Step};
+    use super::{SchemaError, Shrinks};
+
+    /// Width of one frame vector: CLIP ViT-L/14's projection, the model the encoder
+    /// serves (ADR-0025). `frame_vec` fixes its column's width when it is created, so
+    /// a model of another width is a migration, not a setting.
+    pub const FRAME_DIMS: usize = 768;
+
+    /// Append-only, like the store's chain, and versioned separately from it.
+    pub const MIGRATIONS: &[Migration] = &[
+        Sql(include_str!("../frames/v01.sql")),
+        Sql(include_str!("../frames/v02.sql")),
+        Step(v3),
+        Sql(include_str!("../frames/v04.sql")),
+    ];
+
+    pub const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
+
+    /// Version 3 — each Shot's boundaries, stored by the harvester so a reader never
+    /// re-derives them from `cuts`. The titles already indexed get their rows here, from
+    /// the rule the harvester applied when it numbered them: the boundaries are 0, each
+    /// distinct cut at least 500 ms after the boundary before it and before `duration_ms`
+    /// (the last frame's offset when that is NULL), then the end. The rule is written out
+    /// in this step, not imported, so a later change to the harvester's rule leaves this
+    /// one as it ran.
+    fn v3(tx: &Transaction) -> Result<Shrinks, SchemaError> {
+        tx.execute_batch(
+            "CREATE TABLE shots (
+            item_id TEXT NOT NULL,
+            shot_ix INTEGER NOT NULL,
+            in_ms   INTEGER NOT NULL,
+            out_ms  INTEGER NOT NULL,
+            PRIMARY KEY (item_id, shot_ix)
+        ) WITHOUT ROWID\n        ",
+        )?;
+        let titles: Vec<(String, Option<i64>)> = tx
+            .prepare("SELECT item_id, duration_ms FROM frame_index_state WHERE model IS NOT NULL")?
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        for (item_id, duration_ms) in titles {
+            let duration_ms = match duration_ms {
+                Some(ms) => Some(ms),
+                None => tx.query_row(
+                    "SELECT max(t_ms) FROM frame_vec WHERE item_id = ?1",
+                    [&item_id],
+                    |row| row.get::<_, Option<i64>>(0),
+                )?,
+            };
+            let Some(duration_ms) = duration_ms else {
+                continue;
+            };
+            let mut bounds = vec![0_i64];
+            let cuts: Vec<i64> = tx
+                .prepare("SELECT DISTINCT t_ms FROM cuts WHERE item_id = ?1 ORDER BY t_ms")?
+                .query_map([&item_id], |row| row.get(0))?
+                .collect::<Result<_, _>>()?;
+            for t_ms in cuts {
+                if 500 <= t_ms - bounds[bounds.len() - 1] && t_ms < duration_ms {
+                    bounds.push(t_ms);
+                }
+            }
+            bounds.push(duration_ms);
+            let mut insert = tx.prepare(
+                "INSERT INTO shots (item_id, shot_ix, in_ms, out_ms) VALUES (?1, ?2, ?3, ?4)",
+            )?;
+            for (ix, pair) in bounds.windows(2).enumerate() {
+                insert.execute(rusqlite::params![item_id, ix as i64, pair[0], pair[1]])?;
+            }
+        }
+        Ok(Vec::new())
+    }
+}

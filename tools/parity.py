@@ -57,9 +57,13 @@ import parity_fakes  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 
+#: Commands whose run writes `frames.db`: parity gives each side its own Frame index.
+FRAME_COMMANDS = {"frames", "harvest-frames"}
+
 #: Steps whose printed lines are part of what moved, so the two must print the same ones.
 OUTPUT_STEPS = frozenset(
     {
+        "frames",
         "harvest-mdblist",
         "harvest-letterboxd-lists",
         "harvest-mdblist-search",
@@ -183,6 +187,9 @@ def main() -> int:
     parser.add_argument("--store", type=Path, default=REPO / "data" / "plexdb.db")
     parser.add_argument("--decisions-dir", type=Path)
     parser.add_argument(
+        "--frames-db", type=Path, help="seed both sides' frames.db from this file (frame commands)"
+    )
+    parser.add_argument(
         "--fake",
         choices=["tmdb", "lists"],
         help="answer the step's network calls from a local fake instead of the real service",
@@ -239,6 +246,13 @@ def main() -> int:
                 "PLEXDB_BACKUP_DIR": str(root / "backups"),
                 "PLEXDB_EXPLORE_SAVED_PATH": str(own / "explore-queries.json"),
             }
+            if args.step in FRAME_COMMANDS:
+                frames_dir = root / "frames"
+                frames_dir.mkdir()
+                if args.frames_db is not None:
+                    shutil.copyfile(args.frames_db, frames_dir / "frames.db")
+                # Run times compare as text, so both sides must write the same UTC offset.
+                env = env | {"PLEXDB_FRAMES_DIR": str(frames_dir), "TZ": "UTC"}
             argv = (
                 [sys.executable, "-m", "plexdb.cli", args.step, *step_args]
                 if side == "python"
@@ -255,7 +269,19 @@ def main() -> int:
                 for name in DECISIONS_FILES
             ]
             _mask_run_times(root / "plexdb.db", started)
+            if args.step in FRAME_COMMANDS and (root / "frames" / "frames.db").exists():
+                _mask_run_times(root / "frames" / "frames.db", started)
         report = diff(sides["python"] / "plexdb.db", sides["rust"] / "plexdb.db")
+        if args.step in FRAME_COMMANDS:
+            frames_report = diff(
+                sides["python"] / "frames" / "frames.db", sides["rust"] / "frames" / "frames.db"
+            )
+            report = {
+                "tables": report["tables"] + frames_report["tables"],
+                "rows": report["rows"] + frames_report["rows"],
+                "differing": report["differing"]
+                + [{**d, "db": "frames.db"} for d in frames_report["differing"]],
+            }
     report = {"step": args.step, **report, "exit": exits}
     report["stdout"] = _compare(printed["python"], printed["rust"])
     report["decisions_files"] = {

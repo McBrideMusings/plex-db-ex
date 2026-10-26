@@ -8,16 +8,20 @@ description = "The plexdb writer's sweep steps that have moved from the Python p
 plexdb-keywords = { path = "../plexdb-keywords" }
 plexdb-schema = { path = "../plexdb-schema" }
 plexdb-store = { path = "../plexdb-store" }
+base64 = "0.23"
+libc = "0.2"
 rusqlite = { workspace = true }
 # `preserve_order`: a list's JSON keeps the key order `plexdb lists --json` prints it in.
 serde_json = { workspace = true, features = ["preserve_order"] }
+sha2 = "0.10"
+# `frame_vec` is a vec0 virtual table (ADR-0024): the harvester writes it, so the
+# extension loads in this crate too, at the version the workspace pins.
+sqlite-vec = { workspace = true }
+tempfile = "3"
 thiserror = { workspace = true }
 # The list harvests' HTTP calls to MDBList and Letterboxd, both https. Only this crate
 # turns TLS on; the reader stays plain http (ADR-0026).
 ureq = { workspace = true, features = ["rustls"] }
-
-[dev-dependencies]
-tempfile = "3"
 
 # Named `plexdb-rs` while the Python package still owns `plexdb` on PATH; the
 # last slice of the move renames it.

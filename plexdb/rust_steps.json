@@ -33,5 +33,5 @@
     {"name": "harvest-letterboxd-lists", "order": 61, "policy": "best-effort"},
     {"name": "harvest-mdblist-search", "order": 62, "policy": "best-effort"}
   ],
-  "commands": ["lists", "list", "list-decide"]
+  "commands": ["lists", "list", "list-decide", "frames"]
 }

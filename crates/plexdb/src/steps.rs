@@ -6,8 +6,8 @@ use plexdb_store::StoreError;
 
 use crate::decisions::FoldError;
 use crate::{
-    list_decisions, list_steps, merge_decisions, migrate, name_decisions, role_decisions,
-    tmdb_steps,
+    frames_cmd, list_decisions, list_steps, merge_decisions, migrate, name_decisions,
+    role_decisions, tmdb_steps,
 };
 
 /// Why a step stopped. `Config` is a setting that is absent, which the sweep
@@ -95,6 +95,7 @@ pub const STEPS: &[(&str, Run)] = &[
     (list_steps::LISTS, list_steps::lists),
     (list_steps::LIST, list_steps::list_one),
     (list_steps::LIST_DECIDE, list_steps::list_decide),
+    (frames_cmd::NAME, frames_cmd::run),
 ];
 
 pub fn find(name: &str) -> Option<Run> {
