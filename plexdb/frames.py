@@ -27,7 +27,6 @@ import struct
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass, field
 from datetime import datetime, time
 from pathlib import Path
 from typing import IO, Any
@@ -43,7 +42,6 @@ __all__ = [
     "FRAME_DIMS",
     "MIGRATIONS",
     "SCHEMA_VERSION",
-    "PruneStats",
     "UnknownItem",
     "frames_path",
     "harvester_running",
@@ -52,7 +50,6 @@ __all__ = [
     "migrate_configured",
     "open_frames",
     "parse_hours",
-    "prune_orphans",
     "queue",
     "section_titles",
     "set_indexing",
@@ -182,9 +179,6 @@ ALTER TABLE frame_index_state ADD COLUMN reason TEXT;
 #: Append-only, like the store's chain, and versioned separately from it.
 MIGRATIONS: tuple[schema.Migration, ...] = (_V1, _V2, _V3, _V4)
 SCHEMA_VERSION = len(MIGRATIONS)
-
-#: Every frames.db table keyed by item_id, in the order a prune deletes from.
-_TITLE_TABLES = ("frame_vec", "cuts", "shots", "frame_queue", "frame_index_state")
 
 
 class UnknownItem(PlexdbError):
@@ -511,39 +505,6 @@ def queue(
     return cursor.rowcount == 1
 
 
-@dataclass(frozen=True)
-class PruneStats:
-    """What one prune removed, per table, and for which titles."""
-
-    item_ids: tuple[str, ...]
-    deleted: dict[str, int] = field(default_factory=dict)
-
-
-def _titles_held(frames_conn: sqlite3.Connection) -> set[str]:
-    """Every item_id frames.db holds a row for.
-
-    `frame_vec` is read through its shadow table `frame_vec_chunks`, which holds
-    one row per 1024 vectors with the partition key beside it. Selecting from
-    `frame_vec` itself scans every vector row, which at full library is tens of
-    millions.
-
-    A title's vectors and its `frame_index_state` row are written in one
-    transaction, so a title with vectors always has a state row. The chunks are
-    read anyway: a file that broke that rule still gets its vectors pruned.
-    """
-    held: set[str] = set()
-    for table in ("frame_index_state", "cuts", "shots", "frame_queue"):
-        held.update(
-            str(row[0])
-            for row in frames_conn.execute(f"SELECT DISTINCT item_id FROM {table}")  # noqa: S608
-        )
-    held.update(
-        str(row[0])
-        for row in frames_conn.execute("SELECT DISTINCT partition00 FROM frame_vec_chunks")
-    )
-    return held
-
-
 def delete_vectors(frames_conn: sqlite3.Connection, item_id: str) -> int:
     """Delete one title's vectors by rowid and return how many went.
 
@@ -564,23 +525,3 @@ def delete_vectors(frames_conn: sqlite3.Connection, item_id: str) -> int:
     ]
     frames_conn.executemany("DELETE FROM frame_vec WHERE rowid = ?", [(r,) for r in rowids])
     return len(rowids)
-
-
-def prune_orphans(frames_conn: sqlite3.Connection, live: set[str]) -> PruneStats:
-    """Delete every frames.db row whose item_id is not in `live` — the store's
-    `items`, read by the caller. One transaction per title, matching the
-    harvester's one commit per title."""
-    orphans = sorted(_titles_held(frames_conn) - live)
-    deleted = dict.fromkeys(_TITLE_TABLES, 0)
-    for item_id in orphans:
-        with frames_conn:
-            deleted["frame_vec"] += delete_vectors(frames_conn, item_id)
-            for table in _TITLE_TABLES:
-                if table == "frame_vec":
-                    continue
-                cursor = frames_conn.execute(
-                    f"DELETE FROM {table} WHERE item_id = ?",  # noqa: S608
-                    (item_id,),
-                )
-                deleted[table] += cursor.rowcount
-    return PruneStats(item_ids=tuple(orphans), deleted=deleted)

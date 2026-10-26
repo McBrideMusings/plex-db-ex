@@ -76,7 +76,7 @@ fn unique_path(directory: &Path, stem: &str) -> PathBuf {
 /// INTO`: one file with no `-wal` or `-shm` sidecars, read through a normal
 /// connection, so a copy taken while another process writes still lands
 /// consistent. A plain file copy can miss committed rows still in the sidecar.
-fn take_backup(store: &Path, backup_dir: &Path, stem: &str) -> Result<PathBuf, StoreError> {
+pub fn take_backup(store: &Path, backup_dir: &Path, stem: &str) -> Result<PathBuf, StoreError> {
     std::fs::create_dir_all(backup_dir).map_err(|err| {
         StoreError::Store(format!("cannot create {}: {err}", backup_dir.display()))
     })?;
@@ -96,7 +96,7 @@ fn take_backup(store: &Path, backup_dir: &Path, stem: &str) -> Result<PathBuf, S
 /// Put a backup back over the store. The `-wal` and `-shm` sidecars describe the
 /// file being replaced, and SQLite reading a stale sidecar beside a different
 /// database is how a restore turns into a corruption, so they go.
-fn restore(backup: &Path, store: &Path) -> Result<(), StoreError> {
+pub fn restore(backup: &Path, store: &Path) -> Result<(), StoreError> {
     if !backup.is_file() {
         return Err(StoreError::Store(format!(
             "cannot restore {} from {}: the backup does not exist",

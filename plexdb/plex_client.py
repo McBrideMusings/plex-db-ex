@@ -1,10 +1,12 @@
 """Reading a Plex library over its HTTP API — read-only, GET requests only.
 
-The walk (`plexdb/walk.py`) depends on `PlexSource`, not on `LivePlexClient`
-directly, so a recorded-response test can substitute a fake that returns the
-same shapes without a socket. `LivePlexClient` is the one implementation that
-talks to a real server; tests exercise it too, but through `httpx`'s
-`MockTransport` playing back a recording rather than a live connection.
+The Frame harvester depends on `PlexSource`, not on `LivePlexClient` directly,
+so a recorded-response test can substitute a fake that returns the same shapes
+without a socket. The library walk, the history ingest and the media walk read
+Plex through the Rust client in `crates/plexdb/src/plex.rs`. `LivePlexClient` is
+the one implementation that talks to a real server; tests exercise it too, but
+through `httpx`'s `MockTransport` playing back a recording rather than a live
+connection.
 
 Section types and metadata types follow Plex's own numbering
 (https://support.plex.tv): a library section is `movie` or `show` in its
@@ -30,10 +32,6 @@ PLEX_TYPE_SHOW = 2
 PLEX_TYPE_EPISODE = 4
 
 _DEFAULT_TIMEOUT = 60.0
-#: Page size for `/status/sessions/history/all`, which does not return
-#: everything in one response the way `/library/sections/<key>/all` does — a
-#: real server has tens of thousands of history rows.
-_HISTORY_PAGE_SIZE = 200
 #: Page size for `/library/sections/<key>/all`, small enough that each response
 #: with `includeGuids=1` stays well inside `_DEFAULT_TIMEOUT`.
 _SECTION_PAGE_SIZE = 500
@@ -73,16 +71,6 @@ class PlexSource(Protocol):
         ...
 
 
-class PlexMediaSource(PlexSource, Protocol):
-    """What `plexdb media-walk` reads: the library listing, plus one title's full
-    record, which is the only response that carries its tracks."""
-
-    def metadata(self, rating_key: str) -> dict[str, Any] | None:
-        """The full `Metadata` record for one rating key, or `None` when Plex has
-        none."""
-        ...
-
-
 class LivePlexClient:
     """The one `PlexSource` that reaches a real server, over `httpx`.
 
@@ -107,15 +95,6 @@ class LivePlexClient:
                     if int(part.get("id", -1)) == part_id and part.get("file"):
                         return str(part["file"])
         return None
-
-    def metadata(self, rating_key: str) -> dict[str, Any] | None:
-        """The one full `Metadata` record Plex holds for `rating_key`, streams included,
-        or `None` when Plex no longer has it. A metadata read, so it starts no playback
-        session."""
-        records: list[dict[str, Any]] = (
-            self._get(f"/library/metadata/{rating_key}").get("Metadata") or []
-        )
-        return records[0] if records else None
 
     def _get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         # The token rides in a header, not the query string, so it never lands
@@ -204,59 +183,6 @@ class LivePlexClient:
         container = self._get(f"/library/metadata/{collection_key}/children")
         metadata: list[dict[str, Any]] = container.get("Metadata", [])
         return metadata
-
-    def history(self, *, since_viewed_at: int | None = None) -> list[dict[str, Any]]:
-        """Every history event at or newer than `since_viewed_at`, newest
-        first.
-
-        Filters server-side via Plex's own `viewedAt>` operator — confirmed
-        live: a filtered request reports a smaller `totalSize` than an
-        unfiltered one, so this is a real narrowing, not just a client-side
-        illusion. `None` fetches the whole history, which is what a first
-        ingest needs.
-
-        `viewedAt>` is **inclusive** in practice despite its name — filtering
-        on a value equal to the newest event's own `viewedAt` still returns
-        that event (confirmed live). So a caller passing the latest
-        `viewed_at` it already has on file will see that same event again on
-        the next call; `ingest_plays`'s `ON CONFLICT(history_key) DO NOTHING`
-        is what makes that free rather than a duplicate.
-
-        Paginates via `X-Plex-Container-Start`/`-Size`, since unlike a
-        library section this can be tens of thousands of rows.
-        """
-        params: dict[str, Any] = {"sort": "viewedAt:desc"}
-        if since_viewed_at is not None:
-            params["viewedAt>"] = since_viewed_at
-
-        events: list[dict[str, Any]] = []
-        start = 0
-        while True:
-            container = self._get(
-                "/status/sessions/history/all",
-                {
-                    **params,
-                    "X-Plex-Container-Start": start,
-                    "X-Plex-Container-Size": _HISTORY_PAGE_SIZE,
-                },
-            )
-            page: list[dict[str, Any]] = container.get("Metadata", [])
-            events.extend(page)
-            start += len(page)
-            total = container.get("totalSize", start)
-            if not page or start >= total:
-                break
-        return events
-
-    def devices(self) -> list[dict[str, Any]]:
-        """Every device Plex has ever seen a client connect from.
-
-        Cheap to call once per ingest and cache — a play references a
-        device far more often than the device list changes.
-        """
-        container = self._get("/devices")
-        devices: list[dict[str, Any]] = container.get("Device", [])
-        return devices
 
     def accounts(self) -> list[dict[str, Any]]:
         """Every Plex account this server has ever attached — owner, home,

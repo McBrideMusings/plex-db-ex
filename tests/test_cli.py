@@ -4,33 +4,19 @@ from __future__ import annotations
 
 import argparse
 import importlib
-import sqlite3
 from pathlib import Path
 
 import pytest
-from fixture_store import init as init_store
-from plex_fixtures import (
-    FakeHistorySource,
-    FakeSource,
-    recorded_history_source,
-    recorded_source,
-)
 
 from plexdb.cli import _register_commands, build_parser, main
-from plexdb.commands import ingest_plays as ingest_plays_cmd
 from plexdb.commands import iter_command_modules
-from plexdb.commands import walk as walk_cmd
 from plexdb.config import Config, ConfigError
-from plexdb.store import open_store
-from plexdb.walk import walk_all
 
 EXPECTED_COMMANDS = {
     "check",
     "idle",
     "steps",
     "sweep",
-    "walk",
-    "media-walk",
     "check-files",
     "record-panels",
     "publish",
@@ -40,12 +26,7 @@ EXPECTED_COMMANDS = {
     "refresh-map",
     "refresh-tagnetwork",
     "enrich-mdblist-ratings",
-    "ingest-plays",
-    "enrich-tautulli-plays",
     "explore",
-    "repair-identities",
-    "repair-fs-identities",
-    "prune-frames",
     "frames",
     "search",
     "harvest-frames",
@@ -66,15 +47,8 @@ EXPECTED_COMMAND_ORDER = [
     # Every sweep step and which implementation runs it (`plexdb/commands/steps.py`).
     "steps",
     "sweep",
-    "walk",
-    "media-walk",
     "check-files",
     "record-panels",
-    "repair-identities",
-    "repair-fs-identities",
-    "prune-frames",
-    "ingest-plays",
-    "enrich-tautulli-plays",
     "enrich-anilist",
     "enrich-letterboxd",
     "enrich-wikidata",
@@ -186,56 +160,6 @@ def test_a_command_module_without_name_fails_loudly_naming_the_module(
 
     with pytest.raises(RuntimeError, match="nameless_commands.no_name"):
         _register_commands(sub, package=nameless_commands)
-
-
-def _fixture_backed_client(base_url: str, token: str) -> FakeSource:
-    """Stands in for `LivePlexClient` in a CLI test: same call shape
-    (`base_url`, `token`), returns the same recorded fixtures every other walk
-    test uses. No network."""
-    assert base_url, "walk must pass the configured PLEX_URL through"
-    assert token, "walk must pass the configured PLEX_TOKEN through"
-    return recorded_source()
-
-
-def _fixture_backed_history_client(base_url: str, token: str) -> FakeHistorySource:
-    """Stands in for `LivePlexClient` in an ingest-plays CLI test: same call
-    shape, returns the recorded history fixtures every `test_plays.py` test
-    uses. No network."""
-    assert base_url, "ingest-plays must pass the configured PLEX_URL through"
-    assert token, "ingest-plays must pass the configured PLEX_TOKEN through"
-    return recorded_history_source()
-
-
-def _configure_ingest_plays(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Point the CLI at a store under `tmp_path`, already walked from the
-    recorded library fixtures — so `plex_items` can resolve the history
-    fixture's rating keys — with the recorded history fixtures standing in
-    for Plex's history and device endpoints. Returns the store path."""
-    store = tmp_path / "plexdb.db"
-    monkeypatch.setenv("PLEXDB_PATH", str(store))
-    monkeypatch.setenv("PLEX_URL", "http://plex.example:32400")
-    monkeypatch.setenv("PLEX_TOKEN", "test-token")
-    init_store(store)
-    with open_store(store) as conn:
-        walk_all(conn, recorded_source())
-    monkeypatch.setattr(ingest_plays_cmd, "LivePlexClient", _fixture_backed_history_client)
-    return store
-
-
-def _configure_walk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Point the CLI at a store under `tmp_path`, with Plex credentials set and
-    the recorded fixtures standing in for a server. Returns the store path; the
-    store itself is not created, so a test can choose whether to `init` first."""
-    store = tmp_path / "plexdb.db"
-    monkeypatch.setenv("PLEXDB_PATH", str(store))
-    monkeypatch.setenv("PLEX_URL", "http://plex.example:32400")
-    monkeypatch.setenv("PLEX_TOKEN", "test-token")
-    # The recorded fixtures report paths under /media, same as the real server.
-    # `walk` refuses to run without this (issue #24), so it is part of a
-    # working configuration, not an extra a test opts into.
-    monkeypatch.setenv("PLEX_SOURCE_ROOTS", "/media")
-    monkeypatch.setattr(walk_cmd, "LivePlexClient", _fixture_backed_client)
-    return store
 
 
 def test_init_creates_the_store_and_says_where(
@@ -435,163 +359,3 @@ def test_publish_without_a_snapshot_path_configured_is_an_error_not_a_default(
     err = capsys.readouterr().err
     assert err.startswith("error: ")
     assert "PLEXDB_SNAPSHOT_PATH" in err
-
-
-def test_walk_writes_items_and_reports_a_summary(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    store = _configure_walk(tmp_path, monkeypatch)
-    main(["migrate"])
-    capsys.readouterr()
-
-    assert main(["walk"]) == 0
-
-    out = capsys.readouterr().out
-    assert "walked 4 section(s)" in out
-    assert "6 title(s) seen, 6 written" in out
-    assert "1 fell back to a path-derived id" in out
-
-    with sqlite3.connect(store) as conn:
-        count = conn.execute("SELECT count(*) FROM items").fetchone()[0]
-    assert count == 6
-
-
-def test_walk_scoped_to_one_section(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    _configure_walk(tmp_path, monkeypatch)
-    main(["migrate"])
-    capsys.readouterr()
-
-    assert main(["walk", "--section", "1"]) == 0
-
-    out = capsys.readouterr().out
-    assert "walked 1 section(s)" in out
-    assert "2 title(s) seen, 2 written" in out
-
-
-def test_walk_without_plex_credentials_configured_is_an_error_not_a_default(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    store = tmp_path / "plexdb.db"
-    monkeypatch.setenv("PLEXDB_PATH", str(store))
-    # Set (not delete): `Config.from_env` calls `load_dotenv(override=False)`,
-    # which only fills a var that is *absent* from the environment — deleting
-    # these would let the worktree's own `.env` (real PLEX_URL/PLEX_TOKEN,
-    # needed for `verify`) leak back in and mask the case under test.
-    monkeypatch.setenv("PLEX_URL", "")
-    monkeypatch.setenv("PLEX_TOKEN", "")
-    monkeypatch.setenv("PLEX_SOURCE_ROOTS", "/media")
-    main(["migrate"])
-    capsys.readouterr()
-
-    assert main(["walk"]) == 1
-    err = capsys.readouterr().err
-    assert err.startswith("error: ")
-    assert "PLEX_URL" in err
-    assert "PLEX_TOKEN" in err
-
-
-def test_walk_without_a_source_root_refuses_rather_than_writing_mount_bound_ids(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """An empty root list is the wrong answer, not an absent option.
-
-    A GUID-less title's item_id is a hash of its path, so with nothing stripped
-    the id encodes the mount point and joins with no other store. That produced
-    1,521 disagreements against `etv-station` (issue #24). Set (not delete) for
-    the same reason as the credentials test above.
-    """
-    _configure_walk(tmp_path, monkeypatch)
-    monkeypatch.setenv("PLEX_SOURCE_ROOTS", "")
-    main(["migrate"])
-    capsys.readouterr()
-
-    assert main(["walk"]) == 1
-    err = capsys.readouterr().err
-    assert err.startswith("error: ")
-    assert "PLEX_SOURCE_ROOTS" in err
-    assert "Traceback" not in err
-    assert "Traceback" not in err
-
-
-def test_walk_without_a_store_says_so_not_a_traceback(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    _configure_walk(tmp_path, monkeypatch)  # no `init` — the store never gets created
-
-    assert main(["walk"]) == 1
-    err = capsys.readouterr().err
-    assert err.startswith("error: ")
-    assert "plexdb migrate" in err
-    assert "Traceback" not in err
-
-
-def test_ingest_plays_writes_rows_and_reports_a_summary(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    store = _configure_ingest_plays(tmp_path, monkeypatch)
-    capsys.readouterr()
-
-    assert main(["ingest-plays"]) == 0
-
-    out = capsys.readouterr().out
-    assert "ingested 3 play(s) from 4 event(s) seen, 0 already recorded" in out
-    assert "1 event(s) had a rating key not in the walk's map" in out
-    assert "1 event(s) had a device id not in Plex's device list" in out
-
-    with sqlite3.connect(store) as conn:
-        count = conn.execute("SELECT count(*) FROM plays").fetchone()[0]
-    assert count == 3
-
-
-def test_ingest_plays_a_second_time_adds_no_duplicate_rows(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    store = _configure_ingest_plays(tmp_path, monkeypatch)
-    main(["ingest-plays"])
-    capsys.readouterr()
-
-    assert main(["ingest-plays"]) == 0
-
-    out = capsys.readouterr().out
-    assert "ingested 0 play(s)" in out
-
-    with sqlite3.connect(store) as conn:
-        count = conn.execute("SELECT count(*) FROM plays").fetchone()[0]
-    assert count == 3
-
-
-def test_ingest_plays_without_plex_credentials_configured_is_an_error_not_a_default(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    store = tmp_path / "plexdb.db"
-    monkeypatch.setenv("PLEXDB_PATH", str(store))
-    # Set (not delete): see the same note on `test_walk_without_plex_credentials…`.
-    monkeypatch.setenv("PLEX_URL", "")
-    monkeypatch.setenv("PLEX_TOKEN", "")
-    main(["migrate"])
-    capsys.readouterr()
-
-    assert main(["ingest-plays"]) == 1
-    err = capsys.readouterr().err
-    assert err.startswith("error: ")
-    assert "PLEX_URL" in err
-    assert "PLEX_TOKEN" in err
-    assert "Traceback" not in err
-
-
-def test_ingest_plays_without_a_store_says_so_not_a_traceback(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.setenv("PLEXDB_PATH", str(tmp_path / "plexdb.db"))
-    monkeypatch.setenv("PLEX_URL", "http://plex.example:32400")
-    monkeypatch.setenv("PLEX_TOKEN", "test-token")
-    monkeypatch.setattr(ingest_plays_cmd, "LivePlexClient", _fixture_backed_history_client)
-    # no `init` — the store never gets created
-
-    assert main(["ingest-plays"]) == 1
-    err = capsys.readouterr().err
-    assert err.startswith("error: ")
-    assert "plexdb migrate" in err
-    assert "Traceback" not in err

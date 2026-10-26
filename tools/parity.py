@@ -19,10 +19,11 @@ A step that fetches runs against a fake server (`tools/parity_fakes.py` for TMDB
 `tools/fake_lists.py` for MDBList and Letterboxd, and `parity_fakes.serve_jev` for the embedding
 server and Jev, and `parity_fakes.serve_plex` for Plex's `/accounts`; `--fake`) so both sides see
 the same answers offline. A fake built from the store also seeds both copies with the decisions the
-step acts on and logs the requests each side sent. Times a run wrote (`fetched_at` and the
-other `*_at` columns at or after the moment parity started) differ by seconds between
-two runs by nature, so both copies have them replaced by one marker before they are
-compared; a time written earlier is compared as it is.
+step acts on and logs the requests each side sent. Times a run wrote (`fetched_at`,
+`last_seen` and the other `*_at` and `*_seen` columns at or after the moment parity
+started) differ by seconds between two runs by nature, so both copies have them
+replaced by one marker before they are compared; a time written earlier is compared
+as it is.
 
 Prints one JSON object: `tables` and `rows` compared (rows counted on the Python
 copy), `differing` as `[{table, key}]`, where `key` is the row's primary key (the
@@ -126,12 +127,12 @@ RUN_TIME = "<written by this run>"
 
 
 def _mask_run_times(store: Path, started: str) -> None:
-    """Replace every `*_at` text value at or after `started` with one marker."""
+    """Replace every `*_at` and `*_seen` text value at or after `started` with one marker."""
     with sqlite3.connect(store) as conn:
         for table in _tables(conn, "main"):
             t = _quote(table)
             for _, column, kind, *_ in conn.execute(f"PRAGMA table_info({t})").fetchall():
-                if column.endswith("_at") and kind.upper() == "TEXT":
+                if column.endswith(("_at", "_seen")) and kind.upper() == "TEXT":
                     c = _quote(column)
                     conn.execute(f"UPDATE {t} SET {c} = ? WHERE {c} >= ?", (RUN_TIME, started))
 
