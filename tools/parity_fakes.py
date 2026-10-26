@@ -577,7 +577,9 @@ def _encoder_handlers() -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:  # noqa: N802
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            rows = [{"index": i, "embedding": _frame_vector(s)} for i, s in enumerate(body["input"])]
+            rows = [
+                {"index": i, "embedding": _frame_vector(s)} for i, s in enumerate(body["input"])
+            ]
             self._send({"data": rows[::-1], "model": "fake-clip-parity"})
 
     return Handler

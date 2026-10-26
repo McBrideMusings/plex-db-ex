@@ -137,6 +137,13 @@ pub fn load(frames: &Connection, floats: &Connection) -> rusqlite::Result<Paired
         if held_ix != shot_ix {
             continue;
         }
+        if floats.len() != vec.len() * 4 {
+            return Err(rusqlite::Error::InvalidParameterName(format!(
+                "frame_float row {item_id} @ {t_ms} ms holds {} bytes; frame_vec holds {} dims",
+                floats.len(),
+                vec.len()
+            )));
+        }
         paired.fp16.push(
             floats
                 .chunks_exact(4)

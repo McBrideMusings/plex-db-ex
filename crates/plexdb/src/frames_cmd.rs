@@ -155,12 +155,22 @@ fn quant_arguments(args: &[&str]) -> Result<(Vec<String>, Vec<usize>), Failure> 
     let mut ks = Vec::new();
     let mut tokens = args.iter();
     while let Some(&token) = tokens.next() {
-        if token == "--top" {
-            let raw = tokens
-                .next()
-                .ok_or_else(|| Failure::Usage("--top needs a value".into()))?;
+        let value = if token == "--top" {
+            Some(
+                *tokens
+                    .next()
+                    .ok_or_else(|| Failure::Usage("--top needs a value".into()))?,
+            )
+        } else {
+            token.strip_prefix("--top=")
+        };
+        if let Some(raw) = value {
             match raw.parse::<usize>() {
-                Ok(k) if k >= 1 => ks.push(k),
+                Ok(k) if k >= 1 => {
+                    if !ks.contains(&k) {
+                        ks.push(k);
+                    }
+                }
                 _ => return Err(Failure::Usage(format!("{raw} is not a positive count"))),
             }
         } else {
