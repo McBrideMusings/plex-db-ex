@@ -18,7 +18,6 @@ EXPECTED_COMMANDS = {
     "steps",
     "sweep",
     "check-files",
-    "record-panels",
     "publish",
     "refresh-map",
     "refresh-tagnetwork",
@@ -44,7 +43,6 @@ EXPECTED_COMMAND_ORDER = [
     "steps",
     "sweep",
     "check-files",
-    "record-panels",
     "refresh-map",
     "refresh-tagnetwork",
     # The Frame index's status, queue and migration (`plexdb/commands/frames.py`).

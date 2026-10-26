@@ -48,6 +48,7 @@ pub mod pyiso;
 pub mod pyjson;
 pub mod pyurl;
 pub mod pyval;
+pub mod record_panels;
 pub mod repair;
 pub mod repair_fs;
 pub mod role_decisions;

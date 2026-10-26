@@ -11,6 +11,10 @@ pub enum Json {
     Null,
     Bool(bool),
     Int(i64),
+    /// An integer past `i64` that a file already held.
+    Uint(u64),
+    /// A float, spelled as Python's `repr` spells it.
+    Float(f64),
     Str(String),
     Array(Vec<Json>),
     Object(Vec<(String, Json)>),
@@ -28,6 +32,81 @@ impl Json {
     pub fn opt_str(text: Option<String>) -> Json {
         text.map_or(Json::Null, Json::Str)
     }
+}
+
+impl From<&serde_json::Value> for Json {
+    /// A parsed file, in the key order it was read in (`serde_json` is built with
+    /// `preserve_order`), ready to be written back the way Python writes it.
+    fn from(value: &serde_json::Value) -> Json {
+        use serde_json::Value;
+        match value {
+            Value::Null => Json::Null,
+            Value::Bool(flag) => Json::Bool(*flag),
+            Value::Number(n) => match (n.as_i64(), n.as_u64()) {
+                (Some(int), _) => Json::Int(int),
+                (None, Some(big)) => Json::Uint(big),
+                _ => Json::Float(n.as_f64().unwrap_or(f64::NAN)),
+            },
+            Value::String(text) => Json::Str(text.clone()),
+            Value::Array(items) => Json::Array(items.iter().map(Json::from).collect()),
+            Value::Object(map) => Json::Object(
+                map.iter()
+                    .map(|(key, item)| (key.clone(), Json::from(item)))
+                    .collect(),
+            ),
+        }
+    }
+}
+
+/// `repr(x)` for a finite float: the shortest digits that read back as `x`, laid out
+/// as Python lays them out (fixed from `1e-4` up to `1e16`, exponent form outside).
+pub fn float_repr(x: f64) -> String {
+    if !x.is_finite() {
+        return if x.is_nan() {
+            "NaN".into()
+        } else if x < 0.0 {
+            "-Infinity".into()
+        } else {
+            "Infinity".into()
+        };
+    }
+    if x == 0.0 {
+        return if x.is_sign_negative() { "-0.0" } else { "0.0" }.into();
+    }
+    let sci = format!("{:e}", x.abs());
+    let (mantissa, exp) = sci.split_once('e').unwrap_or((&sci, "0"));
+    let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
+    let decpt = exp.parse::<i32>().unwrap_or(0) + 1;
+    let sign = if x < 0.0 { "-" } else { "" };
+    let len = i32::try_from(digits.len()).unwrap_or(i32::MAX);
+    let body = if decpt > 16 || decpt <= -4 {
+        let fraction = if digits.len() > 1 {
+            format!(".{}", &digits[1..])
+        } else {
+            String::new()
+        };
+        let e = decpt - 1;
+        format!(
+            "{}{fraction}e{}{:02}",
+            &digits[..1],
+            if e < 0 { '-' } else { '+' },
+            e.abs()
+        )
+    } else if decpt <= 0 {
+        format!(
+            "0.{}{digits}",
+            "0".repeat(usize::try_from(-decpt).unwrap_or(0))
+        )
+    } else if decpt >= len {
+        format!(
+            "{digits}{}.0",
+            "0".repeat(usize::try_from(decpt - len).unwrap_or(0))
+        )
+    } else {
+        let at = usize::try_from(decpt).unwrap_or(0);
+        format!("{}.{}", &digits[..at], &digits[at..])
+    };
+    format!("{sign}{body}")
 }
 
 fn quote(out: &mut String, text: &str) {
@@ -65,6 +144,10 @@ fn write(out: &mut String, value: &Json, depth: usize) {
         Json::Int(n) => {
             let _ = write!(out, "{n}");
         }
+        Json::Uint(n) => {
+            let _ = write!(out, "{n}");
+        }
+        Json::Float(x) => out.push_str(&float_repr(*x)),
         Json::Str(text) => quote(out, text),
         Json::Array(items) if items.is_empty() => out.push_str("[]"),
         Json::Array(items) => {
@@ -122,5 +205,24 @@ mod tests {
             dumps_indent2(&value),
             "{\n  \"b\": 1,\n  \"a\": [\n    \"\\u00e9\\ud83d\\ude00\",\n    null,\n    true\n  ],\n  \"empty\": []\n}"
         );
+    }
+
+    #[test]
+    fn floats_read_as_python_reprs_them() {
+        for (x, repr) in [
+            (1.0, "1.0"),
+            (0.5, "0.5"),
+            (-2.25, "-2.25"),
+            (123456789.125, "123456789.125"),
+            (1e16, "1e+16"),
+            (1.5e300, "1.5e+300"),
+            (1e15, "1000000000000000.0"),
+            (0.0001, "0.0001"),
+            (0.00001, "1e-05"),
+            (1.234e-7, "1.234e-07"),
+            (0.1 + 0.2, "0.30000000000000004"),
+        ] {
+            assert_eq!(float_repr(x), repr);
+        }
     }
 }

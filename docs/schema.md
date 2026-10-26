@@ -1491,7 +1491,7 @@ oldest day first, one entry per UTC `day` (`YYYY-MM-DD`). `<hash12>` is the firs
 `sha256(sql + NUL + value)`, so editing a panel's SQL or `value` starts a new series.
 
 `plexdb record-panels` (sweep step 23, best effort, right after `check-files`) runs every panel
-through the Query tab's guarded `run_query` (read-only, 5 s, 500 rows). A `rows` panel records
+through the same guards as the Query tab's `run_query` (read-only, an authorizer that allows reads only, 5 s, 500 rows). A `rows` panel records
 `SELECT COUNT(*) FROM (<sql>)`; a `column:<name>` panel records that column of the first row. A
 query that fails, a first row with no such column, no rows at all, and a cell that is not a number
 (`column <name> is not a number`) each record `{day, error}`, and the other panels still run. A

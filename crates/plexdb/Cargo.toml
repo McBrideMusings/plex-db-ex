@@ -10,7 +10,9 @@ plexdb-schema = { path = "../plexdb-schema" }
 plexdb-store = { path = "../plexdb-store" }
 base64 = "0.23"
 libc = "0.2"
-rusqlite = { workspace = true }
+# `hooks` and `limits`: `record-panels` runs a panel's SQL under an authorizer, a progress
+# deadline and a value-length limit, the way the Query tab does.
+rusqlite = { workspace = true, features = ["hooks", "limits"] }
 # `preserve_order`: a list's JSON keeps the key order `plexdb lists --json` prints it in.
 serde_json = { workspace = true, features = ["preserve_order"] }
 sha2 = "0.10"
