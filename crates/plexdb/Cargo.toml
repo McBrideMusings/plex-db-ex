@@ -6,6 +6,7 @@ description = "The plexdb writer's sweep steps that have moved from the Python p
 
 [dependencies]
 plexdb-keywords = { path = "../plexdb-keywords" }
+plexdb-reader = { path = "../plexdb-reader" }
 plexdb-schema = { path = "../plexdb-schema" }
 plexdb-store = { path = "../plexdb-store" }
 base64 = "0.23"

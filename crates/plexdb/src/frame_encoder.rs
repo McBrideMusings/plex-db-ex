@@ -22,6 +22,10 @@ const TIMEOUT: Duration = Duration::from_secs(300);
 /// `reachable` asks only whether the server answers; listing models loads none.
 const REACHABLE_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// The image `plexdb frames probe-encoder` embeds: a 224 px red square, the size the
+/// harvester sends.
+pub const PROBE_IMAGE: &[u8] = include_bytes!("probe.jpg");
+
 /// The phrase `plexdb frames probe-encoder` embeds.
 pub const PROBE_PHRASE: &str = "a red square";
 
@@ -108,6 +112,11 @@ impl EncoderClient {
             ));
         }
         Ok(Self::new(&config.encoder_url, &config.model))
+    }
+
+    /// One vector per phrase, in the order given.
+    pub fn embed_texts(&self, texts: &[String]) -> Result<Vec<Vec<f64>>, EncoderError> {
+        Ok(self.timed_texts(texts)?.vectors)
     }
 
     pub fn timed_texts(&self, texts: &[String]) -> Result<Embedded, EncoderError> {

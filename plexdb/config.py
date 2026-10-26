@@ -149,7 +149,7 @@ class Config:
     #: `PLEXDB_FRAME_TOKENIZER`, a `tokenizer.json` for `frame_model`. Unset means
     #: the Search tab reads `tokenizer-<model>.json` from its data directory (`PhraseTokenizer`).
     frame_tokenizer: Path | None
-    #: `PLEXDB_READ_BIN`, the `plexdb-read` binary `plexdb search` runs: a path,
+    #: `PLEXDB_READ_BIN`, the `plexdb-read` binary the Plex DB-EX Search tab runs: a path,
     #: or a name looked up on `PATH`. The container's image carries it.
     read_bin: str
     #: `PLEXDB_RS_BIN`, the `plexdb-rs` binary that runs the sweep steps moved to

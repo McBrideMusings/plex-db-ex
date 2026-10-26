@@ -105,11 +105,11 @@ def _refused_url() -> str:
 
 
 def test_status_on_a_fresh_directory_creates_one_current_file_with_every_count_zero(
-    env: Path, capsys: pytest.CaptureFixture[str]
+    env: Path, capfd: pytest.CaptureFixture[str]
 ) -> None:
     for _ in range(2):
         assert main(["frames", "status"]) == 0
-        report = json.loads(capsys.readouterr().out)
+        report = json.loads(capfd.readouterr().out)
         assert report["schema_version"] == frames.SCHEMA_VERSION
         assert report["sections"] == [
             {"section_id": "1", "indexed": 0, "total": 1},
@@ -129,7 +129,7 @@ def test_status_reports_whether_the_configured_encoder_answers(
     env: Path,
     encoder: _EncoderServer,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    capfd: pytest.CaptureFixture[str],
 ) -> None:
     for url, expected in (
         (f"http://127.0.0.1:{encoder.server_port}", True),
@@ -137,7 +137,7 @@ def test_status_reports_whether_the_configured_encoder_answers(
     ):
         monkeypatch.setenv("PLEXDB_FRAME_ENCODER_URL", url)
         assert main(["frames", "status"]) == 0
-        assert json.loads(capsys.readouterr().out)["encoder_reachable"] is expected
+        assert json.loads(capfd.readouterr().out)["encoder_reachable"] is expected
     assert encoder.requests == [], "status never asks for an embedding"
 
 
@@ -145,12 +145,12 @@ def test_probe_encoder_waits_out_a_slow_first_answer_and_reports_equal_widths(
     env: Path,
     encoder: _EncoderServer,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    capfd: pytest.CaptureFixture[str],
 ) -> None:
     encoder.delay_s = 5.0
     monkeypatch.setenv("PLEXDB_FRAME_ENCODER_URL", f"http://127.0.0.1:{encoder.server_port}/")
     assert main(["frames", "probe-encoder"]) == 0
-    report = json.loads(capsys.readouterr().out)
+    report = json.loads(capfd.readouterr().out)
     assert report["model"] == "clip-test"
     assert report["image"]["dims"] == report["text"]["dims"] == frames.FRAME_DIMS
     assert report["cold_start_wait_ms"] >= 4000, "the first, held answer is the cold start"
@@ -163,24 +163,24 @@ def test_probe_encoder_waits_out_a_slow_first_answer_and_reports_equal_widths(
 
 
 def test_probe_encoder_against_a_refused_url_exits_non_zero_naming_it(
-    env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    env: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
 ) -> None:
     url = _refused_url()
     monkeypatch.setenv("PLEXDB_FRAME_ENCODER_URL", url)
     assert main(["frames", "probe-encoder"]) == 1
-    assert f"error: encoder unavailable at {url}/v1/embeddings" in capsys.readouterr().err
+    assert f"error: encoder unavailable at {url}/v1/embeddings" in capfd.readouterr().err
 
     monkeypatch.setenv("PLEXDB_FRAME_ENCODER_URL", "")
     assert main(["frames", "probe-encoder"]) == 1
-    assert "PLEXDB_FRAME_ENCODER_URL is not set" in capsys.readouterr().err
+    assert "PLEXDB_FRAME_ENCODER_URL is not set" in capfd.readouterr().err
 
 
 def test_queue_adds_a_known_title_and_refuses_an_unknown_one(
-    env: Path, capsys: pytest.CaptureFixture[str]
+    env: Path, capfd: pytest.CaptureFixture[str]
 ) -> None:
     assert main(["frames", "queue", "imdb:tt1"]) == 0
     assert main(["frames", "queue", "imdb:tt404"]) == 1
-    assert "imdb:tt404 is not in items" in capsys.readouterr().err
+    assert "imdb:tt404 is not in items" in capfd.readouterr().err
 
     with frames.open_frames(env / "frames.db") as conn:
         rows = conn.execute("SELECT item_id, queued_by FROM frame_queue").fetchall()

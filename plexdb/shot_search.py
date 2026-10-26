@@ -1,8 +1,9 @@
 """The command line of `plexdb-read search`, built once for every Python caller.
 
-`plexdb search` and the Plex DB-EX Search tab both run the reader crate's one
-search (ADR-0024, ADR-0026). This module is where they agree on which binary,
-which files and which flags, so neither can drift from the other.
+The Plex DB-EX Search tab runs the reader crate's one search (ADR-0024, ADR-0026)
+through `plexdb-read`, as `plexdb search` (`crates/plexdb/src/search_cmd.rs`) runs it
+in-process. This module is where the tab agrees on which binary, which files and
+which flags.
 """
 
 from __future__ import annotations

@@ -41,6 +41,8 @@ pub const TITLE_TABLES: [&str; 5] = [
 #[derive(Debug, Clone)]
 pub struct FrameConfig {
     pub frames_dir: Option<PathBuf>,
+    /// `PLEXDB_PHRASE_CACHE`: where `plexdb search` keeps embedded phrases (ADR-0026).
+    pub phrase_cache: Option<PathBuf>,
     pub frame_hours: String,
     pub encoder_url: String,
     pub model: String,
@@ -88,6 +90,7 @@ impl FrameConfig {
         };
         Ok(FrameConfig {
             frames_dir: env_path("PLEXDB_FRAMES_DIR"),
+            phrase_cache: env_path("PLEXDB_PHRASE_CACHE"),
             frame_hours: env_text("PLEXDB_FRAME_HOURS"),
             encoder_url: env_text("PLEXDB_FRAME_ENCODER_URL"),
             model: env_text("PLEXDB_FRAME_MODEL"),
@@ -108,6 +111,13 @@ impl FrameConfig {
     /// `frames.db` inside `frames_dir`, or `None` when that is unset.
     pub fn frames_path(&self) -> Option<PathBuf> {
         self.frames_dir.as_ref().map(|dir| dir.join("frames.db"))
+    }
+
+    /// `PLEXDB_PHRASE_CACHE`, else `phrases.db` inside `frames_dir`.
+    pub fn phrase_cache_path(&self) -> Option<PathBuf> {
+        self.phrase_cache
+            .clone()
+            .or_else(|| self.frames_dir.as_ref().map(|dir| dir.join("phrases.db")))
     }
 
     /// `frames.db`'s path, or a `Config` error when nobody configured it.

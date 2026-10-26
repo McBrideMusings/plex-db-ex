@@ -11,6 +11,7 @@ pub enum Json {
     Null,
     Bool(bool),
     Int(i64),
+    Float(f64),
     Str(String),
     Array(Vec<Json>),
     Object(Vec<(String, Json)>),
@@ -28,6 +29,37 @@ impl Json {
     pub fn opt_str(text: Option<String>) -> Json {
         text.map_or(Json::Null, Json::Str)
     }
+}
+
+/// Python's `repr(float)`, which `json.dumps` prints: the shortest digits that read back
+/// the same, fixed notation for exponents -4 to 15 and `1e-05` style outside them.
+pub fn py_float_repr(x: f64) -> String {
+    if !x.is_finite() {
+        return if x.is_nan() {
+            "NaN"
+        } else if x > 0.0 {
+            "Infinity"
+        } else {
+            "-Infinity"
+        }
+        .into();
+    }
+    if x == 0.0 {
+        return if x.is_sign_negative() { "-0.0" } else { "0.0" }.into();
+    }
+    let sci = format!("{x:e}");
+    let (mantissa, exp) = sci.split_once('e').unwrap_or((&sci, "0"));
+    let exp: i32 = exp.parse().unwrap_or(0);
+    if (-4..16).contains(&exp) {
+        let fixed = format!("{x}");
+        return if fixed.contains('.') {
+            fixed
+        } else {
+            format!("{fixed}.0")
+        };
+    }
+    let sign = if exp < 0 { '-' } else { '+' };
+    format!("{mantissa}e{sign}{:02}", exp.abs())
 }
 
 fn quote(out: &mut String, text: &str) {
@@ -65,6 +97,7 @@ fn write(out: &mut String, value: &Json, depth: usize) {
         Json::Int(n) => {
             let _ = write!(out, "{n}");
         }
+        Json::Float(x) => out.push_str(&py_float_repr(*x)),
         Json::Str(text) => quote(out, text),
         Json::Array(items) if items.is_empty() => out.push_str("[]"),
         Json::Array(items) => {
@@ -107,6 +140,17 @@ pub fn dumps_indent2(value: &Json) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn floats_print_the_way_python_repr_does() {
+        assert_eq!(py_float_repr(0.5), "0.5");
+        assert_eq!(py_float_repr(3.0), "3.0");
+        assert_eq!(py_float_repr(0.00001), "1e-05");
+        assert_eq!(py_float_repr(0.000015), "1.5e-05");
+        assert_eq!(py_float_repr(0.0001), "0.0001");
+        assert_eq!(py_float_repr(1e16), "1e+16");
+        assert_eq!(py_float_repr(123456789012345.0), "123456789012345.0");
+    }
 
     #[test]
     fn matches_python_indent_two_with_ascii_escapes() {

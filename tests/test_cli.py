@@ -23,8 +23,6 @@ EXPECTED_COMMANDS = {
     "refresh-map",
     "refresh-tagnetwork",
     "explore",
-    "frames",
-    "search",
     "schedule",
 }
 
@@ -46,10 +44,6 @@ EXPECTED_COMMAND_ORDER = [
     "record-panels",
     "refresh-map",
     "refresh-tagnetwork",
-    # The Frame index's status, queue and migration (`plexdb/commands/frames.py`).
-    "frames",
-    # Ranks Shots against a Phrase through `plexdb-read` (`plexdb/commands/search.py`).
-    "search",
     # Not a step of the sweep: a read-only browser view of what the steps above
     # wrote (`plexdb/commands/explore.py`).
     "explore",

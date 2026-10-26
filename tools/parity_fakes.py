@@ -557,6 +557,51 @@ def _frames_handlers(scenario: FramesScenario) -> type[BaseHTTPRequestHandler]:
     return Handler
 
 
+def _encoder_handlers() -> type[BaseHTTPRequestHandler]:
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+            pass
+
+        def _send(self, body: object) -> None:
+            raw = json.dumps(body).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def do_GET(self) -> None:  # noqa: N802
+            self._send({"data": [{"id": "fake-clip"}]})
+
+        def do_POST(self) -> None:  # noqa: N802
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            rows = [{"index": i, "embedding": _frame_vector(s)} for i, s in enumerate(body["input"])]
+            self._send({"data": rows[::-1], "model": "fake-clip-parity"})
+
+    return Handler
+
+
+@contextlib.contextmanager
+def serve_encoder() -> Iterator[dict[str, str]]:
+    """An encoder alone: a vector per input, a pure function of the input text or image,
+    for the commands that only embed a phrase (`frames quant-agreement`, `search`)."""
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _encoder_handlers())
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield {
+            "PLEXDB_FRAME_ENCODER_URL": f"http://127.0.0.1:{server.server_port}",
+            "PLEXDB_FRAME_MODEL": "fake-clip-parity",
+            "NO_PROXY": "127.0.0.1",
+            "no_proxy": "127.0.0.1",
+        }
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 @contextlib.contextmanager
 def serve_frames(store: Path) -> Iterator[tuple[dict[str, str], FramesScenario]]:
     """A Plex listing fixture videos, an encoder answering a vector per image, and the

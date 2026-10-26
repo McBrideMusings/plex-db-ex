@@ -1803,7 +1803,7 @@ A fourth film, *3:10 to Yuma*, had a damaged file. The CPU decoder concealed the
 ### The encoder request (ADR-0025)
 
 Every frame and phrase is embedded by `POST {PLEXDB_FRAME_ENCODER_URL}/v1/embeddings` with
-`PLEXDB_FRAME_MODEL` as `model` (`plexdb/frame_encoder.py`). The client waits up to 300 s for an
+`PLEXDB_FRAME_MODEL` as `model` (`crates/plexdb/src/frame_encoder.rs`). The client waits up to 300 s for an
 answer, so a server holding the request through a cold start is waited out. A refused connection,
 a timeout or a 5xx is `EncoderUnavailable`, naming the URL and the status. Each vector is scaled
 to unit length before it is used.
@@ -1953,13 +1953,14 @@ go in any order. `plexdb-read --help` prints the usage and exits 0.
 
 `p` is absent without a temperature. With `--draw`, `shots` holds the drawn Shots.
 
-**`plexdb search <phrase>`** runs `plexdb-read search` with the files from the environment: the
+**`plexdb search <phrase>`** runs the reader crate's search (`Reader::search_drawn`, the one
+implementation `plexdb-read search` also calls) with the files from the environment: the
 Snapshot (`PLEXDB_SNAPSHOT_PATH`, else `PLEXDB_PATH`), `frames.db`, the Phrase cache
 (`PLEXDB_PHRASE_CACHE`, else `phrases.db` in `PLEXDB_FRAMES_DIR`) and `PLEXDB_FRAME_ENCODER_URL`.
 It takes `--pool` or `--pool-file` (item_ids; `-` is standard input), `--not` (both repeat, one value per flag), `--weight`,
-`--temperature`, `--draw` and `--seed`, and prints what the binary prints. The binary is
-`PLEXDB_READ_BIN`, default `plexdb-read` on `PATH`; the container image carries it. The command
-exits 1 with the build command when it cannot find the binary.
+`--temperature`, `--draw` and `--seed`, and prints the JSON above. It runs inside `plexdb-rs`, so
+it needs no `plexdb-read` binary; the Plex DB-EX Search tab still starts `plexdb-read`
+(`PLEXDB_READ_BIN`).
 
 ## Reading the store to build collections
 

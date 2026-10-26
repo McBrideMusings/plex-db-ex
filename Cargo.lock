@@ -497,6 +497,7 @@ dependencies = [
  "base64",
  "libc",
  "plexdb-keywords",
+ "plexdb-reader",
  "plexdb-schema",
  "plexdb-store",
  "rusqlite",

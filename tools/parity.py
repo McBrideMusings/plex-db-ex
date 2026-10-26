@@ -62,7 +62,7 @@ import parity_fakes  # noqa: E402
 REPO = Path(__file__).resolve().parent.parent
 
 #: Commands whose run writes `frames.db`: parity gives each side its own Frame index.
-FRAME_COMMANDS = {"frames", "harvest-frames"}
+FRAME_COMMANDS = {"frames", "harvest-frames", "search"}
 
 #: Steps whose printed lines are part of what moved, so the two must print the same ones.
 OUTPUT_STEPS = frozenset(
@@ -214,8 +214,13 @@ def main() -> int:
         "--frames-db", type=Path, help="seed both sides' frames.db from this file (frame commands)"
     )
     parser.add_argument(
+        "--float-db",
+        type=Path,
+        help="seed both sides' frames-float.db from this file (frames quant-agreement)",
+    )
+    parser.add_argument(
         "--fake",
-        choices=["tmdb", "lists", "jev", "plex", "sources", "frames"],
+        choices=["tmdb", "lists", "jev", "plex", "sources", "frames", "encoder"],
         help="answer the step's network calls from a local fake instead of the real service",
     )
     args, step_args = parser.parse_known_args()
@@ -255,6 +260,8 @@ def main() -> int:
             base.update(served)
         elif args.fake == "frames":
             served, scenario = stack.enter_context(parity_fakes.serve_frames(store))
+        elif args.fake == "encoder":
+            base.update(stack.enter_context(parity_fakes.serve_encoder()))
         elif args.fake == "sources":
             served, scenario = stack.enter_context(fake_sources.serve_sources(store))
             base.update(served)
@@ -285,6 +292,11 @@ def main() -> int:
                 frames_dir.mkdir()
                 if args.frames_db is not None:
                     shutil.copyfile(args.frames_db, frames_dir / "frames.db")
+                if args.float_db is not None:
+                    shutil.copyfile(args.float_db, frames_dir / "frames-float.db")
+                if args.step == "search":
+                    # `search` reads a Snapshot; the store copy stands in for one.
+                    shutil.copyfile(root / "plexdb.db", root / "snapshot.db")
                 if isinstance(scenario, parity_fakes.FramesScenario):
                     scenario.seed_frames(frames_dir / "frames.db")
                     scenario.requests.clear()
