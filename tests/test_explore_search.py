@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import json
 import math
+import re
 import sqlite3
 import stat
 import statistics
@@ -651,10 +652,60 @@ def test_a_clip_window_past_the_title_or_longer_than_two_minutes_is_refused(
     assert served["media"].calls == []
 
 
-def _raise_site_reasons() -> list[str]:
-    """Every `reason` a `MediaError(...)` in the package's source passes, with each f-string
-    placeholder filled by a number, so a new raise site joins the test by being written."""
+def _rust_call_arguments(text: str, start: int) -> list[str]:
+    """The top-level, comma-separated arguments of the call whose `(` is at `start`."""
+    depth, args, current, ix, quoted = 0, [], "", start, False
+    while ix < len(text):
+        char = text[ix]
+        if quoted:
+            current += char
+            if char == "\\":
+                ix += 1
+                current += text[ix]
+            elif char == '"':
+                quoted = False
+        elif char == '"':
+            quoted = True
+            current += char
+        elif char in "([{":
+            depth += 1
+            if depth > 1:
+                current += char
+        elif char in ")]}":
+            depth -= 1
+            if depth == 0:
+                args.append(current.strip())
+                return [arg for arg in args if arg]
+            current += char
+        elif char == "," and depth == 1:
+            args.append(current.strip())
+            current = ""
+        else:
+            current += char
+        ix += 1
+    raise AssertionError("a MediaError::new call that never closes")
+
+
+def _rust_raise_site_reasons() -> list[str]:
+    """The `reason` of every `MediaError::new(message, reason)` in the harvester's Rust, with
+    each `{}` placeholder of a `format!` reason filled by a number."""
     reasons: list[str] = []
+    src = Path(__file__).parent.parent / "crates" / "plexdb" / "src"
+    for source in sorted(src.glob("*.rs")):
+        text = source.read_text()
+        for found in re.finditer(r"MediaError::new\(", text):
+            reason = _rust_call_arguments(text, found.end() - 1)[1]
+            literal = re.match(r'(?:format!\()?"((?:[^"\\]|\\.)*)"', reason)
+            assert literal, f"{source.name}: a reason that is not a string: {reason}"
+            reasons.append(re.sub(r"\{[^}]*\}", "9", literal.group(1)))
+    return reasons
+
+
+def _raise_site_reasons() -> list[str]:
+    """Every `reason` a `MediaError(...)` in the package's source or a `MediaError::new(...)` in
+    the harvester's Rust passes, with each f-string placeholder filled by a number, so a new
+    raise site joins the test by being written."""
+    reasons: list[str] = _rust_raise_site_reasons()
     for source in sorted(Path(__file__).parent.parent.joinpath("plexdb").glob("*.py")):
         for node in ast.walk(ast.parse(source.read_text())):
             if not (

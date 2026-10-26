@@ -1,12 +1,9 @@
 """Reading a Plex library over its HTTP API — read-only, GET requests only.
 
-The Frame harvester depends on `PlexSource`, not on `LivePlexClient` directly,
-so a recorded-response test can substitute a fake that returns the same shapes
-without a socket. The library walk, the history ingest and the media walk read
-Plex through the Rust client in `crates/plexdb/src/plex.rs`. `LivePlexClient` is
-the one implementation that talks to a real server; tests exercise it too, but
-through `httpx`'s `MockTransport` playing back a recording rather than a live
-connection.
+The library walk, the history ingest, the media walk and the frame harvester read
+Plex through the Rust client in `crates/plexdb/src/plex.rs`. `LivePlexClient` serves the
+Python commands that remain (the poster proxy, `latent-users`); tests exercise it through
+`httpx`'s `MockTransport` playing back a recording rather than a live connection.
 
 Section types and metadata types follow Plex's own numbering
 (https://support.plex.tv): a library section is `movie` or `show` in its
@@ -47,32 +44,8 @@ class Section:
     title: str
 
 
-class PlexSource(Protocol):
-    """The read surface a walk needs from Plex — real or recorded.
-
-    Two methods, both read-only: the section list, and the raw `Metadata`
-    records for one section at one Plex item type. Everything the walk
-    knows about a title comes out of those records; `PlexSource` carries no
-    parsing, so a recorded fixture and a live response are interchangeable
-    here.
-    """
-
-    def sections(self) -> list[Section]:
-        """Every library section the server reports, in Plex's own order."""
-        ...
-
-    def items(self, section_key: str, type_: int) -> list[dict[str, Any]]:
-        """Raw `Metadata` records for one section at one Plex item type.
-
-        `type_` is one of the `PLEX_TYPE_*` constants above. A section with no
-        matching records (e.g. asking a movie section for `PLEX_TYPE_SHOW`
-        items) returns an empty list, never an error.
-        """
-        ...
-
-
 class LivePlexClient:
-    """The one `PlexSource` that reaches a real server, over `httpx`.
+    """The client that reaches a real Plex server, over `httpx`.
 
     Read-only by construction: every method issues a GET, and nothing here
     can mutate the library. `http` is injectable so a test can hand in a
@@ -205,7 +178,7 @@ class LivePlexClient:
 class PlexAccountSource(Protocol):
     """The read surface `enrich-tautulli-plays` needs from Plex to resolve
     the server owner's account id across systems (issue #26) — real or
-    recorded, independent of `PlexSource`'s library-walk surface."""
+    recorded."""
 
     def accounts(self) -> list[dict[str, Any]]:
         """Every Plex account this server has ever attached, including id

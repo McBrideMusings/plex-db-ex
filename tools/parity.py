@@ -66,6 +66,7 @@ FRAME_COMMANDS = {"frames", "harvest-frames"}
 OUTPUT_STEPS = frozenset(
     {
         "frames",
+        "harvest-frames",
         "harvest-mdblist",
         "harvest-letterboxd-lists",
         "harvest-mdblist-search",
@@ -82,6 +83,8 @@ OUTPUT_STEPS = frozenset(
 DECISIONS_FILES = ("list_decisions.json",)
 
 _TIME = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?\+00:00")
+#: How long a harvest stage took, which differs by milliseconds between two runs.
+_STAGE_SECONDS = re.compile(r"\b((?:decode|scan|extract|encode)_s)=\d+\.\d\b")
 
 
 def _python_commands() -> set[str]:
@@ -112,7 +115,10 @@ def _run(argv: list[str], env: dict[str, str], side: str) -> tuple[int, str]:
 
 
 def _lines(text: str, scratch: str) -> list[str]:
-    return [_TIME.sub("<time>", line.replace(scratch, "<run>")) for line in text.splitlines()]
+    return [
+        _STAGE_SECONDS.sub(r"\1=<s>", _TIME.sub("<time>", line.replace(scratch, "<run>")))
+        for line in text.splitlines()
+    ]
 
 
 def _compare(left: list[str], right: list[str]) -> dict[str, Any]:
@@ -197,7 +203,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--fake",
-        choices=["tmdb", "lists", "jev"],
+        choices=["tmdb", "lists", "jev", "frames"],
         help="answer the step's network calls from a local fake instead of the real service",
     )
     args, step_args = parser.parse_known_args()
@@ -233,6 +239,9 @@ def main() -> int:
         elif args.fake == "jev":
             served, scenario = stack.enter_context(parity_fakes.serve_jev(store))
             base.update(served)
+        elif args.fake == "frames":
+            served, scenario = stack.enter_context(parity_fakes.serve_frames(store))
+            base.update(served)
         sides = {"python": Path(scratch) / "python", "rust": Path(scratch) / "rust"}
         exits: dict[str, int] = {}
         printed: dict[str, list[str]] = {}
@@ -260,6 +269,9 @@ def main() -> int:
                 frames_dir.mkdir()
                 if args.frames_db is not None:
                     shutil.copyfile(args.frames_db, frames_dir / "frames.db")
+                if isinstance(scenario, parity_fakes.FramesScenario):
+                    scenario.seed_frames(frames_dir / "frames.db")
+                    scenario.requests.clear()
                 # Run times compare as text, so both sides must write the same UTC offset.
                 env = env | {"PLEXDB_FRAMES_DIR": str(frames_dir), "TZ": "UTC"}
             argv = (
@@ -287,6 +299,19 @@ def main() -> int:
             frames_report = diff(
                 sides["python"] / "frames" / "frames.db", sides["rust"] / "frames" / "frames.db"
             )
+            floats = [side / "frames" / "frames-float.db" for side in sides.values()]
+            if any(path.exists() for path in floats):
+                # `--keep-float`: the measurement file is part of what the run wrote.
+                for path in floats:
+                    if not path.exists():
+                        sqlite3.connect(path).close()
+                float_report = diff(floats[0], floats[1])
+                frames_report = {
+                    "tables": frames_report["tables"] + float_report["tables"],
+                    "rows": frames_report["rows"] + float_report["rows"],
+                    "differing": frames_report["differing"]
+                    + [{**d, "table": "float:" + d["table"]} for d in float_report["differing"]],
+                }
             report = {
                 "tables": report["tables"] + frames_report["tables"],
                 "rows": report["rows"] + frames_report["rows"],

@@ -37,6 +37,8 @@
     "order they had; best-effort because Jev and the embedding server are optional services",
     "(ADR-0004) and a pair or keyword is judged once and kept, so a skipped pass costs only the",
     "rows it would have added.",
+    "harvest-frames: a command, not a step: `plexdb schedule` starts it when PLEXDB_FRAME_HOURS open",
+    "and it writes frames.db alone (ADR-0024), so no sweep runs it.",
     "commands: moved to Rust but in no sweep, so they carry no order or policy."
   ],
   "steps": [
@@ -61,5 +63,5 @@
     {"name": "judge-keyword-pairs", "order": 65, "policy": "best-effort"},
     {"name": "judge-keyword-roles", "order": 66, "policy": "best-effort"}
   ],
-  "commands": ["lists", "list", "list-decide", "frames", "repair-identities", "repair-fs-identities"]
+  "commands": ["lists", "list", "list-decide", "frames", "harvest-frames", "repair-identities", "repair-fs-identities"]
 }

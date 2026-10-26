@@ -18,7 +18,6 @@ Two rules shape every write here:
 
 from __future__ import annotations
 
-import errno
 import fcntl
 import json
 import os
@@ -35,7 +34,7 @@ import sqlite_vec
 
 from . import schema
 from .config import Config
-from .errors import ConfigError, HarvesterBusy, PlexdbError, StoreError
+from .errors import ConfigError, PlexdbError, StoreError
 from .store import BUSY_TIMEOUT_MS
 
 __all__ = [
@@ -52,7 +51,6 @@ __all__ = [
     "parse_hours",
     "queue",
     "section_titles",
-    "set_indexing",
     "status",
 ]
 
@@ -194,15 +192,6 @@ def frames_path(config: Config) -> Path:
 
 def decoder_path(frames_file: Path) -> Path:
     return frames_file.parent / "decoder.json"
-
-
-def write_decoder_fallback(frames_file: Path, reason: str) -> None:
-    """Record that the harvester asked for CUDA and decodes on the CPU, and why."""
-    decoder_path(frames_file).write_text(json.dumps({"cuda_failed": reason}))
-
-
-def clear_decoder_fallback(frames_file: Path) -> None:
-    decoder_path(frames_file).unlink(missing_ok=True)
 
 
 def decoder_report(frames_file: Path, requested: str) -> str:
@@ -404,35 +393,6 @@ def _indexing(frames_conn: sqlite3.Connection) -> dict[str, str] | None:
     return None if row is None else {"item_id": row["item_id"], "since": row["since"]}
 
 
-@contextmanager
-def harvest_lock(path: Path) -> Iterator[None]:
-    """Hold the one harvester slot, or raise `HarvesterBusy` naming the holder.
-
-    The lock is an open-file-description lock on `harvest.lock` beside `frames.db`; the operating
-    system drops it when the holder exits, however it exits, so a crash leaves
-    nothing to clear. The file carries the holder's pid, and the title in hand
-    comes from the `frame_harvest` row.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = path.parent / "harvest.lock"
-    with open(lock_path, "a+") as handle:
-        try:
-            _ofd_lock(handle, fcntl.F_WRLCK, fcntl.F_OFD_SETLK)
-        except OSError as error:
-            if error.errno not in (errno.EAGAIN, errno.EACCES):
-                raise
-            handle.seek(0)
-            pid = handle.read().strip() or "unknown"
-            raise HarvesterBusy(
-                f"another harvester is running (pid {pid}, {_title_in_hand(path)})"
-            ) from None
-        handle.seek(0)
-        handle.truncate()
-        handle.write(str(os.getpid()))
-        handle.flush()
-        yield
-
-
 def _ofd_lock(handle: IO[str], lock_type: int, command: int) -> bytes:
     """Run one open-file-description lock `command` over the whole of `handle`."""
     if _FLOCK_DARWIN:
@@ -454,31 +414,6 @@ def harvester_running(path: Path) -> bool:
         answer = _ofd_lock(handle, fcntl.F_WRLCK, fcntl.F_OFD_GETLK)
     lock_type = struct.unpack(_FLOCK_FORMAT, answer)[3 if _FLOCK_DARWIN else 0]
     return bool(lock_type != fcntl.F_UNLCK)
-
-
-def _title_in_hand(path: Path) -> str:
-    try:
-        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=1)
-        conn.row_factory = sqlite3.Row
-        try:
-            indexing = _indexing(conn)
-        finally:
-            conn.close()
-    except (sqlite3.Error, OSError):
-        return "title unknown"
-    return "between titles" if indexing is None else f"indexing {indexing['item_id']}"
-
-
-def set_indexing(frames_conn: sqlite3.Connection, item_id: str | None, *, now: datetime) -> None:
-    """Record the title being indexed, or `None` when none is."""
-    with frames_conn:
-        if item_id is None:
-            frames_conn.execute("DELETE FROM frame_harvest")
-        else:
-            frames_conn.execute(
-                "INSERT OR REPLACE INTO frame_harvest (id, item_id, since) VALUES (1, ?, ?)",
-                (item_id, now.isoformat()),
-            )
 
 
 def queue(
@@ -503,25 +438,3 @@ def queue(
             (item_id, now.isoformat(), by),
         )
     return cursor.rowcount == 1
-
-
-def delete_vectors(frames_conn: sqlite3.Connection, item_id: str) -> int:
-    """Delete one title's vectors by rowid and return how many went.
-
-    `DELETE FROM frame_vec WHERE item_id = ?` scans the whole vec0 table
-    (sqlite-vec 0.1.9); the title's rowids come from the shadow tables by
-    partition key instead, and a rowid delete is a point lookup. Measured on
-    1M vectors of 768 int8 dims (1000 titles of 1000): one title's delete took
-    4.083 s by item_id and 0.142 s by rowid; listing the titles took 3.163 s
-    from `frame_vec` and 0.001 s from `frame_vec_chunks`.
-    """
-    rowids = [
-        int(row[0])
-        for row in frames_conn.execute(
-            "SELECT r.rowid FROM frame_vec_rowids r "
-            "JOIN frame_vec_chunks k ON k.chunk_id = r.chunk_id WHERE k.partition00 = ?",
-            (item_id,),
-        )
-    ]
-    frames_conn.executemany("DELETE FROM frame_vec WHERE rowid = ?", [(r,) for r in rowids])
-    return len(rowids)

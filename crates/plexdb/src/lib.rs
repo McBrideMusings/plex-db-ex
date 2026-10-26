@@ -15,6 +15,7 @@ pub mod frame_media;
 pub mod frames;
 pub mod frames_cmd;
 pub mod gated;
+pub mod harvest_frames;
 pub mod html;
 pub mod http;
 pub mod identity;
