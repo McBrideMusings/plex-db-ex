@@ -440,3 +440,44 @@ pub fn is_carried(conn: &Connection, keyword: &str) -> rusqlite::Result<bool> {
         |row| row.get(0),
     )
 }
+
+/// For each keyword `keyword_forms` maps a raw spelling to, the spelling a person or a
+/// judge reads for it: the shortest (by characters), ties by text. A keyword with no
+/// row is absent.
+pub fn readable_forms(conn: &Connection) -> rusqlite::Result<HashMap<String, String>> {
+    let mut chosen: HashMap<String, String> = HashMap::new();
+    let mut statement = conn.prepare("SELECT surface, keyword FROM keyword_forms")?;
+    let rows = statement.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    for row in rows {
+        let (surface, keyword) = row?;
+        let key = (surface.chars().count(), &surface);
+        match chosen.get(&keyword) {
+            Some(best) if (best.chars().count(), best) <= key => {}
+            _ => {
+                chosen.insert(keyword, surface);
+            }
+        }
+    }
+    Ok(chosen)
+}
+
+/// Each keyword a title carries as `key = 'keyword'`, with its readable spelling
+/// ([`readable_forms`]) or its own text when no `keyword_forms` row maps back to it.
+pub fn readable_surfaces(conn: &Connection) -> rusqlite::Result<BTreeMap<String, String>> {
+    let chosen = readable_forms(conn)?;
+    let mut statement = conn
+        .prepare("SELECT DISTINCT value FROM enrichment WHERE namespace = ? AND key = 'keyword'")?;
+    let rows = statement.query_map([NAMESPACE], |row| row.get::<_, String>(0))?;
+    let mut surfaces = BTreeMap::new();
+    for row in rows {
+        let keyword = row?;
+        let surface = chosen
+            .get(&keyword)
+            .cloned()
+            .unwrap_or_else(|| keyword.clone());
+        surfaces.insert(keyword, surface);
+    }
+    Ok(surfaces)
+}

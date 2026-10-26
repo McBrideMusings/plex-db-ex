@@ -149,3 +149,119 @@ def serve_tmdb(store: Path) -> Iterator[dict[str, str]]:
     finally:
         server.shutdown()
         server.server_close()
+
+
+#: Roles Jev scores for a tag, in the order `keywords.ROLES` lists them.
+_ROLES = ("tone", "era", "region", "theme", "character_trait")
+
+
+def _vector(text: str) -> list[float]:
+    """A 16-number vector for `text`. Texts that start with the same word share most of
+    it, so some pairs of keywords land above the cosine cut and most do not."""
+    head = text.split(" ")[0]
+    return [
+        round(
+            (_seed("head", head, i) % 2001 - 1000) / 1000
+            + 0.45 * ((_seed("tail", text, i) % 2001 - 1000) / 1000),
+            6,
+        )
+        for i in range(16)
+    ]
+
+
+class JevScenario:
+    """The requests a Jev-shaped fake received, as one line each, and nothing to seed."""
+
+    def __init__(self) -> None:
+        self.requests: list[str] = []
+        self.lock = threading.Lock()
+
+    def seed(self, conn: sqlite3.Connection) -> None:
+        pass
+
+    def note(self, line: str) -> None:
+        with self.lock:
+            self.requests.append(line)
+
+
+def _jev_handler(scenario: JevScenario, key: str) -> type[BaseHTTPRequestHandler]:
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+            pass
+
+        def _send(self, status: int, body: object) -> None:
+            raw = json.dumps(body).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def do_POST(self) -> None:  # noqa: N802
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            if self.path == "/v1/embeddings":
+                texts = body["input"]
+                scenario.note("embed " + json.dumps(texts, ensure_ascii=False))
+                rows = [{"index": i, "embedding": _vector(text)} for i, text in enumerate(texts)]
+                self._send(200, {"data": rows[::-1]})
+                return
+            if self.path != "/v1/systemone":
+                self._send(404, {})
+                return
+            if self.headers.get("Authorization") != f"Bearer {key}":
+                self._send(401, {})
+                return
+            state = body["state"]
+            if "tag_a" in state:
+                scenario.note(f"judge {state['tag_a']} | {state['tag_b']}")
+                seed = _seed("pair", state["tag_a"], state["tag_b"])
+                if seed % 17 == 0:
+                    self._send(422, {})
+                    return
+                answers = {"n": {"noul": (seed % 101) / 100}, "s": {"score": seed % 3}}
+            else:
+                scenario.note(f"roles {state['tag']}")
+                seed = _seed("roles", state["tag"])
+                if seed % 13 == 0:
+                    self._send(400, {})
+                    return
+                answers = {
+                    role: {"noul": (_seed(role, state["tag"]) % 1001) / 1000} for role in _ROLES
+                }
+            self._send(200, {"answers": answers, "model": "jev-parity-1.0"})
+
+    return Handler
+
+
+@contextlib.contextmanager
+def serve_jev(store: Path) -> Iterator[tuple[dict[str, str], JevScenario]]:
+    """A server answering the embedding endpoint and Jev's, and the environment that
+    points the judge steps at it. Requests arrive from several threads, so the scenario
+    keeps them as lines to compare sorted."""
+    del store
+    scenario = JevScenario()
+
+    class Server(ThreadingHTTPServer):
+        #: The judges send eight requests at once; the default backlog of five drops some.
+        request_queue_size = 128
+
+    server = Server(("127.0.0.1", 0), _jev_handler(scenario, "parity-key"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        yield (
+            {
+                "LLAMA_BROKER_BASE_URL": base,
+                "JEV_URL": f"{base}/v1/systemone",
+                "TYPESAFE_API_KEY": "parity-key",
+                "NO_PROXY": "127.0.0.1",
+                "no_proxy": "127.0.0.1",
+            },
+            scenario,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()

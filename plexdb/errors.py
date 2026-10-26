@@ -83,10 +83,6 @@ class MDBListUnreachable(MDBListError):
     rather than recording the failure against each list."""
 
 
-class EmbeddingError(PlexdbError):
-    """The embedding server could not be reached, or returned something unusable."""
-
-
 class EncoderError(PlexdbError):
     """The Frame encoder refused a request or returned something unusable (ADR-0025)."""
 
@@ -116,15 +112,6 @@ class MediaError(PlexdbError):
 class MediaTimeout(MediaError):
     """ffmpeg or ffprobe ran past its time limit on a file. Unlike a missing binary, this
     says something about the file, so a caller may record it."""
-
-
-class JevError(PlexdbError):
-    """Jev could not be reached, kept answering 429, or returned something unusable."""
-
-
-class JevRejected(JevError):
-    """Jev answered 400 or 422 for one pair or keyword: the request itself is refused,
-    so asking again about the same one gets the same answer."""
 
 
 class DecisionsFileError(PlexdbError):

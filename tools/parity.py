@@ -7,7 +7,7 @@ takes two copies with SQLite's backup API, which is safe while a writer has the
 source open, and each implementation writes only its own copy.
 
     uv run python tools/parity.py <step> [--store data/plexdb.db] [--decisions-dir DIR]
-                                  [--fake tmdb|lists] [step args]
+                                  [--fake tmdb|lists|jev] [step args]
 
 Both runs start from the decisions files in `--decisions-dir` (default: the source
 store's directory), each on its own copy, through `PLEXDB_EXPLORE_SAVED_PATH`. Arguments
@@ -16,7 +16,8 @@ the tool does not know go to the step. Each run gets the
 backup directory pointed into its own scratch directory.
 
 A step that fetches runs against a fake server (`tools/parity_fakes.py` for TMDB,
-`tools/fake_lists.py` for MDBList and Letterboxd; `--fake`) so both sides see the same
+`tools/fake_lists.py` for MDBList and Letterboxd, and `parity_fakes.serve_jev` for the embedding
+server and Jev; `--fake`) so both sides see the same
 answers offline. A fake built from the store also seeds both copies with the decisions the
 step acts on and logs the requests each side sent. Times a run wrote (`fetched_at` and the
 other `*_at` columns at or after the moment parity started) differ by seconds between
@@ -70,6 +71,10 @@ OUTPUT_STEPS = frozenset(
         "lists",
         "list",
         "list-decide",
+        "prune-keyword-verdicts",
+        "film-suffix-verdicts",
+        "judge-keyword-pairs",
+        "judge-keyword-roles",
     }
 )
 #: Decisions files a step may write, compared after it ran.
@@ -191,7 +196,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--fake",
-        choices=["tmdb", "lists"],
+        choices=["tmdb", "lists", "jev"],
         help="answer the step's network calls from a local fake instead of the real service",
     )
     args, step_args = parser.parse_known_args()
@@ -223,6 +228,9 @@ def main() -> int:
             base.update(stack.enter_context(parity_fakes.serve_tmdb(store)))
         elif args.fake == "lists":
             served, scenario = stack.enter_context(fake_lists.serve_lists(store))
+            base.update(served)
+        elif args.fake == "jev":
+            served, scenario = stack.enter_context(parity_fakes.serve_jev(store))
             base.update(served)
         sides = {"python": Path(scratch) / "python", "rust": Path(scratch) / "rust"}
         exits: dict[str, int] = {}
@@ -261,7 +269,9 @@ def main() -> int:
             exits[side], out = _run(argv, env, side)
             printed[side] = _lines(out, str(root))
             if scenario is not None:
-                asked[side] = list(scenario.requests)
+                asked[side] = (
+                    sorted(scenario.requests) if args.fake == "jev" else list(scenario.requests)
+                )
             written[side] = [
                 _lines((own / name).read_text(encoding="utf-8"), str(root))
                 if (own / name).exists()

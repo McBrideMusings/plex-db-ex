@@ -932,7 +932,7 @@ the member the most titles carry (`merge_review.merge_map`). Plex DB-EX's tag ta
 titles, the title map, its region labels and the tag network all read keywords through that fold
 (`explore.keyword_rows`); `enrichment` itself never changes.
 
-The vectors are cached in `keyword-embeddings.npz` beside the store (not in it): one unit vector
+The vectors are cached in `keyword-embeddings.bin` beside the store (not in it): one unit vector
 per surface text and the model that made it. A sweep embeds only the texts the cache lacks, so a
 night with no new keyword makes no embedding request. Deleting the file, or a change of model,
 costs one re-embed of the vocabulary.

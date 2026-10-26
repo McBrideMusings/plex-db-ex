@@ -8,20 +8,15 @@ import sqlite3
 from pathlib import Path
 
 import pytest
-from fixture_store import fold
 from fixture_store import init as init_store
 
-from plexdb.cli import main
 from plexdb.keywords import (
-    FILM_SUFFIX_MODEL,
     ROLES,
     RawKeyword,
     normalize_keyword,
-    prune_keyword_verdicts,
     rederive_keywords,
     state_role,
     upsert_keyword_form,
-    write_film_suffix_verdicts,
     write_title_keywords,
 )
 from plexdb.store import open_store
@@ -188,167 +183,6 @@ def test_a_rewrite_moves_a_surface_to_the_current_rule(tmp_path: Path) -> None:
 
 
 AT = "2026-01-01T00:00:00+00:00"
-OLD = "\u200bhidden world"
-
-
-def _carry(conn: sqlite3.Connection, keyword: str) -> None:
-    conn.execute(
-        "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) "
-        "VALUES ('imdb:tt1', 'keywords', 'tmdb', 'keyword', ?, ?)",
-        (keyword, AT),
-    )
-
-
-def _judge(conn: sqlite3.Connection, keyword: str) -> None:
-    conn.execute(
-        "INSERT INTO keyword_roles (keyword, role, source, score, model, stated_at) "
-        "VALUES (?, 'theme', 'jev', 0.9, 'jev-test', ?)",
-        (keyword, AT),
-    )
-
-
-def _judged_store(tmp_path: Path) -> Path:
-    """A title carrying `OLD` and `heist`, each judged, decided and named, and a decided pair."""
-    store = tmp_path / "plexdb.db"
-    init_store(store)
-    with open_store(store) as conn:
-        conn.execute("INSERT INTO items (item_id, type, title) VALUES ('imdb:tt1', 'movie', 'T')")
-        for keyword in (OLD, "heist"):
-            _carry(conn, keyword)
-            _judge(conn, keyword)
-            conn.execute(
-                "INSERT INTO keyword_role_decisions VALUES (?, 'theme', 'accepted', ?)",
-                (keyword, AT),
-            )
-            conn.execute("INSERT INTO keyword_names VALUES (?, 'A name', ?)", (keyword, AT))
-        conn.execute(
-            "INSERT INTO keyword_pairs (keyword_a, keyword_b, jev_score, jev_model, judged_at, "
-            "decision, decided_at) VALUES ('heist', ?, 0.8, 'jev-test', ?, 'rejected', ?)",
-            (OLD, AT, AT),
-        )
-        conn.commit()
-    return store
-
-
-def test_a_value_a_refetch_moved_loses_its_rows_and_a_carried_value_keeps_its(
-    tmp_path: Path,
-) -> None:
-    store = _judged_store(tmp_path)
-    with open_store(store) as conn:
-        conn.execute("DELETE FROM enrichment WHERE value = ?", (OLD,))
-        _carry(conn, "hidden world")
-        conn.commit()
-        stats = prune_keyword_verdicts(conn)
-        keyed = {
-            table: [r[0] for r in conn.execute(f"SELECT {column} FROM {table} ORDER BY 1")]
-            for table, column in (
-                ("keyword_pairs", "keyword_a"),
-                ("keyword_roles", "keyword"),
-                ("keyword_role_decisions", "keyword"),
-                ("keyword_names", "keyword"),
-            )
-        }
-    assert keyed == {
-        "keyword_pairs": [],
-        "keyword_roles": ["heist"],
-        "keyword_role_decisions": ["heist"],
-        "keyword_names": ["heist"],
-    }
-    assert (stats.keywords_pruned, stats.keywords_stored) == ([OLD], 2)
-    assert (
-        stats.pairs_deleted,
-        stats.roles_deleted,
-        stats.decisions_deleted,
-        stats.names_deleted,
-    ) == (1, 1, 1, 1)
-
-
-def test_the_command_prints_the_counts_and_each_pruned_value(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    store = _judged_store(tmp_path)
-    with open_store(store) as conn:
-        conn.execute("DELETE FROM enrichment WHERE value = ?", (OLD,))
-        conn.commit()
-    monkeypatch.setenv("PLEXDB_PATH", str(store))
-    assert main(["prune-keyword-verdicts"]) == 0
-    assert capsys.readouterr().out.splitlines() == [
-        "pruned 1 keyword value(s) no title carries (of 1 stored): "
-        "1 pair row(s), 1 role row(s), 1 decision row(s), 1 name row(s)",
-        "pruned keyword '\\u200bhidden world'",
-    ]
-
-
-def test_a_pruned_decision_comes_back_from_its_file_once_the_value_is_judged_again(
-    tmp_path: Path,
-) -> None:
-    store = _judged_store(tmp_path)
-    decisions = tmp_path / "role_decisions.json"
-    decisions.write_text(
-        json.dumps(
-            [{"surface": "Hidden World", "role": "theme", "decision": "accepted", "decided_at": AT}]
-        )
-    )
-    with open_store(store) as conn:
-        conn.execute("DELETE FROM enrichment WHERE value = ?", (OLD,))
-        conn.commit()
-        prune_keyword_verdicts(conn)
-        conn.commit()
-    assert fold("fold-role-decisions", store, decisions).unmatched == 1
-    with open_store(store) as conn:
-        _carry(conn, "hidden world")
-        _judge(conn, "hidden world")
-        conn.commit()
-    fold("fold-role-decisions", store, decisions)
-    with open_store(store) as conn:
-        restored = conn.execute(
-            "SELECT decision FROM keyword_role_decisions WHERE keyword = 'hidden world'"
-        ).fetchone()
-    assert tuple(restored) == ("accepted",)
-
-
-def test_a_value_carried_only_as_a_spoiler_keyword_keeps_its_rows(tmp_path: Path) -> None:
-    store = _judged_store(tmp_path)
-    with open_store(store) as conn:
-        conn.execute("UPDATE enrichment SET key = 'spoiler_keyword' WHERE value = 'heist'")
-        conn.commit()
-        stats = prune_keyword_verdicts(conn)
-        kept = conn.execute("SELECT COUNT(*) FROM keyword_roles WHERE keyword = 'heist'").fetchone()
-    assert kept[0] == 1
-    assert stats.keywords_pruned == []
-
-
-def test_the_film_suffix_rule_pairs_x_film_with_a_stored_x_and_drops_an_undecided_stale_pair(
-    tmp_path: Path,
-) -> None:
-    store = tmp_path / "plexdb.db"
-    init_store(store)
-    with open_store(store) as conn:
-        conn.execute("INSERT INTO items (item_id, type, title) VALUES ('imdb:tt1', 'movie', 'x')")
-        for value in ("christmas", "christmas film", "short film", "art", "art film", "horror"):
-            _carry(conn, value)
-        conn.executemany(
-            "INSERT INTO keyword_pairs "
-            "(keyword_a, keyword_b, jev_score, jev_model, judged_at, decision, decided_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [
-                ("christmas", "christmas film", 0.09, "jev-1", AT, "rejected", AT),
-                ("horror", "horror film", 1.0, FILM_SUFFIX_MODEL, AT, None, None),
-                ("heist", "heist film", 1.0, FILM_SUFFIX_MODEL, AT, "rejected", AT),
-            ],
-        )
-        conn.commit()
-
-        stats = write_film_suffix_verdicts(conn, "2026-10-09T00:00:00+00:00")
-        rows = conn.execute(
-            "SELECT keyword_a, keyword_b, jev_score, jev_model, decision FROM keyword_pairs"
-        ).fetchall()
-
-    assert (stats.pairs, stats.pairs_written, stats.pairs_removed) == (1, 1, 1)
-    assert sorted(tuple(r) for r in rows) == [
-        ("christmas", "christmas film", 1.0, FILM_SUFFIX_MODEL, "rejected"),
-        ("heist", "heist film", 1.0, FILM_SUFFIX_MODEL, "rejected"),
-    ]
 
 
 def test_normalize_keyword_returns_what_the_published_fixture_says() -> None:
@@ -356,7 +190,6 @@ def test_normalize_keyword_returns_what_the_published_fixture_says() -> None:
     Rust normalizer (`crates/plexdb-keywords/tests/golden.rs`) is held to it too. A
     change to this function, or a simplemma bump, that the fixture does not follow
     fails here."""
-    import json
 
     path = Path(__file__).parent / "fixtures" / "keyword_normalization.json"
     cases = json.loads(path.read_text(encoding="utf-8"))["cases"]

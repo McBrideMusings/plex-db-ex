@@ -18,6 +18,11 @@
     "harvest-mdblist, harvest-letterboxd-lists, harvest-mdblist-search: the last of the sources,",
     "because a list entry can only resolve to a title walk already wrote; best-effort, because the",
     "lists are staleness-gated and a missed harvest is picked up by the next run (ADR-0004).",
+    "prune-keyword-verdicts (63), film-suffix-verdicts (64), judge-keyword-pairs (65),",
+    "judge-keyword-roles (66): after every writer that stores keywords and before publish, in the",
+    "order they had; best-effort because Jev and the embedding server are optional services",
+    "(ADR-0004) and a pair or keyword is judged once and kept, so a skipped pass costs only the",
+    "rows it would have added.",
     "commands: moved to Rust but in no sweep, so they carry no order or policy."
   ],
   "steps": [
@@ -31,7 +36,11 @@
     {"name": "enrich-tmdb-edges", "order": 55, "policy": "best-effort"},
     {"name": "harvest-mdblist", "order": 60, "policy": "best-effort"},
     {"name": "harvest-letterboxd-lists", "order": 61, "policy": "best-effort"},
-    {"name": "harvest-mdblist-search", "order": 62, "policy": "best-effort"}
+    {"name": "harvest-mdblist-search", "order": 62, "policy": "best-effort"},
+    {"name": "prune-keyword-verdicts", "order": 63, "policy": "best-effort"},
+    {"name": "film-suffix-verdicts", "order": 64, "policy": "best-effort"},
+    {"name": "judge-keyword-pairs", "order": 65, "policy": "best-effort"},
+    {"name": "judge-keyword-roles", "order": 66, "policy": "best-effort"}
   ],
   "commands": ["lists", "list", "list-decide", "frames"]
 }

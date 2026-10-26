@@ -24,7 +24,7 @@ from __future__ import annotations
 import sqlite3
 import unicodedata
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import simplemma
 
@@ -391,134 +391,13 @@ _CARRIED = (
 
 def is_carried(conn: sqlite3.Connection, keyword: str) -> bool:
     """Whether some title carries `keyword`, as a keyword or a spoiler keyword — the
-    rule `prune_keyword_verdicts` keeps rows by."""
+    rule `prune-keyword-verdicts` (Rust) keeps rows by."""
     return (
         conn.execute(f"SELECT 1 FROM ({_CARRIED}) WHERE value = ? LIMIT 1", (keyword,)).fetchone()
         is not None
     )
 
 
-@dataclass
-class PruneStats:
-    #: Distinct stored keyword values some title carries.
-    keywords_stored: int = 0
-    pairs_deleted: int = 0
-    roles_deleted: int = 0
-    decisions_deleted: int = 0
-    names_deleted: int = 0
-    #: The keyword values whose rows were deleted, sorted.
-    keywords_pruned: list[str] = field(default_factory=list)
-
-
-def prune_keyword_verdicts(conn: sqlite3.Connection) -> PruneStats:
-    """Delete every `keyword_pairs`, `keyword_roles`, `keyword_role_decisions` and
-    `keyword_names` row keyed on a keyword value no `enrichment` row carries.
-
-    A value leaves `enrichment` when a source stops listing it or a change to
-    `normalize_keyword` rewrites it on a title's next fetch; the rows keyed on
-    it then describe nothing. Jev's scores for a value that returns are asked
-    for again. A person's decision or name goes with its rows: the decisions file
-    it came from keeps it, and the fold restores it once the value, or the pair,
-    has a verdict again. One transaction.
-    """
-    stats = PruneStats()
-    with conn:
-        stats.keywords_stored = conn.execute(
-            f"SELECT COUNT(*) FROM (SELECT DISTINCT * FROM ({_CARRIED}))"
-        ).fetchone()[0]
-        stats.keywords_pruned = [
-            row[0]
-            for row in conn.execute(
-                "SELECT keyword_a FROM keyword_pairs UNION SELECT keyword_b FROM keyword_pairs "
-                "UNION SELECT keyword FROM keyword_roles "
-                "UNION SELECT keyword FROM keyword_role_decisions "
-                "UNION SELECT keyword FROM keyword_names "
-                f"EXCEPT {_CARRIED} ORDER BY 1"
-            )
-        ]
-        stats.pairs_deleted = conn.execute(
-            f"DELETE FROM keyword_pairs "
-            f"WHERE keyword_a NOT IN ({_CARRIED}) OR keyword_b NOT IN ({_CARRIED})"
-        ).rowcount
-        stats.roles_deleted = conn.execute(
-            f"DELETE FROM keyword_roles WHERE keyword NOT IN ({_CARRIED})"
-        ).rowcount
-        stats.decisions_deleted = conn.execute(
-            f"DELETE FROM keyword_role_decisions WHERE keyword NOT IN ({_CARRIED})"
-        ).rowcount
-        stats.names_deleted = conn.execute(
-            f"DELETE FROM keyword_names WHERE keyword NOT IN ({_CARRIED})"
-        ).rowcount
-    return stats
-
-
 #: The `keyword_pairs.jev_model` the film-suffix rule writes, so a reader can tell
 #: its verdicts from Jev's (ADR-0018).
 FILM_SUFFIX_MODEL = "rule:film-suffix"
-
-#: Stored keywords whose "<keyword> film" means something else, so the
-#: film-suffix rule never pairs the two: "art film" is not art, "student film" is
-#: not about students, "race film" is a historical genre, "essay film" a form.
-FILM_SUFFIX_KEEP: frozenset[str] = frozenset({"art", "essay", "race", "student"})
-
-_FILM_SUFFIX = " film"
-
-
-@dataclass
-class FilmSuffixStats:
-    #: Pairs the rule holds this run.
-    pairs: int = 0
-    #: Of those, pairs that had no rule row before: new, or a Jev score replaced.
-    pairs_written: int = 0
-    #: Rule rows deleted because the rule no longer holds for them.
-    pairs_removed: int = 0
-
-
-def write_film_suffix_verdicts(conn: sqlite3.Connection, judged_at: str) -> FilmSuffixStats:
-    """Pair every stored "X film" with its bare "X" when some title carries both
-    values (on any titles), unless X is in `FILM_SUFFIX_KEEP`.
-
-    Each pair gets `jev_score` 1.0 under `FILM_SUFFIX_MODEL`, replacing any score
-    Jev gave it; a person's `decision` on the pair stays. A rule row the rule no
-    longer holds for is deleted, unless a person has decided it, so the next judge
-    run asks Jev about it again.
-    One transaction.
-    """
-    stats = FilmSuffixStats()
-    carried = {row[0] for row in conn.execute(f"SELECT DISTINCT value FROM ({_CARRIED})")}
-    pairs = sorted(
-        (bare, value) if bare < value else (value, bare)
-        for value in carried
-        if value.endswith(_FILM_SUFFIX)
-        for bare in (value[: -len(_FILM_SUFFIX)],)
-        if bare in carried and bare not in FILM_SUFFIX_KEEP
-    )
-    stats.pairs = len(pairs)
-    with conn:
-        held = {
-            (row[0], row[1])
-            for row in conn.execute(
-                "SELECT keyword_a, keyword_b FROM keyword_pairs WHERE jev_model = ?",
-                (FILM_SUFFIX_MODEL,),
-            )
-        }
-        stale = held - set(pairs)
-        stats.pairs_removed = sum(
-            conn.execute(
-                "DELETE FROM keyword_pairs WHERE keyword_a = ? AND keyword_b = ? "
-                "AND decision IS NULL",
-                pair,
-            ).rowcount
-            for pair in sorted(stale)
-        )
-        fresh = [pair for pair in pairs if pair not in held]
-        conn.executemany(
-            "INSERT INTO keyword_pairs "
-            "(keyword_a, keyword_b, jev_score, jev_model, judged_at, jev_error) "
-            "VALUES (?, ?, 1.0, ?, ?, NULL) "
-            "ON CONFLICT (keyword_a, keyword_b) DO UPDATE SET jev_score = 1.0, "
-            "jev_model = excluded.jev_model, judged_at = excluded.judged_at, jev_error = NULL",
-            [(a, b, FILM_SUFFIX_MODEL, judged_at) for a, b in fresh],
-        )
-        stats.pairs_written = len(fresh)
-    return stats

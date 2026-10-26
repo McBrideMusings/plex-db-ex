@@ -229,7 +229,7 @@ pub fn configured_reachable(config: &FrameConfig) -> Option<bool> {
     Some(EncoderClient::new(&config.encoder_url, &config.model).reachable())
 }
 
-fn error_kind(err: &ureq::Error) -> &'static str {
+pub(crate) fn error_kind(err: &ureq::Error) -> &'static str {
     match err {
         ureq::Error::Timeout(_) => "TimeoutException",
         ureq::Error::HostNotFound | ureq::Error::ConnectionFailed => "ConnectError",
