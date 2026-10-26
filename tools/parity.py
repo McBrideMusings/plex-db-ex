@@ -7,7 +7,7 @@ takes two copies with SQLite's backup API, which is safe while a writer has the
 source open, and each implementation writes only its own copy.
 
     uv run python tools/parity.py <step> [--store data/plexdb.db] [--decisions-dir DIR]
-                                  [--fake tmdb|lists|jev] [step args]
+                                  [--fake tmdb|lists|jev|plex] [step args]
 
 Both runs start from the decisions files in `--decisions-dir` (default: the source
 store's directory), each on its own copy, through `PLEXDB_EXPLORE_SAVED_PATH`. Arguments
@@ -17,8 +17,8 @@ backup directory pointed into its own scratch directory.
 
 A step that fetches runs against a fake server (`tools/parity_fakes.py` for TMDB,
 `tools/fake_lists.py` for MDBList and Letterboxd, and `parity_fakes.serve_jev` for the embedding
-server and Jev; `--fake`) so both sides see the same
-answers offline. A fake built from the store also seeds both copies with the decisions the
+server and Jev, and `parity_fakes.serve_plex` for Plex's `/accounts`; `--fake`) so both sides see
+the same answers offline. A fake built from the store also seeds both copies with the decisions the
 step acts on and logs the requests each side sent. Times a run wrote (`fetched_at` and the
 other `*_at` columns at or after the moment parity started) differ by seconds between
 two runs by nature, so both copies have them replaced by one marker before they are
@@ -75,6 +75,7 @@ OUTPUT_STEPS = frozenset(
         "film-suffix-verdicts",
         "judge-keyword-pairs",
         "judge-keyword-roles",
+        "latent-users",
     }
 )
 #: Decisions files a step may write, compared after it ran.
@@ -196,7 +197,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--fake",
-        choices=["tmdb", "lists", "jev"],
+        choices=["tmdb", "lists", "jev", "plex"],
         help="answer the step's network calls from a local fake instead of the real service",
     )
     args, step_args = parser.parse_known_args()
@@ -226,6 +227,8 @@ def main() -> int:
         scenario = None
         if args.fake == "tmdb":
             base.update(stack.enter_context(parity_fakes.serve_tmdb(store)))
+        elif args.fake == "plex":
+            base.update(stack.enter_context(parity_fakes.serve_plex(store)))
         elif args.fake == "lists":
             served, scenario = stack.enter_context(fake_lists.serve_lists(store))
             base.update(served)

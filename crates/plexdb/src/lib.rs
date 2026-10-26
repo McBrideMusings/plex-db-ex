@@ -19,6 +19,7 @@ pub mod html;
 pub mod jev;
 pub mod judge_steps;
 pub mod keyword_verdicts;
+pub mod latent_users;
 pub mod letterboxd;
 pub mod letterboxd_lists;
 pub mod list_decisions;

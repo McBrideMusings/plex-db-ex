@@ -94,7 +94,7 @@ then IP, then platform/product, with device display name excluded as a clusterin
 IP does double duty: it fills in only when a play has no client machine ID (the fallback
 chain above), and — issue #27 — it also *joins* two different client machine IDs into one
 cluster when both recur at the same IP within one account and that IP is not seen under any
-other Plex account; see `plexdb.clusters` for the exact recurrence and cross-account
+other Plex account; see `crates/plexdb/src/latent_users.rs` for the exact recurrence and cross-account
 thresholds.
 
 **Shared account**:

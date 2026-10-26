@@ -265,3 +265,50 @@ def serve_jev(store: Path) -> Iterator[tuple[dict[str, str], JevScenario]]:
     finally:
         server.shutdown()
         server.server_close()
+
+
+def _plex_accounts(store: Path) -> list[dict[str, object]]:
+    """Plex's `/accounts` for `store`: a name for most accounts that have plays, a blank
+    one for every third, Plex's id-0 placeholder, and an account with no plays."""
+    with sqlite3.connect(f"file:{store}?mode=ro", uri=True) as conn:
+        ids = [row[0] for row in conn.execute("SELECT DISTINCT plex_account_id FROM plays")]
+    accounts: list[dict[str, object]] = [{"id": 0, "name": ""}]
+    for ix, account_id in enumerate(sorted(ids)):
+        name = "" if ix % 3 == 2 else f"Viewer {account_id} é"
+        accounts.append({"id": account_id, "name": name})
+    accounts.append({"id": 999999999, "name": "Nobody Watched"})
+    return accounts
+
+
+@contextlib.contextmanager
+def serve_plex(store: Path) -> Iterator[dict[str, str]]:
+    """A Plex-shaped server answering `/accounts` only, and the environment pointing a
+    step at it. A request without the token is refused, as Plex does."""
+    body = json.dumps({"MediaContainer": {"Account": _plex_accounts(store)}}).encode()
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+            pass
+
+        def do_GET(self) -> None:  # noqa: N802
+            known = self.path == "/accounts" and self.headers.get("X-Plex-Token") == "parity-token"
+            raw = body if known else b"{}"
+            self.send_response(200 if known else 401)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield {
+            "PLEX_URL": f"http://127.0.0.1:{server.server_port}",
+            "PLEX_TOKEN": "parity-token",
+            "NO_PROXY": "127.0.0.1",
+            "no_proxy": "127.0.0.1",
+        }
+    finally:
+        server.shutdown()
+        server.server_close()

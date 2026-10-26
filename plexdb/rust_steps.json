@@ -42,5 +42,5 @@
     {"name": "judge-keyword-pairs", "order": 65, "policy": "best-effort"},
     {"name": "judge-keyword-roles", "order": 66, "policy": "best-effort"}
   ],
-  "commands": ["lists", "list", "list-decide", "frames"]
+  "commands": ["lists", "list", "list-decide", "frames", "latent-users"]
 }
