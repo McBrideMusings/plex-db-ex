@@ -168,10 +168,8 @@ def _start_frame_harvester() -> None:
     import threading
 
     from .config import Config
-    from .frame_encoder import from_config
-    from .frame_harvest import configured_media, harvest, run_in_windows
+    from .frame_harvest import harvest, run_in_windows
     from .frames import frames_path, parse_hours
-    from .plex_client import LivePlexClient
 
     config = Config.from_env()
     missing = [
@@ -190,19 +188,7 @@ def _start_frame_harvester() -> None:
     frames_path(config)
 
     def run_once() -> str:
-        media = configured_media(config)
-        encoder = from_config(config)
-        try:
-            result = harvest(
-                config,
-                plex=LivePlexClient(config.plex_url, config.plex_token),
-                media=media,
-                encoder=encoder,
-                log=lambda line: print(line, flush=True),
-            )
-        finally:
-            encoder.close()
-        return result.stopped
+        return harvest(config, lambda line: print(line, flush=True))
 
     thread = threading.Thread(
         target=run_in_windows,

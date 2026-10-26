@@ -26,7 +26,7 @@ import numpy as np
 from .frames import FRAME_DIMS
 from .store import BUSY_TIMEOUT_MS
 
-__all__ = ["FLOAT_FILE", "Paired", "agreement", "float_path", "load", "open_float", "write_floats"]
+__all__ = ["FLOAT_FILE", "Paired", "agreement", "float_path", "load", "open_float"]
 
 FLOAT_FILE = "frames-float.db"
 
@@ -54,25 +54,6 @@ def open_float(path: Path) -> Iterator[sqlite3.Connection]:
         yield conn
     finally:
         conn.close()
-
-
-def write_floats(
-    conn: sqlite3.Connection,
-    item_id: str,
-    samples: Sequence[tuple[int, int]],
-    vectors: Sequence[Sequence[float]],
-) -> None:
-    """Replace one title's float vectors; `samples` are the `(t_ms, shot_ix)` the
-    harvester wrote to `frame_vec`, in the same order as `vectors`."""
-    with conn:
-        conn.execute("DELETE FROM frame_float WHERE item_id = ?", (item_id,))
-        conn.executemany(
-            "INSERT OR REPLACE INTO frame_float (item_id, t_ms, shot_ix, vec) VALUES (?, ?, ?, ?)",
-            [
-                (item_id, t_ms, ix, np.asarray(vec, dtype="<f4").tobytes())
-                for (t_ms, ix), vec in zip(samples, vectors, strict=True)
-            ],
-        )
 
 
 def _shot_scores(keys: list[tuple[str, int]], sims: np.ndarray) -> dict[tuple[str, int], float]:

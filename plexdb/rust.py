@@ -21,7 +21,8 @@ import os
 import shutil
 import subprocess
 import sys
-from collections.abc import Sequence
+import threading
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -39,6 +40,7 @@ __all__ = [
     "names",
     "run",
     "steps",
+    "stream",
 ]
 
 #: The exit code `plexdb-rs` uses for a setting that is absent (`EX_CONFIG`); the
@@ -92,6 +94,27 @@ def names() -> set[str]:
     return {step.name for step in steps()} | set(commands())
 
 
+def _child_env(config: Config) -> dict[str, str]:
+    env = dict(os.environ)
+    held = held_path(config.store_path)
+    if held is not None:
+        env[HELD_STORE_VAR] = str(held)
+    else:
+        env.pop(HELD_STORE_VAR, None)
+    return env
+
+
+def _check(returncode: int, stderr: str) -> int:
+    """`returncode` when the binary succeeded, else the error its `error:` line carries."""
+    if returncode == 0:
+        sys.stderr.write(stderr)
+        return 0
+    message = stderr.strip().removeprefix("error: ") or f"exit code {returncode}"
+    if returncode == NOT_CONFIGURED:
+        raise ConfigError(message)
+    raise RustStepError(message)
+
+
 def run(args: Sequence[str], config: Config | None = None) -> int:
     """Run `plexdb-rs <args>`, its output on this process's stdout.
 
@@ -101,20 +124,54 @@ def run(args: Sequence[str], config: Config | None = None) -> int:
     report a Python step's.
     """
     config = config or Config.from_env()
-    env = dict(os.environ)
-    held = held_path(config.store_path)
-    if held is not None:
-        env[HELD_STORE_VAR] = str(held)
-    else:
-        env.pop(HELD_STORE_VAR, None)
+    env = _child_env(config)
     sys.stdout.flush()
     done = subprocess.run(
         [binary(config), *args], env=env, stderr=subprocess.PIPE, text=True, check=False
     )
-    if done.returncode == 0:
-        sys.stderr.write(done.stderr)
-        return 0
-    message = done.stderr.strip().removeprefix("error: ") or f"exit code {done.returncode}"
-    if done.returncode == NOT_CONFIGURED:
-        raise ConfigError(message)
-    raise RustStepError(message)
+    return _check(done.returncode, done.stderr)
+
+
+def stream(
+    args: Sequence[str], on_line: Callable[[str], None], config: Config | None = None
+) -> None:
+    """Run `plexdb-rs <args>` and hand each stdout line to `on_line` as it is printed, for
+    a command that runs for hours and reports as it goes. Its stderr is passed on as it
+    arrives. Fails as `run` does."""
+    config = config or Config.from_env()
+    child = subprocess.Popen(
+        [binary(config), *args],
+        env=_child_env(config),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert child.stdout is not None
+    assert child.stderr is not None
+    errors: list[str] = []
+
+    def forward() -> None:
+        assert child.stderr is not None
+        for line in child.stderr:
+            errors.append(line)
+            sys.stderr.write(line)
+            sys.stderr.flush()
+
+    thread = threading.Thread(target=forward, daemon=True)
+    thread.start()
+    try:
+        with child.stdout:
+            for line in child.stdout:
+                on_line(line.rstrip("\n"))
+    except BaseException:
+        # A failing `on_line` must not leave the child running, holding its locks.
+        child.kill()
+        child.wait()
+        raise
+    finally:
+        thread.join()
+    code = child.wait()
+    if code != 0:
+        # The last line is the binary's own `error:` line; earlier ones are progress.
+        lines = [line for line in "".join(errors).splitlines() if line.strip()]
+        _check(code, lines[-1] if lines else "")

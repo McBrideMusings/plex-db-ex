@@ -34,7 +34,7 @@ fn open_readonly(path: &std::path::Path) -> Result<Connection, StoreError> {
     Ok(conn)
 }
 
-fn which(program: &str) -> bool {
+pub(crate) fn which(program: &str) -> bool {
     if program.contains('/') {
         return std::path::Path::new(program).is_file();
     }
@@ -110,7 +110,7 @@ fn queue_title(item_id: &str, by: &str) -> Result<(), StoreError> {
 }
 
 /// Python's `f"{n:,}"`.
-fn group_thousands(n: i64) -> String {
+pub(crate) fn group_thousands(n: i64) -> String {
     let digits = n.abs().to_string();
     let mut out = String::new();
     for (ix, c) in digits.chars().enumerate() {

@@ -7,9 +7,9 @@ use plexdb_store::{Config, StoreError, open_store};
 use crate::decisions::FoldError;
 use crate::sources::Sources;
 use crate::{
-    frames_cmd, judge_steps, keyword_verdicts, latent_users, list_decisions, list_steps, media,
-    merge_decisions, migrate, name_decisions, plays, prune_frames, record_panels, repair,
-    repair_fs, role_decisions, source_steps, tmdb_steps, walk,
+    frames_cmd, harvest_frames, judge_steps, keyword_verdicts, latent_users, list_decisions,
+    list_steps, media, merge_decisions, migrate, name_decisions, plays, prune_frames,
+    record_panels, repair, repair_fs, role_decisions, source_steps, tmdb_steps, walk,
 };
 
 /// Why a step stopped. `Config` is a setting that is absent, which the sweep
@@ -319,6 +319,7 @@ pub const STEPS: &[(&str, Run)] = &[
     (list_steps::LIST, list_steps::list_one),
     (list_steps::LIST_DECIDE, list_steps::list_decide),
     (frames_cmd::NAME, frames_cmd::run),
+    (harvest_frames::NAME, harvest_frames::run),
     (latent_users::NAME, latent_users::run),
     (record_panels::NAME, record_panels::run),
     (keyword_verdicts::PRUNE, keyword_verdicts::run_prune),

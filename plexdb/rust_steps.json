@@ -45,6 +45,8 @@
     "record-panels (23): right after check-files, so a panel counting file verdicts sees tonight's;",
     "best-effort, because a panel's history is a convenience for a chart, not something a library",
     "is published from.",
+    "harvest-frames: a command, not a step: `plexdb schedule` starts it when PLEXDB_FRAME_HOURS open",
+    "and it writes frames.db alone (ADR-0024), so no sweep runs it.",
     "commands: moved to Rust but in no sweep, so they carry no order or policy."
   ],
   "steps": [
@@ -74,5 +76,5 @@
     {"name": "judge-keyword-pairs", "order": 65, "policy": "best-effort"},
     {"name": "judge-keyword-roles", "order": 66, "policy": "best-effort"}
   ],
-  "commands": ["lists", "list", "list-decide", "frames", "repair-identities", "repair-fs-identities", "latent-users"]
+  "commands": ["lists", "list", "list-decide", "frames", "harvest-frames", "repair-identities", "repair-fs-identities", "latent-users"]
 }

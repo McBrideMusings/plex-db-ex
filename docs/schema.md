@@ -1618,7 +1618,7 @@ CREATE TABLE shots (
 ```
 
 The harvester writes a title's rows in the same transaction as its vectors, and it is the only
-writer of the boundaries, by one rule (`frame_harvest.shots`): a Cut closer than 500 ms
+writer of the boundaries, by one rule (`harvest_frames::shots` in `crates/plexdb/src/harvest_frames.rs`): a Cut closer than 500 ms
 to the boundary before it makes no Shot. Readers read `in_ms` and `out_ms`; none re-derives them.
 The migration numbered the titles already indexed by that same rule, from `cuts` and
 `frame_index_state.duration_ms`.
@@ -1749,7 +1749,7 @@ now and `--limit N` stops after N titles. It writes `frames.db` alone.
   24, with the CUDA scan 1.2× to 3.2× faster. A 24-input extraction with `-hwaccel cuda` hung on
   all three AV1 films after 13 frames, which is one more reason extraction stays on the CPU.
 - **A damaged source is a failure, never an index.** The scan runs at `-loglevel warning` and
-  `frame_harvest.classify_decode_stderr` sorts its stderr line by line. A line from a video decoder
+  `frame_media::classify_decode_stderr` (`crates/plexdb/src/frame_media.rs`) sorts its stderr line by line. A line from a video decoder
   (`[hevc @`, `[h264 @`, `[av1 @` and the like) carrying "invalid", "error", "outside the valid
   range", "undecodable" or "concealing" is a decode error; every other warning is counted and
   ignored. One or more decode errors fail the title with the `reason` `source file damaged (N
