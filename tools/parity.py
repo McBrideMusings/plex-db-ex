@@ -6,31 +6,36 @@ pull-baseline` copy (ADR-0001). It never opens the source store for writing: it
 takes two copies with SQLite's backup API, which is safe while a writer has the
 source open, and each implementation writes only its own copy.
 
-    uv run python tools/parity.py <step> [--store data/plexdb.db] [--decisions-dir DIR] [step args]
+    uv run python tools/parity.py <step> [--store data/plexdb.db] [--decisions-dir DIR]
+                                  [--fake tmdb|lists] [step args]
 
 Both runs start from the decisions files in `--decisions-dir` (default: the source
-store's directory), each on its own copy, through `PLEXDB_EXPLORE_SAVED_PATH`. Each run
-gets the `.env` values the Python CLI would load, with `PLEXDB_PATH`, the snapshot and the
-backup directory pointed into its own scratch directory. Arguments the tool does not know
-go to the step.
+store's directory), each on its own copy, through `PLEXDB_EXPLORE_SAVED_PATH`. Arguments
+the tool does not know go to the step. Each run gets the
+`.env` values the Python CLI would load, with `PLEXDB_PATH`, the snapshot and the
+backup directory pointed into its own scratch directory.
 
-A crowd-list harvest reads two live services, whose answers change between two runs and
-whose daily quota a real run spends. Those steps run against `tools/fake_lists.py`, one
-local server built from the store being compared and answering both runs the same bytes;
-its decision rows are written to both copies first.
+A step that fetches runs against a fake server (`tools/parity_fakes.py` for TMDB,
+`tools/fake_lists.py` for MDBList and Letterboxd; `--fake`) so both sides see the same
+answers offline. A fake built from the store also seeds both copies with the decisions the
+step acts on and logs the requests each side sent. Times a run wrote (`fetched_at` and the
+other `*_at` columns at or after the moment parity started) differ by seconds between
+two runs by nature, so both copies have them replaced by one marker before they are
+compared; a time written earlier is compared as it is.
 
 Prints one JSON object: `tables` and `rows` compared (rows counted on the Python
 copy), `differing` as `[{table, key}]`, where `key` is the row's primary key (the
 whole row when the table has none, `null` when the table exists on one side
-only), each side's exit code, whether the two printed the same lines (`stdout`), and,
-for a step that talks to a server, whether the two sent it the same requests
-(`requests`). A time a run wrote is not compared (two runs are seconds apart), only that
-it was written. Exits 1 when anything differs.
+only), each side's exit code, whether the two printed the same lines (`stdout`), whether
+they left the same decisions files, and, against a request-logging fake, whether they sent
+the same requests (`requests`). Exits 1 when anything differs. The printed lines must match
+for the steps in `OUTPUT_STEPS`.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import difflib
 import json
 import os
@@ -46,18 +51,27 @@ from typing import Any
 
 from dotenv import dotenv_values
 
-REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "tools"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import fake_lists  # noqa: E402
+import parity_fakes  # noqa: E402
 
-#: Steps that read MDBList or Letterboxd: they run against `tools/fake_lists.py`.
-SERVER_STEPS = frozenset({"harvest-mdblist", "harvest-letterboxd-lists", "harvest-mdblist-search"})
+REPO = Path(__file__).resolve().parent.parent
+
 #: Steps whose printed lines are part of what moved, so the two must print the same ones.
-OUTPUT_STEPS = SERVER_STEPS | {"lists", "list", "list-decide"}
+OUTPUT_STEPS = frozenset(
+    {
+        "harvest-mdblist",
+        "harvest-letterboxd-lists",
+        "harvest-mdblist-search",
+        "lists",
+        "list",
+        "list-decide",
+    }
+)
 #: Decisions files a step may write, compared after it ran.
 DECISIONS_FILES = ("list_decisions.json",)
 
 _TIME = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?\+00:00")
-_TIME_GLOB = "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]*+00:00"
 
 
 def _python_commands() -> set[str]:
@@ -87,6 +101,31 @@ def _run(argv: list[str], env: dict[str, str], side: str) -> tuple[int, str]:
     return done.returncode, done.stdout
 
 
+def _lines(text: str, scratch: str) -> list[str]:
+    return [_TIME.sub("<time>", line.replace(scratch, "<run>")) for line in text.splitlines()]
+
+
+def _compare(left: list[str], right: list[str]) -> dict[str, Any]:
+    if left == right:
+        return {"identical": True}
+    delta = list(difflib.unified_diff(left, right, "python", "rust", lineterm="", n=1))
+    return {"identical": False, "diff": delta[:60]}
+
+
+RUN_TIME = "<written by this run>"
+
+
+def _mask_run_times(store: Path, started: str) -> None:
+    """Replace every `*_at` text value at or after `started` with one marker."""
+    with sqlite3.connect(store) as conn:
+        for table in _tables(conn, "main"):
+            t = _quote(table)
+            for _, column, kind, *_ in conn.execute(f"PRAGMA table_info({t})").fetchall():
+                if column.endswith("_at") and kind.upper() == "TEXT":
+                    c = _quote(column)
+                    conn.execute(f"UPDATE {t} SET {c} = ? WHERE {c} >= ?", (RUN_TIME, started))
+
+
 def _tables(conn: sqlite3.Connection, schema: str) -> dict[str, str]:
     """Every ordinary table in `schema`, with its `CREATE` text. A virtual table is
     left out: its rows are in its shadow tables, which are listed."""
@@ -101,43 +140,9 @@ def _quote(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
-def _differences(conn: sqlite3.Connection, table: str) -> list[dict[str, Any]]:
-    """The rows of `table` that one copy holds and the other does not, as their keys."""
-    t = _quote(table)
-    info = conn.execute(f"PRAGMA main.table_info({t})").fetchall()
-    columns = [col[1] for col in info]
-    pk = [col[1] for col in sorted(info, key=lambda col: col[5]) if col[5] > 0]
-    key_cols = pk or columns
-    keys: list[dict[str, Any]] = []
-    for first, second in (("main", "rs"), ("rs", "main")):
-        query = f"SELECT * FROM {first}.{t} EXCEPT SELECT * FROM {second}.{t}"
-        for row in conn.execute(query):
-            record = dict(zip(columns, row, strict=True))
-            key = {col: record[col] for col in key_cols}
-            if key not in keys:
-                keys.append(key)
-    return keys
-
-
-def _blank_run_times(conn: sqlite3.Connection, table: str, since: str) -> None:
-    """Replace every time a run wrote into `table` (an ISO time at or after `since`, which
-    only the run could have written) with one value, in both copies. Two runs are seconds
-    apart, so their times differ whatever the steps did."""
-    t = _quote(table)
-    for schema in ("main", "rs"):
-        for col in conn.execute(f"PRAGMA {schema}.table_info({t})").fetchall():
-            if col[2].upper().startswith("TEXT"):
-                c = _quote(col[1])
-                conn.execute(
-                    f"UPDATE {schema}.{t} SET {c} = '<run time>' WHERE {c} >= ? AND {c} GLOB ?",
-                    (since, _TIME_GLOB),
-                )
-    conn.commit()
-
-
-def diff(python_store: Path, rust_store: Path, since: str | None = None) -> dict[str, Any]:
-    conn = sqlite3.connect(python_store)
-    conn.execute("ATTACH DATABASE ? AS rs", (str(rust_store),))
+def diff(python_store: Path, rust_store: Path) -> dict[str, Any]:
+    conn = sqlite3.connect(f"file:{python_store}?mode=ro", uri=True)
+    conn.execute("ATTACH DATABASE ? AS rs", (f"file:{rust_store}?mode=ro",))
     py_tables, rs_tables = _tables(conn, "main"), _tables(conn, "rs")
     differing: list[dict[str, Any]] = []
     rows = 0
@@ -145,11 +150,20 @@ def diff(python_store: Path, rust_store: Path, since: str | None = None) -> dict
         if py_tables.get(table) != rs_tables.get(table):
             differing.append({"table": table, "key": None})
             continue
-        rows += conn.execute(f"SELECT COUNT(*) FROM main.{_quote(table)}").fetchone()[0]
-        keys = _differences(conn, table)
-        if keys and since is not None:
-            _blank_run_times(conn, table, since)
-            keys = _differences(conn, table)
+        t = _quote(table)
+        rows += conn.execute(f"SELECT COUNT(*) FROM main.{t}").fetchone()[0]
+        info = conn.execute(f"PRAGMA main.table_info({t})").fetchall()
+        columns = [col[1] for col in info]
+        pk = [col[1] for col in sorted(info, key=lambda col: col[5]) if col[5] > 0]
+        key_cols = pk or columns
+        keys: list[dict[str, Any]] = []
+        for first, second in (("main", "rs"), ("rs", "main")):
+            query = f"SELECT * FROM {first}.{t} EXCEPT SELECT * FROM {second}.{t}"
+            for row in conn.execute(query):
+                record = dict(zip(columns, row, strict=True))
+                key = {col: record[col] for col in key_cols}
+                if key not in keys:
+                    keys.append(key)
         differing += [{"table": table, "key": _jsonable(key)} for key in keys]
     conn.close()
     return {
@@ -163,22 +177,16 @@ def _jsonable(key: dict[str, Any]) -> dict[str, Any]:
     return {k: v.hex() if isinstance(v, bytes) else v for k, v in key.items()}
 
 
-def _lines(text: str, scratch: str) -> list[str]:
-    return [_TIME.sub("<time>", line.replace(scratch, "<run>")) for line in text.splitlines()]
-
-
-def _compare(left: list[str], right: list[str]) -> dict[str, Any]:
-    if left == right:
-        return {"identical": True}
-    delta = list(difflib.unified_diff(left, right, "python", "rust", lineterm="", n=1))
-    return {"identical": False, "diff": delta[:60]}
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(prog="admin parity", description=__doc__.splitlines()[0])
     parser.add_argument("step")
     parser.add_argument("--store", type=Path, default=REPO / "data" / "plexdb.db")
     parser.add_argument("--decisions-dir", type=Path)
+    parser.add_argument(
+        "--fake",
+        choices=["tmdb", "lists"],
+        help="answer the step's network calls from a local fake instead of the real service",
+    )
     args, step_args = parser.parse_known_args()
 
     rs_bin = os.environ.get("PLEXDB_RS_BIN", "").strip()
@@ -200,26 +208,20 @@ def main() -> int:
     base = {k: v for k, v in dotenv_values(REPO / ".env").items() if v is not None}
     base.update(os.environ)
     base.pop("PLEXDB_HELD_STORE", None)
-    scenario = server = None
-    server_env: dict[str, str] = {}
-    if args.step in SERVER_STEPS:
-        import fake_lists
-
-        scenario = fake_lists.build(store)
-        server, url = fake_lists.serve(scenario)
-        server_env = {
-            "MDBLIST_BASE_URL": url,
-            "LETTERBOXD_BASE_URL": url,
-            "MDBLIST_API_KEY": fake_lists.API_KEY,
-            "LETTERBOXD_PAUSE_SECONDS": "0",
-        }
     started = datetime.now(UTC).isoformat(timespec="seconds")
-    with tempfile.TemporaryDirectory(prefix="plexdb-parity.") as scratch:
+    with contextlib.ExitStack() as stack:
+        scratch = stack.enter_context(tempfile.TemporaryDirectory(prefix="plexdb-parity."))
+        scenario = None
+        if args.fake == "tmdb":
+            base.update(stack.enter_context(parity_fakes.serve_tmdb(store)))
+        elif args.fake == "lists":
+            served, scenario = stack.enter_context(fake_lists.serve_lists(store))
+            base.update(served)
         sides = {"python": Path(scratch) / "python", "rust": Path(scratch) / "rust"}
         exits: dict[str, int] = {}
         printed: dict[str, list[str]] = {}
         asked: dict[str, list[str]] = {}
-        written: dict[str, list[str]] = {}
+        written: dict[str, list[list[str]]] = {}
         for side, root in sides.items():
             root.mkdir()
             _copy(store, root / "plexdb.db")
@@ -231,16 +233,12 @@ def main() -> int:
                 with sqlite3.connect(root / "plexdb.db") as seeded:
                     scenario.seed(seeded)
                 scenario.requests.clear()
-            env = (
-                base
-                | server_env
-                | {
-                    "PLEXDB_PATH": str(root / "plexdb.db"),
-                    "PLEXDB_SNAPSHOT_PATH": str(root / "snapshot.db"),
-                    "PLEXDB_BACKUP_DIR": str(root / "backups"),
-                    "PLEXDB_EXPLORE_SAVED_PATH": str(own / "explore-queries.json"),
-                }
-            )
+            env = base | {
+                "PLEXDB_PATH": str(root / "plexdb.db"),
+                "PLEXDB_SNAPSHOT_PATH": str(root / "snapshot.db"),
+                "PLEXDB_BACKUP_DIR": str(root / "backups"),
+                "PLEXDB_EXPLORE_SAVED_PATH": str(own / "explore-queries.json"),
+            }
             argv = (
                 [sys.executable, "-m", "plexdb.cli", args.step, *step_args]
                 if side == "python"
@@ -256,9 +254,8 @@ def main() -> int:
                 else []
                 for name in DECISIONS_FILES
             ]
-        if server is not None:
-            server.shutdown()
-        report = diff(sides["python"] / "plexdb.db", sides["rust"] / "plexdb.db", started)
+            _mask_run_times(root / "plexdb.db", started)
+        report = diff(sides["python"] / "plexdb.db", sides["rust"] / "plexdb.db")
     report = {"step": args.step, **report, "exit": exits}
     report["stdout"] = _compare(printed["python"], printed["rust"])
     report["decisions_files"] = {

@@ -16,12 +16,9 @@ from plex_fixtures import (
     recorded_history_source,
     recorded_source,
 )
-from tmdb_fixtures import FakeTMDbSource
 
 from plexdb.cli import _register_commands, build_parser, main
 from plexdb.clusters import LATENT_USER_FLOOR
-from plexdb.commands import enrich_tmdb_edges as enrich_tmdb_edges_cmd
-from plexdb.commands import enrich_tmdb_keywords as enrich_tmdb_keywords_cmd
 from plexdb.commands import ingest_plays as ingest_plays_cmd
 from plexdb.commands import iter_command_modules
 from plexdb.commands import latent_users as latent_users_cmd
@@ -41,9 +38,6 @@ EXPECTED_COMMANDS = {
     "check-files",
     "record-panels",
     "publish",
-    "enrich-tmdb-keywords",
-    "enrich-tmdb-language",
-    "enrich-tmdb-edges",
     "enrich-anilist",
     "enrich-letterboxd",
     "enrich-wikidata",
@@ -83,9 +77,6 @@ EXPECTED_COMMAND_ORDER = [
     # Every sweep step and which implementation runs it (`plexdb/commands/steps.py`).
     "steps",
     "sweep",
-    "fold-merge-decisions",
-    "fold-role-decisions",
-    "fold-name-decisions",
     "walk",
     "media-walk",
     "check-files",
@@ -95,9 +86,6 @@ EXPECTED_COMMAND_ORDER = [
     "prune-frames",
     "ingest-plays",
     "enrich-tautulli-plays",
-    "enrich-tmdb-keywords",
-    "enrich-tmdb-language",
-    "enrich-tmdb-edges",
     "enrich-anilist",
     "enrich-letterboxd",
     "enrich-wikidata",
@@ -555,257 +543,6 @@ def test_walk_without_a_store_says_so_not_a_traceback(
     assert "Traceback" not in err
 
 
-def _configure_enrich(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake: FakeTMDbSource
-) -> Path:
-    """Point the CLI at a store under `tmp_path`, with a TMDB key set and
-    `fake` standing in for `LiveTMDbClient`. No network."""
-    store = tmp_path / "plexdb.db"
-    monkeypatch.setenv("PLEXDB_PATH", str(store))
-    monkeypatch.setenv("TMDB_API_KEY", "test-tmdb-key")
-
-    def _fixture_backed_client(api_key: str) -> FakeTMDbSource:
-        assert api_key == "test-tmdb-key", "enrich-tmdb-keywords must pass the configured key"
-        return fake
-
-    monkeypatch.setattr(enrich_tmdb_keywords_cmd, "LiveTMDbClient", _fixture_backed_client)
-    return store
-
-
-def _seed_one_movie(store: Path) -> None:
-    with sqlite3.connect(store) as conn:
-        conn.execute(
-            "INSERT INTO items (item_id, type, title) VALUES "
-            "('imdb:tt0468569', 'movie', 'The Dark Knight')"
-        )
-        conn.execute(
-            "INSERT INTO external_ids (item_id, ns, value, kind, last_seen) "
-            "VALUES ('imdb:tt0468569', 'tmdb', '155', 'movie', '2026-01-01T00:00:00+00:00')"
-        )
-
-
-def test_enrich_tmdb_keywords_writes_rows_and_reports_a_summary(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    fake = FakeTMDbSource(keywords_by_id={("155", "movie"): ["superhero", "gotham city"]})
-    store = _configure_enrich(tmp_path, monkeypatch, fake)
-    main(["migrate"])
-    _seed_one_movie(store)
-    capsys.readouterr()
-
-    assert main(["enrich-tmdb-keywords"]) == 0
-
-    out = capsys.readouterr().out
-    assert "1 title(s) seen" in out
-    assert "1 fetched" in out
-    assert "2 keyword(s) written" in out
-
-    with sqlite3.connect(store) as conn:
-        count = conn.execute(
-            "SELECT count(*) FROM enrichment WHERE namespace = 'keywords' AND source = 'tmdb'"
-        ).fetchone()[0]
-        cursors = conn.execute(
-            "SELECT count(*) FROM enrichment_cursor WHERE namespace = 'keywords'"
-        ).fetchone()[0]
-    # Two keyword rows and nothing else. The fetch cursor is a row in
-    # `enrichment_cursor`, not a third row here pretending to be a keyword
-    # (issue #41, ADR-0013).
-    assert count == 2
-    assert cursors == 1
-
-
-def test_a_second_enrich_tmdb_keywords_run_does_not_refetch(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    fake = FakeTMDbSource(keywords_by_id={("155", "movie"): ["superhero"]})
-    store = _configure_enrich(tmp_path, monkeypatch, fake)
-    main(["migrate"])
-    _seed_one_movie(store)
-    capsys.readouterr()
-    main(["enrich-tmdb-keywords"])
-    capsys.readouterr()
-
-    assert main(["enrich-tmdb-keywords"]) == 0
-
-    out = capsys.readouterr().out
-    assert "0 fetched" in out
-    assert "1 already cached" in out
-    assert fake.calls == [("155", "movie")]
-
-
-def test_enrich_tmdb_keywords_rewipe_forces_a_full_refetch(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    fake = FakeTMDbSource(keywords_by_id={("155", "movie"): ["superhero"]})
-    store = _configure_enrich(tmp_path, monkeypatch, fake)
-    main(["migrate"])
-    _seed_one_movie(store)
-    main(["enrich-tmdb-keywords"])
-    capsys.readouterr()
-
-    assert main(["enrich-tmdb-keywords", "--rewipe"]) == 0
-
-    out = capsys.readouterr().out
-    assert "wiped" in out
-    assert "1 fetched" in out
-    assert fake.calls == [("155", "movie"), ("155", "movie")]
-
-
-def _seed_movies(store: Path, n: int) -> None:
-    with sqlite3.connect(store) as conn:
-        for i in range(1, n + 1):
-            item_id = f"imdb:tt{i:07d}"
-            conn.execute(
-                "INSERT INTO items (item_id, type, title) VALUES (?, 'movie', ?)",
-                (item_id, f"Movie {i}"),
-            )
-            conn.execute(
-                "INSERT INTO external_ids (item_id, ns, value, kind, last_seen) "
-                "VALUES (?, 'tmdb', ?, 'movie', '2026-01-01T00:00:00+00:00')",
-                (item_id, str(i)),
-            )
-
-
-def test_enrich_tmdb_keywords_reports_titles_failed_prominently(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    # Call 1 fails, call 2 succeeds — one failure, well short of the
-    # 3-consecutive abort threshold, so the sweep completes and reports it.
-    fake = FakeTMDbSource(keywords_by_id={("2", "movie"): ["ok"]}, fail_calls={1})
-    store = _configure_enrich(tmp_path, monkeypatch, fake)
-    main(["migrate"])
-    _seed_movies(store, 2)
-    capsys.readouterr()
-
-    assert main(["enrich-tmdb-keywords"]) == 0
-
-    out = capsys.readouterr().out
-    assert "1 failed" in out
-    assert "failed and were not cached" in out
-
-
-def test_enrich_tmdb_keywords_aborts_after_three_consecutive_failures(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    fake = FakeTMDbSource(fail_calls={1, 2, 3})
-    store = _configure_enrich(tmp_path, monkeypatch, fake)
-    main(["migrate"])
-    _seed_movies(store, 5)
-    capsys.readouterr()
-
-    assert main(["enrich-tmdb-keywords"]) == 1
-
-    err = capsys.readouterr().err
-    assert err.startswith("error: ")
-    assert "3 consecutive failures" in err
-    assert "Traceback" not in err
-    # The sweep stopped at the third failing title — the fourth and fifth
-    # were never asked for.
-    assert fake.calls == [("1", "movie"), ("2", "movie"), ("3", "movie")]
-
-
-def _configure_enrich_edges(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake: FakeTMDbSource
-) -> Path:
-    """Point the CLI at a store under `tmp_path`, with a TMDB key set and
-    `fake` standing in for `LiveTMDbClient`. No network."""
-    store = tmp_path / "plexdb.db"
-    monkeypatch.setenv("PLEXDB_PATH", str(store))
-    monkeypatch.setenv("TMDB_API_KEY", "test-tmdb-key")
-
-    def _fixture_backed_client(api_key: str) -> FakeTMDbSource:
-        assert api_key == "test-tmdb-key", "enrich-tmdb-edges must pass the configured key"
-        return fake
-
-    monkeypatch.setattr(enrich_tmdb_edges_cmd, "LiveTMDbClient", _fixture_backed_client)
-    return store
-
-
-def test_enrich_tmdb_edges_writes_rows_and_reports_a_summary(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    fake = FakeTMDbSource(recommendations_by_id={("155", "movie"): ["272"]})
-    store = _configure_enrich_edges(tmp_path, monkeypatch, fake)
-    main(["migrate"])
-    _seed_one_movie(store)
-    with sqlite3.connect(store) as conn:
-        conn.execute(
-            "INSERT INTO items (item_id, type, title) VALUES "
-            "('imdb:tt0372784', 'movie', 'Batman Begins')"
-        )
-        conn.execute(
-            "INSERT INTO external_ids (item_id, ns, value, kind, last_seen) "
-            "VALUES ('imdb:tt0372784', 'tmdb', '272', 'movie', '2026-01-01T00:00:00+00:00')"
-        )
-    capsys.readouterr()
-
-    assert main(["enrich-tmdb-edges"]) == 0
-
-    out = capsys.readouterr().out
-    assert "tmdb_recommendations:" in out
-    assert "tmdb_similar:" in out
-    assert "1 edge(s) written" in out
-
-    with sqlite3.connect(store) as conn:
-        count = conn.execute(
-            "SELECT count(*) FROM edges WHERE edge_type = 'tmdb_recommendations'"
-        ).fetchone()[0]
-    assert count == 1
-
-
-def test_a_second_enrich_tmdb_edges_run_does_not_refetch(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    fake = FakeTMDbSource(recommendations_by_id={("155", "movie"): []})
-    store = _configure_enrich_edges(tmp_path, monkeypatch, fake)
-    main(["migrate"])
-    _seed_one_movie(store)
-    capsys.readouterr()
-    main(["enrich-tmdb-edges"])
-    capsys.readouterr()
-
-    assert main(["enrich-tmdb-edges"]) == 0
-
-    out = capsys.readouterr().out
-    assert "0 fetched" in out
-    assert "1 already cached" in out
-    assert fake.recommendation_calls == [("155", "movie")]
-    assert fake.similar_calls == [("155", "movie")]
-
-
-def test_enrich_tmdb_edges_rewipe_forces_a_full_refetch(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    fake = FakeTMDbSource(recommendations_by_id={("155", "movie"): []})
-    store = _configure_enrich_edges(tmp_path, monkeypatch, fake)
-    main(["migrate"])
-    _seed_one_movie(store)
-    main(["enrich-tmdb-edges"])
-    capsys.readouterr()
-
-    assert main(["enrich-tmdb-edges", "--rewipe"]) == 0
-
-    out = capsys.readouterr().out
-    assert "wiped" in out
-    assert fake.recommendation_calls == [("155", "movie"), ("155", "movie")]
-
-
-def test_enrich_tmdb_edges_without_an_api_key_is_an_error_not_a_default(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    store = tmp_path / "plexdb.db"
-    monkeypatch.setenv("PLEXDB_PATH", str(store))
-    monkeypatch.setenv("TMDB_API_KEY", "")
-    main(["migrate"])
-    capsys.readouterr()
-
-    assert main(["enrich-tmdb-edges"]) == 1
-    err = capsys.readouterr().err
-    assert err.startswith("error: ")
-    assert "TMDB_API_KEY" in err
-    assert "Traceback" not in err
-
-
 def test_ingest_plays_writes_rows_and_reports_a_summary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1011,24 +748,6 @@ def test_latent_users_without_plex_credentials_configured_is_an_error_not_a_defa
     err = capsys.readouterr().err
     assert err.startswith("error: ")
     assert "PLEX_URL" in err
-    assert "Traceback" not in err
-
-
-def test_enrich_tmdb_keywords_without_an_api_key_is_an_error_not_a_default(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    store = tmp_path / "plexdb.db"
-    monkeypatch.setenv("PLEXDB_PATH", str(store))
-    # Set (not delete): see the matching comment on the walk test above —
-    # deleting would let the worktree's own `.env` leak a real key back in.
-    monkeypatch.setenv("TMDB_API_KEY", "")
-    main(["migrate"])
-    capsys.readouterr()
-
-    assert main(["enrich-tmdb-keywords"]) == 1
-    err = capsys.readouterr().err
-    assert err.startswith("error: ")
-    assert "TMDB_API_KEY" in err
     assert "Traceback" not in err
 
 

@@ -3,7 +3,7 @@
 `plays.match_tautulli_history` depends on `TautulliSource`, not on
 `LiveTautulliClient` directly, so a recorded-response test can substitute a
 fake that returns the same shapes without a socket — the same split
-`plex_client.py`/`HistorySource` and `tmdb_client.py`/`TMDbSource` use.
+`plex_client.py`/`HistorySource` uses.
 
 Verified against the live server (2026-08-10): `get_history`'s
 `response.data.data` array carries one row per session, whether it has
@@ -117,7 +117,7 @@ class LiveTautulliClient:
         """GET one Tautulli `cmd`, returning `response.data`.
 
         The key rides in the query string — Tautulli's `/api/v2` has no
-        header-based auth — so, same reasoning as `tmdb_client.LiveTMDbClient._get`,
+        header-based auth — so
         every error message below is built from `cmd`/`resp.status_code`,
         never from `err` or `resp.url`: httpx's own `raise_for_status`
         formats its message as `"... for url '{response.url}'"`, and that URL

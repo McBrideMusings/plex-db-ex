@@ -22,22 +22,22 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::clock::{self, is_before};
+use crate::clock::is_before;
 use crate::collections::{
     ADDED, Attempt, Decision, FEED, GateInput, HarvestError, HarvestStats, ListEntry,
     MDBLIST_SOURCE, SEARCH, Snapshot, apply_removals, attempts as load_attempts, decision_map,
     decisions_for, drop_lists, gate, place_entries, record_failure, resolve_index, stocked,
     write_snapshot,
 };
+use crate::cursors::{ATTEMPTED_KEY, FETCHED_KEY, delete_cursors, write_fetched};
 use crate::list_decisions::{canonical_list_url, list_url_parts};
 use crate::mdblist::MdbSource;
+use crate::staleness::{Cutoff, Now, is_stale};
 
 pub const NAMESPACE: &str = "list_search";
 pub const CURSOR_SOURCE: &str = "mdblist";
 pub const HIT_PREFIX: &str = "hit:";
 pub const REJECTED_PREFIX: &str = "rejected:";
-const FETCHED_KEY: &str = "fetched";
-const ATTEMPTED_KEY: &str = "attempted";
 
 /// Seeds one run asks, candidates one run fetches, and library titles a candidate must hold.
 pub const DEFAULT_MAX_SEEDS: i64 = 25;
@@ -90,10 +90,10 @@ fn url_of(user_name: &str, slug: &str) -> Option<String> {
     canonical_list_url(&format!("https://mdblist.com/lists/{user_name}/{slug}"))
 }
 
-fn is_fresh(fetched_at: Option<&String>, cutoff: i128) -> Result<bool, HarvestError> {
+fn is_fresh(fetched_at: Option<&String>, cutoff: Cutoff) -> Result<bool, HarvestError> {
     match fetched_at {
         None => Ok(false),
-        Some(at) => Ok(!clock::is_stale(at, cutoff)?),
+        Some(at) => Ok(!is_stale(at, cutoff)?),
     }
 }
 
@@ -103,7 +103,7 @@ fn ask_seeds(
     source: &mut dyn MdbSource,
     stats: &mut SearchStats,
     seeds: &[Seed],
-    cutoff: i128,
+    cutoff: Cutoff,
     limit: i64,
 ) -> Result<BTreeSet<String>, HarvestError> {
     let mut fetched: HashMap<String, String> = HashMap::new();
@@ -170,7 +170,7 @@ fn ask_seeds(
             .iter()
             .filter_map(|r| url_of(&r.user_name, &r.slug))
             .collect();
-        let now = clock::now_iso();
+        let now = Now::read().iso();
         let tx = conn.transaction()?;
         tx.execute(
             "DELETE FROM enrichment_cursor WHERE item_id = ? AND namespace = ? \
@@ -195,7 +195,14 @@ fn ask_seeds(
                 ],
             )?;
         }
-        write_fetched(&tx, &seed.item_id, &now)?;
+        write_fetched(
+            &tx,
+            NAMESPACE,
+            CURSOR_SOURCE,
+            &seed.item_id,
+            &now,
+            FETCHED_KEY,
+        )?;
         tx.commit()?;
         stats.seeds_asked += 1;
         println!(
@@ -213,23 +220,9 @@ const UPSERT: &str = "INSERT INTO enrichment_cursor (item_id, namespace, source,
     VALUES (?, ?, ?, ?, ?) \
     ON CONFLICT(item_id, namespace, source, key) DO UPDATE SET fetched_at = excluded.fetched_at";
 
-/// Record a title as fetched and clear its `attempted` cursor.
-fn write_fetched(conn: &Connection, item_id: &str, now_iso: &str) -> rusqlite::Result<()> {
-    conn.execute(
-        UPSERT,
-        params![item_id, NAMESPACE, CURSOR_SOURCE, FETCHED_KEY, now_iso],
-    )?;
-    conn.execute(
-        "DELETE FROM enrichment_cursor \
-         WHERE item_id = ? AND namespace = ? AND source = ? AND key = ?",
-        params![item_id, NAMESPACE, CURSOR_SOURCE, ATTEMPTED_KEY],
-    )?;
-    Ok(())
-}
-
 /// Move a title that produced nothing cacheable to the back of the next run's order.
 fn mark_attempted(conn: &Connection, item_id: &str) -> rusqlite::Result<()> {
-    let now = clock::iso_micros(clock::now_micros());
+    let now = Now::read().iso_micros();
     conn.execute(
         UPSERT,
         params![item_id, NAMESPACE, CURSOR_SOURCE, ATTEMPTED_KEY, now],
@@ -272,7 +265,7 @@ pub fn refresh_list_search(
     source: &mut dyn MdbSource,
     options: Options,
 ) -> Result<SearchStats, HarvestError> {
-    let cutoff = clock::cutoff(options.stale_days);
+    let cutoff = Now::read().cutoff(options.stale_days);
     let mut stats = SearchStats::default();
 
     let decisions: Vec<Decision> = decisions_for(conn, MDBLIST_SOURCE)?;
@@ -427,7 +420,7 @@ pub fn refresh_list_search(
                 if err.is_systemic() {
                     return Err(err.into());
                 }
-                record_failure(conn, url, held.as_ref(), &clock::now_iso(), &err.message)?;
+                record_failure(conn, url, held.as_ref(), &Now::read().iso(), &err.message)?;
                 stats.harvest.lists_failed += 1;
                 continue;
             }
@@ -444,7 +437,7 @@ pub fn refresh_list_search(
             .collect();
         let (entry_rows, memberships) = place_entries(&index, &entries, &mut stats.harvest);
         stats.harvest.entries_parsed += i64::try_from(entries.len()).unwrap_or(0);
-        let now = clock::now_iso();
+        let now = Now::read().iso();
         let collection_id = format!("{MDBLIST_SOURCE}:{}", meta.list_id);
         if i64::try_from(memberships.len()).unwrap_or(0) < options.min_titles {
             reject(conn, url, &now)?;
@@ -526,10 +519,7 @@ pub fn wipe_searched(conn: &mut Connection) -> rusqlite::Result<(usize, usize)> 
             .collect::<rusqlite::Result<_>>()?
     };
     drop_lists(conn, &ids)?;
-    let cursors = conn.execute(
-        "DELETE FROM enrichment_cursor WHERE namespace = ? AND source = ?",
-        params![NAMESPACE, CURSOR_SOURCE],
-    )?;
+    let cursors = delete_cursors(conn, NAMESPACE, CURSOR_SOURCE, None)?;
     Ok((ids.len(), cursors))
 }
 

@@ -13,10 +13,12 @@ the key) so a run's requests can be compared as well as its rows.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import sqlite3
 import threading
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -415,3 +417,23 @@ def serve(scenario: Scenario) -> tuple[ThreadingHTTPServer, str]:
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server, f"http://127.0.0.1:{server.server_address[1]}"
+
+
+@contextlib.contextmanager
+def serve_lists(store: Path) -> Iterator[tuple[dict[str, str], Scenario]]:
+    """Serve the scenario built from `store`; yields the environment that points both
+    implementations at it, and the scenario (its decision rows and request log)."""
+    scenario = build(store)
+    server, url = serve(scenario)
+    try:
+        yield (
+            {
+                "MDBLIST_BASE_URL": url,
+                "LETTERBOXD_BASE_URL": url,
+                "MDBLIST_API_KEY": API_KEY,
+                "LETTERBOXD_PAUSE_SECONDS": "0",
+            },
+            scenario,
+        )
+    finally:
+        server.shutdown()

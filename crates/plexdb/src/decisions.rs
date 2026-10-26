@@ -8,6 +8,8 @@
 
 use std::path::Path;
 
+use plexdb_store::{Config, StoreError, open_store};
+use rusqlite::Connection;
 use serde_json::Value;
 use thiserror::Error;
 
@@ -27,7 +29,14 @@ pub struct Spec {
     /// Text fields an entry carries unless its decision is `cleared`.
     pub values: &'static [&'static str],
     /// Why a key cannot be an entry's key, or `None`.
-    pub key_problem: fn(&[String]) -> Option<&'static str>,
+    pub key_problem: fn(&[String]) -> Option<String>,
+    /// Why an entry's `values` cannot be stored, or `None`.
+    pub values_problem: fn(&[String]) -> Option<String>,
+}
+
+/// A spec with no extra rule on its values.
+pub fn no_values_problem(_values: &[String]) -> Option<String> {
+    None
 }
 
 /// One checked entry: its key fields, decision, values and `decided_at`.
@@ -79,7 +88,7 @@ pub fn py_repr(text: &str) -> String {
 }
 
 /// Python's `repr` of a tuple of strings.
-fn py_tuple_repr(items: &[&str]) -> String {
+pub fn py_tuple_repr(items: &[&str]) -> String {
     let inner: Vec<String> = items.iter().map(|item| py_repr(item)).collect();
     if inner.len() == 1 {
         format!("({},)", inner[0])
@@ -146,6 +155,9 @@ pub fn parse(spec: &Spec, path: &Path, text: &str) -> Result<Vec<Entry>, Decisio
                 )));
             }
             values = found.into_iter().flatten().collect();
+            if let Some(problem) = (spec.values_problem)(&values) {
+                return Err(DecisionsFileError(format!("{at} {problem}")));
+            }
             if !is_isoformat(&decided_at) {
                 return Err(DecisionsFileError(format!(
                     "{at} has decided_at {}, expected an ISO 8601 time",
@@ -192,4 +204,31 @@ pub fn thousands(n: usize) -> String {
         out.push(c);
     }
     out
+}
+
+/// Why a fold stopped: the file is wrong, the store would not open, or SQLite
+/// refused a write. The file is checked before the first row changes.
+#[derive(Debug, Error)]
+pub enum FoldError {
+    #[error(transparent)]
+    File(#[from] DecisionsFileError),
+    #[error(transparent)]
+    Store(#[from] StoreError),
+    #[error(transparent)]
+    Sqlite(#[from] rusqlite::Error),
+}
+
+/// What a `fold-*-decisions` step does: read `Config`, open the store for
+/// writing, fold the file `file_name` names, and print the one-line report.
+pub fn run_fold(
+    file_name: &str,
+    fold: fn(&mut Connection, &Path) -> Result<FoldStats, FoldError>,
+    describe: fn(&FoldStats, &Path) -> String,
+) -> Result<(), FoldError> {
+    let config = Config::from_env()?;
+    let path = config.decisions_file(file_name);
+    let mut store = open_store(&config.store_path)?;
+    let stats = fold(&mut store.conn, &path)?;
+    println!("{}", describe(&stats, &path));
+    Ok(())
 }

@@ -8,6 +8,7 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from fixture_store import fold
 from fixture_store import init as init_store
 
 from plexdb.cli import main
@@ -15,7 +16,6 @@ from plexdb.keywords import (
     FILM_SUFFIX_MODEL,
     ROLES,
     RawKeyword,
-    keyword_spellings,
     normalize_keyword,
     prune_keyword_verdicts,
     rederive_keywords,
@@ -24,11 +24,7 @@ from plexdb.keywords import (
     write_film_suffix_verdicts,
     write_title_keywords,
 )
-from plexdb.merge_review import MergeDecisions
-from plexdb.role_review import RoleDecisions
-from plexdb.roles import fold_role_decisions
 from plexdb.store import open_store
-from plexdb.synonyms import fold_merge_decisions
 
 
 def test_the_constant_is_exactly_the_set_the_schema_accepts(tmp_path: Path) -> None:
@@ -297,56 +293,18 @@ def test_a_pruned_decision_comes_back_from_its_file_once_the_value_is_judged_aga
         conn.execute("DELETE FROM enrichment WHERE value = ?", (OLD,))
         conn.commit()
         prune_keyword_verdicts(conn)
-        assert fold_role_decisions(conn, decisions).unmatched == 1
+        conn.commit()
+    assert fold("fold-role-decisions", store, decisions).unmatched == 1
+    with open_store(store) as conn:
         _carry(conn, "hidden world")
         _judge(conn, "hidden world")
         conn.commit()
-        fold_role_decisions(conn, decisions)
+    fold("fold-role-decisions", store, decisions)
+    with open_store(store) as conn:
         restored = conn.execute(
             "SELECT decision FROM keyword_role_decisions WHERE keyword = 'hidden world'"
         ).fetchone()
     assert tuple(restored) == ("accepted",)
-
-
-def test_an_unfolded_decision_follows_its_keyword_through_a_normalization_change(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    store = tmp_path / "plexdb.db"
-    init_store(store)
-    with open_store(store) as conn:
-        conn.execute("INSERT INTO items (item_id, type, title) VALUES ('imdb:tt1', 'movie', 'One')")
-        raw = [RawKeyword("Documentary Films"), RawKeyword("Heists")]
-        write_title_keywords(conn, "imdb:tt1", "tmdb", raw, AT)
-        _judge(conn, "documentary film")
-        conn.commit()
-        forms = keyword_spellings(conn, ("documentary film", "heist"))
-    merges = MergeDecisions(tmp_path / "merge_decisions.json")
-    roles = RoleDecisions(tmp_path / "role_decisions.json")
-    merges.record(("documentary film", "heist"), "accepted", forms)
-    roles.record(("documentary film", "theme"), "accepted", forms)
-
-    # A new rule renames the value, and a migration re-derives the store and moves its
-    # verdict rows, as v17 did; the files are never touched.
-    def renamed(surface: str) -> str:
-        value = normalize_keyword(surface)
-        return "nonfiction" if value == "documentary film" else value
-
-    for module in ("plexdb.keywords", "plexdb.merge_review", "plexdb.role_review"):
-        monkeypatch.setattr(f"{module}.normalize_keyword", renamed)
-    with open_store(store) as conn:
-        rederive_keywords(conn)
-        conn.execute(
-            "UPDATE keyword_roles SET keyword = 'nonfiction' WHERE keyword = 'documentary film'"
-        )
-        conn.commit()
-        assert fold_merge_decisions(conn, merges.path).matched == 1
-        assert fold_role_decisions(conn, roles.path).matched == 1
-        pairs = conn.execute("SELECT keyword_a, keyword_b, decision FROM keyword_pairs").fetchall()
-        ruled = conn.execute(
-            "SELECT keyword, role, decision FROM keyword_role_decisions"
-        ).fetchall()
-    assert [tuple(r) for r in pairs] == [("heist", "nonfiction", "accepted")]
-    assert [tuple(r) for r in ruled] == [("nonfiction", "theme", "accepted")]
 
 
 def test_a_value_carried_only_as_a_spoiler_keyword_keeps_its_rows(tmp_path: Path) -> None:
@@ -391,3 +349,16 @@ def test_the_film_suffix_rule_pairs_x_film_with_a_stored_x_and_drops_an_undecide
         ("christmas", "christmas film", 1.0, FILM_SUFFIX_MODEL, "rejected"),
         ("heist", "heist film", 1.0, FILM_SUFFIX_MODEL, "rejected"),
     ]
+
+
+def test_normalize_keyword_returns_what_the_published_fixture_says() -> None:
+    """`tests/fixtures/keyword_normalization.json` is the rule's specification, and the
+    Rust normalizer (`crates/plexdb-keywords/tests/golden.rs`) is held to it too. A
+    change to this function, or a simplemma bump, that the fixture does not follow
+    fails here."""
+    import json
+
+    path = Path(__file__).parent / "fixtures" / "keyword_normalization.json"
+    cases = json.loads(path.read_text(encoding="utf-8"))["cases"]
+    wrong = [(s, want, normalize_keyword(s)) for s, want in cases if normalize_keyword(s) != want]
+    assert wrong[:10] == []

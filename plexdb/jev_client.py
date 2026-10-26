@@ -2,8 +2,7 @@
 keyword plays.
 
 `synonyms.py` depends on `Judge` and `roles.py` on `RoleJudge`, not on
-`LiveJev`, so a test can substitute a fake without a socket — the same split as
-`tmdb_client.py`.
+`LiveJev`, so a test can substitute a fake without a socket.
 
 Jev's `noul` answer is a probability between 0 and 1 that the statement is true.
 The pair request also carries a `score` question; Jev answers both from one

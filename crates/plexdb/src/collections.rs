@@ -15,9 +15,10 @@ use std::collections::{HashMap, HashSet};
 
 use rusqlite::{Connection, Row, params};
 
-use crate::clock::{self, is_before};
+use crate::clock::is_before;
 use crate::list_decisions::{LETTERBOXD, MDBLIST, canonical_list_url, list_source, list_url_parts};
 use crate::mdblist::{MdbError, MdbList, MdbSource};
+use crate::staleness::{BadTime, Cutoff, Now, is_stale};
 
 pub const MDBLIST_SOURCE: &str = MDBLIST;
 pub const LETTERBOXD_SOURCE: &str = LETTERBOXD;
@@ -33,8 +34,6 @@ pub const SEARCH: &str = "search";
 pub const MAX_FAILURES: i64 = 3;
 /// The longest failure reason kept in `list_attempt`.
 pub const REASON_MAX: usize = 300;
-/// The shared default staleness window (`staleness.DEFAULT_STALE_DAYS`).
-pub const DEFAULT_STALE_DAYS: i64 = 45;
 
 /// The store's id namespaces in the order an id is derived (`identity.PRIORITY`).
 const PRIORITY: [&str; 4] = ["imdb", "tmdb", "tvdb", "plex"];
@@ -49,9 +48,9 @@ pub enum HarvestError {
     Other(String),
 }
 
-impl From<String> for HarvestError {
-    fn from(message: String) -> Self {
-        HarvestError::Other(message)
+impl From<BadTime> for HarvestError {
+    fn from(err: BadTime) -> Self {
+        HarvestError::Other(err.to_string())
     }
 }
 
@@ -282,7 +281,7 @@ pub struct GateInput<'a> {
     pub held: Option<&'a Attempt>,
     pub seen_at: Option<&'a str>,
     pub stocked: bool,
-    pub cutoff: i128,
+    pub cutoff: Cutoff,
 }
 
 /// Whether a list is fetched this run, and the failure record that still stands for it.
@@ -320,7 +319,7 @@ pub fn gate(
             .is_none_or(|seen| is_before(seen, input.decision.map_or("", |d| &d.decided_at)));
     if !refetch
         && let Some(seen) = input.seen_at
-        && !clock::is_stale(seen, input.cutoff)?
+        && !is_stale(seen, input.cutoff)?
         && input.stocked
     {
         stats.lists_cached += 1;
@@ -537,7 +536,7 @@ pub fn refresh_mdblist(
     source: &mut dyn MdbSource,
     stale_days: i64,
 ) -> Result<HarvestStats, HarvestError> {
-    let cutoff = clock::cutoff(stale_days);
+    let cutoff = Now::read().cutoff(stale_days);
     let mut stats = HarvestStats::default();
 
     let decisions = decisions_for(conn, MDBLIST_SOURCE)?;
@@ -629,7 +628,7 @@ pub fn refresh_mdblist(
                     conn,
                     &unit.key,
                     held.as_ref(),
-                    &clock::now_iso(),
+                    &Now::read().iso(),
                     &err.message,
                 )?;
                 stats.lists_failed += 1;
@@ -638,7 +637,7 @@ pub fn refresh_mdblist(
         };
         let collection_id = format!("{MDBLIST_SOURCE}:{}", meta.list_id);
         let url = list_url(&meta).or_else(|| unit.url.clone());
-        let fetched_iso = clock::now_iso();
+        let fetched_iso = Now::read().iso();
         // Array position is the rank the list presents; MDBList's own `rank` is a
         // different ordering entirely and is ignored.
         let entries: Vec<ListEntry> = contents

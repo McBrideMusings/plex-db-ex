@@ -4,7 +4,11 @@
 
 use plexdb_store::StoreError;
 
-use crate::{list_decisions, list_steps, migrate};
+use crate::decisions::FoldError;
+use crate::{
+    list_decisions, list_steps, merge_decisions, migrate, name_decisions, role_decisions,
+    tmdb_steps,
+};
 
 /// Why a step stopped. `Config` is a setting that is absent, which the sweep
 /// reports as skipped rather than failed.
@@ -12,11 +16,23 @@ use crate::{list_decisions, list_steps, migrate};
 pub enum Failure {
     Config(String),
     Failed(String),
-    /// Arguments the step does not accept, which the caller sees as exit code 2.
+    /// The command line is wrong: an unknown flag, a missing value.
     Usage(String),
 }
 
+/// A step, given the arguments after its name.
 pub type Run = fn(&[String]) -> Result<(), Failure>;
+
+/// A step that takes no arguments.
+fn no_args(name: &str, args: &[String]) -> Result<(), Failure> {
+    match args.first() {
+        None => Ok(()),
+        Some(_) => Err(Failure::Usage(format!(
+            "{name} takes no arguments, got {}",
+            args.join(" ")
+        ))),
+    }
+}
 
 pub(crate) fn failure(err: StoreError) -> Failure {
     match err {
@@ -25,35 +41,48 @@ pub(crate) fn failure(err: StoreError) -> Failure {
     }
 }
 
-/// A step that takes no arguments refuses any.
-fn no_arguments(name: &str, args: &[String]) -> Result<(), Failure> {
-    if args.is_empty() {
-        return Ok(());
-    }
-    Err(Failure::Usage(format!(
-        "{name} takes no arguments, got {}",
-        args.join(" ")
-    )))
-}
-
 fn migrate(args: &[String]) -> Result<(), Failure> {
-    no_arguments(migrate::NAME, args)?;
+    no_args(migrate::NAME, args)?;
     migrate::run().map_err(failure)
 }
 
-fn fold_list_decisions(args: &[String]) -> Result<(), Failure> {
-    use list_decisions::FoldError;
-    no_arguments(list_decisions::NAME, args)?;
-    list_decisions::run().map_err(|err| match err {
+fn fold(result: Result<(), FoldError>) -> Result<(), Failure> {
+    result.map_err(|err| match err {
         FoldError::Store(err) => failure(err),
         other => Failure::Failed(other.to_string()),
     })
 }
 
+fn fold_list_decisions(args: &[String]) -> Result<(), Failure> {
+    no_args(list_decisions::NAME, args)?;
+    fold(list_decisions::run())
+}
+
+fn fold_merge_decisions(args: &[String]) -> Result<(), Failure> {
+    no_args(merge_decisions::NAME, args)?;
+    fold(merge_decisions::run())
+}
+
+fn fold_role_decisions(args: &[String]) -> Result<(), Failure> {
+    no_args(role_decisions::NAME, args)?;
+    fold(role_decisions::run())
+}
+
+fn fold_name_decisions(args: &[String]) -> Result<(), Failure> {
+    no_args(name_decisions::NAME, args)?;
+    fold(name_decisions::run())
+}
+
 /// Every step, by the name `plexdb/rust_steps.json` declares it under.
 pub const STEPS: &[(&str, Run)] = &[
     (migrate::NAME, migrate),
+    (merge_decisions::NAME, fold_merge_decisions),
+    (role_decisions::NAME, fold_role_decisions),
+    (name_decisions::NAME, fold_name_decisions),
     (list_decisions::NAME, fold_list_decisions),
+    (tmdb_steps::KEYWORDS, tmdb_steps::run_keywords),
+    (tmdb_steps::LANGUAGE, tmdb_steps::run_language),
+    (tmdb_steps::EDGES, tmdb_steps::run_edges),
     (list_steps::HARVEST_MDBLIST, list_steps::harvest_mdblist),
     (
         list_steps::HARVEST_LETTERBOXD_LISTS,

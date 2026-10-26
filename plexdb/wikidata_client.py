@@ -2,8 +2,7 @@
 endpoint — read-only, one query per batch of titles.
 
 `enrich_wikidata.py` depends on `WikidataSource`, not on `LiveWikidataClient`
-directly, so a recorded-response test substitutes a fake without a socket —
-the same split as `tmdb_client.py`/`TMDbSource`.
+directly, so a recorded-response test substitutes a fake without a socket.
 
 One query carries many IMDb ids through `VALUES` on P345 and asks for the
 English labels of five properties at once, one result row per (IMDb id,

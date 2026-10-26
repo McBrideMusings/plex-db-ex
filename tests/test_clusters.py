@@ -471,7 +471,7 @@ def test_keyword_profile_reports_zero_coverage_rather_than_an_empty_profile(
 def test_keyword_profile_treats_fetched_but_empty_the_same_as_never_fetched(
     store: sqlite3.Connection,
 ) -> None:
-    """`enrich_tmdb.py` writes a `_fetched` sentinel row for a title TMDB
+    """the TMDB keyword sweep wrote a `_fetched` sentinel row for a title TMDB
     returned zero keywords for, so a re-run does not keep re-asking. That
     sentinel is not a `keyword` row, so it must not count as coverage here —
     a title with genuinely no keywords contributes nothing to a taste

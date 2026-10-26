@@ -3,13 +3,15 @@
 //! decide lists (`lists`, `list`, `list-decide`). Each is the Python command it replaces
 //! (`plexdb/commands/`), down to the lines it prints.
 
-use plexdb_store::{Config, open_readonly, open_store};
+use plexdb_store::{Config, open_readonly};
 use serde_json::Value;
 
-use crate::args::{self, Parsed, Spec, int_option};
+use crate::args::{self, Parsed, Spec};
 use crate::collections::{
-    DEFAULT_STALE_DAYS, LETTERBOXD_SOURCE, MDBLIST_SOURCE, refresh_mdblist, report_line,
-    wipe_source,
+    LETTERBOXD_SOURCE, MDBLIST_SOURCE, refresh_mdblist, report_line, wipe_source,
+};
+use crate::gated::{
+    self, credential, env_int, parse_capped_options, parse_options, resolve_stale_days,
 };
 use crate::letterboxd::LiveLbClient;
 use crate::letterboxd_lists::refresh_letterboxd_lists;
@@ -38,65 +40,17 @@ fn parse(args: &[String], spec: &Spec) -> Result<Parsed, Failure> {
     args::parse(args, spec).map_err(Failure::Usage)
 }
 
-/// `sources.env_int`: the variable's whole number, else the default for an unset or
-/// empty one.
-fn env_int(var: &str, default: i64, what: &str) -> Result<i64, Failure> {
-    let raw = std::env::var(var).unwrap_or_default();
-    let raw = plexdb_store::py_strip(&raw);
-    if raw.is_empty() {
-        return Ok(default);
-    }
-    crate::pyval::py_int_text(raw).ok_or_else(|| {
-        Failure::Config(format!(
-            "{var} must be {what}, got {}",
-            crate::decisions::py_repr(raw)
-        ))
-    })
-}
-
-const HARVEST_SPEC: Spec = Spec {
-    options: &["--stale-days"],
-    flags: &["--rewipe"],
-    positionals: 0,
-};
-
-const SEARCH_SPEC: Spec = Spec {
-    options: &["--stale-days", "--limit"],
-    flags: &["--rewipe"],
-    positionals: 0,
-};
-
-/// `GatedSource.resolve_stale_days`: the flag, then `<NAME>_STALE_DAYS`, then the default.
-fn stale_days(parsed: &Parsed, name: &str) -> Result<i64, Failure> {
-    if let Some(days) = int_option(parsed, "--stale-days").map_err(Failure::Usage)? {
-        return Ok(days);
-    }
-    env_int(
-        &format!("{}_STALE_DAYS", name.to_uppercase()),
-        DEFAULT_STALE_DAYS,
-        "a whole number of days",
-    )
-}
-
-fn api_key(purpose: &str) -> Result<String, Failure> {
-    let key = std::env::var("MDBLIST_API_KEY").unwrap_or_default();
-    let key = plexdb_store::py_strip(&key);
-    if key.is_empty() {
-        return Err(Failure::Config(format!(
-            "MDBLIST_API_KEY must be set in .env to {purpose}"
-        )));
-    }
-    Ok(key.to_string())
-}
-
 /// `plexdb harvest-mdblist [--stale-days N] [--rewipe]`.
 pub fn harvest_mdblist(args: &[String]) -> Result<(), Failure> {
-    let parsed = parse(args, &HARVEST_SPEC)?;
-    let config = Config::from_env().map_err(crate::steps::failure)?;
-    let mut client = LiveMdbClient::new(&api_key("harvest MDBList collections")?);
-    let stale = stale_days(&parsed, "mdblist")?;
-    let mut store = open_store(&config.store_path).map_err(crate::steps::failure)?;
-    if parsed.flag("--rewipe") {
+    let options = parse_options(HARVEST_MDBLIST, args)?;
+    let config = gated::config()?;
+    let mut client = LiveMdbClient::new(&credential(
+        "MDBLIST_API_KEY",
+        "harvest MDBList collections",
+    )?);
+    let stale = resolve_stale_days("mdblist", options.stale_days)?;
+    let mut store = gated::open(&config)?;
+    if options.rewipe {
         let (memberships, entries, collections) =
             wipe_source(&mut store.conn, MDBLIST_SOURCE).map_err(failed)?;
         println!(
@@ -111,12 +65,12 @@ pub fn harvest_mdblist(args: &[String]) -> Result<(), Failure> {
 
 /// `plexdb harvest-letterboxd-lists [--stale-days N] [--rewipe]`.
 pub fn harvest_letterboxd_lists(args: &[String]) -> Result<(), Failure> {
-    let parsed = parse(args, &HARVEST_SPEC)?;
-    let config = Config::from_env().map_err(crate::steps::failure)?;
+    let options = parse_options(HARVEST_LETTERBOXD_LISTS, args)?;
+    let config = gated::config()?;
     let mut client = LiveLbClient::new();
-    let stale = stale_days(&parsed, "letterboxd_lists")?;
-    let mut store = open_store(&config.store_path).map_err(crate::steps::failure)?;
-    if parsed.flag("--rewipe") {
+    let stale = resolve_stale_days("letterboxd_lists", options.stale_days)?;
+    let mut store = gated::open(&config)?;
+    if options.rewipe {
         let (memberships, entries, collections) =
             wipe_source(&mut store.conn, LETTERBOXD_SOURCE).map_err(failed)?;
         println!(
@@ -131,11 +85,12 @@ pub fn harvest_letterboxd_lists(args: &[String]) -> Result<(), Failure> {
 
 /// `plexdb harvest-mdblist-search [--stale-days N] [--limit N] [--rewipe]`.
 pub fn harvest_mdblist_search(args: &[String]) -> Result<(), Failure> {
-    let parsed = parse(args, &SEARCH_SPEC)?;
-    let config = Config::from_env().map_err(crate::steps::failure)?;
-    let mut client = LiveMdbClient::new(&api_key("search MDBList for lists")?);
-    let stale = stale_days(&parsed, "mdblist_search")?;
-    let limit = match int_option(&parsed, "--limit").map_err(Failure::Usage)? {
+    let options = parse_capped_options(HARVEST_MDBLIST_SEARCH, args)?;
+    let config = gated::config()?;
+    let mut client =
+        LiveMdbClient::new(&credential("MDBLIST_API_KEY", "search MDBList for lists")?);
+    let stale = resolve_stale_days("mdblist_search", options.stale_days)?;
+    let limit = match options.limit {
         Some(limit) => limit,
         None => env_int(
             "MDBLIST_SEARCH_MAX_SEEDS",
@@ -148,12 +103,12 @@ pub fn harvest_mdblist_search(args: &[String]) -> Result<(), Failure> {
             "the mdblist_search limit cannot be negative, got {limit}"
         )));
     }
-    let mut store = open_store(&config.store_path).map_err(crate::steps::failure)?;
-    if parsed.flag("--rewipe") {
+    let mut store = gated::open(&config)?;
+    if options.rewipe {
         let (lists, cursors) = wipe_searched(&mut store.conn).map_err(failed)?;
         println!("wiped {lists} searched list(s) and {cursors} seed cursor(s)");
     }
-    let options = Options {
+    let search = Options {
         stale_days: stale,
         limit,
         min_titles: env_int(
@@ -167,7 +122,7 @@ pub fn harvest_mdblist_search(args: &[String]) -> Result<(), Failure> {
             "a whole number of lists",
         )?,
     };
-    let stats = refresh_list_search(&mut store.conn, &mut client, options).map_err(failed)?;
+    let stats = refresh_list_search(&mut store.conn, &mut client, search).map_err(failed)?;
     println!("{}", list_search::report_line(&stats));
     Ok(())
 }

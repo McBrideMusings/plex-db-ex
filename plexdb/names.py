@@ -15,13 +15,11 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterator
-from pathlib import Path
 from typing import ClassVar
 
-from .config import Config
-from .decisions import DecisionsFile, FoldStats, decisions_dir
+from .decisions import DecisionsFile
 from .errors import NameDecisionsError
-from .keywords import is_carried, normalize_keyword, readable_forms
+from .keywords import normalize_keyword, readable_forms
 from .merge_review import merge_map
 
 __all__ = [
@@ -30,8 +28,6 @@ __all__ = [
     "NameDecisions",
     "NoSuchKeyword",
     "display_labels",
-    "fold_name_decisions",
-    "name_decisions_path",
     "names_json",
     "own_labels",
 ]
@@ -93,48 +89,6 @@ class NameDecisions(DecisionsFile):
         if len(name) > NAME_MAX:
             raise ValueError(f"name must be at most {NAME_MAX} characters")
         return keyword, ("named" if name else "cleared"), name
-
-
-def name_decisions_path(config: Config) -> Path:
-    """`name_decisions.json`, beside Plex DB-EX's saved-queries file."""
-    return decisions_dir(config) / NAME_DECISIONS_FILE
-
-
-def fold_name_decisions(conn: sqlite3.Connection, path: Path) -> FoldStats:
-    """Apply `path` to `keyword_names`; a missing file is no decisions.
-
-    The file is a list of `{surface, decision, name, decided_at}`, where `decision`
-    is `named` (with `name`) or `cleared`. Each entry names the keyword its spelling
-    normalizes to now (`NameDecisions.resolve`), so a name survives a migration that
-    renames stored values. Entries apply in list order, so the last entry for a
-    keyword wins. `named` writes the row; `cleared` deletes it. An entry naming a
-    keyword no title carries is counted and ignored, and comes back once the keyword
-    does. The whole file is validated before the first row changes, and applied in
-    one transaction. It is applied every run, so the file stays the record of the
-    latest name per keyword.
-    """
-    stats = FoldStats()
-    entries = NameDecisions.load(path)
-    if entries is None:
-        return stats
-    stats.file_found = True
-    stats.entries = len(entries)
-    with conn:
-        for key, entry in NameDecisions.resolved(entries):
-            if key is None or not is_carried(conn, key[0]):
-                stats.unmatched += 1
-                continue
-            stats.matched += 1
-            if entry["decision"] == "cleared":
-                conn.execute("DELETE FROM keyword_names WHERE keyword = ?", key)
-            else:
-                conn.execute(
-                    "INSERT INTO keyword_names (keyword, name, decided_at) VALUES (?, ?, ?) "
-                    "ON CONFLICT (keyword) DO UPDATE SET "
-                    "name = excluded.name, decided_at = excluded.decided_at",
-                    (*key, entry["name"], entry["decided_at"]),
-                )
-    return stats
 
 
 def names_json(conn: sqlite3.Connection, overlay: _Overlay) -> dict[str, dict[str, object]]:

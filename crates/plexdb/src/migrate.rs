@@ -15,7 +15,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use plexdb_schema::{
-    GUARDED_TABLES, MIGRATIONS, Migration as Step, apply_chain, current_version, preflight,
+    GUARDED_TABLES, MIGRATIONS, Migration as Step, Shrinks, apply_chain, current_version, preflight,
 };
 use plexdb_store::{Config, MigrateLock, StoreError, create_store, open_store};
 use rusqlite::Connection;
@@ -152,7 +152,21 @@ pub fn thousands(n: i64) -> String {
 /// order where a failure of one makes the next meaningless: is the store at the
 /// version it claims, is the file structurally sound, and is the history still
 /// there — no guarded table holds fewer rows than before.
-fn verify(conn: &Connection, target: i64, before: &Counts) -> Result<Option<String>, StoreError> {
+///
+/// A guarded table shrinking is not automatically "the history is gone": a migration
+/// can collapse rows on purpose (v10 and v17 merge keyword spellings that normalize
+/// to one fact). Row counts alone cannot tell that apart from real loss, so a
+/// migration that intends a shrink declares the exact row count it expects the table
+/// to land at. A drop is accepted only when the actual after-count matches that
+/// number exactly — a migration that merges as expected *and* loses something else
+/// lands on a different number and still trips this guard. A table with no declared
+/// entry keeps the all-or-nothing rule: any drop at all is a failure.
+fn verify(
+    conn: &Connection,
+    target: i64,
+    before: &Counts,
+    declared: &Shrinks,
+) -> Result<Option<String>, StoreError> {
     let now = current_version(conn)?;
     if now != target {
         return Ok(Some(format!(
@@ -172,6 +186,13 @@ fn verify(conn: &Connection, target: i64, before: &Counts) -> Result<Option<Stri
             .find(|(name, _)| name == table)
             .map_or(0, |(_, rows)| *rows);
         if count_after < *count_before {
+            let expected = declared
+                .iter()
+                .find(|(name, _)| name == table)
+                .map(|(_, rows)| *rows);
+            if expected == Some(count_after) {
+                continue;
+            }
             return Ok(Some(format!(
                 "{table} went from {} rows to {} — a migration lost {} rows",
                 thousands(*count_before),
@@ -229,9 +250,9 @@ pub fn migrate_chain(
 
     let landed = (|| {
         let mut store = create_store(path)?;
-        let (was, now) = apply_chain(&mut store.conn, chain)?;
+        let (was, now, declared) = apply_chain(&mut store.conn, chain)?;
         let problem = match taken {
-            Some(_) => verify(&store.conn, target, &counts_before)?,
+            Some(_) => verify(&store.conn, target, &counts_before, &declared)?,
             None => None,
         };
         let counts_after = guarded_counts(&store.conn)?;

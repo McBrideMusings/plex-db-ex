@@ -7,7 +7,6 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use plexdb::clock::{iso_seconds, micros_of, now_micros};
 use plexdb::collections::{
     HarvestError, LETTERBOXD_SOURCE, MDBLIST_SOURCE, refresh_mdblist, wipe_source,
 };
@@ -16,6 +15,7 @@ use plexdb::letterboxd_lists::refresh_letterboxd_lists;
 use plexdb::list_search::{Options, refresh_list_search, wipe_searched};
 use plexdb::mdblist::{Kind, MdbContents, MdbEntry, MdbError, MdbList, MdbSource};
 use plexdb::migrate::migrate;
+use plexdb::staleness::Now;
 use rusqlite::Connection;
 
 const DARK_KNIGHT: &str = "imdb:tt0468569";
@@ -335,7 +335,7 @@ fn a_fresh_list_is_not_fetched_again_unless_a_refetch_was_decided_after_it() {
 #[test]
 fn a_list_stored_without_entries_is_fetched_once_more() {
     let (_dir, mut conn) = library();
-    let now = iso_seconds(now_micros());
+    let now = Now::read().iso();
     conn.execute(
         "INSERT INTO collection (collection_id, source, name, url, size, likes, observed_at) \
          VALUES ('mdblist:14', 'mdblist', 'Top Watched', ?, 48, 961, ?)",
@@ -808,7 +808,7 @@ fn a_stored_letterboxd_list_is_refreshed_without_a_decision_and_keeps_its_proven
     conn.execute(
         "INSERT INTO collection (collection_id, source, name, url, observed_at, provenance) \
          VALUES ('letterboxd:ann/best', 'letterboxd', 'Old', ?, ?, 'added')",
-        (LB_URL, iso_seconds(micros_of(2020, 1, 1, 0, 0, 0))),
+        (LB_URL, "2020-01-01T00:00:00+00:00"),
     )
     .expect("a stored list");
     let mut source = FakeLb {

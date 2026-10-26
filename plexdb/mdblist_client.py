@@ -5,7 +5,7 @@ The crowd-list harvests that read lists through this client now run in Rust
 (`crates/plexdb/src/mdblist.rs`); the ratings sweep still uses it, and the list methods
 below go with it when the ratings sweep moves (plex-db-ex-f58.6). A recorded-response
 test can substitute a fake returning the same shapes without a socket — same split as
-`plex_client.py`/`PlexSource` and `tmdb_client.py`/`TMDbSource`.
+`plex_client.py`/`PlexSource`.
 
 Verified against the live endpoints (2026-08-11):
 

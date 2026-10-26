@@ -159,9 +159,9 @@ def run_sweep(
             # A best-effort step must not be able to end the sweep, and making
             # that true only for the exception types listed above means it
             # depends on every client's error discipline staying in sync with
-            # one tuple in this file. It already does not: `tmdb_client.py`
-            # calls `resp.json()` outside its own `try`, so a 200 carrying a
-            # proxy error page raises `JSONDecodeError` — none of the three
+            # one tuple in this file. A client that
+            # calls `resp.json()` outside its own `try` lets a 200 carrying a
+            # proxy error page raise `JSONDecodeError` — none of the three
             # types above — and would kill a 3am run before `publish`.
             #
             # The type name goes in the message because this arm also catches

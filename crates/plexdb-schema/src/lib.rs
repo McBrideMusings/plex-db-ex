@@ -44,10 +44,17 @@ pub enum SchemaError {
     Sqlite(#[from] rusqlite::Error),
 }
 
+/// The row count a step expects a guarded table to hold once it lands, for a table
+/// it intentionally shrinks. `plexdb migrate` accepts a drop in a guarded table only
+/// down to exactly this number, so a step that also lost an unrelated row lands on
+/// another number and is rolled back. Empty for a step that never shrinks one on
+/// purpose, which is every step but versions 10 and 17.
+pub type Shrinks = Vec<(&'static str, i64)>;
+
 /// One step of the chain.
 pub enum Migration {
     Sql(&'static str),
-    Step(fn(&Transaction) -> Result<(), SchemaError>),
+    Step(fn(&Transaction) -> Result<Shrinks, SchemaError>),
 }
 
 use Migration::{Sql, Step};
@@ -112,7 +119,7 @@ pub fn current_version(conn: &Connection) -> Result<i64, SchemaError> {
 /// Bring a store up to [`SCHEMA_VERSION`], returning the version it started at
 /// and the one it ended at. Applying a current store is a no-op, which is what
 /// makes `plexdb migrate` safe to run on every startup.
-pub fn apply(conn: &mut Connection) -> Result<(i64, i64), SchemaError> {
+pub fn apply(conn: &mut Connection) -> Result<(i64, i64, Shrinks), SchemaError> {
     apply_chain(conn, MIGRATIONS)
 }
 
@@ -123,12 +130,16 @@ pub fn apply(conn: &mut Connection) -> Result<(i64, i64), SchemaError> {
 /// Each step runs in one transaction with its version row, so a process killed
 /// mid-migration leaves the store at the last step that fully landed rather than
 /// half-built.
-pub fn apply_chain(conn: &mut Connection, chain: &[Migration]) -> Result<(i64, i64), SchemaError> {
+pub fn apply_chain(
+    conn: &mut Connection,
+    chain: &[Migration],
+) -> Result<(i64, i64, Shrinks), SchemaError> {
     let target = chain.len() as i64;
     let start = preflight(conn, chain)?;
     if start == target {
-        return Ok((start, start));
+        return Ok((start, start, Vec::new()));
     }
+    let mut declared = Shrinks::new();
     for (index, migration) in chain.iter().enumerate().skip(start as usize) {
         let tx = conn.transaction()?;
         // Inside the step's transaction, so a first step that fails leaves an
@@ -137,7 +148,14 @@ pub fn apply_chain(conn: &mut Connection, chain: &[Migration]) -> Result<(i64, i
         tx.execute_batch("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")?;
         match migration {
             Sql(sql) => tx.execute_batch(sql)?,
-            Step(step) => step(&tx)?,
+            Step(step) => {
+                // The last step to declare a table's count wins: a later step
+                // that merges more rows lands on its own number, not the first's.
+                for (table, rows) in step(&tx)? {
+                    declared.retain(|(held, _)| *held != table);
+                    declared.push((table, rows));
+                }
+            }
         }
         tx.execute("DELETE FROM schema_version", [])?;
         tx.execute(
@@ -146,17 +164,15 @@ pub fn apply_chain(conn: &mut Connection, chain: &[Migration]) -> Result<(i64, i
         )?;
         tx.commit()?;
     }
-    Ok((start, target))
+    Ok((start, target, declared))
 }
 
 /// The version the store is at, or why `chain` will not be applied to it, decided
 /// by reading alone. [`apply_chain`] runs this first; `plexdb migrate` runs it
 /// before it copies the store, so a store the chain refuses costs no copy.
 ///
-/// Refused: a store newer than the chain, a damaged one (see [`current_version`]),
-/// and a store below v17 holding keyword rows when the chain crosses version 10 or
-/// 17 — those steps re-normalize every keyword, and the keyword normalizer has not
-/// moved to Rust yet (`keyword_steps`).
+/// Refused: a store newer than the chain, and a damaged one (see
+/// [`current_version`]).
 pub fn preflight(conn: &Connection, chain: &[Migration]) -> Result<i64, SchemaError> {
     let target = chain.len() as i64;
     let start = current_version(conn)?;
@@ -165,26 +181,6 @@ pub fn preflight(conn: &Connection, chain: &[Migration]) -> Result<i64, SchemaEr
             "store is at schema version {start}, but this build only understands {target} — \
              upgrade plex-db-ex rather than writing with an older one"
         )));
-    }
-    // An empty store (version 0) has no keyword rows, nor yet a table to hold any.
-    let renormalizes = if start == 0 {
-        None
-    } else if start < 10 && target >= 10 {
-        Some(10)
-    } else if start < 17 && target >= 17 {
-        Some(17)
-    } else {
-        None
-    };
-    if let Some(version) = renormalizes {
-        let rows = keyword_steps::keyword_rows(conn)?;
-        if rows > 0 {
-            return Err(SchemaError::Refused(format!(
-                "migration {version} re-normalizes this store's {rows} keyword rows, and keyword \
-                 normalization has not moved to the Rust writer yet, so this build cannot migrate \
-                 a store below v17 that holds keywords"
-            )));
-        }
     }
     Ok(start)
 }

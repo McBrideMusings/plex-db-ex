@@ -15,7 +15,7 @@ from types import ModuleType
 import pytest
 
 from plexdb import sweep
-from plexdb.errors import ConfigError, PlexError, TMDbError
+from plexdb.errors import ConfigError, PlexError
 from plexdb.store import held_by
 from plexdb.sweep import PlannedStep, Status, Step, plan, run_locked_sweep, run_sweep
 
@@ -163,7 +163,7 @@ def test_a_best_effort_step_failing_is_reported_and_the_run_continues(
     def invoke(name: str) -> int:
         ran.append(name)
         if name == "enrich-tmdb-keywords":
-            raise TMDbError("TMDB returned 503")
+            raise PlexError("TMDB returned 503")
         return 0
 
     code = run_sweep(
@@ -220,9 +220,9 @@ def test_an_unexpected_exception_in_a_best_effort_step_does_not_end_the_sweep(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """The failure policy must not depend on every client's error discipline
-    staying in sync with one tuple of exception types. It already did not:
-    `tmdb_client.py` calls `resp.json()` outside its own `try`, so a 200
-    carrying a proxy error page raises `JSONDecodeError` — not a `PlexdbError`,
+    staying in sync with one tuple of exception types. A client that calls
+    `resp.json()` outside its own `try` lets a 200 carrying a proxy error page
+    raise `JSONDecodeError` — not a `PlexdbError`,
     not an `OSError`, not a `sqlite3.Error` — and would have killed a 3am run
     before `publish`.
     """

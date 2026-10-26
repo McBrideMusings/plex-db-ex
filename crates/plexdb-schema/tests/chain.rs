@@ -6,7 +6,7 @@
 use std::collections::BTreeSet;
 
 use plexdb_schema::{
-    MIGRATIONS, Migration, READER_SHAPE, SCHEMA_VERSION, SchemaError, apply, apply_chain,
+    MIGRATIONS, Migration, READER_SHAPE, SCHEMA_VERSION, SchemaError, Shrinks, apply, apply_chain,
     current_version,
 };
 use rusqlite::Connection;
@@ -57,6 +57,12 @@ fn text(conn: &Connection, sql: &str) -> Vec<Vec<Option<String>>> {
     rows(conn, sql)
 }
 
+/// Where a run started and ended, whatever shrinks its steps declared.
+fn landed(result: Result<(i64, i64, Shrinks), SchemaError>) -> (i64, i64) {
+    let (was, now, _) = result.expect("apply");
+    (was, now)
+}
+
 fn s(value: &str) -> Option<String> {
     Some(value.to_string())
 }
@@ -65,7 +71,7 @@ fn s(value: &str) -> Option<String> {
 fn an_empty_store_reaches_every_table_the_schema_holds_and_nothing_else() {
     let mut conn = open();
 
-    assert_eq!(apply(&mut conn).expect("apply"), (0, SCHEMA_VERSION));
+    assert_eq!(landed(apply(&mut conn)), (0, SCHEMA_VERSION));
 
     let want: BTreeSet<String> = [
         "items",
@@ -157,10 +163,7 @@ fn applying_a_current_store_changes_nothing() {
     apply(&mut conn).expect("apply");
     let changes = conn.total_changes();
 
-    assert_eq!(
-        apply(&mut conn).expect("apply again"),
-        (SCHEMA_VERSION, SCHEMA_VERSION)
-    );
+    assert_eq!(landed(apply(&mut conn)), (SCHEMA_VERSION, SCHEMA_VERSION));
     assert_eq!(conn.total_changes(), changes);
 }
 
@@ -189,7 +192,7 @@ fn a_store_missing_its_version_row_is_damaged_not_empty() {
     assert!(err.to_string().contains("damaged"), "{err}");
 }
 
-fn broken(_: &rusqlite::Transaction) -> Result<(), SchemaError> {
+fn broken(_: &rusqlite::Transaction) -> Result<Shrinks, SchemaError> {
     Err(SchemaError::Refused("this step always fails".into()))
 }
 
@@ -237,7 +240,7 @@ fn v5_takes_an_existing_ids_kind_from_its_items_type() {
     )
     .expect("seed");
 
-    assert_eq!(apply(&mut conn).expect("apply"), (4, SCHEMA_VERSION));
+    assert_eq!(landed(apply(&mut conn)), (4, SCHEMA_VERSION));
 
     assert_eq!(
         text(
@@ -382,39 +385,6 @@ fn v10_gives_each_fact_and_cursor_its_source() {
 }
 
 #[test]
-fn a_store_below_v17_holding_keywords_is_refused_and_left_where_it_was() {
-    for (version, seed) in [
-        (
-            9,
-            "INSERT INTO enrichment (item_id, namespace, key, value, fetched_at)
-                 VALUES ('imdb:tt1', 'tmdb_keywords', 'keyword', 'heist', '2026-01-01T00:00:00Z');",
-        ),
-        (
-            16,
-            "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at)
-                 VALUES ('imdb:tt1', 'keywords', 'tmdb', 'keyword', 'heist', '2026-01-01T00:00:00Z');",
-        ),
-    ] {
-        let mut conn = store_at(version);
-        conn.execute(
-            "INSERT INTO items (item_id, type, title) VALUES ('imdb:tt1', 'movie', 'Heat')",
-            [],
-        )
-        .expect("item");
-        conn.execute_batch(seed).expect("seed");
-
-        let err = apply(&mut conn).expect_err("keywords need the normalizer");
-
-        assert!(err.to_string().contains("keyword normalization"), "{err}");
-        assert_eq!(current_version(&conn).expect("version"), version as i64);
-        assert_eq!(
-            text(&conn, "SELECT value FROM enrichment"),
-            vec![vec![s("heist")]]
-        );
-    }
-}
-
-#[test]
 fn v13_carries_every_keyword_pair_over_and_accepts_a_refused_pair() {
     let mut conn = store_at(12);
     conn.execute(
@@ -512,5 +482,143 @@ fn v21_keeps_every_stored_list_and_marks_it_as_a_feed_list() {
             "SELECT collection_id, provenance, CAST(seed_count AS TEXT) FROM collection"
         ),
         vec![vec![s("mdblist:1"), s("feed"), None]]
+    );
+}
+
+const AT: &str = "2026-10-01T00:00:00Z";
+
+#[test]
+fn v10_moves_tmdb_keywords_to_one_namespace_merging_spellings_that_collide() {
+    // ADR-0016. Two spellings of one idea on one title collapse to one row that keeps
+    // the newer `fetched_at`; the raw spellings are recorded; the step declares the
+    // exact row count it landed at.
+    let mut conn = store_at(9);
+    conn.execute_batch(
+        "INSERT INTO items (item_id, type, title) VALUES ('imdb:tt1', 'movie', 'Heat');
+         INSERT INTO items (item_id, type, title) VALUES ('imdb:tt2', 'movie', 'Ronin');
+         INSERT INTO enrichment (item_id, namespace, key, value, fetched_at) VALUES
+             ('imdb:tt1', 'tmdb_keywords', 'keyword', 'Heists', '2026-01-01T00:00:00+00:00'),
+             ('imdb:tt1', 'tmdb_keywords', 'keyword', 'heist', '2026-01-02T00:00:00+00:00'),
+             ('imdb:tt1', 'tmdb_keywords', 'keyword', 'bank-heist', '2026-01-03T00:00:00+00:00'),
+             ('imdb:tt2', 'mdblist', 'list', 'top250', '2024-01-01T00:00:00+00:00');",
+    )
+    .expect("seed");
+
+    let (_, _, declared) = apply_chain(&mut conn, &MIGRATIONS[..10]).expect("apply v10");
+
+    assert_eq!(declared, vec![("enrichment", 3)]);
+    assert_eq!(
+        text(
+            &conn,
+            "SELECT item_id, namespace, source, key, value, fetched_at FROM enrichment \
+             ORDER BY item_id, value"
+        ),
+        vec![
+            vec![
+                s("imdb:tt1"),
+                s("keywords"),
+                s("tmdb"),
+                s("keyword"),
+                s("bank heist"),
+                s("2026-01-03T00:00:00+00:00")
+            ],
+            // The two colliding rows merged into one, keeping the newer fetched_at.
+            vec![
+                s("imdb:tt1"),
+                s("keywords"),
+                s("tmdb"),
+                s("keyword"),
+                s("heist"),
+                s("2026-01-02T00:00:00+00:00")
+            ],
+            // No known writer other than tmdb_keywords existed, so the namespace names its own source.
+            vec![
+                s("imdb:tt2"),
+                s("mdblist"),
+                s("mdblist"),
+                s("list"),
+                s("top250"),
+                s("2024-01-01T00:00:00+00:00")
+            ],
+        ]
+    );
+    assert_eq!(
+        text(
+            &conn,
+            "SELECT surface, keyword FROM keyword_forms ORDER BY surface"
+        ),
+        vec![
+            vec![s("Heists"), s("heist")],
+            vec![s("bank-heist"), s("bank heist")],
+            vec![s("heist"), s("heist")],
+        ]
+    );
+}
+
+#[test]
+fn v17_renames_a_stem_with_one_new_form_and_refetches_one_that_splits() {
+    // `christma` has one spelling, so it becomes `christmas` and its pair moves with
+    // it; `anim` was both Animals and Anime, so its row stays and its title is
+    // fetched again. Nothing else is lost.
+    let mut conn = store_at(16);
+    conn.execute_batch(&format!(
+        "INSERT INTO items (item_id, type, title) VALUES ('imdb:tt1', 'movie', 'Elf');
+         INSERT INTO items (item_id, type, title) VALUES ('imdb:tt2', 'movie', 'Akira');
+         INSERT INTO keyword_forms (surface, keyword) VALUES
+             ('Christmas', 'christma'), ('Christmas film', 'christma film'),
+             ('Animals', 'anim'), ('Anime', 'anim');
+         INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) VALUES
+             ('imdb:tt1', 'keywords', 'tmdb', 'keyword', 'christma', '{AT}'),
+             ('imdb:tt1', 'keywords', 'wikidata', 'keyword', 'christma film', '{AT}'),
+             ('imdb:tt2', 'keywords', 'tmdb', 'keyword', 'anim', '{AT}');
+         INSERT INTO enrichment_cursor (item_id, namespace, source, key, fetched_at) VALUES
+             ('imdb:tt1', 'keywords', 'tmdb', 'fetched', '{AT}'),
+             ('imdb:tt2', 'keywords', 'tmdb', 'fetched', '{AT}');
+         INSERT INTO keyword_pairs (keyword_a, keyword_b, jev_score, jev_model, judged_at)
+             VALUES ('christma', 'christma film', 0.09, 'jev-1', '{AT}');"
+    ))
+    .expect("seed");
+
+    let (_, _, declared) = apply(&mut conn).expect("apply");
+
+    assert_eq!(declared.last(), Some(&("enrichment", 3)));
+    assert_eq!(
+        text(&conn, "SELECT item_id, value FROM enrichment ORDER BY 1, 2"),
+        vec![
+            vec![s("imdb:tt1"), s("christmas")],
+            vec![s("imdb:tt1"), s("christmas film")],
+            vec![s("imdb:tt2"), s("anim")],
+        ]
+    );
+    assert_eq!(
+        text(&conn, "SELECT item_id FROM enrichment_cursor"),
+        vec![vec![s("imdb:tt1")]]
+    );
+    assert_eq!(
+        text(&conn, "SELECT keyword_a, keyword_b FROM keyword_pairs"),
+        vec![vec![s("christmas"), s("christmas film")]]
+    );
+    assert_eq!(
+        text(
+            &conn,
+            "SELECT surface, keyword FROM keyword_forms ORDER BY surface"
+        ),
+        vec![
+            vec![s("Animals"), s("animal")],
+            vec![s("Anime"), s("anime")],
+            vec![s("Christmas"), s("christmas")],
+            vec![s("Christmas film"), s("christmas film")],
+        ]
+    );
+    assert_eq!(
+        text(
+            &conn,
+            "SELECT item_id, surface FROM keyword_surfaces ORDER BY 1, 2"
+        ),
+        vec![
+            vec![s("imdb:tt1"), s("Christmas")],
+            vec![s("imdb:tt1"), s("Christmas film")],
+            vec![s("imdb:tt2"), s("anim")],
+        ]
     );
 }

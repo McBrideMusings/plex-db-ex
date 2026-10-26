@@ -38,7 +38,12 @@ fn main() -> ExitCode {
                 eprintln!("error: no command {name:?}\n{}", usage());
                 return ExitCode::from(2);
             };
-            match run(rest) {
+            match run(rest
+                .iter()
+                .map(|arg| arg.to_string())
+                .collect::<Vec<_>>()
+                .as_slice())
+            {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(Failure::Usage(message)) => {
                     eprintln!("error: {message}");

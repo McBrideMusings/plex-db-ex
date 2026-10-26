@@ -16,7 +16,6 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use rusqlite::Connection;
 
-use crate::clock;
 use crate::collections::{
     ADDED, GateInput, HarvestError, HarvestStats, LETTERBOXD_SOURCE, ListEntry, Snapshot,
     apply_removals, attempts as load_attempts, decision_map, decisions_for, gate, place_entries,
@@ -24,6 +23,7 @@ use crate::collections::{
 };
 use crate::letterboxd::{FilmIds, LbError, LbSource};
 use crate::list_decisions::{canonical_list_url, letterboxd_list_parts};
+use crate::staleness::Now;
 
 /// The most entries one list may hold and still be harvested: each costs a film page
 /// request, so a list past this is refused whole.
@@ -43,7 +43,7 @@ pub fn refresh_letterboxd_lists(
     source: &mut dyn LbSource,
     stale_days: i64,
 ) -> Result<HarvestStats, HarvestError> {
-    let cutoff = clock::cutoff(stale_days);
+    let cutoff = Now::read().cutoff(stale_days);
     let mut stats = HarvestStats::default();
 
     let decisions = decisions_for(conn, LETTERBOXD_SOURCE)?;
@@ -175,7 +175,7 @@ pub fn refresh_letterboxd_lists(
             Ok(found) => found,
             Err(err) => {
                 println!("letterboxd: {key} -> failed: {err}");
-                record_failure(conn, key, held.as_ref(), &clock::now_iso(), &err.0)?;
+                record_failure(conn, key, held.as_ref(), &Now::read().iso(), &err.0)?;
                 stats.lists_failed += 1;
                 failures_in_a_row += 1;
                 continue;
@@ -204,7 +204,7 @@ pub fn refresh_letterboxd_lists(
                 likes: None,
                 provenance,
                 list_key: key,
-                fetched_iso: &clock::now_iso(),
+                fetched_iso: &Now::read().iso(),
                 stored: &stored,
                 memberships: &memberships,
                 seed_count: None,

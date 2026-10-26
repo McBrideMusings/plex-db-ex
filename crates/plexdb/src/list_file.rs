@@ -13,9 +13,9 @@ use std::path::{Path, PathBuf};
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::{Map, Value};
 
-use crate::clock;
 use crate::decisions::{self, DecisionsFileError};
 use crate::list_decisions::{SPEC, canonical_list_url};
+use crate::staleness::Now;
 
 pub const URL_MAX: usize = 300;
 pub const MAX_ENTRIES: usize = 50_000;
@@ -91,7 +91,7 @@ impl ListFile {
         let mut entry = Map::new();
         entry.insert("url".into(), url.into());
         entry.insert("decision".into(), decision.into());
-        entry.insert("decided_at".into(), clock::now_iso().into());
+        entry.insert("decided_at".into(), Now::read().iso().into());
         let mut kept: Vec<Value> = self
             .load_raw()?
             .unwrap_or_default()
