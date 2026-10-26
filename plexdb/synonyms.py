@@ -54,19 +54,14 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 
-from .config import Config
-from .decisions import FoldStats, decisions_dir
 from .embed_client import MODEL, Embedder
 from .errors import JevRejected
 from .jev_client import Judge, Verdict, judge_all
 from .keywords import readable_surfaces
-from .merge_review import MERGE_DECISIONS_FILE, MergeDecisions, is_stored
 
 __all__ = [
     "JudgeStats",
     "find_synonym_pairs",
-    "fold_merge_decisions",
-    "merge_decisions_path",
 ]
 
 #: How many nearest neighbours each keyword proposes.
@@ -108,68 +103,6 @@ class JudgeStats:
     #: Pairs Jev refused with a 400 or 422, stored with `jev_error` and no score.
     pairs_unjudgeable: int = 0
     batches_committed: int = 0
-
-
-def merge_decisions_path(config: Config) -> Path:
-    """`merge_decisions.json`, beside Plex DB-EX's saved-queries file."""
-    return decisions_dir(config) / MERGE_DECISIONS_FILE
-
-
-def fold_merge_decisions(conn: sqlite3.Connection, path: Path) -> FoldStats:
-    """Apply `path` to `keyword_pairs.decision`; a missing file is no decisions.
-
-    The file is a list of `{surface_a, surface_b, decision, decided_at}`, where
-    `decision` is `accepted`, `rejected` or `cleared`. Each entry names the pair
-    its two spellings normalize to now (`MergeDecisions.resolve`), so a decision
-    survives a migration that renames stored values. Entries apply in list
-    order, so the last entry for a pair wins. `cleared` sets `decision` and
-    `decided_at` back to NULL, and deletes a row no judge wrote. A decision on a
-    pair with no row, whose two keywords are both stored, inserts a row with only
-    the decision (schema v18, ADR-0020); one naming a keyword no title carries,
-    or two spellings that now normalize to one value, is unmatched. The whole
-    file is validated before the first row changes, and applied in one
-    transaction. It is applied every run, so the file stays the record of the
-    latest decision per pair.
-    """
-    stats = FoldStats()
-    entries = MergeDecisions.load(path)
-    if entries is None:
-        return stats
-    stats.file_found = True
-    stats.entries = len(entries)
-    with conn:
-        for pair, entry in MergeDecisions.resolved(entries):
-            if pair is None:
-                stats.unmatched += 1
-                continue
-            if entry["decision"] == "cleared":
-                changed = conn.execute(
-                    "DELETE FROM keyword_pairs WHERE keyword_a = ? AND keyword_b = ? "
-                    "AND judged_at IS NULL",
-                    pair,
-                ).rowcount
-                changed += conn.execute(
-                    "UPDATE keyword_pairs SET decision = NULL, decided_at = NULL "
-                    "WHERE keyword_a = ? AND keyword_b = ?",
-                    pair,
-                ).rowcount
-            else:
-                changed = conn.execute(
-                    "UPDATE keyword_pairs SET decision = ?, decided_at = ? "
-                    "WHERE keyword_a = ? AND keyword_b = ?",
-                    (entry["decision"], entry["decided_at"], *pair),
-                ).rowcount
-                if not changed and all(is_stored(conn, keyword) for keyword in pair):
-                    changed = conn.execute(
-                        "INSERT INTO keyword_pairs (keyword_a, keyword_b, decision, decided_at) "
-                        "VALUES (?, ?, ?, ?)",
-                        (*pair, entry["decision"], entry["decided_at"]),
-                    ).rowcount
-            if changed:
-                stats.matched += 1
-            else:
-                stats.unmatched += 1
-    return stats
 
 
 def find_synonym_pairs(

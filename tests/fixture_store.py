@@ -10,11 +10,13 @@ creates. `admin test` builds the binary and names it in `PLEXDB_RS_BIN`
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
-__all__ = ["init"]
+__all__ = ["FoldRefused", "Folded", "fold", "init"]
 
 
 def _binary() -> str:
@@ -38,3 +40,45 @@ def init(path: Path) -> None:
     )
     if done.returncode != 0:
         raise RuntimeError(f"plexdb-rs migrate failed for {path}: {done.stderr.strip()}")
+
+
+@dataclass(frozen=True)
+class Folded:
+    """What a `fold-*-decisions` step reported: the numbers in its one-line report."""
+
+    file_found: bool
+    entries: int
+    matched: int
+    unmatched: int
+
+
+class FoldRefused(RuntimeError):
+    """The step exited non-zero; the message is its `error:` line."""
+
+
+def fold(step: str, store: Path, path: Path) -> Folded:
+    """Run the Rust `fold-*-decisions` step `step` on `store`, reading the decisions
+    file `path`, as the sweep would. The fold is Rust-only, so a test that needs its
+    effect runs the binary instead of a copy of it."""
+    env = dict(
+        os.environ,
+        PLEXDB_PATH=str(store),
+        PLEXDB_EXPLORE_SAVED_PATH=str(path.parent / "explore-queries.json"),
+    )
+    env.pop("PLEXDB_HELD_STORE", None)
+    done = subprocess.run([_binary(), step], env=env, capture_output=True, text=True, check=False)
+    if done.returncode != 0:
+        raise FoldRefused(done.stderr.strip().removeprefix("error: "))
+    out = done.stdout
+    if ": no file at " in out:
+        return Folded(False, 0, 0, 0)
+    entries, matched, unmatched = _numbers(out)
+    return Folded(True, entries, matched, unmatched)
+
+
+def _numbers(report: str) -> tuple[int, int, int]:
+    """`<what>: N entr(ies) in <path>, M <matched>, K <unmatched>` -> (N, M, K)."""
+    head, _, rest = report.partition(" in ")
+    entries = int(re.search(r"([\d,]+) entr", head).group(1).replace(",", ""))  # type: ignore[union-attr]
+    counts = re.findall(r", ([\d,]+) ", rest)
+    return entries, int(counts[0].replace(",", "")), int(counts[1].replace(",", ""))

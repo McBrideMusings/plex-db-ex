@@ -37,11 +37,12 @@ fn main() -> ExitCode {
                 eprintln!("error: no command {name:?}\n{}", usage());
                 return ExitCode::from(2);
             };
-            if !rest.is_empty() {
-                eprintln!("error: {name} takes no arguments, got {}", rest.join(" "));
-                return ExitCode::from(2);
-            }
-            match run() {
+            match run(rest
+                .iter()
+                .map(|arg| arg.to_string())
+                .collect::<Vec<_>>()
+                .as_slice())
+            {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(Failure::Config(message)) => {
                     eprintln!("error: {message}");
@@ -50,6 +51,10 @@ fn main() -> ExitCode {
                 Err(Failure::Failed(message)) => {
                     eprintln!("error: {message}");
                     ExitCode::FAILURE
+                }
+                Err(Failure::Usage(message)) => {
+                    eprintln!("error: {message}");
+                    ExitCode::from(2)
                 }
             }
         }

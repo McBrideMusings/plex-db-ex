@@ -62,7 +62,8 @@ SOURCE = GatedSource(
     limit_unit="request",
     credential="MDBLIST_API_KEY",
     credential_purpose="fetch MDBList ratings",
-    # Late-bound on purpose — see the note in enrich_tmdb_keywords.py.
+    # Late-bound on purpose: it resolves `LiveMDBListClient` from this module's globals on
+    # every call, so a test can substitute a fixture-backed client with `monkeypatch.setattr`.
     make_client=lambda api_key: LiveMDBListClient(api_key),
     refresh=enrich_mdblist_ratings,
     wipe=_wipe,

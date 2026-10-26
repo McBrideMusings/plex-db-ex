@@ -7,11 +7,18 @@ takes two copies with SQLite's backup API, which is safe while a writer has the
 source open, and each implementation writes only its own copy.
 
     uv run python tools/parity.py <step> [--store data/plexdb.db] [--decisions-dir DIR]
+                                  [--fake tmdb]
 
 Both runs read the same decisions files, from `--decisions-dir` (default: the
 source store's directory), through `PLEXDB_EXPLORE_SAVED_PATH`. Each run gets the
 `.env` values the Python CLI would load, with `PLEXDB_PATH`, the snapshot and the
 backup directory pointed into its own scratch directory.
+
+A step that fetches runs against a fake server (`tools/parity_fakes.py`, `--fake`) so
+both sides see the same answers offline. Times a run wrote (`fetched_at` and the
+other `*_at` columns at or after the moment parity started) differ by seconds between
+two runs by nature, so both copies have them replaced by one marker before they are
+compared; a time written earlier is compared as it is.
 
 Prints one JSON object: `tables` and `rows` compared (rows counted on the Python
 copy), `differing` as `[{table, key}]`, where `key` is the row's primary key (the
@@ -22,16 +29,21 @@ only), and each side's exit code. Exits 1 when anything differs.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import sqlite3
 import subprocess
 import sys
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from dotenv import dotenv_values
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import parity_fakes  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -61,6 +73,20 @@ def _run(argv: list[str], env: dict[str, str], side: str) -> int:
     for line in (done.stdout + done.stderr).splitlines():
         print(f"[{side}] {line}", file=sys.stderr)
     return done.returncode
+
+
+RUN_TIME = "<written by this run>"
+
+
+def _mask_run_times(store: Path, started: str) -> None:
+    """Replace every `*_at` text value at or after `started` with one marker."""
+    with sqlite3.connect(store) as conn:
+        for table in _tables(conn, "main"):
+            t = _quote(table)
+            for _, column, kind, *_ in conn.execute(f"PRAGMA table_info({t})").fetchall():
+                if column.endswith("_at") and kind.upper() == "TEXT":
+                    c = _quote(column)
+                    conn.execute(f"UPDATE {t} SET {c} = ? WHERE {c} >= ?", (RUN_TIME, started))
 
 
 def _tables(conn: sqlite3.Connection, schema: str) -> dict[str, str]:
@@ -119,6 +145,11 @@ def main() -> int:
     parser.add_argument("step")
     parser.add_argument("--store", type=Path, default=REPO / "data" / "plexdb.db")
     parser.add_argument("--decisions-dir", type=Path)
+    parser.add_argument(
+        "--fake",
+        choices=["tmdb"],
+        help="answer the step's network calls from a local fake instead of the real service",
+    )
     args = parser.parse_args()
 
     rs_bin = os.environ.get("PLEXDB_RS_BIN", "").strip()
@@ -140,7 +171,11 @@ def main() -> int:
     base = {k: v for k, v in dotenv_values(REPO / ".env").items() if v is not None}
     base.update(os.environ)
     base.pop("PLEXDB_HELD_STORE", None)
-    with tempfile.TemporaryDirectory(prefix="plexdb-parity.") as scratch:
+    started = datetime.now(UTC).isoformat(timespec="seconds")
+    with contextlib.ExitStack() as stack:
+        scratch = stack.enter_context(tempfile.TemporaryDirectory(prefix="plexdb-parity."))
+        if args.fake == "tmdb":
+            base.update(stack.enter_context(parity_fakes.serve_tmdb(store)))
         sides = {"python": Path(scratch) / "python", "rust": Path(scratch) / "rust"}
         exits: dict[str, int] = {}
         for side, root in sides.items():
@@ -158,6 +193,7 @@ def main() -> int:
                 else [rs_bin, args.step]
             )
             exits[side] = _run(argv, env, side)
+            _mask_run_times(root / "plexdb.db", started)
         report = diff(sides["python"] / "plexdb.db", sides["rust"] / "plexdb.db")
     report = {"step": args.step, **report, "exit": exits}
     print(json.dumps(report, indent=2))

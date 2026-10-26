@@ -10,10 +10,11 @@
 
 use std::path::Path;
 
-use plexdb_store::{Config, StoreError, open_store, py_strip};
+use plexdb_store::py_strip;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
-use crate::decisions::{self, DecisionsFileError, FoldStats, Spec, thousands};
+pub use crate::decisions::FoldError;
+use crate::decisions::{self, FoldStats, Spec, thousands};
 use crate::pyurl::{unquote, urlparse};
 
 pub const NAME: &str = "fold-list-decisions";
@@ -22,10 +23,10 @@ pub const LIST_DECISIONS_FILE: &str = "list_decisions.json";
 const MDBLIST_HOSTS: &[&str] = &["mdblist.com", "www.mdblist.com"];
 const LETTERBOXD_HOSTS: &[&str] = &["letterboxd.com", "www.letterboxd.com"];
 
-fn key_problem(key: &[String]) -> Option<&'static str> {
+fn key_problem(key: &[String]) -> Option<String> {
     match key.first().and_then(|url| canonical_list_url(url)) {
         Some(_) => None,
-        None => Some("has a url that is not an MDBList or Letterboxd list"),
+        None => Some("has a url that is not an MDBList or Letterboxd list".into()),
     }
 }
 
@@ -35,6 +36,7 @@ pub const SPEC: Spec = Spec {
     decisions: &["added", "excluded", "refetch", "retry", "removed"],
     values: &[],
     key_problem,
+    values_problem: decisions::no_values_problem,
 };
 
 fn path_parts(raw: &str, hosts: &[&str]) -> Option<Vec<String>> {
@@ -97,16 +99,6 @@ pub fn canonical_list_url(raw: &str) -> Option<String> {
         .map(|(user, slug)| format!("https://letterboxd.com/{user}/list/{slug}"))
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum FoldError {
-    #[error(transparent)]
-    File(#[from] DecisionsFileError),
-    #[error(transparent)]
-    Store(#[from] StoreError),
-    #[error(transparent)]
-    Sqlite(#[from] rusqlite::Error),
-}
-
 /// Apply `path` to `list_decision`; a missing file is no decisions.
 ///
 /// Entries apply in order, so the last per canonical URL wins. `added` sets the
@@ -165,10 +157,5 @@ pub fn describe(stats: &FoldStats, path: &Path) -> String {
 
 /// `plexdb fold-list-decisions`.
 pub fn run() -> Result<(), FoldError> {
-    let config = Config::from_env()?;
-    let path = config.decisions_file(LIST_DECISIONS_FILE);
-    let mut store = open_store(&config.store_path)?;
-    let stats = fold(&mut store.conn, &path)?;
-    println!("{}", describe(&stats, &path));
-    Ok(())
+    decisions::run_fold(LIST_DECISIONS_FILE, fold, describe)
 }

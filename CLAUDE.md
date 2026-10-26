@@ -27,6 +27,8 @@ published, so changing it is a schema change: its specification is
 describing the store. Who else derives these ids, and how they keep up, is their business — this
 store keeps no register of its readers.
 
+**Keyword normalization is a published rule.** `normalize_keyword` exists in Rust (`crates/plexdb-keywords`) and in Python (`plexdb/keywords.py`, until the last Python keyword writer moves); `tests/fixtures/keyword_normalization.json` is its specification, and the code and that file move together (`tools/golden_keywords.py` regenerates it).
+
 **Enrichment is namespaced and opaque.** No first-class `mood` / `keywords` / `award` columns.
 A writer may wipe and rewrite only rows in its own namespace, and the store never interprets a
 value.
@@ -52,7 +54,7 @@ because `enrichment_cursor` carries a `fetched_at` per title. See
 ## Layout
 
 ```
-crates/            the Rust workspace: the schema (plexdb-schema), plexdb-reader, and the writer's steps as they move
+crates/            the Rust workspace: the schema (plexdb-schema), keyword normalization (plexdb-keywords), plexdb-reader, and the writer's steps as they move
 plexdb/            the Python package — runs the sweep steps not yet ported to Rust
 docs/              CONTEXT.md, adr/, PRD.md, ROADMAP.md
 data/              plexdb.db lives here (gitignored)

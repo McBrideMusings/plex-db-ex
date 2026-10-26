@@ -11,13 +11,11 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from fixture_store import init
+from fixture_store import fold, init
 
 from plexdb.cli import main
-from plexdb.errors import RoleDecisionsError
 from plexdb.explore import make_server
 from plexdb.role_review import RoleDecisions
-from plexdb.roles import fold_role_decisions
 from plexdb.store import open_store
 
 STATED = "2026-10-01T00:00:00+00:00"
@@ -198,8 +196,7 @@ def test_the_file_the_page_wrote_folds_into_the_table(base_url: str, store: Path
     _send("POST", url, {"keyword": "grief", "role": "theme", "decision": "cleared"})
     entries = json.loads((store.parent / "role_decisions.json").read_text())
 
-    with open_store(store) as conn:
-        stats = fold_role_decisions(conn, store.parent / "role_decisions.json")
+    stats = fold("fold-role-decisions", store, store.parent / "role_decisions.json")
 
     assert (stats.entries, stats.matched, stats.unmatched) == (3, 3, 0)
     decided_at = {key: e["decided_at"] for key, e in RoleDecisions.resolved(entries)}
@@ -215,67 +212,8 @@ def _entry(keyword: str, role: str, decision: str, at: str = STATED) -> dict[str
     return {"surface": keyword, "role": role, "decision": decision, "decided_at": at}
 
 
-def test_folding_applies_in_order_and_counts_unmatched(tmp_path: Path, store: Path) -> None:
-    path = tmp_path / "role_decisions.json"
-    path.write_text(
-        json.dumps(
-            [
-                _entry("bleak", "tone", "rejected"),
-                _entry("bleak", "tone", "accepted"),
-                _entry("tokyo", "tone", "accepted"),
-                _entry("tokyo", "tone", "cleared"),
-                _entry("odd", "tone", "accepted"),
-                _entry("nowhere", "era", "accepted"),
-            ]
-        )
-    )
-
-    with open_store(store) as conn:
-        stats = fold_role_decisions(conn, path)
-
-    assert (stats.entries, stats.matched, stats.unmatched) == (6, 4, 2)
-    assert _decisions(store) == {
-        ("bleak", "tone"): ("accepted", STATED),
-        ("grief", "theme"): ("rejected", STATED),
-    }
-
-
-@pytest.mark.parametrize(
-    "entries",
-    [
-        "{not json",
-        {"not": "a list"},
-        [_entry("bleak", "tone", "maybe")],
-        [_entry("bleak", "mood", "accepted")],
-        [_entry("", "tone", "accepted")],
-        [_entry("bleak", "tone", "accepted", at="yesterday")],
-        [{"surface": "bleak", "role": "tone", "decision": "accepted"}],
-    ],
-)
-def test_an_invalid_file_is_refused_whole_and_changes_nothing(
-    tmp_path: Path, store: Path, entries: object
-) -> None:
-    path = tmp_path / "role_decisions.json"
-    if isinstance(entries, list):
-        entries = [_entry("bleak", "tone", "accepted"), *entries]
-    path.write_text(entries if isinstance(entries, str) else json.dumps(entries))
-    before = _decisions(store)
-
-    with open_store(store) as conn, pytest.raises(RoleDecisionsError):
-        fold_role_decisions(conn, path)
-
-    assert _decisions(store) == before
-
-
-def test_a_missing_file_is_no_decisions(tmp_path: Path, store: Path) -> None:
-    with open_store(store) as conn:
-        stats = fold_role_decisions(conn, tmp_path / "role_decisions.json")
-    assert (stats.file_found, stats.entries) == (False, 0)
-    assert _decisions(store) == {("grief", "theme"): ("rejected", STATED)}
-
-
 def test_the_command_folds_the_file_beside_the_saved_queries_file(
-    store: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    store: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setenv("PLEXDB_PATH", str(store))
     monkeypatch.setenv("PLEXDB_SNAPSHOT_PATH", "")
@@ -286,7 +224,7 @@ def test_the_command_folds_the_file_beside_the_saved_queries_file(
 
     assert main(["fold-role-decisions"]) == 0
 
-    assert "1 matched a keyword role" in capsys.readouterr().out
+    assert "1 matched a keyword role" in capfd.readouterr().out
     assert _decisions(store)[("bleak", "tone")] == ("accepted", STATED)
 
 

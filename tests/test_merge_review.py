@@ -11,13 +11,12 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from fixture_store import init
+from fixture_store import fold, init
 
 from plexdb.explore import make_server
 from plexdb.keywords import FILM_SUFFIX_MODEL
 from plexdb.merge_review import MergeDecisions, merge_map
 from plexdb.store import open_store
-from plexdb.synonyms import fold_merge_decisions
 
 JUDGED = "2026-09-30T00:00:00+00:00"
 
@@ -144,8 +143,8 @@ def test_the_file_the_page_wrote_folds_into_the_table(base_url: str, store: Path
     _send("POST", url, {"keyword_a": "bank", "keyword_b": "vault", "decision": "accepted"})
     _send("POST", url, {"keyword_a": "ghost", "keyword_b": "spirit", "decision": "cleared"})
 
+    stats = fold("fold-merge-decisions", store, store.parent / "merge_decisions.json")
     with open_store(store) as conn:
-        stats = fold_merge_decisions(conn, store.parent / "merge_decisions.json")
         rows = dict(
             ((a, b), d)
             for a, b, d in conn.execute("SELECT keyword_a, keyword_b, decision FROM keyword_pairs")
@@ -226,8 +225,8 @@ def test_a_merge_of_two_stored_keywords_no_judge_saw_lists_folds_and_clears(
     assert body["pair"]["score"] is None and body["pair"]["pending"] is True  # type: ignore[index]
     assert "tae kwon do/taekwondo" in _names(_send("GET", url)[1]["decided"])
     file = store.parent / "merge_decisions.json"
+    assert fold("fold-merge-decisions", store, file).matched == 1
     with open_store(store) as conn:
-        assert fold_merge_decisions(conn, file).matched == 1
         row = conn.execute(
             "SELECT judged_at, jev_score, decision FROM keyword_pairs WHERE keyword_b = 'taekwondo'"
         ).fetchone()
@@ -238,8 +237,8 @@ def test_a_merge_of_two_stored_keywords_no_judge_saw_lists_folds_and_clears(
             conn.execute("INSERT INTO keyword_pairs (keyword_a, keyword_b) VALUES ('p', 'q')")
 
     _send("POST", url, {**pair, "decision": "cleared"})
+    assert fold("fold-merge-decisions", store, file).matched == 1
     with open_store(store) as conn:
-        assert fold_merge_decisions(conn, file).matched == 1
         gone = conn.execute("SELECT 1 FROM keyword_pairs WHERE keyword_b = 'taekwondo'").fetchone()
         assert gone is None
 

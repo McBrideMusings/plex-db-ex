@@ -829,11 +829,10 @@ shared function, merging any two `enrichment` rows a stemmer collision now unifi
 key) already meant one row per writer — so only `enrichment` can shrink. `plexdb check` fails if
 any `tmdb_keywords` row survives it.
 
-**The Rust writer runs this step only on a store holding no keyword rows.** Re-normalizing
-needs the keyword normalizer, which has not moved to Rust yet, so `plexdb migrate` refuses a
-store below v17 that holds keywords, names why, and leaves it at the version it found.
-Version 17 does the same. A store built from nothing passes through both while empty, and every
-store at v17 or later is past both.
+**The Rust writer runs this step with `plexdb-keywords`**, the one keyword normalizer it has.
+It declares the `enrichment` row count it lands at, and `plexdb migrate` accepts a drop in that
+table only down to exactly that number. Version 17 does the same. Migrating a copy of the v16 store
+and of the v8 store with each chain wrote zero rows differently.
 
 ## Version 11 — Plex DB-EX's stored tag network
 

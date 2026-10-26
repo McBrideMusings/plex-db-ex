@@ -3,7 +3,7 @@
 Every external source in this store caches the same way — write a timestamp
 next to what was fetched, and skip a re-fetch while that timestamp is inside a
 window. The rule does not vary by source, so it lives here rather than being
-restated per sweep: TMDB keywords and edges (`tmdb_common.py`) and crowd-list
+restated per sweep: the Gated Sources (`sources.py`) and crowd-list
 harvesting (`collections.py`) all read it from this one place.
 
 `config.py` holds no staleness setting at all, and this is the only copy of the

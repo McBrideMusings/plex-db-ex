@@ -1,8 +1,7 @@
 """Embedding short texts through llama-swap's OpenAI-compatible endpoint.
 
 `synonyms.py` depends on `Embedder`, not on `LlamaSwapEmbedder`, so a test can
-substitute a fake that returns vectors without a socket — the same split as
-`tmdb_client.py`.
+substitute a fake that returns vectors without a socket.
 """
 
 from __future__ import annotations

@@ -22,7 +22,6 @@ import os
 import threading
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import ClassVar
@@ -34,7 +33,6 @@ __all__ = [
     "EXPLORE_SAVED_PATH_VAR",
     "SAVED_FILE",
     "DecisionsFile",
-    "FoldStats",
     "decisions_dir",
 ]
 
@@ -64,17 +62,6 @@ def decisions_dir(config: Config) -> Path:
     if raw:
         return Path(raw).expanduser().parent
     return (config.snapshot_path or config.store_path).parent
-
-
-@dataclass
-class FoldStats:
-    file_found: bool = False
-    entries: int = 0
-    #: Entries naming something the store has a row for, whether or not its decision changed.
-    matched: int = 0
-    #: Entries naming something with no row. Not an error: the file may name a row a
-    #: restored older store never had.
-    unmatched: int = 0
 
 
 class DecisionsFile(ABC):

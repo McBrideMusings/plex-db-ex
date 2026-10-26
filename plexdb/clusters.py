@@ -96,7 +96,7 @@ deterministic across runs regardless of dict/set iteration order.
 
 **The unit of taste analysis is the show, not the episode (issue #25).**
 `tmdb_keywords` enrichment is only ever written for movies and shows
-(`enrich_tmdb_keywords.py`) — an episode's own `item_id` never carries it.
+(`enrich-tmdb-keywords`) — an episode's own `item_id` never carries it.
 90.5% of plays are episodes, so building a keyword profile from the played
 `item_id` directly reads coverage for under 10% of plays. Every episode
 carries `items.show_item_id`, so the profile is built from

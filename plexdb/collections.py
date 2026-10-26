@@ -4,8 +4,8 @@ MDBList is the first source; Letterboxd, Trakt, editorial articles and
 subreddit mentions land on top as further values in `collection.source`, never
 as a schema change (issues #35–#38).
 
-**Membership is a snapshot, not a fact** — the same discipline `tmdb_edges.py`
-applies to edges. On re-pull, a list's whole membership set is deleted and
+**Membership is a snapshot, not a fact** — the same discipline the TMDB edges
+(`crates/plexdb/src/tmdb_edges.rs`) apply. On re-pull, a list's whole membership set is deleted and
 rewritten inside one transaction, so a title the list dropped disappears rather
 than going stale. MDBList marks some of its lists `dynamic`, meaning the source
 regenerates them; appending to one of those would accumulate every title that
@@ -21,7 +21,7 @@ the four raw columns, which is why all four are stored.
 `plexdb walk` (ADR-0005). An entry naming a title nobody walked has no `item_id`
 to point at, so it is counted in `entries_not_in_library` and left out of
 membership, never stored under an invented id — the same rule and the same
-reasoning as `tmdb_edges.py`.
+reasoning as the TMDB edges.
 
 **Every entry is stored, owned or not, in `collection_entry`** (ADR-0027), under
 the strongest external id the source gave and with the source's own title and

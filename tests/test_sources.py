@@ -11,8 +11,6 @@ import pytest
 from plexdb.commands import enrich_anilist as enrich_anilist_cmd
 from plexdb.commands import enrich_letterboxd as enrich_letterboxd_cmd
 from plexdb.commands import enrich_mdblist_ratings as enrich_mdblist_ratings_cmd
-from plexdb.commands import enrich_tmdb_edges as enrich_tmdb_edges_cmd
-from plexdb.commands import enrich_tmdb_keywords as enrich_tmdb_keywords_cmd
 from plexdb.commands import enrich_wikidata as enrich_wikidata_cmd
 from plexdb.commands import harvest_letterboxd_lists as harvest_letterboxd_lists_cmd
 from plexdb.commands import harvest_mdblist as harvest_mdblist_cmd
@@ -23,8 +21,6 @@ from plexdb.staleness import DEFAULT_STALE_DAYS
 
 # Every Gated Source in the package, with the variable each one derives.
 SOURCES = [
-    (enrich_tmdb_keywords_cmd.SOURCE, "TMDB_KEYWORDS_STALE_DAYS"),
-    (enrich_tmdb_edges_cmd.SOURCE, "TMDB_EDGES_STALE_DAYS"),
     (harvest_mdblist_cmd.SOURCE, "MDBLIST_STALE_DAYS"),
     (harvest_letterboxd_lists_cmd.SOURCE, "LETTERBOXD_LISTS_STALE_DAYS"),
     (harvest_mdblist_search_cmd.SOURCE, "MDBLIST_SEARCH_STALE_DAYS"),
@@ -60,11 +56,11 @@ def test_the_windows_stay_independent(monkeypatch: pytest.MonkeyPatch) -> None:
     """Collapsing to one shared knob was the thing not to do: `config.py` said
     the separate knobs were deliberate so edges and keywords can be dialed
     apart. Deriving the name keeps that while removing the duplication."""
-    monkeypatch.setenv("TMDB_KEYWORDS_STALE_DAYS", "10")
-    monkeypatch.setenv("TMDB_EDGES_STALE_DAYS", "90")
+    monkeypatch.setenv("MDBLIST_STALE_DAYS", "10")
+    monkeypatch.setenv("LETTERBOXD_LISTS_STALE_DAYS", "90")
 
-    assert enrich_tmdb_keywords_cmd.SOURCE.resolve_stale_days(None) == 10
-    assert enrich_tmdb_edges_cmd.SOURCE.resolve_stale_days(None) == 90
+    assert harvest_mdblist_cmd.SOURCE.resolve_stale_days(None) == 10
+    assert harvest_letterboxd_lists_cmd.SOURCE.resolve_stale_days(None) == 90
 
 
 def test_the_flag_beats_the_variable(monkeypatch: pytest.MonkeyPatch) -> None:

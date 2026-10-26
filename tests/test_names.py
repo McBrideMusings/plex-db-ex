@@ -12,12 +12,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from fixture_store import init
+from fixture_store import fold, init
 
-from plexdb.errors import NameDecisionsError
 from plexdb.explore import make_server
 from plexdb.keywords import readable_surfaces
-from plexdb.names import NameDecisions, display_labels, fold_name_decisions, names_json
+from plexdb.names import NameDecisions, display_labels, names_json
 from plexdb.store import open_readonly, open_store
 
 AT = "2026-10-01T00:00:00+00:00"
@@ -105,47 +104,10 @@ def _entry(surface: str, name: str | None, at: str = AT) -> dict[str, str]:
 def _fold(store: Path, tmp_path: Path, entries: list[dict[str, str]]):  # type: ignore[no-untyped-def]
     path = tmp_path / "name_decisions.json"
     path.write_text(json.dumps(entries))
+    stats = fold("fold-name-decisions", store, path)
     with open_store(store) as conn:
-        stats = fold_name_decisions(conn, path)
         rows = conn.execute("SELECT keyword, name FROM keyword_names ORDER BY 1").fetchall()
     return stats, [tuple(r) for r in rows]
-
-
-def test_folding_writes_clears_and_counts_a_keyword_no_title_carries(
-    store: Path, tmp_path: Path
-) -> None:
-    stats, rows = _fold(
-        store,
-        tmp_path,
-        [
-            _entry("Heists", "Heist"),
-            _entry("Bank Robbery", "Robbery"),
-            _entry("Bank Robbery", None, LATER),
-            _entry("Age Gap", "May–December"),
-            _entry("zeppelins", "Airships"),
-        ],
-    )
-    assert rows == [("age gap", "May–December"), ("heist", "Heist")]
-    assert (stats.entries, stats.matched, stats.unmatched) == (5, 4, 1)
-
-
-@pytest.mark.parametrize(
-    ("bad", "message"),
-    [
-        ({"surface": "heist", "decision": "named", "decided_at": AT}, "entry 1 needs text name"),
-        (_entry("heist", "   "), "entry 1 has a blank name"),
-        (_entry("heist", "x" * 201), "entry 1 has a name over 200 characters"),
-    ],
-)
-def test_a_named_entry_without_a_usable_name_refuses_the_whole_file(
-    store: Path, tmp_path: Path, bad: dict[str, str], message: str
-) -> None:
-    path = tmp_path / "name_decisions.json"
-    path.write_text(json.dumps([_entry("Heists", "Heist"), bad]))
-    with open_store(store) as conn, pytest.raises(NameDecisionsError, match=message):
-        fold_name_decisions(conn, path)
-    with open_readonly(store) as conn:
-        assert conn.execute("SELECT COUNT(*) FROM keyword_names").fetchone()[0] == 0
 
 
 def test_a_label_is_the_name_else_the_readable_spelling_and_the_file_overrides_the_store(

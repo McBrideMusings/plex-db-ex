@@ -29,16 +29,12 @@ import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
 
-from .config import Config
-from .decisions import FoldStats, decisions_dir
 from .errors import JevRejected
 from .jev_client import RoleJudge, RoleVerdict, judge_all
 from .keywords import ROLES, readable_surfaces
-from .role_review import ROLE_DECISIONS_FILE, RoleDecisions, has_verdict
 
-__all__ = ["RoleStats", "fold_role_decisions", "judge_keyword_roles", "role_decisions_path"]
+__all__ = ["RoleStats", "judge_keyword_roles"]
 
 #: This judge's source name in `keyword_roles`.
 SOURCE = "jev"
@@ -141,48 +137,3 @@ def _write(
 def _judge_all(judge: RoleJudge, tags: list[str]) -> list[RoleVerdict | JevRejected]:
     """Every tag's verdict, in order; see `jev_client.judge_all`."""
     return judge_all(judge.judge_roles, tags, JUDGE_WORKERS)
-
-
-def role_decisions_path(config: Config) -> Path:
-    """`role_decisions.json`, beside Plex DB-EX's saved-queries file and `merge_decisions.json`."""
-    return decisions_dir(config) / ROLE_DECISIONS_FILE
-
-
-def fold_role_decisions(conn: sqlite3.Connection, path: Path) -> FoldStats:
-    """Apply `path` to `keyword_role_decisions`; a missing file is no decisions.
-
-    The file is a list of `{surface, role, decision, decided_at}`, where `decision`
-    is `accepted`, `rejected` or `cleared`. Each entry names the keyword its spelling
-    normalizes to now (`RoleDecisions.resolve`), so a decision survives a migration
-    that renames stored values. Entries apply in list order, so the last
-    entry for a (keyword, role) wins. `accepted` and `rejected` set the row's
-    `decision` and `decided_at`; `cleared` deletes the row, so both read NULL. An
-    entry naming a (keyword, role) with no verdict in `keyword_roles` is counted and
-    ignored. The whole file is validated before the first row changes, and applied
-    in one transaction. It is applied every run, so the file stays the record of the
-    latest decision per (keyword, role).
-    """
-    stats = FoldStats()
-    entries = RoleDecisions.load(path)
-    if entries is None:
-        return stats
-    stats.file_found = True
-    stats.entries = len(entries)
-    with conn:
-        for key, entry in RoleDecisions.resolved(entries):
-            if key is None or not has_verdict(conn, *key):
-                stats.unmatched += 1
-                continue
-            stats.matched += 1
-            if entry["decision"] == "cleared":
-                conn.execute(
-                    "DELETE FROM keyword_role_decisions WHERE keyword = ? AND role = ?", key
-                )
-            else:
-                conn.execute(
-                    "INSERT INTO keyword_role_decisions (keyword, role, decision, decided_at) "
-                    "VALUES (?, ?, ?, ?) ON CONFLICT (keyword, role) DO UPDATE SET "
-                    "decision = excluded.decision, decided_at = excluded.decided_at",
-                    (*key, entry["decision"], entry["decided_at"]),
-                )
-    return stats

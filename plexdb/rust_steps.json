@@ -5,6 +5,11 @@
     "plan without running anything (plexdb/rust.py), so a missing or broken plexdb-rs fails only",
     "its own steps, each under its policy. plexdb-rs runs every name here",
     "(crates/plexdb/src/steps.rs); its test checks that it has one for each.",
+    "fold-merge-decisions, fold-role-decisions, fold-name-decisions: right after migrate and in that",
+    "order, for the same reason as fold-list-decisions; best-effort for the same reason.",
+    "enrich-tmdb-keywords (50), enrich-tmdb-language (51), enrich-tmdb-edges (55): the TMDB sweeps, in",
+    "the places they had; best-effort because TMDB is an optional source (ADR-0004) and staleness",
+    "gating means a skipped pass costs nothing but freshness.",
     "migrate: first, because every later step writes the schema it leaves; required, because a",
     "sweep against a store this build cannot open has nothing to walk into.",
     "fold-list-decisions: right after fold-name-decisions, because a sweep starts by applying what",
@@ -13,6 +18,12 @@
   ],
   "steps": [
     {"name": "migrate", "order": 10, "policy": "required"},
-    {"name": "fold-list-decisions", "order": 14, "policy": "best-effort"}
+    {"name": "fold-merge-decisions", "order": 11, "policy": "best-effort"},
+    {"name": "fold-role-decisions", "order": 12, "policy": "best-effort"},
+    {"name": "fold-name-decisions", "order": 13, "policy": "best-effort"},
+    {"name": "fold-list-decisions", "order": 14, "policy": "best-effort"},
+    {"name": "enrich-tmdb-keywords", "order": 50, "policy": "best-effort"},
+    {"name": "enrich-tmdb-language", "order": 51, "policy": "best-effort"},
+    {"name": "enrich-tmdb-edges", "order": 55, "policy": "best-effort"}
   ]
 }

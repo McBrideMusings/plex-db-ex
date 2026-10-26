@@ -82,7 +82,7 @@ from .store import open_readonly, read_snapshot
 EXPLORE_PORT_VAR = "PLEXDB_EXPLORE_PORT"
 
 #: The media types TMDB has keywords for. An episode never carries them
-#: (`enrich_tmdb_keywords` enriches movies and shows only).
+#: (`enrich-tmdb-keywords` enriches movies and shows only).
 KINDS = ("movie", "show")
 
 #: How many related tags each table row names. Five is enough to show what a tag

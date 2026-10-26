@@ -3,8 +3,7 @@ GET requests only.
 
 `collections.py` depends on `MDBListSource`, not on `LiveMDBListClient`
 directly, so a recorded-response test can substitute a fake returning the same
-shapes without a socket — same split as `plex_client.py`/`PlexSource` and
-`tmdb_client.py`/`TMDbSource`.
+shapes without a socket — same split as `plex_client.py`/`PlexSource`.
 
 Verified against the live endpoints (2026-08-11):
 

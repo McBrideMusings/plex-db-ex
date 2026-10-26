@@ -25,13 +25,12 @@ from fixture_store import init as init_store
 from plexdb import synonyms
 from plexdb.cli import main
 from plexdb.commands import judge_keyword_pairs as judge_cmd
-from plexdb.config import Config
 from plexdb.embed_client import LlamaSwapEmbedder
-from plexdb.errors import EmbeddingError, JevError, JevRejected, MergeDecisionsError
+from plexdb.errors import EmbeddingError, JevError, JevRejected
 from plexdb.jev_client import LiveJev, Verdict
 from plexdb.keywords import normalize_keyword, upsert_keyword_form
 from plexdb.store import open_store
-from plexdb.synonyms import find_synonym_pairs, fold_merge_decisions, merge_decisions_path
+from plexdb.synonyms import find_synonym_pairs
 
 VECTORS = {
     "heist": [1.0, 0.0, 0.0],
@@ -313,94 +312,8 @@ def _decisions_file(tmp_path: Path, entries: object) -> Path:
     return path
 
 
-def _entry(a: str, b: str, decision: str, at: str = "2026-10-01T12:00:00+00:00") -> dict[str, str]:
-    return {"surface_a": a, "surface_b": b, "decision": decision, "decided_at": at}
-
-
-def _decisions(store: Path) -> dict[tuple[str, str], tuple[str | None, str | None]]:
-    return {
-        (r["keyword_a"], r["keyword_b"]): (r["decision"], r["decided_at"])
-        for r in _pair_rows(store)
-    }
-
-
-def test_folding_sets_clears_and_counts_decisions(tmp_path: Path) -> None:
-    store = _store(tmp_path)
-    _run(store, FakeJudge(), FakeEmbedder())
-    at = "2026-10-01T12:00:00+00:00"
-    path = _decisions_file(
-        tmp_path,
-        [
-            _entry(BANK, HEIST, "accepted"),
-            _entry(JAIL, PRISON, "rejected"),
-            _entry(JAIL, PRISON, "cleared"),
-            _entry(HEIST, ROBBERY, "rejected"),
-            _entry("aaa", "bbb", "accepted"),
-        ],
-    )
-
-    with open_store(store) as conn:
-        stats = fold_merge_decisions(conn, path)
-
-    assert (stats.entries, stats.matched, stats.unmatched) == (5, 4, 1)
-    decisions = _decisions(store)
-    assert decisions[(BANK, HEIST)] == ("accepted", at)
-    assert decisions[(HEIST, ROBBERY)] == ("rejected", at)
-    assert decisions[(JAIL, PRISON)] == (None, None)
-    assert decisions[(BANK, ROBBERY)] == (None, None)
-
-
-def test_a_missing_decisions_file_changes_nothing(tmp_path: Path) -> None:
-    store = _store(tmp_path)
-    with open_store(store) as conn:
-        stats = fold_merge_decisions(conn, tmp_path / "merge_decisions.json")
-    assert (stats.file_found, stats.entries) == (False, 0)
-
-
-@pytest.mark.parametrize(
-    "entries",
-    [
-        {"not": "a list"},
-        [_entry(BANK, HEIST, "maybe")],
-        [_entry(BANK, BANK, "accepted")],
-        [_entry(BANK, HEIST, "accepted", at="")],
-        [_entry(BANK, HEIST, "accepted", at="yesterday")],
-        [{"surface_a": BANK, "surface_b": HEIST, "decision": "accepted"}],
-    ],
-)
-def test_a_malformed_decisions_file_is_refused_before_any_row_changes(
-    tmp_path: Path, entries: object
-) -> None:
-    store = _store(tmp_path)
-    _run(store, FakeJudge(), FakeEmbedder())
-    if isinstance(entries, list):
-        entries = [_entry(JAIL, PRISON, "accepted"), *entries]
-    path = _decisions_file(tmp_path, entries)
-
-    with open_store(store) as conn, pytest.raises(MergeDecisionsError):
-        fold_merge_decisions(conn, path)
-
-    assert all(decision == (None, None) for decision in _decisions(store).values())
-
-
-def test_the_decisions_file_sits_beside_the_saved_queries_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    store = tmp_path / "data" / "plexdb.db"
-    monkeypatch.setenv("PLEXDB_PATH", str(store))
-    monkeypatch.setenv("PLEXDB_SNAPSHOT_PATH", "")
-    monkeypatch.setenv("PLEXDB_EXPLORE_SAVED_PATH", "")
-    assert merge_decisions_path(Config.from_env()) == tmp_path / "data" / "merge_decisions.json"
-
-    monkeypatch.setenv("PLEXDB_SNAPSHOT_PATH", str(tmp_path / "snap" / "plexdb.db"))
-    assert merge_decisions_path(Config.from_env()) == tmp_path / "snap" / "merge_decisions.json"
-
-    monkeypatch.setenv("PLEXDB_EXPLORE_SAVED_PATH", str(tmp_path / "explore" / "q.json"))
-    assert merge_decisions_path(Config.from_env()) == tmp_path / "explore" / "merge_decisions.json"
-
-
 def test_the_commands_run_through_the_cli_and_skip_when_a_service_is_unset(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
 ) -> None:
     store = _store(tmp_path)
     monkeypatch.setenv("PLEXDB_PATH", str(store))
@@ -411,21 +324,21 @@ def test_the_commands_run_through_the_cli_and_skip_when_a_service_is_unset(
     monkeypatch.setenv("TYPESAFE_API_KEY", "")
 
     assert main(["judge-keyword-pairs"]) == 1
-    assert "LLAMA_BROKER_BASE_URL" in capsys.readouterr().err
+    assert "LLAMA_BROKER_BASE_URL" in capfd.readouterr().err
 
     monkeypatch.setenv("LLAMA_BROKER_BASE_URL", "http://embed.test")
     assert main(["judge-keyword-pairs"]) == 1
-    assert "TYPESAFE_API_KEY" in capsys.readouterr().err
+    assert "TYPESAFE_API_KEY" in capfd.readouterr().err
 
     monkeypatch.setenv("TYPESAFE_API_KEY", "test-jev-key")
     monkeypatch.setattr(judge_cmd, "LlamaSwapEmbedder", lambda url: FakeEmbedder())
     monkeypatch.setattr(judge_cmd, "LiveJev", lambda key: FakeJudge())
     assert main(["judge-keyword-pairs"]) == 0
-    assert "4 judged now" in capsys.readouterr().out
+    assert "4 judged now" in capfd.readouterr().out
     assert len(_pair_rows(store)) == 4
 
     assert main(["fold-merge-decisions"]) == 0
-    assert "0 entr(ies)" in capsys.readouterr().out
+    assert "0 entr(ies)" in capfd.readouterr().out
 
 
 def _jev_http(handler: Any) -> httpx.Client:
