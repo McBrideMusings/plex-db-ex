@@ -7,9 +7,9 @@ use plexdb_store::{Config, StoreError, open_store};
 use crate::decisions::FoldError;
 use crate::sources::Sources;
 use crate::{
-    frames_cmd, harvest_frames, judge_steps, keyword_verdicts, list_decisions, list_steps, media,
-    merge_decisions, migrate, name_decisions, plays, prune_frames, repair, repair_fs,
-    role_decisions, tmdb_steps, walk,
+    frames_cmd, harvest_frames, judge_steps, keyword_verdicts, latent_users, list_decisions,
+    list_steps, media, merge_decisions, migrate, name_decisions, plays, prune_frames, repair,
+    repair_fs, role_decisions, source_steps, tmdb_steps, walk,
 };
 
 /// Why a step stopped. `Config` is a setting that is absent, which the sweep
@@ -20,6 +20,9 @@ pub enum Failure {
     Failed(String),
     /// The command line is wrong: an unknown flag, a missing value.
     Usage(String),
+    /// The step ran and printed its report, and its result is still a failure (a
+    /// scraper whose pages stopped parsing, a spent quota): exit 1, no `error:` line.
+    Reported,
 }
 
 /// A step, given the arguments after its name.
@@ -289,6 +292,13 @@ pub const STEPS: &[(&str, Run)] = &[
     (tmdb_steps::KEYWORDS, tmdb_steps::run_keywords),
     (tmdb_steps::LANGUAGE, tmdb_steps::run_language),
     (tmdb_steps::EDGES, tmdb_steps::run_edges),
+    (source_steps::ANILIST, source_steps::run_anilist),
+    (source_steps::LETTERBOXD, source_steps::run_letterboxd),
+    (source_steps::WIKIDATA, source_steps::run_wikidata),
+    (
+        source_steps::MDBLIST_RATINGS,
+        source_steps::run_mdblist_ratings,
+    ),
     (list_steps::HARVEST_MDBLIST, list_steps::harvest_mdblist),
     (
         list_steps::HARVEST_LETTERBOXD_LISTS,
@@ -310,6 +320,7 @@ pub const STEPS: &[(&str, Run)] = &[
     (list_steps::LIST_DECIDE, list_steps::list_decide),
     (frames_cmd::NAME, frames_cmd::run),
     (harvest_frames::NAME, harvest_frames::run),
+    (latent_users::NAME, latent_users::run),
     (keyword_verdicts::PRUNE, keyword_verdicts::run_prune),
     (
         keyword_verdicts::FILM_SUFFIX_VERDICTS,

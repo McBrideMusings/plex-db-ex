@@ -102,6 +102,36 @@ pub trait MdbSource {
     fn search_lists(&mut self, query: &str) -> Result<Vec<MdbList>, MdbError>;
 }
 
+/// The most ids one batch title request carries: MDBList's documented cap.
+pub const BATCH_SIZE: usize = 200;
+
+/// One site's rating of one title, as MDBList relayed it. `value` is the site's own number on
+/// the site's own scale, as the JSON carried it; either field may be absent.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MdbRating {
+    pub site: String,
+    pub value: Option<Value>,
+    pub votes: Option<i64>,
+}
+
+/// Every rating MDBList returned for one title, keyed back by IMDb id.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MdbTitleRatings {
+    pub imdb_id: String,
+    pub ratings: Vec<MdbRating>,
+}
+
+/// The read surface the ratings sweep needs from MDBList: real or recorded.
+pub trait MdbRatingsSource {
+    /// One batch request: the ratings of every id MDBList knows, in no particular order.
+    /// `media_type` is `movie` or `show`; at most [`BATCH_SIZE`] ids.
+    fn ratings(
+        &mut self,
+        media_type: &str,
+        imdb_ids: &[String],
+    ) -> Result<Vec<MdbTitleRatings>, MdbError>;
+}
+
 pub struct LiveMdbClient {
     key: String,
     base: String,
@@ -140,12 +170,34 @@ impl LiveMdbClient {
     /// built from `url` without its query and the status, so a refused key never
     /// prints itself.
     fn get(&mut self, path: &str, extra: &[(&str, String)]) -> Result<Value, MdbError> {
+        self.exchange(path, extra, None)
+    }
+
+    /// One request: a GET, or a POST of `body` as JSON.
+    fn exchange(
+        &mut self,
+        path: &str,
+        extra: &[(&str, String)],
+        body: Option<&Value>,
+    ) -> Result<Value, MdbError> {
         let url = format!("{}{path}", self.base);
-        let mut request = self.agent.get(&url).query("apikey", &self.key);
-        for (name, value) in extra {
-            request = request.query(name, value);
-        }
-        let mut response = request.call().map_err(|err| MdbError {
+        let sent = match body {
+            None => {
+                let mut request = self.agent.get(&url).query("apikey", &self.key);
+                for (name, value) in extra {
+                    request = request.query(name, value);
+                }
+                request.call()
+            }
+            Some(body) => {
+                let mut request = self.agent.post(&url).query("apikey", &self.key);
+                for (name, value) in extra {
+                    request = request.query(name, value);
+                }
+                request.send_json(body)
+            }
+        };
+        let mut response = sent.map_err(|err| MdbError {
             kind: Kind::Unreachable,
             status: None,
             message: format!("cannot reach MDBList at {url}: {}", transport_name(&err)),
@@ -343,6 +395,69 @@ impl MdbSource for LiveMdbClient {
     }
 }
 
+impl MdbRatingsSource for LiveMdbClient {
+    fn ratings(
+        &mut self,
+        media_type: &str,
+        imdb_ids: &[String],
+    ) -> Result<Vec<MdbTitleRatings>, MdbError> {
+        assert!(
+            imdb_ids.len() <= BATCH_SIZE,
+            "a batch carries at most {BATCH_SIZE} ids, got {}",
+            imdb_ids.len()
+        );
+        let path = format!("/imdb/{media_type}/");
+        let started = std::time::Instant::now();
+        let body = self.exchange(&path, &[], Some(&serde_json::json!({"ids": imdb_ids})))?;
+        let Value::Array(titles) = &body else {
+            return Err(MdbError::new(
+                format!(
+                    "MDBList {path} returned {}, expected a list of titles",
+                    py_type_name(&body)
+                ),
+                None,
+            ));
+        };
+        let found: Vec<MdbTitleRatings> = titles.iter().filter_map(title_ratings).collect();
+        println!(
+            "mdblist: POST {path} {} id(s) -> {} title(s), {} rating(s) in {:.1} s",
+            imdb_ids.len(),
+            found.len(),
+            found.iter().map(|t| t.ratings.len()).sum::<usize>(),
+            started.elapsed().as_secs_f64()
+        );
+        Ok(found)
+    }
+}
+
+/// One batch answer's IMDb id and ratings, or `None` for an answer with no IMDb id to match
+/// it back by.
+fn title_ratings(title: &Value) -> Option<MdbTitleRatings> {
+    let imdb_id = title.get("ids")?.get("imdb").filter(|v| truthy(v))?;
+    let ratings = match title.get("ratings") {
+        Some(Value::Array(list)) => list
+            .iter()
+            .filter(|rating| rating.is_object())
+            .filter_map(|rating| {
+                let site = rating.get("source").filter(|v| truthy(v))?;
+                Some(MdbRating {
+                    site: py_str(site),
+                    value: rating
+                        .get("value")
+                        .filter(|v| matches!(v, Value::Number(_) | Value::Bool(_)))
+                        .cloned(),
+                    votes: optional_int(rating.get("votes")),
+                })
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    Some(MdbTitleRatings {
+        imdb_id: py_str(imdb_id),
+        ratings,
+    })
+}
+
 fn list_from(entry: &Value) -> Option<MdbList> {
     let id = entry.get("id")?;
     let list_id = py_int(id)?;
@@ -426,6 +541,40 @@ mod tests {
         assert_eq!(list.user_name, "lina");
         assert_eq!(list.size, Some(300));
         assert_eq!(list.likes, None);
+    }
+
+    #[test]
+    fn a_batch_answer_keeps_each_sites_own_number_and_drops_what_is_not_one() {
+        let title = json!({"ids": {"imdb": "tt1"}, "ratings": [
+            {"source": "imdb", "value": 7.9, "score": 79, "votes": 17303},
+            {"source": "rogerebert", "value": 4.0, "score": null},
+            {"source": "metacritic", "value": null, "votes": 1},
+            {"source": "", "value": 1},
+            "junk"
+        ]});
+        let answer = title_ratings(&title).expect("a title");
+        assert_eq!(answer.imdb_id, "tt1");
+        let seen: Vec<(&str, Option<String>, Option<i64>)> = answer
+            .ratings
+            .iter()
+            .map(|r| {
+                (
+                    r.site.as_str(),
+                    r.value.as_ref().map(Value::to_string),
+                    r.votes,
+                )
+            })
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                ("imdb", Some("7.9".to_string()), Some(17303)),
+                ("rogerebert", Some("4.0".to_string()), None),
+                ("metacritic", None, Some(1)),
+            ]
+        );
+        assert!(title_ratings(&json!({"ids": {"imdb": ""}})).is_none());
+        assert!(title_ratings(&json!({"ratings": []})).is_none());
     }
 
     #[test]

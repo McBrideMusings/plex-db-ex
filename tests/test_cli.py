@@ -5,17 +5,12 @@ from __future__ import annotations
 import argparse
 import importlib
 from pathlib import Path
-from typing import Any
 
 import pytest
-from fixture_store import init as init_store
 
 from plexdb.cli import _register_commands, build_parser, main
-from plexdb.clusters import LATENT_USER_FLOOR
 from plexdb.commands import iter_command_modules
-from plexdb.commands import latent_users as latent_users_cmd
 from plexdb.config import Config, ConfigError
-from plexdb.store import open_store
 
 EXPECTED_COMMANDS = {
     "check",
@@ -25,13 +20,8 @@ EXPECTED_COMMANDS = {
     "check-files",
     "record-panels",
     "publish",
-    "enrich-anilist",
-    "enrich-letterboxd",
-    "enrich-wikidata",
     "refresh-map",
     "refresh-tagnetwork",
-    "enrich-mdblist-ratings",
-    "latent-users",
     "explore",
     "frames",
     "search",
@@ -54,13 +44,8 @@ EXPECTED_COMMAND_ORDER = [
     "sweep",
     "check-files",
     "record-panels",
-    "enrich-anilist",
-    "enrich-letterboxd",
-    "enrich-wikidata",
-    "enrich-mdblist-ratings",
     "refresh-map",
     "refresh-tagnetwork",
-    "latent-users",
     # The Frame index's status, queue and migration (`plexdb/commands/frames.py`).
     "frames",
     # Ranks Shots against a Phrase through `plexdb-read` (`plexdb/commands/search.py`).
@@ -362,176 +347,3 @@ def test_publish_without_a_snapshot_path_configured_is_an_error_not_a_default(
     err = capsys.readouterr().err
     assert err.startswith("error: ")
     assert "PLEXDB_SNAPSHOT_PATH" in err
-
-
-class _FakeAccountsSource:
-    """Stands in for `LivePlexClient` in a `latent-users` CLI test — same
-    `(base_url, token)` construction shape, backed by a fixed `/accounts`
-    listing. No network. `accounts` is a class attribute so a test can set
-    it right before calling `main`, without needing a per-test subclass."""
-
-    accounts_response: list[dict[str, Any]] = []
-
-    def __init__(self, base_url: str, token: str) -> None:
-        assert base_url, "latent-users must pass the configured PLEX_URL through"
-        assert token, "latent-users must pass the configured PLEX_TOKEN through"
-
-    def accounts(self) -> list[dict[str, Any]]:
-        return self.accounts_response
-
-
-def _configure_latent_users(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, accounts: list[dict[str, Any]] | None = None
-) -> Path:
-    """Point the CLI at a fresh store under `tmp_path` with Plex credentials
-    configured and `_FakeAccountsSource` standing in for `LivePlexClient`.
-    Returns the store path."""
-    store = tmp_path / "plexdb.db"
-    monkeypatch.setenv("PLEXDB_PATH", str(store))
-    monkeypatch.setenv("PLEX_URL", "http://plex.example:32400")
-    monkeypatch.setenv("PLEX_TOKEN", "test-token")
-    init_store(store)
-    monkeypatch.setattr(_FakeAccountsSource, "accounts_response", accounts or [])
-    monkeypatch.setattr(latent_users_cmd, "LivePlexClient", _FakeAccountsSource)
-    return store
-
-
-def test_latent_users_reports_a_shared_account_with_its_structural_baseline(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """A configured shared account still gets the full fingerprint-clustered
-    report — issue #27 only narrowed which accounts reach this path."""
-    store = _configure_latent_users(tmp_path, monkeypatch)
-    monkeypatch.setenv("PLEXDB_SHARED_ACCOUNT_IDS", "7")
-    with open_store(store) as conn:
-        conn.execute(
-            "INSERT INTO items (item_id, type, title) VALUES ('imdb:tt0096734', 'movie', ?)",
-            ("The 'Burbs",),
-        )
-        # LATENT_USER_FLOOR plays, so this cluster clears the floor (issue
-        # #28) and is still reported as a latent user, not folded into the
-        # unattributed bucket.
-        for i in range(LATENT_USER_FLOOR):
-            conn.execute(
-                "INSERT INTO plays (history_key, item_id, plex_account_id, client_identifier, "
-                "viewed_at) VALUES (?, 'imdb:tt0096734', 7, 'device-alpha-001', 1700000000)",
-                (f"h{i}",),
-            )
-        conn.commit()
-    capsys.readouterr()
-
-    assert main(["latent-users"]) == 0
-
-    out = capsys.readouterr().out
-    assert "== account 7 ==" in out
-    assert (
-        f"structural baseline: {LATENT_USER_FLOOR} play(s), 1 distinct client_identifier(s), "
-        f"1 cluster(s) found, 1 at or above the {LATENT_USER_FLOOR}-play floor" in out
-    )
-    assert "cluster 1 [client_identifier='device-alpha-001']" in out
-
-
-def test_latent_users_reports_a_non_shared_account_as_one_user_by_default(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """Account 7 is not in the default `PLEXDB_SHARED_ACCOUNT_IDS`, so it
-    gets the personal report: no structural baseline, no cluster label."""
-    store = _configure_latent_users(tmp_path, monkeypatch)
-    monkeypatch.delenv("PLEXDB_SHARED_ACCOUNT_IDS", raising=False)
-    with open_store(store) as conn:
-        conn.execute(
-            "INSERT INTO items (item_id, type, title) VALUES ('imdb:tt0096734', 'movie', ?)",
-            ("The 'Burbs",),
-        )
-        conn.execute(
-            "INSERT INTO plays (history_key, item_id, plex_account_id, client_identifier, "
-            "viewed_at) VALUES ('h1', 'imdb:tt0096734', 7, 'device-alpha-001', 1700000000)"
-        )
-        conn.commit()
-    capsys.readouterr()
-
-    assert main(["latent-users"]) == 0
-
-    out = capsys.readouterr().out
-    assert "== account 7 ==" in out
-    assert "plays: 1" in out
-    assert "structural baseline" not in out
-    assert "cluster" not in out
-    assert "device-alpha-001" not in out
-
-
-def test_latent_users_labels_accounts_by_the_name_plex_reports(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    store = _configure_latent_users(tmp_path, monkeypatch, accounts=[{"id": 7, "name": "Madi"}])
-    monkeypatch.delenv("PLEXDB_SHARED_ACCOUNT_IDS", raising=False)
-    with open_store(store) as conn:
-        conn.execute("INSERT INTO items (item_id, type, title) VALUES ('imdb:tt1', 'movie', 'A')")
-        conn.execute(
-            "INSERT INTO plays (history_key, item_id, plex_account_id, viewed_at) "
-            "VALUES ('h1', 'imdb:tt1', 7, 1700000000)"
-        )
-        conn.commit()
-    capsys.readouterr()
-
-    assert main(["latent-users"]) == 0
-
-    out = capsys.readouterr().out
-    assert "== account 7 (Madi) ==" in out
-
-
-def test_latent_users_never_writes_the_store(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """Guards the read-only claim end to end: a store with zero plays is
-    untouched by running the command, not merely "reported as empty"."""
-    store = _configure_latent_users(tmp_path, monkeypatch)
-    before = store.stat().st_mtime_ns
-    capsys.readouterr()
-
-    assert main(["latent-users"]) == 0
-
-    out = capsys.readouterr().out
-    assert out == "\n"
-    assert store.stat().st_mtime_ns == before
-
-
-def test_latent_users_can_be_scoped_to_one_account(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    store = _configure_latent_users(tmp_path, monkeypatch)
-    with open_store(store) as conn:
-        conn.execute("INSERT INTO items (item_id, type, title) VALUES ('imdb:tt1', 'movie', 'A')")
-        conn.execute(
-            "INSERT INTO plays (history_key, item_id, plex_account_id, client_identifier, "
-            "viewed_at) VALUES ('h1', 'imdb:tt1', 1, 'd1', 1700000000)"
-        )
-        conn.execute(
-            "INSERT INTO plays (history_key, item_id, plex_account_id, client_identifier, "
-            "viewed_at) VALUES ('h2', 'imdb:tt1', 2, 'd2', 1700000000)"
-        )
-        conn.commit()
-    capsys.readouterr()
-
-    assert main(["latent-users", "--account", "2"]) == 0
-
-    out = capsys.readouterr().out
-    assert "account 2" in out
-    assert "account 1" not in out
-
-
-def test_latent_users_without_plex_credentials_configured_is_an_error_not_a_default(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    store = tmp_path / "plexdb.db"
-    monkeypatch.setenv("PLEXDB_PATH", str(store))
-    monkeypatch.setenv("PLEX_URL", "")
-    monkeypatch.setenv("PLEX_TOKEN", "")
-    init_store(store)
-    capsys.readouterr()
-
-    assert main(["latent-users"]) == 1
-    err = capsys.readouterr().err
-    assert err.startswith("error: ")
-    assert "PLEX_URL" in err
-    assert "Traceback" not in err

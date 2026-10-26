@@ -6,8 +6,8 @@ pointed at this one local server, which answers the same bytes to each. The answ
 built from the store being compared, so the lists name titles the library really holds:
 what the harvests resolve, skip, place twice and fail on is decided by the store's own rows.
 
-The server speaks the two services' shapes as `plexdb/mdblist_client.py` and
-`plexdb/letterboxd_client.py` document them, and logs every request (path and query, minus
+The server speaks the two services' shapes as `crates/plexdb/src/mdblist.rs` and
+`crates/plexdb/src/letterboxd.rs` document them, and logs every request (path and query, minus
 the key) so a run's requests can be compared as well as its rows.
 """
 

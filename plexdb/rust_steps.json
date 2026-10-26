@@ -15,6 +15,11 @@
     "fold-list-decisions: right after fold-name-decisions, because a sweep starts by applying what",
     "a person decided since the last one; best-effort, because a malformed file costs the sweep",
     "one step's report, not a night's library read.",
+    "enrich-anilist, enrich-letterboxd, enrich-wikidata (56): the optional keyword sources, after both",
+    "TMDB sweeps and before refresh-map draws from the keywords; equal numbers run by name.",
+    "enrich-mdblist-ratings (60): beside harvest-mdblist, which draws on the same daily quota, and",
+    "just before it by name; ratings are not keywords, so nothing waits on them. All four are",
+    "best-effort because each source is optional (ADR-0004) and a skipped pass costs only freshness.",
     "harvest-mdblist, harvest-letterboxd-lists, harvest-mdblist-search: the last of the sources,",
     "because a list entry can only resolve to a title walk already wrote; best-effort, because the",
     "lists are staleness-gated and a missed harvest is picked up by the next run (ADR-0004).",
@@ -55,6 +60,10 @@
     {"name": "enrich-tmdb-keywords", "order": 50, "policy": "best-effort"},
     {"name": "enrich-tmdb-language", "order": 51, "policy": "best-effort"},
     {"name": "enrich-tmdb-edges", "order": 55, "policy": "best-effort"},
+    {"name": "enrich-anilist", "order": 56, "policy": "best-effort"},
+    {"name": "enrich-letterboxd", "order": 56, "policy": "best-effort"},
+    {"name": "enrich-wikidata", "order": 56, "policy": "best-effort"},
+    {"name": "enrich-mdblist-ratings", "order": 60, "policy": "best-effort"},
     {"name": "harvest-mdblist", "order": 60, "policy": "best-effort"},
     {"name": "harvest-letterboxd-lists", "order": 61, "policy": "best-effort"},
     {"name": "harvest-mdblist-search", "order": 62, "policy": "best-effort"},
@@ -63,5 +72,5 @@
     {"name": "judge-keyword-pairs", "order": 65, "policy": "best-effort"},
     {"name": "judge-keyword-roles", "order": 66, "policy": "best-effort"}
   ],
-  "commands": ["lists", "list", "list-decide", "frames", "harvest-frames", "repair-identities", "repair-fs-identities"]
+  "commands": ["lists", "list", "list-decide", "frames", "harvest-frames", "repair-identities", "repair-fs-identities", "latent-users"]
 }

@@ -53,6 +53,7 @@ fn main() -> ExitCode {
                     eprintln!("error: {message}");
                     ExitCode::from(NOT_CONFIGURED)
                 }
+                Err(Failure::Reported) => ExitCode::FAILURE,
                 Err(Failure::Failed(message)) => {
                     eprintln!("error: {message}");
                     ExitCode::FAILURE

@@ -110,6 +110,34 @@ pub fn resolve_stale_days(name: &str, flag: Option<i64>) -> Result<i64, Failure>
     )
 }
 
+/// The most units one run takes: the flag, then `<NAME>_MAX_<UNIT>S`, then `default`. An
+/// empty variable means the default, as for staleness (`GatedSource.resolve_limit`).
+pub fn resolve_limit(
+    name: &str,
+    capped_unit: &str,
+    flag: Option<i64>,
+    default: i64,
+) -> Result<i64, Failure> {
+    let limit = match flag {
+        Some(limit) => limit,
+        None => env_int(
+            &format!(
+                "{}_MAX_{}S",
+                name.to_uppercase(),
+                capped_unit.to_uppercase()
+            ),
+            default,
+            &format!("a whole number of {capped_unit}s"),
+        )?,
+    };
+    if limit < 0 {
+        return Err(config_error(format!(
+            "the {name} limit cannot be negative, got {limit}"
+        )));
+    }
+    Ok(limit)
+}
+
 /// The credential in `var`, or a config error saying what it is for.
 pub fn credential(var: &str, purpose: &str) -> Result<String, Failure> {
     let value = std::env::var(var).unwrap_or_default();

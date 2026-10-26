@@ -7,7 +7,7 @@ takes two copies with SQLite's backup API, which is safe while a writer has the
 source open, and each implementation writes only its own copy.
 
     uv run python tools/parity.py <step> [--store data/plexdb.db] [--decisions-dir DIR]
-                                  [--fake tmdb|lists|jev] [step args]
+                                  [--fake tmdb|lists|jev|plex|sources] [step args]
 
 Both runs start from the decisions files in `--decisions-dir` (default: the source
 store's directory), each on its own copy, through `PLEXDB_EXPLORE_SAVED_PATH`. Arguments
@@ -16,9 +16,10 @@ the tool does not know go to the step. Each run gets the
 backup directory pointed into its own scratch directory.
 
 A step that fetches runs against a fake server (`tools/parity_fakes.py` for TMDB,
-`tools/fake_lists.py` for MDBList and Letterboxd, and `parity_fakes.serve_jev` for the embedding
-server and Jev; `--fake`) so both sides see the same
-answers offline. A fake built from the store also seeds both copies with the decisions the
+`tools/fake_lists.py` for the MDBList and Letterboxd lists, `tools/fake_sources.py` for AniList,
+Wikidata, MDBList ratings and Letterboxd film pages, `parity_fakes.serve_jev` for the embedding
+server and Jev, and `parity_fakes.serve_plex` for Plex's `/accounts`; `--fake`) so both sides see
+the same answers offline. A fake built from the store also seeds both copies with the decisions the
 step acts on and logs the requests each side sent. Times a run wrote (`fetched_at`,
 `last_seen` and the other `*_at` and `*_seen` columns at or after the moment parity
 started) differ by seconds between two runs by nature, so both copies have them
@@ -55,6 +56,7 @@ from dotenv import dotenv_values
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fake_lists  # noqa: E402
+import fake_sources  # noqa: E402
 import parity_fakes  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
@@ -77,6 +79,11 @@ OUTPUT_STEPS = frozenset(
         "film-suffix-verdicts",
         "judge-keyword-pairs",
         "judge-keyword-roles",
+        "latent-users",
+        "enrich-anilist",
+        "enrich-wikidata",
+        "enrich-mdblist-ratings",
+        "enrich-letterboxd",
     }
 )
 #: Decisions files a step may write, compared after it ran.
@@ -85,6 +92,8 @@ DECISIONS_FILES = ("list_decisions.json",)
 _TIME = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?\+00:00")
 #: How long a harvest stage took, which differs by milliseconds between two runs.
 _STAGE_SECONDS = re.compile(r"\b((?:decode|scan|extract|encode)_s)=\d+\.\d\b")
+#: The seconds a client reports a request took, which differ between two runs by nature.
+_TOOK = re.compile(r"\b(in|after) \d+\.\d s\b")
 
 
 def _python_commands() -> set[str]:
@@ -116,7 +125,10 @@ def _run(argv: list[str], env: dict[str, str], side: str) -> tuple[int, str]:
 
 def _lines(text: str, scratch: str) -> list[str]:
     return [
-        _STAGE_SECONDS.sub(r"\1=<s>", _TIME.sub("<time>", line.replace(scratch, "<run>")))
+        _STAGE_SECONDS.sub(
+            r"\1=<s>",
+            _TOOK.sub(r"\1 <t> s", _TIME.sub("<time>", line.replace(scratch, "<run>"))),
+        )
         for line in text.splitlines()
     ]
 
@@ -203,7 +215,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--fake",
-        choices=["tmdb", "lists", "jev", "frames"],
+        choices=["tmdb", "lists", "jev", "plex", "sources", "frames"],
         help="answer the step's network calls from a local fake instead of the real service",
     )
     args, step_args = parser.parse_known_args()
@@ -233,6 +245,8 @@ def main() -> int:
         scenario = None
         if args.fake == "tmdb":
             base.update(stack.enter_context(parity_fakes.serve_tmdb(store)))
+        elif args.fake == "plex":
+            base.update(stack.enter_context(parity_fakes.serve_plex(store)))
         elif args.fake == "lists":
             served, scenario = stack.enter_context(fake_lists.serve_lists(store))
             base.update(served)
@@ -241,6 +255,8 @@ def main() -> int:
             base.update(served)
         elif args.fake == "frames":
             served, scenario = stack.enter_context(parity_fakes.serve_frames(store))
+        elif args.fake == "sources":
+            served, scenario = stack.enter_context(fake_sources.serve_sources(store))
             base.update(served)
         sides = {"python": Path(scratch) / "python", "rust": Path(scratch) / "rust"}
         exits: dict[str, int] = {}

@@ -241,7 +241,7 @@ own GUIDs derive the contested id keeps it, the other one moves off.
 `SELECT DISTINCT item_id, value`, never a bare row count or row list.** Once a second source can list
 the same keyword on the same item, `namespace`+`key` alone matches one row per source — a bare
 `COUNT(*)` or unfiltered `SELECT value` would count or list that keyword once per agreeing source
-instead of once per item. `plexdb/clusters.py`'s `build_keyword_profile` and every keyword rollup
+instead of once per item. `crates/plexdb/src/latent_users.rs`'s `build_keyword_profile` and every keyword rollup
 in `plexdb/explore.py` (`build_index`, `titles_tagged`, `tag_network`, `title_map`,
 `title_keywords`) dedupe this way.
 
