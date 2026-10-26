@@ -13,10 +13,11 @@ import time
 from pathlib import Path
 
 import pytest
+from fixture_store import init
 
 from plexdb import rust
 from plexdb.config import Config
-from plexdb.store import holding, init
+from plexdb.store import holding
 from plexdb.sweep import Impl, plan, run_sweep
 
 STEP = "fold-list-decisions"
@@ -58,6 +59,24 @@ def test_a_rust_step_run_under_this_processs_own_claim_does_not_wait_on_it(store
         worker.start()
         worker.join(timeout=30)
     assert result == [0], "plexdb-rs waited on the lock its parent holds"
+
+
+def test_migrate_creating_a_store_under_this_processs_own_claim_does_not_wait_on_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`plexdb idle migrate` on a store not created yet: the child must recognise
+    the claim on a path that does not exist, or it waits on its parent forever."""
+    path = tmp_path / "new" / "plexdb.db"
+    monkeypatch.setenv("PLEXDB_PATH", str(path))
+    monkeypatch.delenv(rust.HELD_STORE_VAR, raising=False)
+    result: list[int] = []
+    with holding(path) as refused:
+        assert refused is None
+        worker = threading.Thread(target=lambda: result.append(rust.run(["migrate"])), daemon=True)
+        worker.start()
+        worker.join(timeout=30)
+    assert result == [0], "plexdb-rs migrate waited on the lock its parent holds"
+    assert path.exists()
 
 
 @pytest.mark.parametrize(

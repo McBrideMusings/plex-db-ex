@@ -20,6 +20,7 @@ from typing import Any
 import httpx
 import numpy as np
 import pytest
+from fixture_store import init as init_store
 
 from plexdb import synonyms
 from plexdb.cli import main
@@ -29,7 +30,6 @@ from plexdb.embed_client import LlamaSwapEmbedder
 from plexdb.errors import EmbeddingError, JevError, JevRejected, MergeDecisionsError
 from plexdb.jev_client import LiveJev, Verdict
 from plexdb.keywords import normalize_keyword, upsert_keyword_form
-from plexdb.store import init as init_store
 from plexdb.store import open_store
 from plexdb.synonyms import find_synonym_pairs, fold_merge_decisions, merge_decisions_path
 

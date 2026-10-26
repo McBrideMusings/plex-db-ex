@@ -11,13 +11,14 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from fixture_store import init
 
 from plexdb.cli import main
 from plexdb.errors import RoleDecisionsError
 from plexdb.explore import make_server
 from plexdb.role_review import RoleDecisions
 from plexdb.roles import fold_role_decisions
-from plexdb.store import init, open_store
+from plexdb.store import open_store
 
 STATED = "2026-10-01T00:00:00+00:00"
 

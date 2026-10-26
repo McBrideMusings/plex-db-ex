@@ -12,6 +12,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from fixture_store import init as init_store
 
 from plexdb.clusters import (
     LATENT_USER_FLOOR,
@@ -25,7 +26,6 @@ from plexdb.clusters import (
     profile_overlap,
     render_report,
 )
-from plexdb.store import init as init_store
 
 ACCOUNT = 1
 

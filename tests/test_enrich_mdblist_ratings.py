@@ -8,13 +8,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from fixture_store import init as init_store
 from mdblist_fixtures import RecordedRatingsSource
 
 from plexdb import enrich_mdblist_ratings as ratings_module
 from plexdb.commands import enrich_mdblist_ratings as enrich_mdblist_ratings_cmd
 from plexdb.enrich_mdblist_ratings import enrich_mdblist_ratings, wipe
 from plexdb.errors import MDBListError
-from plexdb.store import init as init_store
 from plexdb.store import open_store
 
 CHIEF = "imdb:tt21301418"

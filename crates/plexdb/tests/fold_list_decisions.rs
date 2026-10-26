@@ -1,30 +1,19 @@
 //! `fold-list-decisions` against a store built by the real `plexdb migrate`, so
 //! the test fails when a migration changes `list_decision` under the fold.
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
 
 use plexdb::list_decisions::fold;
+use plexdb::migrate::migrate;
 use rusqlite::Connection;
 
 const MINE: &str = "https://mdblist.com/lists/lina/top-watched";
 const AT: &str = "2026-10-01T00:00:00+00:00";
 const LATER: &str = "2026-10-02T00:00:00+00:00";
 
-fn repo_root() -> PathBuf {
-    let manifest = std::env::var("CARGO_MANIFEST_DIR").expect("run the tests through cargo");
-    Path::new(&manifest).join("../..")
-}
-
 fn store(dir: &Path) -> Connection {
     let path = dir.join("plexdb.db");
-    let status = Command::new("uv")
-        .args(["run", "plexdb", "migrate"])
-        .env("PLEXDB_PATH", &path)
-        .current_dir(repo_root())
-        .status()
-        .expect("run `uv run plexdb migrate` — is uv on PATH?");
-    assert!(status.success(), "plexdb migrate failed");
+    migrate(&path, &dir.join("backups")).expect("plexdb migrate builds the store");
     Connection::open(&path).expect("open the fixture store")
 }
 

@@ -8,12 +8,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from fixture_store import init as init_store
 from letterboxd_fixtures import INCEPTION_TMDB, RecordedLetterboxdSource, load, markerless
 
 from plexdb.commands import enrich_letterboxd as enrich_letterboxd_cmd
 from plexdb.enrich_letterboxd import enrich_letterboxd, wipe
 from plexdb.errors import LetterboxdError
-from plexdb.store import init as init_store
 from plexdb.store import open_store
 
 INCEPTION = "imdb:tt1375666"

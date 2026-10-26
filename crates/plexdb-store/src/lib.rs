@@ -36,6 +36,8 @@ pub enum StoreError {
     #[error("{0}")]
     Store(String),
     #[error(transparent)]
+    Schema(#[from] plexdb_schema::SchemaError),
+    #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
     #[error(transparent)]
     Io(#[from] std::io::Error),
@@ -108,6 +110,9 @@ pub struct Config {
     pub store_path: PathBuf,
     /// `PLEXDB_SNAPSHOT_PATH`, or `None` when unset.
     pub snapshot_path: Option<PathBuf>,
+    /// `PLEXDB_BACKUP_DIR`, else `backups/` beside the store: where a migration
+    /// leaves the copy it took first.
+    pub backup_dir: PathBuf,
 }
 
 impl Config {
@@ -127,9 +132,15 @@ impl Config {
         let snapshot_path = env_text("PLEXDB_SNAPSHOT_PATH")
             .filter(|raw| !raw.is_empty())
             .map(|raw| py_path(&raw));
+        let store_path = py_path(&raw);
+        let backup_dir = match env_text("PLEXDB_BACKUP_DIR").filter(|raw| !raw.is_empty()) {
+            Some(raw) => py_path(&raw),
+            None => py_join(&py_parent(&store_path), "backups"),
+        };
         Ok(Config {
-            store_path: py_path(&raw),
+            store_path,
             snapshot_path,
+            backup_dir,
         })
     }
 
@@ -156,11 +167,44 @@ pub fn write_lock_path(store: &Path) -> PathBuf {
     store.with_file_name(name)
 }
 
-fn ensure_parent(path: &Path) -> Result<(), StoreError> {
+/// `<store>.migrate-lock`, the file a migration holds exclusive from its first
+/// read to its last rollback, and `plexdb check` and `plexdb idle` test.
+pub fn migrate_lock_path(store: &Path) -> PathBuf {
+    let mut name = store.file_name().unwrap_or_default().to_os_string();
+    name.push(".migrate-lock");
+    store.with_file_name(name)
+}
+
+/// Make the directory `path` will live in.
+pub fn ensure_parent(path: &Path) -> Result<(), StoreError> {
     match path.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => std::fs::create_dir_all(parent)
             .map_err(|err| StoreError::Store(format!("cannot create {}: {err}", parent.display()))),
         _ => Ok(()),
+    }
+}
+
+/// `Path.resolve()` as Python spells it, which `store.held_path` names the store
+/// by: the longest part of the path that exists is canonicalized and the rest is
+/// joined on as written, so a store not created yet still resolves.
+fn py_resolve(path: &Path) -> PathBuf {
+    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut rest = Vec::new();
+    let mut existing = absolute.as_path();
+    loop {
+        if let Ok(resolved) = std::fs::canonicalize(existing) {
+            return rest
+                .iter()
+                .rev()
+                .fold(resolved, |joined, part| joined.join(part));
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_os_string());
+                existing = parent;
+            }
+            _ => return absolute,
+        }
     }
 }
 
@@ -169,7 +213,7 @@ fn held_by_parent(store: &Path) -> bool {
     let Some(held) = std::env::var_os(HELD_STORE_VAR) else {
         return false;
     };
-    std::fs::canonicalize(store).is_ok_and(|resolved| resolved == Path::new(&held))
+    py_resolve(store) == Path::new(&held)
 }
 
 /// The writer lock, held shared for as long as this value lives (`store.writing`).
@@ -197,6 +241,33 @@ impl WriteLock {
     }
 }
 
+/// The migration lock, held exclusive for as long as this value lives. Python's
+/// `store.outside_migration` and `store.held_by` test it.
+///
+/// The schema version is committed before the migration verifies the store, and
+/// a failed check copies the backup over the file, so a reader that saw the new
+/// version has not seen a finished migration. This lock spans all of it; the
+/// kernel drops it if the process dies.
+#[derive(Debug)]
+pub struct MigrateLock {
+    _file: Option<File>,
+}
+
+impl MigrateLock {
+    pub fn exclusive(store: &Path) -> Result<Self, StoreError> {
+        if held_by_parent(store) {
+            return Ok(MigrateLock { _file: None });
+        }
+        ensure_parent(store)?;
+        let file = OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(migrate_lock_path(store))?;
+        file.lock()?;
+        Ok(MigrateLock { _file: Some(file) })
+    }
+}
+
 /// A writing connection and the lock it was opened under. The connection closes
 /// before the lock is released, as `open_store` does.
 #[derive(Debug)]
@@ -221,6 +292,24 @@ pub fn open_store(path: &Path) -> Result<Store, StoreError> {
             path.display()
         )));
     }
+    connect(path)
+}
+
+/// Open the store for writing, creating the file and its directory when absent.
+/// Only a migration creates a store: anything else meeting a missing file is a
+/// typo'd path, and [`open_store`] says so.
+pub fn create_store(path: &Path) -> Result<Store, StoreError> {
+    if path.is_dir() {
+        return Err(StoreError::Store(format!(
+            "{} is a directory, not a store — point PLEXDB_PATH at a file",
+            path.display()
+        )));
+    }
+    ensure_parent(path)?;
+    connect(path)
+}
+
+fn connect(path: &Path) -> Result<Store, StoreError> {
     let lock = WriteLock::shared(path)?;
     let conn = Connection::open(path)
         .map_err(|err| StoreError::Store(format!("cannot open {}: {err}", path.display())))?;
@@ -236,27 +325,4 @@ fn configure(conn: &Connection) -> rusqlite::Result<()> {
     conn.pragma_update_and_check(None, "journal_mode", "WAL", |_| Ok(()))?;
     conn.busy_timeout(Duration::from_millis(BUSY_TIMEOUT_MS))?;
     conn.pragma_update(None, "foreign_keys", "ON")
-}
-
-/// The schema version the store is at (`schema.current_version`): zero when no
-/// migration has run, an error when the version table has no row.
-pub fn schema_version(conn: &Connection) -> Result<i64, StoreError> {
-    let has_table: bool = conn.query_row(
-        "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_version')",
-        [],
-        |row| row.get(0),
-    )?;
-    if !has_table {
-        return Ok(0);
-    }
-    let mut stmt = conn.prepare("SELECT version FROM schema_version")?;
-    let mut rows = stmt.query([])?;
-    match rows.next()? {
-        Some(row) => Ok(row.get(0)?),
-        None => Err(StoreError::Store(
-            "store has a schema_version table but no version row — it is damaged. Restore it \
-             from a backup, or delete the file and re-run `plexdb migrate` to rebuild it from Plex."
-                .into(),
-        )),
-    }
 }

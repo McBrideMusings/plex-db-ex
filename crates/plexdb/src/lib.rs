@@ -4,6 +4,7 @@
 
 pub mod decisions;
 pub mod list_decisions;
+pub mod migrate;
 pub mod pyiso;
 pub mod pyurl;
 pub mod steps;

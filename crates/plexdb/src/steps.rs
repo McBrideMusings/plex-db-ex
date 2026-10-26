@@ -2,7 +2,9 @@
 //! in `plexdb/rust_steps.json`, which the Python sweep reads to plan a run
 //! without starting this binary; this module only maps each name to its code.
 
-use crate::list_decisions;
+use plexdb_store::StoreError;
+
+use crate::{list_decisions, migrate};
 
 /// Why a step stopped. `Config` is a setting that is absent, which the sweep
 /// reports as skipped rather than failed.
@@ -14,17 +16,30 @@ pub enum Failure {
 
 pub type Run = fn() -> Result<(), Failure>;
 
+fn failure(err: StoreError) -> Failure {
+    match err {
+        StoreError::Config(message) => Failure::Config(message),
+        other => Failure::Failed(other.to_string()),
+    }
+}
+
+fn migrate() -> Result<(), Failure> {
+    migrate::run().map_err(failure)
+}
+
 fn fold_list_decisions() -> Result<(), Failure> {
     use list_decisions::FoldError;
-    use plexdb_store::StoreError;
     list_decisions::run().map_err(|err| match err {
-        FoldError::Store(StoreError::Config(message)) => Failure::Config(message),
+        FoldError::Store(err) => failure(err),
         other => Failure::Failed(other.to_string()),
     })
 }
 
 /// Every step, by the name `plexdb/rust_steps.json` declares it under.
-pub const STEPS: &[(&str, Run)] = &[(list_decisions::NAME, fold_list_decisions)];
+pub const STEPS: &[(&str, Run)] = &[
+    (migrate::NAME, migrate),
+    (list_decisions::NAME, fold_list_decisions),
+];
 
 pub fn find(name: &str) -> Option<Run> {
     STEPS

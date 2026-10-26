@@ -12,8 +12,11 @@ breaks none of them (see [Reader shape](#reader-shape)).
 ## Versioning
 
 The store carries its version in a `schema_version` table. Migrations are an append-only list
-in `plexdb/schema.py`: index 0 takes an empty database to version 1, index 1 takes it to
-version 2, and so on. A shipped migration is never edited — another is added.
+in the `plexdb-schema` crate (`crates/plexdb-schema`), one SQL file per version under
+`migrations/`: index 0 takes an empty database to version 1, index 1 takes it to version 2,
+and so on. A shipped migration is never edited — another is added. The writer applies that
+chain, and `plexdb-reader`'s tests build their stores with it, so both compile against one
+definition of every table.
 
 Opening a store whose version is **higher** than the running build understands is refused
 outright, because a newer writer may have added rows this build cannot see. A store carrying a
@@ -28,10 +31,10 @@ reader keeps reading a snapshot from a newer writer that has only added tables o
 
 A migration that renames or drops something a reader selects, moves rows between namespaces, or
 changes what a row means ends with `UPDATE reader_shape SET version = <its version>;` and sets
-`READER_SHAPE` in `plexdb/schema.py` to match, in the same change that updates `plexdb-reader`.
+`READER_SHAPE` in `plexdb-schema` to match, in the same change that updates `plexdb-reader`.
 Every reader built before it then refuses the store instead of misreading it. A migration that
-only adds leaves both alone. `tests/test_schema.py` fails when `READER_SHAPE` and the reader's
-constant disagree.
+only adds leaves both alone. `plexdb-reader`'s tests do not compile while `READER_SHAPE` and
+the reader's constant disagree.
 
 **Versions 1 through 16 are live.** Everything under "Not yet built" is the target for later
 slices.
@@ -826,12 +829,11 @@ shared function, merging any two `enrichment` rows a stemmer collision now unifi
 key) already meant one row per writer — so only `enrichment` can shrink. `plexdb check` fails if
 any `tmdb_keywords` row survives it.
 
-**This is the one migration allowed to shrink a guarded table.** `store.migrate`'s row-count guard
-normally rolls back any migration that leaves `items`, `plays`, or `enrichment` with fewer rows
-than it found — the right call everywhere except here, where merging colliding keyword spellings
-is the point. So this step reports the exact `enrichment` row count it computed as a declared
-shrink, and the guard accepts a drop in that table only when the store lands on that exact number;
-any further loss, from this migration or a future one, still rolls the store back.
+**The Rust writer runs this step only on a store holding no keyword rows.** Re-normalizing
+needs the keyword normalizer, which has not moved to Rust yet, so `plexdb migrate` refuses a
+store below v17 that holds keywords, names why, and leaves it at the version it found.
+Version 17 does the same. A store built from nothing passes through both while empty, and every
+store at v17 or later is past both.
 
 ## Version 11 — Plex DB-EX's stored tag network
 

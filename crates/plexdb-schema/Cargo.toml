@@ -1,0 +1,12 @@
+[package]
+name = "plexdb-schema"
+version = "0.1.0"
+edition = "2024"
+description = "The store's schema: the migration chain that defines every table plexdb.db holds, which the writer applies and the reader is tested against (ADR-0001)."
+
+[dependencies]
+rusqlite = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

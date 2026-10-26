@@ -8,11 +8,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from fixture_store import init as init_store
 from wikidata_fixtures import RecordedWikidataSource
 
 from plexdb.enrich_wikidata import CANDIDATES_SQL, enrich_wikidata, wipe
 from plexdb.errors import WikidataError
-from plexdb.store import init as init_store
 from plexdb.store import open_store
 
 INCEPTION = "imdb:tt1375666"

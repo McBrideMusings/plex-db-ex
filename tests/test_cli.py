@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from fixture_store import init as init_store
 from plex_fixtures import (
     FakeHistorySource,
     FakeSource,
@@ -26,7 +27,6 @@ from plexdb.commands import iter_command_modules
 from plexdb.commands import latent_users as latent_users_cmd
 from plexdb.commands import walk as walk_cmd
 from plexdb.config import Config, ConfigError
-from plexdb.store import init as init_store
 from plexdb.store import open_store
 from plexdb.walk import walk_all
 
@@ -35,7 +35,6 @@ EXPECTED_COMMANDS = {
     "idle",
     "steps",
     "sweep",
-    "migrate",
     "film-suffix-verdicts",
     "walk",
     "media-walk",
@@ -90,7 +89,6 @@ EXPECTED_COMMAND_ORDER = [
     # Every sweep step and which implementation runs it (`plexdb/commands/steps.py`).
     "steps",
     "sweep",
-    "migrate",
     "fold-merge-decisions",
     "fold-role-decisions",
     "fold-name-decisions",
@@ -284,28 +282,28 @@ def _configure_walk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def test_init_creates_the_store_and_says_where(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
 ) -> None:
     store = tmp_path / "plexdb.db"
     monkeypatch.setenv("PLEXDB_PATH", str(store))
 
     assert main(["migrate"]) == 0
 
-    out = capsys.readouterr().out
+    out = capfd.readouterr().out
     assert "created store" in out
     assert str(store.resolve()) in out
     assert store.exists()
 
 
 def test_a_second_init_reports_no_change(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setenv("PLEXDB_PATH", str(tmp_path / "plexdb.db"))
     main(["migrate"])
-    capsys.readouterr()
+    capfd.readouterr()
 
     assert main(["migrate"]) == 0
-    assert "already current" in capsys.readouterr().out
+    assert "already current" in capfd.readouterr().out
 
 
 def test_an_empty_store_path_is_an_error_not_a_default(

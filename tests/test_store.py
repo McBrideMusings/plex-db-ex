@@ -17,8 +17,9 @@ import time
 from pathlib import Path
 
 import pytest
+from fixture_store import init
 
-from plexdb.store import BUSY_TIMEOUT_MS, init, open_readonly, open_store
+from plexdb.store import BUSY_TIMEOUT_MS, open_readonly, open_store
 
 
 def test_busy_timeout_is_set_explicitly_on_open_store_and_open_readonly(tmp_path: Path) -> None:

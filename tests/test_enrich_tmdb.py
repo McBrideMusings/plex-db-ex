@@ -15,11 +15,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from fixture_store import init as init_store
 from tmdb_fixtures import FailOnRepeatSource, FakeTMDbSource
 
 from plexdb.enrich_tmdb import NAMESPACE, EnrichStats, enrich_tmdb_keywords, wipe_namespace
 from plexdb.errors import TMDbError
-from plexdb.store import init as init_store
 from plexdb.store import open_store
 
 MOVIE_ID = "imdb:tt0468569"  # The Dark Knight — arbitrary item_id shape

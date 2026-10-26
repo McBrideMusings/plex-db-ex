@@ -9,11 +9,11 @@ from typing import Any
 
 import pytest
 from anilist_fixtures import RecordedAniListSource
+from fixture_store import init as init_store
 
 from plexdb.anilist_client import Tag
 from plexdb.enrich_anilist import enrich_anilist, index_mapping, role_for, wipe
 from plexdb.errors import AniListError
-from plexdb.store import init as init_store
 from plexdb.store import open_store
 
 FMAB = "imdb:tt1355642"

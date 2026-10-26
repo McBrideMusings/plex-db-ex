@@ -12,6 +12,7 @@ from typing import Any
 
 import httpx
 import pytest
+from fixture_store import init as init_store
 from letterboxd_fixtures import (
     LIST_FILMS,
     LIST_SLUG,
@@ -34,7 +35,6 @@ from plexdb.letterboxd_client import (
 from plexdb.letterboxd_lists import MAX_LIST_ENTRIES, refresh_letterboxd_lists
 from plexdb.list_decisions import canonical_list_url, list_source
 from plexdb.lists import list_detail, list_table
-from plexdb.store import init as init_store
 from plexdb.store import open_store
 
 COLLECTION_ID = f"letterboxd:{LIST_USER}/{LIST_SLUG}"

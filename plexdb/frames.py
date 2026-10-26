@@ -3,8 +3,8 @@
 It holds every title's Cuts and one CLIP vector per Shot. It is derived — the
 frame harvester rebuilds a lost file from the media through Plex — and at full
 library it runs to tens of gigabytes, so it is never snapshotted or backed up,
-and it has its own schema version and migration chain, applied by the same
-`schema.apply` the store uses.
+and it has its own schema version and migration chain, applied by
+`schema.apply`.
 
 Two rules shape every write here:
 
@@ -179,7 +179,7 @@ _V4 = """
 ALTER TABLE frame_index_state ADD COLUMN reason TEXT;
 """
 
-#: Append-only, like `schema.MIGRATIONS`, and versioned separately from it.
+#: Append-only, like the store's chain, and versioned separately from it.
 MIGRATIONS: tuple[schema.Migration, ...] = (_V1, _V2, _V3, _V4)
 SCHEMA_VERSION = len(MIGRATIONS)
 
@@ -267,7 +267,7 @@ def migrate(path: Path) -> tuple[int, int]:
     """
     conn = _connect(path)
     try:
-        was, now, _ = schema.apply(conn, MIGRATIONS)
+        was, now = schema.apply(conn, MIGRATIONS)
     finally:
         conn.close()
     return was, now

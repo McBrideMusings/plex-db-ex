@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from fixture_store import init
 from playwright.sync_api import Browser, sync_playwright
 from tokenizers import Tokenizer, models, pre_tokenizers
 
@@ -31,7 +32,7 @@ from plexdb.explore_search import (
 )
 from plexdb.frames import migrate, open_frames
 from plexdb.plex_client import Section
-from plexdb.store import init, open_store
+from plexdb.store import open_store
 
 MODEL = "test/clip"
 NOW = "2026-10-16T00:00:00+00:00"

@@ -15,10 +15,10 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from fixture_store import init as init_store
 from plex_fixtures import FakeHistorySource, recorded_history_source, recorded_source
 
 from plexdb.plays import PlaysStats, ingest_plays
-from plexdb.store import init as init_store
 from plexdb.store import open_store
 from plexdb.walk import walk_all
 

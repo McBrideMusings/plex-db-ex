@@ -14,6 +14,7 @@ from typing import Any
 
 import httpx
 import pytest
+from fixture_store import init as init_store
 
 from plexdb import roles
 from plexdb.cli import main
@@ -22,7 +23,6 @@ from plexdb.errors import JevError, JevRejected
 from plexdb.jev_client import LiveJev, RoleVerdict
 from plexdb.keywords import ROLES, upsert_keyword_form
 from plexdb.roles import judge_keyword_roles
-from plexdb.store import init as init_store
 from plexdb.store import open_store
 
 MODEL = "jev-test-1.0"

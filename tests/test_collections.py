@@ -15,11 +15,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from fixture_store import init as init_store
 from mdblist_fixtures import FakeMDBListSource, a_list, an_entry
 
 from plexdb.collections import MDBLIST_SOURCE, refresh_mdblist, wipe_source
 from plexdb.errors import MDBListError, MDBListQuotaError
-from plexdb.store import init as init_store
 from plexdb.store import open_store
 
 DARK_KNIGHT = "imdb:tt0468569"

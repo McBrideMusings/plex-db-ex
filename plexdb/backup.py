@@ -1,16 +1,13 @@
-"""Copies of the store taken before anything changes its schema.
+"""Copies of the store taken before a command rewrites rows no re-scan brings back.
 
 The store holds twenty months of watch history and a rate-limited TMDB sweep,
-neither of which a re-scan reproduces. `schema.apply` already wraps every
-pending migration and the version row in one transaction, so a process killed
-partway through leaves the file untouched — but that protects against a *crash*,
-not against a migration that is simply wrong. Bad SQL commits perfectly happily.
+neither of which a re-scan reproduces. A transaction protects against a *crash*,
+not against a rewrite that is simply wrong — bad SQL commits perfectly happily.
+So a copy is taken first, and it is kept. `plexdb repair-fs-identities` takes one
+here; `plexdb migrate` takes its `plexdb.pre-v<N>.db` the same way, in Rust
+(`crates/plexdb/src/migrate.rs`), into the same directory.
 
-So a copy is taken first, and it is kept.
-
-**Nothing this module writes is ever pruned.** Every copy taken here is a
-pre-migration one, and the two kinds of copy in the backups directory are not
-worth the same. A `plexdb.pre-v<N>.db` is
+**Nothing this module writes is ever pruned.** A `plexdb.pre-v<N>.db` is
 the only route back past migration N, there is at most one per schema version,
 and the list of versions grows by one every few weeks — so the whole set is
 bounded by the schema's own history and none of it is redundant. A
@@ -32,10 +29,9 @@ from pathlib import Path
 from .errors import StoreError
 
 #: Tables whose contents no re-run reproduces, checked for row loss after a
-#: migration. `plays` is watch history Tautulli eventually forgets, `enrichment`
-#: is a TMDB sweep paid for against a rate limit, and `items` is what both hang
-#: off. Everything else in the schema — edges, collections, cursors — is
-#: re-fetchable, so a migration that rebuilds one of those is not a red flag.
+#: rewrite (`plexdb_schema::GUARDED_TABLES`, which `plexdb migrate` checks).
+#: `plays` is watch history Tautulli eventually forgets, `enrichment` is a TMDB
+#: sweep paid for against a rate limit, and `items` is what both hang off.
 GUARDED_TABLES = ("items", "plays", "enrichment")
 
 

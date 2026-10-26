@@ -8,10 +8,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from fixture_store import init
 
 from plexdb.errors import PanelsFileError
 from plexdb.panels import PanelHistory, PanelsFile, record_panels, series_key
-from plexdb.store import init, open_store
+from plexdb.store import open_store
 
 DAY1 = date(2026, 10, 1)
 DAY2 = date(2026, 10, 2)

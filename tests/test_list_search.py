@@ -11,11 +11,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from fixture_store import init as init_store
 from mdblist_fixtures import FakeMDBListSource, a_list, an_entry
 
 from plexdb.errors import MDBListQuotaError
 from plexdb.list_search import refresh_list_search, wipe_searched
-from plexdb.store import init as init_store
 from plexdb.store import open_store
 
 ALIEN = "imdb:tt0078748"

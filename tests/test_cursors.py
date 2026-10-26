@@ -7,6 +7,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from fixture_store import init as init_store
 
 from plexdb.cursors import (
     delete_cursors,
@@ -15,7 +16,6 @@ from plexdb.cursors import (
     mark_attempted,
     write_fetched,
 )
-from plexdb.store import init as init_store
 from plexdb.store import open_store
 
 TITLE = "imdb:tt1375666"

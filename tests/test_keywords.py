@@ -8,6 +8,7 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from fixture_store import init as init_store
 
 from plexdb.cli import main
 from plexdb.keywords import (
@@ -26,8 +27,6 @@ from plexdb.keywords import (
 from plexdb.merge_review import MergeDecisions
 from plexdb.role_review import RoleDecisions
 from plexdb.roles import fold_role_decisions
-from plexdb.schema import _rekey
-from plexdb.store import init as init_store
 from plexdb.store import open_store
 from plexdb.synonyms import fold_merge_decisions
 
@@ -336,7 +335,9 @@ def test_an_unfolded_decision_follows_its_keyword_through_a_normalization_change
         monkeypatch.setattr(f"{module}.normalize_keyword", renamed)
     with open_store(store) as conn:
         rederive_keywords(conn)
-        _rekey(conn, {"documentary film": "nonfiction"})
+        conn.execute(
+            "UPDATE keyword_roles SET keyword = 'nonfiction' WHERE keyword = 'documentary film'"
+        )
         conn.commit()
         assert fold_merge_decisions(conn, merges.path).matched == 1
         assert fold_role_decisions(conn, roles.path).matched == 1

@@ -1,23 +1,24 @@
 //! Fixture-store builder shared by this crate's integration tests.
 //!
-//! Per issue #11, the crate is "tested against a fixture store built by
-//! this repository's own writer" — so schema creation goes through the real
-//! `plexdb migrate` CLI (via `uv run`), never a hand-copied version of
-//! `plexdb/schema.py`'s DDL that could drift out of sync with it. Seed rows
-//! beyond the bare schema are plain `INSERT`s against that same schema,
-//! exactly as `plexdb`'s own Python test suite builds its fixtures
-//! (`tests/test_schema.py`).
+//! The crate is "tested against a fixture store built by this repository's own
+//! writer" (issue #11), so the schema comes from `plexdb-schema`'s chain — the one
+//! `plexdb migrate` applies — never a hand-copied version of its DDL that could
+//! drift. Seed rows beyond the bare schema are plain `INSERT`s against it.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use rusqlite::Connection;
+
+// A reader built against one read shape and a writer stamping another is drift
+// this crate's tests refuse to compile.
+const _: () = assert!(plexdb_reader::SUPPORTED_READER_SHAPE == plexdb_schema::READER_SHAPE);
 
 /// The plex-db-ex repo root, two levels above this crate's manifest.
 ///
 /// Read at run time: `cargo test` sets `CARGO_MANIFEST_DIR` for the checkout
 /// running it. The compile-time `env!` bakes in the checkout that built the
 /// binary, and workers sharing one `CARGO_TARGET_DIR` reuse that binary.
+#[allow(dead_code)]
 pub fn repo_root() -> PathBuf {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
         .expect("CARGO_MANIFEST_DIR is set by cargo test; run the tests through cargo");
@@ -28,26 +29,16 @@ pub fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// Build a fixture store at `path`: create the real schema by driving
-/// `plexdb migrate`, then seed a small, hand-written dataset. Returns an open,
-/// writable connection to it (closed when dropped) in case a test needs to
-/// mutate the fixture further, e.g. to force a schema-version mismatch.
-///
-/// `migrate` against a path that does not exist creates the store at the
-/// current schema version, which is what this needs.
+/// Build a fixture store at `path`: create the real schema with the writer's
+/// chain, then seed a small, hand-written dataset. Returns an open, writable
+/// connection to it (closed when dropped) in case a test needs to mutate the
+/// fixture further, e.g. to force a schema-version mismatch.
 pub fn build_fixture(path: &Path) -> Connection {
-    let status = Command::new("uv")
-        .args(["run", "plexdb", "migrate"])
-        .env("PLEXDB_PATH", path)
-        .current_dir(repo_root())
-        .status()
-        .expect("failed to run `uv run plexdb migrate` — is uv on PATH?");
-    assert!(
-        status.success(),
-        "plexdb migrate failed to build the fixture schema"
-    );
+    let mut conn = Connection::open(path).expect("create the fixture store");
+    conn.pragma_update(None, "foreign_keys", "ON")
+        .expect("foreign keys on, as the writer opens the store");
+    plexdb_schema::apply(&mut conn).expect("build the fixture schema");
 
-    let conn = Connection::open(path).expect("open the freshly-created fixture for seeding");
     conn.execute_batch(SEED).expect("seed the fixture store");
     seed_episodes(&conn);
     conn.execute_batch(MOVIE_PLAYS)

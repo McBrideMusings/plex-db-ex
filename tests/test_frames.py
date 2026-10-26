@@ -13,10 +13,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from fixture_store import init
 
 from plexdb import frames, schema
 from plexdb.cli import main
-from plexdb.store import init, open_store
+from plexdb.store import open_store
 
 
 @pytest.fixture

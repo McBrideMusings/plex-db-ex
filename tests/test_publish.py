@@ -12,10 +12,11 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from fixture_store import init
 
 from plexdb import schema
 from plexdb.errors import StoreError
-from plexdb.store import init, open_readonly, open_store, publish
+from plexdb.store import open_readonly, open_store, publish
 
 
 def _seed(store: Path) -> None:

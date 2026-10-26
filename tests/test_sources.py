@@ -127,7 +127,7 @@ def test_the_client_is_built_from_the_credential_and_the_window_reaches_refresh(
     monkeypatch.setenv("PLEXDB_PATH", str(store))
     monkeypatch.setenv("EXAMPLE_API_KEY", "a-key")
     monkeypatch.setenv("EXAMPLE_STALE_DAYS", "7")
-    from plexdb.store import init as init_store
+    from fixture_store import init as init_store
 
     init_store(store)
     seen: dict[str, Any] = {}
@@ -147,7 +147,7 @@ def test_rewipe_off_does_not_wipe(tmp_path: Any, monkeypatch: pytest.MonkeyPatch
     store = tmp_path / "plexdb.db"
     monkeypatch.setenv("PLEXDB_PATH", str(store))
     monkeypatch.setenv("EXAMPLE_API_KEY", "a-key")
-    from plexdb.store import init as init_store
+    from fixture_store import init as init_store
 
     init_store(store)
     wiped: list[bool] = []
@@ -173,7 +173,7 @@ def test_a_source_declared_without_a_credential_runs_with_none_set(
     store = tmp_path / "plexdb.db"
     monkeypatch.setenv("PLEXDB_PATH", str(store))
     monkeypatch.setenv("EXAMPLE_API_KEY", "")
-    from plexdb.store import init as init_store
+    from fixture_store import init as init_store
 
     init_store(store)
     seen: dict[str, Any] = {}
@@ -219,7 +219,7 @@ def test_a_capped_source_passes_the_limit_and_its_exit_code_decides(
     store = tmp_path / "plexdb.db"
     monkeypatch.setenv("PLEXDB_PATH", str(store))
     monkeypatch.setenv("EXAMPLE_MAX_TITLES", "")
-    from plexdb.store import init as init_store
+    from fixture_store import init as init_store
 
     init_store(store)
     seen: dict[str, Any] = {}

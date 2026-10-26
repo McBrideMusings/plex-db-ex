@@ -8,45 +8,43 @@ damaged one.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import sqlite3
 import subprocess
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from fixture_store import init
 
 from plexdb import schema
 from plexdb.cli import main
 from plexdb.commands.check import _cmd_check, await_current, render
 from plexdb.errors import StoreError
 from plexdb.health import Report, inspect
-from plexdb.store import (
-    _migrating,
-    held_by,
-    holding,
-    init,
-    migrate,
-    open_store,
-    outside_migration,
-    writing,
-)
+from plexdb.store import _lock_path, held_by, holding, open_store, outside_migration, writing
 
 NOW = datetime(2026, 8, 12, 12, 0, 0, tzinfo=UTC)
 
 
 def _store_at(path: Path, version: int) -> None:
-    """Build a store at exactly `version` by applying only that many migrations."""
-    with open_store(path, create=True) as conn:
-        for migration in schema.MIGRATIONS[:version]:
-            if isinstance(migration, str):
-                conn.executescript(migration)
-            else:
-                migration(conn)
-        conn.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
-        conn.execute("DELETE FROM schema_version")
-        conn.execute("INSERT INTO schema_version (version) VALUES (?)", (version,))
+    """A store stamped at `version`. Its tables are the current ones: what is
+    under test is how a report reads the version, not the older shape."""
+    init(path)
+    with open_store(path) as conn:
+        conn.execute("UPDATE schema_version SET version = ?", (version,))
         conn.commit()
+
+
+@contextmanager
+def _migrating(path: Path) -> Iterator[None]:
+    """Hold the migration lock exclusive, as `plexdb migrate` does throughout."""
+    with _lock_path(path).open("a") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
 
 
 def _populate(path: Path) -> None:
@@ -502,27 +500,6 @@ def test_idle_is_not_zero_when_it_cannot_look(
     lock.mkdir()
     assert main(["idle"]) != 0
     assert "error" in capsys.readouterr().err
-
-
-def test_migrate_holds_the_lock_a_check_waits_on(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    path = tmp_path / "plexdb.db"
-    _store_at(path, 9)
-    seen: list[bool] = []
-
-    def apply_and_look(conn: sqlite3.Connection) -> tuple[int, int, schema.DeclaredShrinks]:
-        with outside_migration(path) as clear:
-            seen.append(clear)
-        return real_apply(conn)
-
-    real_apply = schema.apply
-    monkeypatch.setattr(schema, "apply", apply_and_look)
-    migrate(path, tmp_path / "backups")
-
-    assert seen == [False]
-    with outside_migration(path) as clear:
-        assert clear
 
 
 def test_a_file_that_is_not_a_database_is_reported_not_traced(tmp_path: Path) -> None:

@@ -80,26 +80,20 @@ def next_fire(now: datetime, at: tuple[int, int]) -> datetime:
 def _migrate_store() -> None:
     """Bring the store to the schema this build expects, and say what happened.
 
-    Deliberately not wrapped: a store that fails to migrate has already been
-    rolled back to the copy `store.migrate` took, and the right thing then is to
-    take the container down loudly rather than sweep a store at a schema this
-    code does not match. Under `restart: unless-stopped` that is a restart loop
-    with the reason in `docker logs`, which is louder than a sweep writing
-    against the wrong shape.
+    `plexdb-rs migrate` prints the backup it took, the version change and the
+    guarded row counts. Deliberately not wrapped: a store that fails to migrate
+    has already been rolled back to the copy the migration took, and the right
+    thing then is to take the container down loudly rather than sweep a store at
+    a schema this code does not match. Under `restart: unless-stopped` that is a
+    restart loop with the reason in `docker logs`, which is louder than a sweep
+    writing against the wrong shape.
     """
+    from . import rust
     from .config import Config
     from .frames import migrate_configured
-    from .store import migrate
 
     config = Config.from_env()
-    result = migrate(config.store_path, config.backup_dir)
-    if result.was == 0:
-        print(f"created store at schema v{result.now}", flush=True)
-    elif result.migrated:
-        print(f"backed up to {result.backup}", flush=True)
-        print(f"migrated store v{result.was} -> v{result.now}", flush=True)
-    else:
-        print(f"store already current at schema v{result.now}", flush=True)
+    rust.run(["migrate"], config)
     # The Frame index is optional (ADR-0024), so its failure is printed and the
     # container stays up to sweep the store; `plexdb check`, which a deploy
     # runs last, fails on a frames.db left damaged or behind.

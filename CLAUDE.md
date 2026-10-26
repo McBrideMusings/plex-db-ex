@@ -52,7 +52,7 @@ because `enrichment_cursor` carries a `fetched_at` per title. See
 ## Layout
 
 ```
-crates/            the Rust workspace: plexdb-reader, and the writer's steps as they move
+crates/            the Rust workspace: the schema (plexdb-schema), plexdb-reader, and the writer's steps as they move
 plexdb/            the Python package — runs the sweep steps not yet ported to Rust
 docs/              CONTEXT.md, adr/, PRD.md, ROADMAP.md
 data/              plexdb.db lives here (gitignored)

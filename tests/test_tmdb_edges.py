@@ -17,10 +17,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from fixture_store import init as init_store
 from tmdb_fixtures import FailOnRepeatSource, FakeTMDbSource
 
 from plexdb.errors import TMDbError
-from plexdb.store import init as init_store
 from plexdb.store import open_store
 from plexdb.tmdb_edges import (
     RECOMMENDATIONS_EDGE_TYPE,

@@ -11,11 +11,11 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from fixture_store import init as init_store
 from plex_fixtures import FakeSource
 
 from plexdb.plex_client import PLEX_TYPE_EPISODE, PLEX_TYPE_MOVIE, PLEX_TYPE_SHOW, Section
 from plexdb.repair import fused_item_ids, kinds_by_rating_key, repair
-from plexdb.store import init as init_store
 from plexdb.store import open_store
 from plexdb.walk import walk_all
 

@@ -14,6 +14,7 @@ from typing import Any
 
 import httpx
 import pytest
+from fixture_store import init
 
 from plexdb import frame_harvest, frames
 from plexdb.config import Config
@@ -21,7 +22,7 @@ from plexdb.errors import HarvesterBusy, MediaError
 from plexdb.frame_encoder import EncoderClient
 from plexdb.frame_harvest import Cut, Scan
 from plexdb.plex_client import Section
-from plexdb.store import init, open_store
+from plexdb.store import open_store
 
 # item_id, type, section, addedAt
 TITLES = [

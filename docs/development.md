@@ -117,6 +117,7 @@ is what `plexdb publish` already used for snapshots ([`store.py`][store.py]), wh
 [`plexdb/backup.py`][backup.py] uses before a migration.
 
 [store.py]: https://github.com/McBrideMusings/plex-db-ex/blob/main/plexdb/store.py
+[migrate.rs]: https://github.com/McBrideMusings/plex-db-ex/blob/main/crates/plexdb/src/migrate.rs
 [baseline.sh]: https://github.com/McBrideMusings/plex-db-ex/blob/main/tools/baseline.sh
 [backup.py]: https://github.com/McBrideMusings/plex-db-ex/blob/main/plexdb/backup.py
 
@@ -133,13 +134,13 @@ Pruning a stamp's store copy removes its decision copies with it.
 
 ## A migration takes a copy first, and rolls back if the result is wrong
 
-`schema.apply` wraps every pending migration and the version row in one transaction, so a process
-killed partway leaves the file untouched. That protects against a **crash**. It does nothing about a
+Each migration and its version row run in one transaction (`plexdb_schema::apply`), so a process
+killed partway leaves the file at the last step that landed. That protects against a **crash**. It does nothing about a
 migration that is simply **wrong** — bad SQL commits perfectly happily, and migrations here are
 forward-only, so there is no down-migration to run.
 
-So `plexdb migrate` — the first step of every sweep — does this instead, in
-[`store.migrate`][store.py]:
+So `plexdb migrate` — the first step of every sweep, and what the container runs as it starts —
+does this instead, in [`crates/plexdb/src/migrate.rs`][migrate.rs]:
 
 1. If the store is already current, stop. Nothing is copied; a copy per sweep would fill the disk.
 2. Otherwise copy the store to `backups/plexdb.pre-v<target>.db` beside it, and record the row

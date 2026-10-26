@@ -12,6 +12,7 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from fixture_store import init as init_store
 from plex_fixtures import FakeSource, recorded_source
 
 from plexdb.cli import main
@@ -24,7 +25,6 @@ from plexdb.repair_fs_identities import (
     plan_fs_repairs,
     repair_fs_identities,
 )
-from plexdb.store import init as init_store
 from plexdb.store import open_store
 
 #: A movie recorded live with no external GUID at all — real fixture data, so

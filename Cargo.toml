@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/plexdb-reader", "crates/plexdb-store", "crates/plexdb"]
+members = ["crates/plexdb-schema", "crates/plexdb-reader", "crates/plexdb-store", "crates/plexdb"]
 resolver = "3"
 
 [workspace.dependencies]

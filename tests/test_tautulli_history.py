@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from fixture_store import init as init_store
 
 from plexdb.plays import (
     MATCH_WINDOW_SECONDS,
@@ -28,7 +29,6 @@ from plexdb.plays import (
     build_account_id_map,
     match_tautulli_history,
 )
-from plexdb.store import init as init_store
 from plexdb.store import open_store
 
 

@@ -24,6 +24,7 @@ from typing import Any, cast
 
 import httpx
 import pytest
+from fixture_store import init
 from playwright.sync_api import Browser, Page, sync_playwright
 
 from plexdb import explore, schedule
@@ -51,7 +52,7 @@ from plexdb.explore import (
 from plexdb.merge_review import merge_map
 from plexdb.names import display_labels
 from plexdb.panels import PanelsFile, series_key
-from plexdb.store import init, open_readonly, open_store, publish
+from plexdb.store import open_readonly, open_store, publish
 from plexdb.tagnetwork import refresh_tag_networks
 from plexdb.titlemap import refresh_title_maps
 

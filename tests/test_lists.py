@@ -13,13 +13,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from fixture_store import init as init_store
 from mdblist_fixtures import FakeMDBListSource, a_list, an_entry
 
 from plexdb import cli
 from plexdb.collections import refresh_mdblist
 from plexdb.health import inspect
 from plexdb.lists import MIN_KEYWORD_TITLES, find_list, list_detail, list_table
-from plexdb.store import init as init_store
 from plexdb.store import open_store
 
 NOW = "2026-01-01T00:00:00+00:00"

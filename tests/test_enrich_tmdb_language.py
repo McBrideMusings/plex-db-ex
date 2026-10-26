@@ -10,12 +10,13 @@ from typing import Any
 
 import httpx
 import pytest
+from fixture_store import init
 from tmdb_fixtures import load
 
 from plexdb.enrich_tmdb_language import NAMESPACE, SOURCE, enrich_tmdb_language, wipe
 from plexdb.explore import run_query
 from plexdb.panels import DEFAULT_DASHBOARDS
-from plexdb.store import init, open_store
+from plexdb.store import open_store
 from plexdb.tmdb_client import LiveTMDbClient
 
 _RECORDED = {

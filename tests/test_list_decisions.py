@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from fixture_store import init
 
 from plexdb import cli
 from plexdb.commands.check import render
@@ -22,7 +23,7 @@ from plexdb.list_decisions import (
     decide,
 )
 from plexdb.lists import list_table, with_pending
-from plexdb.store import init, open_readonly, open_store
+from plexdb.store import open_readonly, open_store
 
 AT = "2026-10-01T00:00:00+00:00"
 LATER = "2026-10-02T00:00:00+00:00"

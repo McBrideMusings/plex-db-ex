@@ -11,12 +11,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from fixture_store import init
 
 from plexdb.errors import MediaTimeout
 from plexdb.frame_harvest import FfmpegMedia
 from plexdb.media_check import check_files
 from plexdb.panels import DEFAULT_DASHBOARDS
-from plexdb.store import init, open_store
+from plexdb.store import open_store
 
 pytestmark = pytest.mark.skipif(
     shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,

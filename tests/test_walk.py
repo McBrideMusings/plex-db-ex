@@ -14,12 +14,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from fixture_store import init as init_store
 from plex_fixtures import FakeSource, recorded_source
 
 from plexdb import walk as walk_module
 from plexdb.identity import canonical_path, derive_item_id
 from plexdb.plex_client import PLEX_TYPE_EPISODE, PLEX_TYPE_MOVIE, PLEX_TYPE_SHOW, Section
-from plexdb.store import init as init_store
 from plexdb.store import open_store
 from plexdb.walk import WalkStats, walk_all
 

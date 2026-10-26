@@ -12,12 +12,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from fixture_store import init
 
 from plexdb.errors import NameDecisionsError
 from plexdb.explore import make_server
 from plexdb.keywords import readable_surfaces
 from plexdb.names import NameDecisions, display_labels, fold_name_decisions, names_json
-from plexdb.store import init, open_readonly, open_store
+from plexdb.store import open_readonly, open_store
 
 AT = "2026-10-01T00:00:00+00:00"
 LATER = "2026-10-02T00:00:00+00:00"

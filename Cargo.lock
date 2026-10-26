@@ -398,6 +398,7 @@ checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 name = "plexdb"
 version = "0.1.0"
 dependencies = [
+ "plexdb-schema",
  "plexdb-store",
  "rusqlite",
  "serde_json",
@@ -409,6 +410,7 @@ dependencies = [
 name = "plexdb-reader"
 version = "0.1.0"
 dependencies = [
+ "plexdb-schema",
  "rusqlite",
  "serde",
  "serde_json",
@@ -420,9 +422,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "plexdb-schema"
+version = "0.1.0"
+dependencies = [
+ "rusqlite",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "plexdb-store"
 version = "0.1.0"
 dependencies = [
+ "plexdb-schema",
  "rusqlite",
  "tempfile",
  "thiserror",

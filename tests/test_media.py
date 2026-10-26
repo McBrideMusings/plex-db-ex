@@ -11,10 +11,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from fixture_store import init
 from plex_fixtures import FakeSource, load, recorded_source
 
 from plexdb.media import media_walk
-from plexdb.store import init, open_store
+from plexdb.store import open_store
 from plexdb.walk import walk_all
 
 RATING_KEY = "13714"

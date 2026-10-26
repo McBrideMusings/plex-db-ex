@@ -5,6 +5,7 @@ edition = "2024"
 description = "The plexdb writer's sweep steps that have moved from the Python package (ADR-0001)."
 
 [dependencies]
+plexdb-schema = { path = "../plexdb-schema" }
 plexdb-store = { path = "../plexdb-store" }
 rusqlite = { workspace = true }
 serde_json = { workspace = true }

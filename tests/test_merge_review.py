@@ -11,11 +11,12 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from fixture_store import init
 
 from plexdb.explore import make_server
 from plexdb.keywords import FILM_SUFFIX_MODEL
 from plexdb.merge_review import MergeDecisions, merge_map
-from plexdb.store import init, open_store
+from plexdb.store import open_store
 from plexdb.synonyms import fold_merge_decisions
 
 JUDGED = "2026-09-30T00:00:00+00:00"

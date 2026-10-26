@@ -13,7 +13,7 @@
 //! migration that changes what an accessor reads bumps `reader_shape`, and
 //! every reader built before it refuses the store rather than misreading it.
 //!
-//! Mirrors `plexdb/schema.py::READER_SHAPE`. Bump this constant, and the
+//! Mirrors `plexdb_schema::READER_SHAPE`. Bump this constant, and the
 //! accessors it backs, in the same change that bumps that one.
 
 use std::path::Path;
@@ -30,8 +30,8 @@ use crate::error::ReaderError;
 /// spellings to normalized forms. Writers' fetch cursors live in
 /// `enrichment_cursor`, not `enrichment` (ADR-0013).
 ///
-/// `tests/test_schema.py` fails whenever this constant differs from
-/// `plexdb/schema.py::READER_SHAPE`.
+/// This crate's tests do not compile while this constant differs from
+/// `plexdb_schema::READER_SHAPE` (`tests/common/mod.rs`).
 pub const SUPPORTED_READER_SHAPE: i64 = 10;
 
 /// Confirm `conn` is a plexdb store whose `reader_shape` is exactly
