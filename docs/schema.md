@@ -794,23 +794,28 @@ title_map_state  kind PK, fingerprint TEXT, unplaced INTEGER, computed_at TEXT
 `title_map` holds the default map of Plex DB-EX's Map view: each title of `kind`
 (`movie` or `show`) with a position in the unit square. Only distances mean anything. It is the
 map with no noise tag excluded, drawn from the `keywords` rows, merges folded, by IDF-weighted keyword
-vectors laid out whole by UMAP with cosine distance (`min_dist` 0.1). `item_id` carries no
+vectors laid out by holomap with cosine distance (`min_dist` 0.1; vectors over 256 columns are
+first projected to 256 by a seeded +/-1 random projection, so one store gives one layout). `item_id` carries no
 foreign key: a title that has left `items` drops out of Plex DB-EX's join, and the next refresh
 redraws the map without it.
 
-`title_map_state` holds one row per kind. `fingerprint` names the drawing recipe, a SHA-256
-digest of the kind's keyword rows (`item_id`, source, value, `fetched_at`, in key order), and a
-SHA-256 digest of the merge fold, so any row added, removed, re-stamped or re-valued, a title
-changing type, or a new merge verdict makes the stored map stale.
+`title_map_state` holds one row per kind. `fingerprint` is `<recipe>|<keyword digest>|<merge
+digest>`: the drawing recipe, a SHA-256 digest of the kind's keyword rows (`item_id`, source,
+value, `fetched_at`, in key order), and a SHA-256 digest of the merge fold, so any row added,
+removed, re-stamped or re-valued, a title changing type, or a new merge verdict makes the stored
+map stale. A row is its fields in order, each as one byte `0` for NULL, or `1`, the UTF-8 length
+as a big-endian `u32` and the UTF-8 bytes; the merge fold's rows are `(keyword, target)` in
+keyword order. The rule is specified by `crates/plexdb/src/keyword_views.rs`, and `plexdb/explore.py`
+computes the same bytes.
 `unplaced` counts titles with keywords that share no tag with another title and so are off the
 map. `computed_at` is UTC.
 
 **Refresh rule.** `plexdb refresh-map` recomputes each kind's fingerprint and redraws only a kind
 whose stored fingerprint differs, replacing the redrawn kinds' rows in both tables and in
 `title_map_label` in one transaction. It runs as its own step of the sweep, after every keyword writer, the film-suffix rule
-and both judges, and before `publish`, so the snapshot carries a map of that night's merges. The
-digest is SHA-256 over Python's `repr` of the row tuples, so only the Python package can
-recompute it; Plex DB-EX compares it and treats a mismatch as no current map, then draws it live,
+and both judges, and before `publish`, so the snapshot carries a map of that night's merges. It
+is a `plexdb-rs` step. A reader recomputes the fingerprint by the rule above, and Plex DB-EX
+compares it and treats a mismatch as no current map, then draws it live,
 which takes tens of seconds for the movies, showing the stale stored map dimmed until the live
 one lands. A reader in another language reads the stored map as the
 last sweep left it and never recomputes the fingerprint.
@@ -850,23 +855,23 @@ tag_network_state  kind PK, fingerprint TEXT, computed_at TEXT
 (`movie` or `show`) that clears the Graph view's document-frequency floor, with its document
 frequency and a position in the unit square. Only distances mean anything. It is the network
 with no noise tag excluded, drawn the same way `title_map` is: IDF-weighted vectors — a tag's
-vector is which titles carry it, the transpose of `title_map`'s — laid out whole by UMAP with
-cosine distance. `tag_network_edge` holds each tag's strongest
+vector is which titles carry it, the transpose of `title_map`'s — laid out by holomap with
+cosine distance, the way `title_map` is. `tag_network_edge` holds each tag's strongest
 co-tags: `a` and `b` (`a < b`, each pair once), and how many titles carry both. Neither table
 carries a foreign key: a tag or title that drops out of `enrichment` or `items` drops out of
 the next refresh's network without it.
 
 `tag_network_state` holds one row per kind, the same fingerprint shape as `title_map_state`:
-the drawing recipe and a SHA-256 digest of the kind's keyword rows. `computed_at` is UTC.
+the drawing recipe, the keyword digest and the merge digest, built as for `title_map_state`.
+`computed_at` is UTC.
 
 **Refresh rule.** `plexdb refresh-tagnetwork` recomputes each kind's fingerprint and redraws
 only a kind whose stored fingerprint differs, replacing all three tables' rows for the redrawn
 kinds in one transaction. It runs as its own step of the sweep, right after `refresh-map`, so
-the snapshot carries a current network. The digest is built as for
-`title_map_state`, so only the Python package can recompute it; Plex DB-EX compares it and
-treats a mismatch as no stored network, then draws it live, which takes tens of seconds for the movies — and only for the
-default (no tag excluded) view, since an excluded-tag combination is never precomputed. A reader
-in another language never recomputes the fingerprint.
+the snapshot carries a current network. It is a `plexdb-rs` step. The nodes (`value`, `df`) and
+the edges are exact counts and do not depend on the layout; only `x` and `y` do. Plex DB-EX
+compares the fingerprint and treats a mismatch as no stored network, then draws it live, which takes tens of seconds for the movies — and only for the
+default (no tag excluded) view, since an excluded-tag combination is never precomputed.
 
 ## Version 12 — a judge's verdicts on keyword pairs
 

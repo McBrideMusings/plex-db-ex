@@ -187,7 +187,7 @@ pub fn ensure_parent(path: &Path) -> Result<(), StoreError> {
 /// `Path.resolve()` as Python spells it, which `store.held_path` names the store
 /// by: the longest part of the path that exists is canonicalized and the rest is
 /// joined on as written, so a store not created yet still resolves.
-fn py_resolve(path: &Path) -> PathBuf {
+pub fn py_resolve(path: &Path) -> PathBuf {
     let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
     let mut rest = Vec::new();
     let mut existing = absolute.as_path();

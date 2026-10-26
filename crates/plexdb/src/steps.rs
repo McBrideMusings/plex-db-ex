@@ -8,8 +8,9 @@ use crate::decisions::FoldError;
 use crate::sources::Sources;
 use crate::{
     frames_cmd, harvest_frames, judge_steps, keyword_verdicts, latent_users, list_decisions,
-    list_steps, media, merge_decisions, migrate, name_decisions, plays, prune_frames,
-    record_panels, repair, repair_fs, role_decisions, search_cmd, source_steps, tmdb_steps, walk,
+    list_steps, media, merge_decisions, migrate, name_decisions, plays, prune_frames, publish,
+    record_panels, refresh_map, refresh_tagnetwork, repair, repair_fs, role_decisions, search_cmd,
+    source_steps, tmdb_steps, walk,
 };
 
 /// Why a step stopped. `Config` is a setting that is absent, which the sweep
@@ -330,6 +331,9 @@ pub const STEPS: &[(&str, Run)] = &[
     ),
     (judge_steps::PAIRS, judge_steps::run_pairs),
     (judge_steps::ROLES, judge_steps::run_roles),
+    (refresh_map::NAME, refresh_map::run),
+    (refresh_tagnetwork::NAME, refresh_tagnetwork::run),
+    (publish::NAME, publish::run),
 ];
 
 pub fn find(name: &str) -> Option<Run> {

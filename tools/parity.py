@@ -81,6 +81,9 @@ OUTPUT_STEPS = frozenset(
         "judge-keyword-roles",
         "latent-users",
         "record-panels",
+        "refresh-map",
+        "refresh-tagnetwork",
+        "publish",
         "enrich-anilist",
         "enrich-wikidata",
         "enrich-mdblist-ratings",
@@ -97,6 +100,12 @@ _STAGE_SECONDS = re.compile(r"\b((?:decode|scan|extract|encode)_s)=\d+\.\d\b")
 _TOOK = re.compile(r"\b(in|after) \d+\.\d s\b")
 #: The milliseconds a panel's query took.
 _MS = re.compile(r"\(\d+ ms\)")
+#: The seconds a layout step reports it took ("drew 11,636 title(s) in 38.0s").
+_DREW = re.compile(r"\bin \d+\.\ds\b")
+#: Steps that lay out a view: the positions, the labels they name and the fingerprint (whose
+#: recipe names the layout) are the layout's own and differ between the two, so they are
+#: compared as nothing; the nodes, edges and counts around them are compared exactly.
+LAYOUT_STEPS = frozenset({"refresh-map", "refresh-tagnetwork"})
 
 
 def _python_commands() -> set[str]:
@@ -128,11 +137,14 @@ def _run(argv: list[str], env: dict[str, str], side: str) -> tuple[int, str]:
 
 def _lines(text: str, scratch: str) -> list[str]:
     return [
-        _MS.sub(
-            "(<t> ms)",
-            _STAGE_SECONDS.sub(
-                r"\1=<s>",
-                _TOOK.sub(r"\1 <t> s", _TIME.sub("<time>", line.replace(scratch, "<run>"))),
+        _DREW.sub(
+            "in <t>s",
+            _MS.sub(
+                "(<t> ms)",
+                _STAGE_SECONDS.sub(
+                    r"\1=<s>",
+                    _TOOK.sub(r"\1 <t> s", _TIME.sub("<time>", line.replace(scratch, "<run>"))),
+                ),
             ),
         )
         for line in text.splitlines()
@@ -158,6 +170,16 @@ def _mask_run_times(store: Path, started: str) -> None:
                 if column.endswith(("_at", "_seen")) and kind.upper() == "TEXT":
                     c = _quote(column)
                     conn.execute(f"UPDATE {t} SET {c} = ? WHERE {c} >= ?", (RUN_TIME, started))
+
+
+def _blank_layout(store: Path) -> None:
+    """Erase what a layout step draws: positions, region labels and fingerprints."""
+    with sqlite3.connect(store) as conn:
+        conn.execute("UPDATE title_map SET x = 0, y = 0")
+        conn.execute("DELETE FROM title_map_label")
+        conn.execute("UPDATE title_map_state SET fingerprint = ''")
+        conn.execute("UPDATE tag_network SET x = 0, y = 0")
+        conn.execute("UPDATE tag_network_state SET fingerprint = ''")
 
 
 def _tables(conn: sqlite3.Connection, schema: str) -> dict[str, str]:
@@ -326,9 +348,20 @@ def main() -> int:
                 for name in DECISIONS_FILES
             ]
             _mask_run_times(root / "plexdb.db", started)
+            if args.step in LAYOUT_STEPS:
+                _blank_layout(root / "plexdb.db")
             if args.step in FRAME_COMMANDS and (root / "frames" / "frames.db").exists():
                 _mask_run_times(root / "frames" / "frames.db", started)
         report = diff(sides["python"] / "plexdb.db", sides["rust"] / "plexdb.db")
+        if args.step == "publish":
+            # What `publish` writes is the snapshot, not the store.
+            snapshots = diff(sides["python"] / "snapshot.db", sides["rust"] / "snapshot.db")
+            report = {
+                "tables": report["tables"] + snapshots["tables"],
+                "rows": report["rows"] + snapshots["rows"],
+                "differing": report["differing"]
+                + [{**d, "db": "snapshot.db"} for d in snapshots["differing"]],
+            }
         if args.step in FRAME_COMMANDS:
             frames_report = diff(
                 sides["python"] / "frames" / "frames.db", sides["rust"] / "frames" / "frames.db"

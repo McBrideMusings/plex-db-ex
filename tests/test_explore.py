@@ -24,7 +24,7 @@ from typing import Any, cast
 
 import httpx
 import pytest
-from fixture_store import init
+from fixture_store import init, publish, refresh_map, refresh_tagnetwork
 from playwright.sync_api import Browser, Page, sync_playwright
 
 from plexdb import explore, schedule
@@ -52,9 +52,7 @@ from plexdb.explore import (
 from plexdb.merge_review import merge_map
 from plexdb.names import display_labels
 from plexdb.panels import PanelsFile, series_key
-from plexdb.store import open_readonly, open_store, publish
-from plexdb.tagnetwork import refresh_tag_networks
-from plexdb.titlemap import refresh_title_maps
+from plexdb.store import open_readonly, open_store
 
 FETCHED = "2026-08-09T12:00:00+00:00"
 
@@ -471,8 +469,8 @@ def test_the_stored_map_carries_its_labels_and_the_page_shows_each_keywords_disp
     person gives it one — on a map drawn live too."""
     path = tmp_path / "plexdb.db"
     _islands(path)
+    refresh_map(path)
     with open_store(path) as conn:
-        refresh_title_maps(conn)
         payload = stored_map(conn, "movie")
         assert payload is not None
         placed = [(p[0], p[3], p[4]) for p in cast(list[list[Any]], payload["points"])]
@@ -521,23 +519,22 @@ def test_the_stored_map_carries_its_labels_and_the_page_shows_each_keywords_disp
 def test_refresh_stores_both_kinds_and_skips_a_kind_whose_keywords_are_unchanged(
     store: Path,
 ) -> None:
+    first = refresh_map(store)
     with open_store(store) as conn:
-        first = refresh_title_maps(conn)
         counts = conn.execute("SELECT kind, COUNT(*) FROM title_map GROUP BY kind")
         rows = [tuple(r) for r in counts]
-        again = refresh_title_maps(conn)
+    again = refresh_map(store)
 
     assert [(r.kind, r.redrawn) for r in first] == [("movie", True), ("show", True)]
     # Heat's only tag is on no other movie, so it is left off; so is the one show.
     assert rows == [("movie", 3)]
-    assert [(r.kind, r.redrawn, r.placed) for r in again] == [
+    assert [(r.kind, r.redrawn, r.count) for r in again] == [
         ("movie", False, 3),
         ("show", False, 0),
     ]
 
     _add_keyword(store, "tvdb:9", "vigilante")
-    with open_store(store) as conn:
-        changed = refresh_title_maps(conn)
+    changed = refresh_map(store)
     assert [(r.kind, r.redrawn) for r in changed] == [("movie", False), ("show", True)]
 
 
@@ -559,9 +556,9 @@ def test_refresh_stores_both_kinds_and_skips_a_kind_whose_keywords_are_unchanged
 def test_a_same_size_rewrite_of_the_keyword_data_makes_the_stored_map_stale(
     store: Path, rewrite: str
 ) -> None:
+    refresh_map(store)
+    refresh_tagnetwork(store)
     with open_store(store) as conn:
-        refresh_title_maps(conn)
-        refresh_tag_networks(conn)
         before = keyword_fingerprint(conn, "movie"), network_fingerprint(conn, "movie")
         assert stored_map(conn, "movie") is not None
         assert stored_network(conn, "movie") is not None
@@ -580,8 +577,7 @@ def test_a_refresh_committing_mid_read_does_not_reach_the_stored_map(
 ) -> None:
     path = tmp_path / "plexdb.db"
     _islands(path)
-    with open_store(path) as conn:
-        refresh_title_maps(conn)
+    refresh_map(path)
     fingerprint = explore.keyword_fingerprint
 
     def refresh_meanwhile(conn: sqlite3.Connection, kind: str) -> str:
@@ -604,8 +600,8 @@ def test_a_refresh_committing_mid_read_does_not_reach_the_stored_map(
 def test_the_stored_map_read_leaves_a_writers_open_transaction_open(tmp_path: Path) -> None:
     path = tmp_path / "plexdb.db"
     _islands(path)
+    refresh_map(path)
     with open_store(path) as conn:
-        refresh_title_maps(conn)
         conn.execute("UPDATE title_map_label SET value = 'pending'")
         payload = stored_map(conn, "movie")
         assert payload is not None
@@ -617,19 +613,38 @@ def test_the_stored_map_read_leaves_a_writers_open_transaction_open(tmp_path: Pa
         assert "pending" not in {label.tag for label in cast(list[RegionLabel], after["labels"])}
 
 
-def test_keyword_fingerprint_digests_the_repr_of_the_ordered_rows(store: Path) -> None:
-    # The digest is what the writer stored on the host; changing its bytes would
-    # make every stored map read as stale.
+def test_keyword_fingerprint_is_the_digest_the_rust_writer_stores(store: Path) -> None:
+    """The fingerprint is a published rule (`crates/plexdb/src/keyword_views.rs`): the writer
+    stores it and this page recomputes it, so the two must make the same bytes."""
+
+    def framed(sha: Any, value: object) -> None:
+        if value is None:
+            sha.update(b"\x00")
+        else:
+            data = str(value).encode()
+            sha.update(b"\x01" + len(data).to_bytes(4, "big") + data)
+
+    refresh_map(store)
     with open_store(store) as conn:
-        rows = conn.execute(
+        keywords = hashlib.sha256()
+        for row in conn.execute(
             "SELECT e.item_id, e.source, e.value, e.fetched_at "
             "FROM enrichment e JOIN items i USING (item_id) "
             "WHERE e.namespace = 'keywords' AND e.key = 'keyword' AND i.type = 'movie' "
             "ORDER BY e.item_id, e.source, e.value"
-        ).fetchall()
-        expected = hashlib.sha256(repr([tuple(r) for r in rows]).encode()).hexdigest()
-        merges = hashlib.sha256(repr(sorted(merge_map(conn).items())).encode()).hexdigest()
-        assert keyword_fingerprint(conn, "movie") == f"{explore.MAP_RECIPE}|{expected}|{merges}"
+        ):
+            for field in row:
+                framed(keywords, field)
+        merges = hashlib.sha256()
+        for pair in sorted(merge_map(conn).items()):
+            for field in pair:
+                framed(merges, field)
+        expected = f"{explore.MAP_RECIPE}|{keywords.hexdigest()}|{merges.hexdigest()}"
+        assert keyword_fingerprint(conn, "movie") == expected
+        (stored,) = conn.execute(
+            "SELECT fingerprint FROM title_map_state WHERE kind = 'movie'"
+        ).fetchone()
+        assert stored == expected
 
 
 def test_a_merge_verdict_folds_one_keyword_into_another_in_every_view_and_redraws_the_map(
@@ -664,8 +679,7 @@ def test_a_merge_verdict_folds_one_keyword_into_another_in_every_view_and_redraw
 def test_map_endpoint_serves_the_stored_map_and_draws_live_once_it_is_stale(
     store: Path, base_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    with open_store(store) as conn:
-        refresh_title_maps(conn)
+    refresh_map(store)
     drawn: list[frozenset[str]] = []
     real = explore.title_map
 
@@ -692,8 +706,7 @@ def test_map_endpoint_serves_the_stored_map_and_draws_live_once_it_is_stale(
 def test_map_endpoint_answers_a_stale_stored_map_at_once_when_asked(
     store: Path, base_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    with open_store(store) as conn:
-        refresh_title_maps(conn)
+    refresh_map(store)
     drawn: list[frozenset[str]] = []
     real = explore.title_map
 
@@ -789,31 +802,29 @@ def test_map_cache_does_not_hold_one_key_behind_another(
 def test_tagnetwork_refresh_stores_both_kinds_and_skips_a_kind_whose_keywords_are_unchanged(
     store: Path,
 ) -> None:
+    first = refresh_tagnetwork(store)
     with open_store(store) as conn:
-        first = refresh_tag_networks(conn)
         counts = conn.execute("SELECT kind, COUNT(*) FROM tag_network GROUP BY kind")
         rows = [tuple(r) for r in counts]
-        again = refresh_tag_networks(conn)
+    again = refresh_tagnetwork(store)
 
     assert [(r.kind, r.redrawn) for r in first] == [("movie", True), ("show", True)]
     # Only "superhero" (df=3) clears the default df >= 3 floor among the movie tags.
     assert rows == [("movie", 1)]
-    assert [(r.kind, r.redrawn, r.nodes) for r in again] == [
+    assert [(r.kind, r.redrawn, r.count) for r in again] == [
         ("movie", False, 1),
         ("show", False, 0),
     ]
 
     _add_keyword(store, "tvdb:9", "vigilante")
-    with open_store(store) as conn:
-        changed = refresh_tag_networks(conn)
+    changed = refresh_tagnetwork(store)
     assert [(r.kind, r.redrawn) for r in changed] == [("movie", False), ("show", True)]
 
 
 def test_tagnetwork_endpoint_serves_the_stored_network_and_draws_live_once_it_is_stale(
     store: Path, base_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    with open_store(store) as conn:
-        refresh_tag_networks(conn)
+    refresh_tagnetwork(store)
     drawn: list[frozenset[str]] = []
     real = explore.tag_network_streaming
 
@@ -1809,8 +1820,7 @@ def browser() -> Iterator[Browser]:
 
 
 def _open_clip(browser: Browser, store: Path, url: str, ready: str = CLIP_READY) -> Page:
-    with open_store(store) as conn:
-        refresh_title_maps(conn)
+    refresh_map(store)
     page = browser.new_page(viewport={"width": 1280, "height": 800})
     page.goto(url)
     page.wait_for_function(ready, timeout=60_000)
@@ -2122,8 +2132,7 @@ def test_demo_exposes_no_clip_seam(browser: Browser, store: Path, base_url: str)
 def _pin_while_the_map_redraws(browser: Browser, store: Path, base_url: str, pin: str) -> Page:
     """Run `pin` on the dimmed default map, then land the redraw without the noise tags
     before the title's details: the order that swaps every point under a pin in flight."""
-    with open_store(store) as conn:
-        refresh_title_maps(conn)
+    refresh_map(store)
     held: dict[str, Any] = {}
     page = browser.new_page(viewport={"width": 1280, "height": 800})
     page.add_init_script("localStorage.setItem('plexdb-explore:noise', '[\"stinger\"]')")

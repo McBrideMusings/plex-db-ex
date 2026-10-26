@@ -45,6 +45,12 @@
     "record-panels (23): right after check-files, so a panel counting file verdicts sees tonight's;",
     "best-effort, because a panel's history is a convenience for a chart, not something a library",
     "is published from.",
+    "refresh-map (67), refresh-tagnetwork (68): after every keyword writer and both judges, so the",
+    "views draw the merges this sweep decided, and before publish, which snapshots what they",
+    "write; best-effort, because Plex DB-EX draws a missing or stale view live and a failed",
+    "refresh costs load time and nothing else.",
+    "publish (90): last, because it snapshots whatever the run produced; required, because a sweep",
+    "whose snapshot is not published has not done what the sweep is for.",
     "harvest-frames: a command, not a step: `plexdb schedule` starts it when PLEXDB_FRAME_HOURS open",
     "and it writes frames.db alone (ADR-0024), so no sweep runs it.",
     "commands: moved to Rust but in no sweep, so they carry no order or policy."
@@ -74,7 +80,10 @@
     {"name": "prune-keyword-verdicts", "order": 63, "policy": "best-effort"},
     {"name": "film-suffix-verdicts", "order": 64, "policy": "best-effort"},
     {"name": "judge-keyword-pairs", "order": 65, "policy": "best-effort"},
-    {"name": "judge-keyword-roles", "order": 66, "policy": "best-effort"}
+    {"name": "judge-keyword-roles", "order": 66, "policy": "best-effort"},
+    {"name": "refresh-map", "order": 67, "policy": "best-effort"},
+    {"name": "refresh-tagnetwork", "order": 68, "policy": "best-effort"},
+    {"name": "publish", "order": 90, "policy": "required"}
   ],
   "commands": ["lists", "list", "list-decide", "frames", "harvest-frames", "search", "repair-identities", "repair-fs-identities", "latent-users"]
 }

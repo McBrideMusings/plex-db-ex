@@ -13,7 +13,6 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import schema
 from .errors import StoreError
 
 # A write batch — one BEGIN IMMEDIATE ... COMMIT, e.g. one page of walk() upserts
@@ -277,39 +276,3 @@ def outside_migration(path: Path) -> Iterator[bool]:
             yield False
             return
         yield True
-
-
-def publish(store_path: Path, snapshot_path: Path) -> tuple[int, int]:
-    """Publish a read-only snapshot of the store for consumers (ADR-0007).
-
-    `VACUUM INTO` writes a compacted, self-contained copy of the store with no
-    `-wal` or `-shm` sidecars — confirmed empirically: a database vacuumed out
-    of a WAL-mode source lands in SQLite's default `DELETE` journal mode
-    regardless of the source's mode, which is what lets the copy be opened
-    read-only from a directory with no write permission.
-
-    The copy is written under a temporary name beside `snapshot_path` and then
-    renamed into place. A rename within one filesystem is atomic and a handle
-    already open on the old file keeps reading it, so a consumer opening
-    `snapshot_path` never observes a half-written file, and a second publish
-    replaces the snapshot rather than erroring.
-
-    Returns the schema version and the byte size of the file written.
-    """
-    _ensure_parent(snapshot_path)
-
-    tmp_path = snapshot_path.with_name(snapshot_path.name + ".tmp")
-    # VACUUM INTO refuses to write over an existing file, so clear one left
-    # behind by a publish that crashed mid-write before starting a new one.
-    tmp_path.unlink(missing_ok=True)
-
-    with open_store(store_path) as conn:
-        try:
-            conn.execute("VACUUM INTO ?", (str(tmp_path),))
-        except sqlite3.Error as err:
-            tmp_path.unlink(missing_ok=True)
-            raise StoreError(f"cannot publish snapshot: {err}") from err
-        version = schema.current_version(conn)
-
-    tmp_path.replace(snapshot_path)
-    return version, snapshot_path.stat().st_size

@@ -18,9 +18,6 @@ EXPECTED_COMMANDS = {
     "steps",
     "sweep",
     "check-files",
-    "publish",
-    "refresh-map",
-    "refresh-tagnetwork",
     "explore",
     "schedule",
 }
@@ -40,12 +37,9 @@ EXPECTED_COMMAND_ORDER = [
     "steps",
     "sweep",
     "check-files",
-    "refresh-map",
-    "refresh-tagnetwork",
     # Not a step of the sweep: a read-only browser view of what the steps above
     # wrote (`plexdb/commands/explore.py`).
     "explore",
-    "publish",
     # Last, and not a step of the sweep — it wraps the whole run rather than
     # taking part in one (`plexdb/commands/schedule.py`).
     "schedule",
@@ -309,33 +303,33 @@ def test_config_rejects_a_non_numeric_shared_account_id(monkeypatch: pytest.Monk
 
 
 def test_publish_writes_a_snapshot_and_says_where(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
 ) -> None:
     store = tmp_path / "plexdb.db"
     snapshot = tmp_path / "plexdb.snapshot.db"
     monkeypatch.setenv("PLEXDB_PATH", str(store))
     monkeypatch.setenv("PLEXDB_SNAPSHOT_PATH", str(snapshot))
     main(["migrate"])
-    capsys.readouterr()
+    capfd.readouterr()
 
     assert main(["publish"]) == 0
 
-    out = capsys.readouterr().out
+    out = capfd.readouterr().out
     assert "published snapshot" in out
     assert str(snapshot.resolve()) in out
     assert snapshot.exists()
 
 
 def test_publish_without_a_snapshot_path_configured_is_an_error_not_a_default(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
 ) -> None:
     store = tmp_path / "plexdb.db"
     monkeypatch.setenv("PLEXDB_PATH", str(store))
     monkeypatch.delenv("PLEXDB_SNAPSHOT_PATH", raising=False)
     main(["migrate"])
-    capsys.readouterr()
+    capfd.readouterr()
 
     assert main(["publish"]) == 1
-    err = capsys.readouterr().err
+    err = capfd.readouterr().err
     assert err.startswith("error: ")
     assert "PLEXDB_SNAPSHOT_PATH" in err

@@ -16,7 +16,16 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-__all__ = ["FoldRefused", "Folded", "fold", "init"]
+__all__ = [
+    "FoldRefused",
+    "Folded",
+    "Refreshed",
+    "fold",
+    "init",
+    "publish",
+    "refresh_map",
+    "refresh_tagnetwork",
+]
 
 
 def _binary() -> str:
@@ -82,3 +91,51 @@ def _numbers(report: str) -> tuple[int, int, int]:
     entries = int(re.search(r"([\d,]+) entr", head).group(1).replace(",", ""))  # type: ignore[union-attr]
     counts = re.findall(r", ([\d,]+) ", rest)
     return entries, int(counts[0].replace(",", "")), int(counts[1].replace(",", ""))
+
+
+@dataclass(frozen=True)
+class Refreshed:
+    """One kind's line from `refresh-map` or `refresh-tagnetwork`."""
+
+    kind: str
+    #: False when the stored view already matched the keyword rows.
+    redrawn: bool
+    #: Titles placed on the map, or nodes on the network.
+    count: int
+
+
+_REFRESHED = re.compile(r"^(?:title map|tag network): (\w+): (drew|current,) ([\d,]+) ")
+
+
+def _step(step: str, store: Path, extra: dict[str, str] | None = None) -> str:
+    env = dict(os.environ, PLEXDB_PATH=str(store)) | (extra or {})
+    env.pop("PLEXDB_HELD_STORE", None)
+    done = subprocess.run([_binary(), step], env=env, capture_output=True, text=True, check=False)
+    if done.returncode != 0:
+        raise RuntimeError(f"plexdb-rs {step} failed for {store}: {done.stderr.strip()}")
+    return done.stdout
+
+
+def _refreshed(step: str, store: Path) -> list[Refreshed]:
+    found = []
+    for line in _step(step, store).splitlines():
+        match = _REFRESHED.match(line)
+        if match is not None:
+            kind, verb, count = match.groups()
+            found.append(Refreshed(kind, verb == "drew", int(count.replace(",", ""))))
+    return found
+
+
+def refresh_map(store: Path) -> list[Refreshed]:
+    """Run the Rust `refresh-map` step on `store`: the stored Title map, as the sweep draws it."""
+    return _refreshed("refresh-map", store)
+
+
+def refresh_tagnetwork(store: Path) -> list[Refreshed]:
+    """Run the Rust `refresh-tagnetwork` step on `store`."""
+    return _refreshed("refresh-tagnetwork", store)
+
+
+def publish(store: Path, snapshot: Path) -> None:
+    """Run the Rust `publish` step: a snapshot of `store` at `snapshot`."""
+    _step("publish", store, {"PLEXDB_SNAPSHOT_PATH": str(snapshot)})

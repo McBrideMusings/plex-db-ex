@@ -348,10 +348,10 @@ LABEL_MIN_TITLES = 8
 #: the whole sparse keyword vector, every tag kept. `uniform` is the scaling:
 #: both axes by one factor, so the layout keeps its shape. `labels` is the
 #: region labels stored with it (`region_labels`), with their depths and floor.
-MAP_RECIPE = (
-    f"umap-cosine-full-df{MAP_MIN_DF}-nn{MAP_NEIGHBOURS}-md{MAP_MIN_DIST}-sp{MAP_SPREAD}"
-    f"-uniform-labels{LABEL_FIRST_DEPTH}-{LABEL_LAST_DEPTH}-min{LABEL_MIN_TITLES}"
-)
+#: The writer draws the stored map with holomap and a seeded random projection
+#: (`crates/plexdb/src/refresh_map.rs` holds this same string); the live draws
+#: below, with noise excluded, still use UMAP.
+MAP_RECIPE = "holomap-cosine-rp256-s0-full-df2-nn15-md0.1-sp1.0-uniform-labels2-9-min8"
 
 
 @dataclass(frozen=True)
@@ -483,52 +483,43 @@ def _fingerprint(conn: sqlite3.Connection, kind: str, recipe: str) -> str:
     including a rewrite that leaves the row count and the newest `fetched_at`
     alone. Then a SHA-256 over `merge_map`, so a new merge verdict redraws it
     too. A change to the drawing code changes the recipe string.
+
+    The writer computes the same bytes (`crates/plexdb/src/keyword_views.rs`), which
+    is what the comparison with a stored view needs: a row is its fields in order,
+    each one byte 0 for NULL, or 1, the UTF-8 length as a big-endian u32 and the
+    UTF-8 bytes. The keyword rows go in by `item_id`, `source`, `value`; the merge
+    map's `(keyword, target)` pairs go in by keyword.
     """
     _check_kind(kind)
-    # typeshed types an aggregate as one int argument returning an int.
-    conn.create_aggregate("plexdb_row_digest", 4, _RowDigest)  # type: ignore[arg-type]
-    # The subquery's ORDER BY feeds the aggregate in order: SQLite does not
-    # flatten an ordered subquery into an aggregating outer query.
-    (digest,) = conn.execute(
-        "SELECT plexdb_row_digest(item_id, source, value, fetched_at) FROM ("
+    keywords = hashlib.sha256()
+    for row in conn.execute(
         "SELECT e.item_id, e.source, e.value, e.fetched_at "
         "FROM enrichment e JOIN items i USING (item_id) "
         "WHERE e.namespace = ? AND e.key = ? AND i.type = ? "
-        "ORDER BY e.item_id, e.source, e.value)",
+        "ORDER BY e.item_id, e.source, e.value",
         (_NAMESPACE, _KEY, kind),
-    ).fetchone()
-    merges = hashlib.sha256(repr(sorted(merge_map(conn).items())).encode()).hexdigest()
-    return f"{recipe}|{digest}|{merges}"
+    ):
+        _frame(keywords, row)
+    merges = hashlib.sha256()
+    for pair in sorted(merge_map(conn).items()):
+        _frame(merges, pair)
+    return f"{recipe}|{keywords.hexdigest()}|{merges.hexdigest()}"
 
 
-class _RowDigest:
-    """SQL aggregate: SHA-256 over the rows it is fed, in the order fed.
-
-    The bytes hashed are `repr` of the list of row tuples, built one row at a
-    time so the rows never all sit in memory. `repr` quotes each field, so no
-    two rows digest alike by moving text across a field boundary.
-    """
-
-    def __init__(self) -> None:
-        self._sha = hashlib.sha256(b"[")
-        self._first = True
-
-    def step(self, *row: Any) -> None:
-        if not self._first:
-            self._sha.update(b", ")
-        self._first = False
-        self._sha.update(repr(row).encode())
-
-    def finalize(self) -> str:
-        self._sha.update(b"]")
-        return self._sha.hexdigest()
+def _frame(sha: Any, fields: Sequence[object]) -> None:
+    for field in fields:
+        if field is None:
+            sha.update(b"\x00")
+        else:
+            data = str(field).encode()
+            sha.update(b"\x01" + len(data).to_bytes(4, "big") + data)
 
 
 def keyword_fingerprint(conn: sqlite3.Connection, kind: str) -> str:
     """A digest of what the default map of `kind` is drawn from.
 
     Nothing reads it except the comparison in `stored_map` and
-    `plexdb.titlemap`.
+    the `refresh-map` step.
     """
     return _fingerprint(conn, kind, MAP_RECIPE)
 
@@ -537,7 +528,7 @@ def network_fingerprint(conn: sqlite3.Connection, kind: str) -> str:
     """A digest of what the default tag network of `kind` is drawn from.
 
     Nothing reads it except the comparison in `stored_network` and
-    `plexdb.tagnetwork`.
+    the `refresh-tagnetwork` step.
     """
     return _fingerprint(conn, kind, NETWORK_RECIPE)
 
@@ -615,11 +606,7 @@ NETWORK_EDGES_PER_NODE = 6
 #: map's recipe: part of a stored network's fingerprint, so changing the
 #: shared embedding recipe or either constant above makes every stored
 #: network stale and the next refresh redraws it.
-NETWORK_RECIPE = (
-    f"umap-cosine-full-df{NETWORK_MIN_DF}-nn{MAP_NEIGHBOURS}"
-    f"-md{MAP_MIN_DIST}-sp{MAP_SPREAD}-uniform"
-    f"-epn{NETWORK_EDGES_PER_NODE}"
-)
+NETWORK_RECIPE = "holomap-cosine-rp256-s0-full-df3-nn15-md0.1-sp1.0-uniform-epn6"
 
 
 @dataclass(frozen=True)
