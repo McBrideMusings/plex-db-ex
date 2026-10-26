@@ -13,7 +13,7 @@
 //! `User-agent: *`, fetched once per client, and a disallowed path raises before anything
 //! is sent. The client pauses after every request and honours a bounded `Retry-After`.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::html::{Token, attr_text, tokenize};
 
@@ -26,6 +26,8 @@ const USER_AGENT: &str = concat!(
     "plexdb/0.1.0 (https://github.com/McBrideMusings/plex-db-ex; ",
     "metadata store over a personal Plex library) ureq"
 );
+/// The `<title>` text of the page `/tmdb/<id>/` answers for an id with no film.
+const IMPORT_RESULT_TITLE: &str = "TMDB Import Result";
 const TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_PAUSE_SECONDS: f64 = 1.0;
 const MAX_RETRIES: usize = 3;
@@ -59,6 +61,32 @@ pub struct ListContents {
 pub struct FilmIds {
     pub media_type: String,
     pub tmdb_id: Option<String>,
+}
+
+/// What one title's lookup found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    /// The film page loaded and carried the marker; `themes` may still be empty.
+    Listed,
+    /// `/tmdb/<id>/` did not redirect to a film page: Letterboxd has no such film.
+    NotListed,
+    /// The film page loaded without a `data-tmdb-id` matching the id asked, or with theme
+    /// links the `Themes` heading does not lead to.
+    Unparsed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Lookup {
+    pub outcome: Outcome,
+    /// Theme and mini-theme labels as the page shows them, in page order.
+    pub themes: Vec<String>,
+}
+
+/// The read surface the Letterboxd theme sweep needs: real or recorded.
+pub trait LbThemesSource {
+    /// Find this TMDB movie id's film page and read its themes. A missing film or a page
+    /// without the marker is an outcome, not an error.
+    fn lookup(&mut self, tmdb_id: &str) -> Result<Lookup, LbError>;
 }
 
 pub trait LbSource {
@@ -302,6 +330,105 @@ pub fn parse_film_ids(html: &str) -> Option<FilmIds> {
     })
 }
 
+/// A film page -> its themes, or `Unparsed` when the marker is missing or names another id, or
+/// when theme links sit on the page but none under the `Themes` heading: a renamed heading or
+/// list, which would otherwise cache an empty theme set. A film with no themes has no theme
+/// links at all.
+pub fn parse_film_page(html: &str, tmdb_id: &str) -> Lookup {
+    let mut page_tmdb_id: Option<String> = None;
+    let mut themes: Vec<String> = Vec::new();
+    let mut theme_links = 0usize;
+    let mut h3_text: Option<String> = None;
+    let mut after_themes_heading = false;
+    let mut in_sluglist = false;
+    let mut div_depth = 0usize;
+    let mut link_text: Option<String> = None;
+    for token in tokenize(html) {
+        match token {
+            Token::Start { tag, attrs, .. } => match tag.as_str() {
+                "body" => page_tmdb_id = attr_text(&attrs, "data-tmdb-id").map(str::to_string),
+                "h3" => {
+                    h3_text = Some(String::new());
+                    after_themes_heading = false;
+                }
+                "div" => {
+                    if in_sluglist {
+                        div_depth += 1;
+                    } else if after_themes_heading
+                        && attr_text(&attrs, "class").is_some_and(|c| c.contains("text-sluglist"))
+                    {
+                        in_sluglist = true;
+                        div_depth = 1;
+                    }
+                }
+                "a" if is_theme_href(attr_text(&attrs, "href").unwrap_or("")) => {
+                    theme_links += 1;
+                    if in_sluglist {
+                        link_text = Some(String::new());
+                    }
+                }
+                _ => {}
+            },
+            Token::End(tag) => match tag.as_str() {
+                "h3" => {
+                    if let Some(text) = h3_text.take() {
+                        after_themes_heading = plexdb_store::py_strip(&text) == "Themes";
+                    }
+                }
+                "a" => {
+                    if let Some(text) = link_text.take() {
+                        let label = text
+                            .split(plexdb_store::is_py_space)
+                            .filter(|p| !p.is_empty())
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        if !label.is_empty() {
+                            themes.push(label);
+                        }
+                    }
+                }
+                "div" if in_sluglist => {
+                    div_depth -= 1;
+                    if div_depth == 0 {
+                        in_sluglist = false;
+                        after_themes_heading = false;
+                    }
+                }
+                _ => {}
+            },
+            Token::Data(data) => {
+                if let Some(text) = &mut h3_text {
+                    text.push_str(&data);
+                }
+                if let Some(text) = &mut link_text {
+                    text.push_str(&data);
+                }
+            }
+        }
+    }
+    if page_tmdb_id.as_deref() != Some(tmdb_id) || (theme_links > 0 && themes.is_empty()) {
+        return Lookup {
+            outcome: Outcome::Unparsed,
+            themes: Vec::new(),
+        };
+    }
+    let mut unique: Vec<String> = Vec::new();
+    for theme in themes {
+        if !unique.contains(&theme) {
+            unique.push(theme);
+        }
+    }
+    Lookup {
+        outcome: Outcome::Listed,
+        themes: unique,
+    }
+}
+
+/// `^/films/(?:theme|mini-theme)/`
+fn is_theme_href(href: &str) -> bool {
+    href.starts_with("/films/theme/") || href.starts_with("/films/mini-theme/")
+}
+
 struct Response {
     status: u16,
     location: String,
@@ -496,6 +623,71 @@ fn is_film_path(path: &str) -> bool {
         .is_some_and(|slug| !slug.is_empty() && !slug.contains(['/', '?', '#']))
 }
 
+impl LbThemesSource for LiveLbClient {
+    fn lookup(&mut self, tmdb_id: &str) -> Result<Lookup, LbError> {
+        if !is_tmdb_id(tmdb_id) {
+            return Err(LbError(format!(
+                "not a TMDB id: {}",
+                crate::decisions::py_repr(tmdb_id)
+            )));
+        }
+        let started = Instant::now();
+        let response = self.get(&format!("/tmdb/{tmdb_id}/"))?;
+        if response.status == 404
+            || (response.status == 200 && response.text.contains(IMPORT_RESULT_TITLE))
+        {
+            println!(
+                "letterboxd: tmdb {tmdb_id} -> not listed ({}) in {:.1} s",
+                response.status,
+                started.elapsed().as_secs_f64()
+            );
+            return Ok(Lookup {
+                outcome: Outcome::NotListed,
+                themes: Vec::new(),
+            });
+        }
+        if !matches!(response.status, 301 | 302 | 303 | 307 | 308) {
+            // A 200 that is not the import-result page is something in front of the site, not
+            // an answer about this film; caching it as "not listed" would hide every title for
+            // a whole staleness window.
+            return Err(LbError(format!(
+                "Letterboxd returned {} for tmdb {tmdb_id}{}",
+                response.status,
+                if response.status == 200 {
+                    " without the TMDB Import Result page"
+                } else {
+                    ""
+                }
+            )));
+        }
+        let path = self.redirect_path(&response.location);
+        if !is_film_path(&path) {
+            return Err(LbError(format!(
+                "Letterboxd redirected tmdb {tmdb_id} to {}, not a film page",
+                crate::decisions::py_repr(&response.location)
+            )));
+        }
+        let page = self.get(&path)?;
+        if page.status != 200 {
+            return Err(LbError(format!(
+                "Letterboxd returned {} for {path}",
+                page.status
+            )));
+        }
+        let found = parse_film_page(&page.text, tmdb_id);
+        let detail = if found.outcome == Outcome::Listed {
+            format!("{} theme(s)", found.themes.len())
+        } else {
+            "no film marker for this id".to_string()
+        };
+        println!(
+            "letterboxd: tmdb {tmdb_id} -> {path} {detail} in {:.1} s",
+            started.elapsed().as_secs_f64()
+        );
+        Ok(found)
+    }
+}
+
 impl LbSource for LiveLbClient {
     fn list_contents(&mut self, user: &str, slug: &str) -> Result<ListContents, LbError> {
         if !(is_segment(user) && is_segment(slug)) {
@@ -676,6 +868,37 @@ mod tests {
         assert!(is_disallowed("/films/theme/a/by/best-match/", &rules));
         assert!(!is_disallowed("/films/theme/a/by/best-match/2/", &rules));
         assert!(!is_disallowed("/film/heat/", &rules));
+    }
+
+    const FILM: &str = r#"<body data-tmdb-id="27205"><h3>Genres</h3>
+        <div class="text-sluglist"><a href="/films/genre/thriller/">Thriller</a></div>
+        <h3> Themes </h3>
+        <div class="text-sluglist capsule"><p><a href="/films/theme/heist/by/best-match/">
+          Heists  and
+          <b>robbery</b></a>
+          <a href="/films/mini-theme/dreams/">Dreams</a>
+          <a href="/films/theme/heist/">Heists and robbery</a></p></div>
+        <div class="text-sluglist"><a href="/films/theme/outside/">Outside</a></div></body>"#;
+
+    #[test]
+    fn a_film_page_gives_the_theme_labels_under_its_themes_heading_once_each() {
+        let found = parse_film_page(FILM, "27205");
+        assert_eq!(found.outcome, Outcome::Listed);
+        assert_eq!(found.themes, ["Heists and robbery", "Dreams"]);
+    }
+
+    #[test]
+    fn a_page_for_another_film_or_with_theme_links_nowhere_under_the_heading_is_unparsed() {
+        assert_eq!(parse_film_page(FILM, "1").outcome, Outcome::Unparsed);
+        let renamed = FILM.replace("Themes", "Topics");
+        assert_eq!(
+            parse_film_page(&renamed, "27205").outcome,
+            Outcome::Unparsed
+        );
+        let none = r#"<body data-tmdb-id="5"><h3>Themes</h3></body>"#;
+        let found = parse_film_page(none, "5");
+        assert_eq!((found.outcome, found.themes.len()), (Outcome::Listed, 0));
+        assert_eq!(parse_film_page("<body>", "5").outcome, Outcome::Unparsed);
     }
 
     #[test]

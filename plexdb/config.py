@@ -56,20 +56,17 @@ DEFAULT_STORE_PATH = "./data/plexdb.db"
 #: secret, so unlike a URL or a token this one may carry a real default.
 DEFAULT_SHARED_ACCOUNT_IDS = "1,3670670"
 
-# Staleness windows and source credentials are deliberately absent from here.
-# A Gated Source reads its own `<NAME>_STALE_DAYS` and its own credential
-# variable (`plexdb/sources.py`), against the single `DEFAULT_STALE_DAYS` in
-# `staleness.py`. That keeps each source's window independently dialable — the
-# reason three separate knobs existed — while adding a source touches no file
-# but its own, and it lets this module stay a leaf importing no feature module
-# (issue #20), which is what the three duplicated literals here were buying.
+# Staleness windows and source credentials are deliberately absent from here: each
+# sweep reads its own `<NAME>_STALE_DAYS` and credential variable (`plexdb-rs`,
+# `crates/plexdb/src/gated.rs`), so this module stays a leaf importing no feature module
+# (issue #20).
 
 
 def _shared_account_ids_from_env() -> tuple[int, ...]:
     """`PLEXDB_SHARED_ACCOUNT_IDS`, comma-separated, falling back to
     `DEFAULT_SHARED_ACCOUNT_IDS` when unset. An explicitly blank value means
     zero shared accounts, not "use the default" — the opposite of the
-    convention `GatedSource.resolve_stale_days` uses, where a blank value means
+    convention the Rust staleness window uses, where a blank value means
     the default, because there a zero would re-fetch the whole library."""
     raw = os.environ.get("PLEXDB_SHARED_ACCOUNT_IDS", DEFAULT_SHARED_ACCOUNT_IDS)
     if not raw.strip():

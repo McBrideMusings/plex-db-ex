@@ -25,62 +25,8 @@ class PlexError(PlexdbError):
     """The Plex server could not be reached, or returned something unusable."""
 
 
-class WikidataError(PlexdbError):
-    """Wikidata's query service could not be reached, refused the query, or returned
-    something unusable.
-
-    An IMDb id Wikidata has no item for is not this — the query simply returns no
-    rows for it, and the sweep caches that as an empty result.
-    """
-
-
-class AniListError(PlexdbError):
-    """AniList's GraphQL API or the Fribb anime mapping could not be reached,
-    refused the request, or returned something unusable.
-
-    An AniList id AniList has no entry for is not this — the page simply omits it,
-    and the sweep caches that title as an empty result.
-    """
-
-
-class LetterboxdError(PlexdbError):
-    """Letterboxd could not be reached, refused the request (a Cloudflare challenge
-    answers 403), or sent the client somewhere robots.txt disallows.
-
-    A TMDB id Letterboxd has no film for is not this — the sweep caches it as not
-    listed — and neither is a film page without the film marker, which the sweep
-    counts as a parse failure.
-    """
-
-
 class TautulliError(PlexdbError):
     """Tautulli could not be reached, or returned something unusable."""
-
-
-class MDBListError(PlexdbError):
-    """MDBList could not be reached, or returned something unusable.
-
-    A list entry naming a title this store has never walked is not this — the
-    harvest counts it as unresolved and drops it, so a list that mostly sits
-    outside the library is an ordinary result rather than a failure.
-
-    `status` is the HTTP status the service answered, or `None` where it never
-    answered.
-    """
-
-    def __init__(self, message: str, status: int | None = None) -> None:
-        super().__init__(message)
-        self.status = status
-
-
-class MDBListQuotaError(MDBListError):
-    """MDBList answered 429: the account's request quota is spent. Every later
-    request would get the same answer, so a run stops rather than retrying."""
-
-
-class MDBListUnreachable(MDBListError):
-    """MDBList never answered. Every list would fail the same way, so a harvest stops
-    rather than recording the failure against each list."""
 
 
 class EncoderError(PlexdbError):

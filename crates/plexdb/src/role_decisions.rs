@@ -14,9 +14,7 @@ use crate::decisions::{
 pub const NAME: &str = "fold-role-decisions";
 pub const ROLE_DECISIONS_FILE: &str = "role_decisions.json";
 
-/// Every role a `keyword_roles` or `keyword_role_decisions` row may carry
-/// (`keywords.ROLES`; the v14 migration CHECKs the same set in SQL).
-pub const ROLES: [&str; 5] = ["tone", "era", "region", "theme", "character_trait"];
+pub use plexdb_keywords::ROLES;
 
 fn key_problem(key: &[String]) -> Option<String> {
     let (surface, role) = (&key[0], &key[1]);

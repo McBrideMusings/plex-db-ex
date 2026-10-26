@@ -29,6 +29,10 @@ pub const NAMESPACE: &str = "keywords";
 pub const KEYWORD_KEY: &str = "keyword";
 pub const SPOILER_KEY: &str = "spoiler_keyword";
 
+/// Every role a `keyword_roles` or `keyword_role_decisions` row may carry
+/// (`keywords.ROLES`; the v14 migration CHECKs the same set in SQL).
+pub const ROLES: [&str; 5] = ["tone", "era", "region", "theme", "character_trait"];
+
 /// Words ending in "s" that are not plurals of the word simplemma would fold
 /// them to: proper nouns, plurals whose meaning differs from the singular, and
 /// abbreviations.
@@ -429,6 +433,25 @@ pub fn rederive_keywords(conn: &Connection) -> rusqlite::Result<usize> {
         }
     }
     Ok(rows.len())
+}
+
+/// Record that `source` itself states `keyword` plays `role`. A source-stated role
+/// carries no score, model or error, which belong to a judge's row. Stating a role
+/// again only moves `stated_at`: the row is per keyword, not per title.
+pub fn state_role(
+    conn: &Connection,
+    keyword: &str,
+    role: &str,
+    source: &str,
+    stated_at: &str,
+) -> rusqlite::Result<()> {
+    debug_assert!(ROLES.contains(&role), "unknown keyword role {role:?}");
+    conn.execute(
+        "INSERT INTO keyword_roles (keyword, role, source, stated_at) VALUES (?, ?, ?, ?) \
+         ON CONFLICT(keyword, role, source) DO UPDATE SET stated_at = excluded.stated_at",
+        params![keyword, role, source, stated_at],
+    )?;
+    Ok(())
 }
 
 /// Whether some title carries `keyword`, as a keyword or a spoiler keyword.

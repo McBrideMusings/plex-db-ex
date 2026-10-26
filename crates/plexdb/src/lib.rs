@@ -2,14 +2,20 @@
 //! Rust (ADR-0001). `plexdb/rust_steps.json` declares them; the Python sweep runs
 //! each in its place, and `plexdb <step>` hands one here.
 
+pub mod anilist;
 pub mod args;
+pub mod backoff;
 pub mod clock;
 pub mod collections;
 pub mod cursors;
 pub mod decisions;
 pub mod embed;
+pub mod enrich_anilist;
+pub mod enrich_letterboxd;
+pub mod enrich_mdblist_ratings;
 pub mod enrich_tmdb;
 pub mod enrich_tmdb_language;
+pub mod enrich_wikidata;
 pub mod frame_encoder;
 pub mod frame_media;
 pub mod frames;
@@ -46,9 +52,11 @@ pub mod repair;
 pub mod repair_fs;
 pub mod role_decisions;
 pub mod roles;
+pub mod source_steps;
 pub mod sources;
 pub mod staleness;
 pub mod steps;
+pub mod sweep;
 pub mod synonyms;
 pub mod tautulli;
 pub mod tmdb;
@@ -56,3 +64,4 @@ pub mod tmdb_common;
 pub mod tmdb_edges;
 pub mod tmdb_steps;
 pub mod walk;
+pub mod wikidata;
