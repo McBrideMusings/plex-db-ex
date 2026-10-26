@@ -11,4 +11,5 @@ row per `(item_id, source, surface)` with the rank and spoiler flag the source g
 spelling to its stored form, and a change to normalization re-derives `enrichment` from
 `keyword_surfaces`. A reader counts a title's keywords via `SELECT DISTINCT (item_id, value)`, so a
 keyword two sources agree on is one fact. A migration that merges rows this way declares the
-shrink, and `store._verify` accepts a row count down to exactly that number.
+shrink, and `plexdb migrate`'s `verify` (`crates/plexdb/src/migrate.rs`) accepts a row count down
+to exactly that number.
