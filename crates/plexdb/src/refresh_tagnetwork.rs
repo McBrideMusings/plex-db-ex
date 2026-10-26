@@ -8,7 +8,7 @@
 //! `tag_network_state`, replaced in one transaction for every redrawn kind, and the only
 //! code that writes them (ADR-0001).
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use rusqlite::{Connection, params};
 
@@ -62,15 +62,34 @@ pub struct Refreshed {
     pub seconds: f64,
 }
 
+/// The first two stages of a network, before the slow layout: which tags qualify and how
+/// many titles each is on, and the strongest links between them.
+#[derive(Debug)]
+pub struct Prepared {
+    /// Every qualifying tag, by name; a tag's index here is its row in the layout.
+    pub values: Vec<String>,
+    /// Titles carrying `values[i]`.
+    pub df: Vec<usize>,
+    /// `(a, b, shared titles)`, `a < b`, each pair once, strongest first then by name.
+    pub edges: Vec<(String, String, usize)>,
+    cells: Vec<(usize, usize, f64)>,
+    titles: usize,
+}
+
 /// The whole tag network of one kind.
 pub fn draw(rows: &[(String, String)], seed: u64) -> Result<Network, String> {
+    layout(prepare(rows, &HashSet::new()), seed)
+}
+
+/// The vocabulary and edges of the network of one kind with the tags in `exclude` left out.
+pub fn prepare(rows: &[(String, String)], exclude: &HashSet<String>) -> Prepared {
     let mut df: HashMap<&str, usize> = HashMap::new();
     for (_, value) in rows {
         *df.entry(value).or_default() += 1;
     }
     let mut values: Vec<&str> = df
         .iter()
-        .filter(|(_, count)| **count >= NETWORK_MIN_DF)
+        .filter(|(value, count)| **count >= NETWORK_MIN_DF && !exclude.contains(**value))
         .map(|(value, _)| *value)
         .collect();
     values.sort_unstable();
@@ -122,18 +141,39 @@ pub fn draw(rows: &[(String, String)], seed: u64) -> Result<Network, String> {
         .map(|(inverse, a, b)| (a, b, usize::MAX - inverse))
         .collect();
 
-    let coords = embed_2d(values.len(), by_title.len(), &cells, seed)?;
-    let nodes = values
-        .iter()
+    Prepared {
+        df: values.iter().map(|value| df[value]).collect(),
+        values: values.iter().map(|value| value.to_string()).collect(),
+        edges,
+        cells,
+        titles: by_title.len(),
+    }
+}
+
+/// The slow stage: place every tag of `prepared` by which titles carry it.
+pub fn layout(prepared: Prepared, seed: u64) -> Result<Network, String> {
+    let coords = embed_2d(
+        prepared.values.len(),
+        prepared.titles,
+        &prepared.cells,
+        seed,
+    )?;
+    let nodes = prepared
+        .values
+        .into_iter()
+        .zip(prepared.df)
         .zip(&coords)
-        .map(|(value, c)| Node {
-            value: (*value).to_string(),
-            df: df[value],
+        .map(|((value, df), c)| Node {
+            value,
+            df,
             x: round(c[0], 5),
             y: round(c[1], 5),
         })
         .collect();
-    Ok(Network { nodes, edges })
+    Ok(Network {
+        nodes,
+        edges: prepared.edges,
+    })
 }
 
 /// Bring the stored default tag network of every kind up to date.

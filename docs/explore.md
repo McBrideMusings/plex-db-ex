@@ -4,6 +4,18 @@ Plex DB-EX is the store's read-only browser page: `plexdb explore`, served by `a
 on `http://localhost:5194`. Its server is `plexdb/explore.py` and its one page is
 `plexdb/explore.html`; [`file-map.md`](./file-map.md) describes both.
 
+## The Rust server
+
+`plexdb-rs explore [--host H] [--port N] [--store PATH] [--fallback URL]` serves the same page and
+the read-only keyword routes (`/api/tags`, `/api/titles`, `/api/cotags`, `/api/map`,
+`/api/tagnetwork`, `/api/title`) from Rust, with the same answers byte for byte
+(`crates/plexdb/src/explore.rs`). Every other route is forwarded to the Python explorer at
+`--fallback` (or `PLEXDB_EXPLORE_FALLBACK`) until its slice moves; with none set it answers 404.
+`admin parity explore` starts both over one copy of the pulled store and lists every route whose
+answer differs. A map or network drawn live with noise excluded is laid out by holomap in Rust and
+UMAP in Python, so that comparison leaves out positions and region labels. The page names the layout
+"holomap". The container still runs the Python explorer.
+
 ## Related tags
 
 Selecting a tag opens its panel with two tabs, **Related tags** and **Titles**, each with its count.

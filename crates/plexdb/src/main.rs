@@ -32,33 +32,41 @@ fn main() -> ExitCode {
             println!("{}", usage());
             ExitCode::SUCCESS
         }
+        // The explorer is a server, not a sweep step: the sweep never plans it, and the
+        // Python `plexdb explore` stays the one a person runs until its routes have moved.
+        ["explore", ..] => match plexdb::explore::run(&args[1..]) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(failure) => report(failure),
+        },
         [name, ..] => {
             let rest = &args[1..];
             let Some(run) = steps::find(name) else {
                 eprintln!("error: no command {name:?}\n{}", usage());
                 return ExitCode::from(2);
             };
-            match run(rest
-                .iter()
-                .map(|arg| arg.to_string())
-                .collect::<Vec<_>>()
-                .as_slice())
-            {
+            match run(rest) {
                 Ok(()) => ExitCode::SUCCESS,
-                Err(Failure::Usage(message)) => {
-                    eprintln!("error: {message}");
-                    ExitCode::from(2)
-                }
-                Err(Failure::Config(message)) => {
-                    eprintln!("error: {message}");
-                    ExitCode::from(NOT_CONFIGURED)
-                }
-                Err(Failure::Reported) => ExitCode::FAILURE,
-                Err(Failure::Failed(message)) => {
-                    eprintln!("error: {message}");
-                    ExitCode::FAILURE
-                }
+                Err(failure) => report(failure),
             }
+        }
+    }
+}
+
+/// Print why a command stopped and give its exit code.
+fn report(failure: Failure) -> ExitCode {
+    match failure {
+        Failure::Usage(message) => {
+            eprintln!("error: {message}");
+            ExitCode::from(2)
+        }
+        Failure::Config(message) => {
+            eprintln!("error: {message}");
+            ExitCode::from(NOT_CONFIGURED)
+        }
+        Failure::Reported => ExitCode::FAILURE,
+        Failure::Failed(message) => {
+            eprintln!("error: {message}");
+            ExitCode::FAILURE
         }
     }
 }

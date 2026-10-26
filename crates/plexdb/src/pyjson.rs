@@ -180,6 +180,41 @@ fn write(out: &mut String, value: &Json, depth: usize) {
     }
 }
 
+fn write_compact(out: &mut String, value: &Json) {
+    match value {
+        Json::Array(items) => {
+            out.push('[');
+            for (ix, item) in items.iter().enumerate() {
+                if ix > 0 {
+                    out.push(',');
+                }
+                write_compact(out, item);
+            }
+            out.push(']');
+        }
+        Json::Object(pairs) => {
+            out.push('{');
+            for (ix, (key, item)) in pairs.iter().enumerate() {
+                if ix > 0 {
+                    out.push(',');
+                }
+                quote(out, key);
+                out.push(':');
+                write_compact(out, item);
+            }
+            out.push('}');
+        }
+        scalar => write(out, scalar, 0),
+    }
+}
+
+/// The text `json.dumps(value, separators=(",", ":"))` prints.
+pub fn dumps_compact(value: &Json) -> String {
+    let mut out = String::new();
+    write_compact(&mut out, value);
+    out
+}
+
 /// The text `json.dumps(value, indent=2)` prints.
 pub fn dumps_indent2(value: &Json) -> String {
     let mut out = String::new();
@@ -205,6 +240,12 @@ mod tests {
             dumps_indent2(&value),
             "{\n  \"b\": 1,\n  \"a\": [\n    \"\\u00e9\\ud83d\\ude00\",\n    null,\n    true\n  ],\n  \"empty\": []\n}"
         );
+    }
+
+    #[test]
+    fn compact_has_no_spaces() {
+        let value = Json::object([("a", Json::Array(vec![Json::Int(1), Json::Float(2.0)]))]);
+        assert_eq!(dumps_compact(&value), r#"{"a":[1,2.0]}"#);
     }
 
     #[test]

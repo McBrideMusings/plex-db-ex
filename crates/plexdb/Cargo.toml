@@ -10,6 +10,12 @@ plexdb-reader = { path = "../plexdb-reader" }
 plexdb-schema = { path = "../plexdb-schema" }
 plexdb-store = { path = "../plexdb-store" }
 base64 = "0.23"
+# Plex DB-EX's server (plex-db-ex-f58.11; the owner picked axum). HTTP/1 only, and no
+# extractors beyond the raw query: `explore.rs` reads the query string the way Python's
+# `parse_qs` does.
+axum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio"] }
+# The trait a streamed response body (`/api/tagnetwork`'s NDJSON lines) implements.
+futures-core = "0.3"
 # The Title map and Tag network layout (plex-db-ex-f58.21 picked it); `layout.rs` says why.
 holomap = "=0.3.0"
 libc = "0.2"
@@ -23,6 +29,7 @@ sha2 = "0.10"
 # extension loads in this crate too, at the version the workspace pins.
 sqlite-vec = { workspace = true }
 tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "signal", "sync"] }
 thiserror = { workspace = true }
 # The list harvests' HTTP calls to MDBList and Letterboxd, both https. Only this crate
 # turns TLS on; the reader stays plain http (ADR-0026).

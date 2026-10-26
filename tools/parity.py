@@ -15,6 +15,9 @@ the tool does not know go to the step. Each run gets the
 `.env` values the Python CLI would load, with `PLEXDB_PATH`, the snapshot and the
 backup directory pointed into its own scratch directory.
 
+`explore` is the exception: `tools/parity_explore.py` starts the Python and the Rust Plex DB-EX over
+one copy of the store and compares every route Rust answers.
+
 A step that fetches runs against a fake server (`tools/parity_fakes.py` for TMDB,
 `tools/fake_lists.py` for the MDBList and Letterboxd lists, `tools/fake_sources.py` for AniList,
 Wikidata, MDBList ratings and Letterboxd film pages, `parity_fakes.serve_jev` for the embedding
@@ -57,6 +60,7 @@ from dotenv import dotenv_values
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fake_lists  # noqa: E402
 import fake_sources  # noqa: E402
+import parity_explore  # noqa: E402
 import parity_fakes  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
@@ -257,6 +261,13 @@ def main() -> int:
     if not rs_bin:
         print("error: PLEXDB_RS_BIN is not set; `admin parity` builds and sets it", file=sys.stderr)
         return 1
+    if args.step == "explore":
+        # Not a sweep step: two servers over one snapshot, their routes compared.
+        return parity_explore.main(
+            ["--store", str(args.store)]
+            + (["--decisions-dir", str(args.decisions_dir)] if args.decisions_dir else [])
+            + step_args
+        )
     if args.step not in _python_commands():
         print(f"error: Python has no {args.step} left to compare", file=sys.stderr)
         return 1

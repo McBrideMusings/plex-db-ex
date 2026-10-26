@@ -1508,7 +1508,7 @@ function mapNote() {
   }
   const lit = d.points.filter(p => state.tagIds.has(p[0])).length;
   document.getElementById("mnote").textContent =
-    `${fmt(d.points.length)} ${noun()}, close together when their keywords are alike (UMAP)`
+    `${fmt(d.points.length)} ${noun()}, close together when their keywords are alike (holomap)`
     + (d.unplaced ? `; ${fmt(d.unplaced)} share no tag with anything and are left off` : "")
     + (state.tag ? `; ${fmt(lit)} carrying “${state.tag}” highlighted` : "")
     + (noise.size ? `; ${fmt(noise.size)} noise-marked tags ignored` : "")
@@ -1916,7 +1916,7 @@ async function streamNetwork(kind, exclude, onStage, isStale) {
 }
 
 // A provisional position for each vocab-stage node, before the server's real
-// SVD+UMAP coordinates exist: a golden-angle spiral ranked by df, biggest tags
+// holomap coordinates exist: a golden-angle spiral ranked by df, biggest tags
 // nearest the centre — the same "important tags stand out" shape the real
 // co-occurrence layout tends to produce, so settling into it later reads as
 // resolving rather than contradicting the placeholder.
@@ -1964,7 +1964,7 @@ async function loadNetwork() {
   }
 }
 
-// The last, slow stage (SVD+UMAP layout) arrived: settle every currently
+// The last, slow stage (holomap layout) arrived: settle every currently
 // shown node from wherever it is now onto its real coordinate in one 400ms
 // ease-out tween, all at once, then hand off to the normal `net.full`/
 // `syncNetworkItems` path as if it had loaded that way from the start.

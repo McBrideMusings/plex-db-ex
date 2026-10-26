@@ -8,7 +8,7 @@
 //! then all redrawn kinds replace their rows in one transaction, so a reader sees the old maps
 //! or the new ones. This is the only code that writes those tables (ADR-0001).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use rusqlite::{Connection, params};
 
@@ -92,6 +92,16 @@ pub fn round(x: f64, places: usize) -> f64 {
 /// Every title of the kind placed in 2-D so titles with similar keywords sit close, and the
 /// labels of its regions. A title's vector is its tags weighted by `1 + ln(n / df)`.
 pub fn draw(rows: &[(String, String)], seed: u64) -> Result<Drawn, String> {
+    draw_excluding(rows, &HashSet::new(), seed)
+}
+
+/// [`draw`] with the tags in `exclude` left out of the vectors and the labels. The weights still
+/// count every row: a title carrying only excluded tags stays in `n` and is `unplaced`.
+pub fn draw_excluding(
+    rows: &[(String, String)],
+    exclude: &HashSet<String>,
+    seed: u64,
+) -> Result<Drawn, String> {
     let mut df: HashMap<&str, usize> = HashMap::new();
     let mut carrying = 0usize;
     let mut last: Option<&str> = None;
@@ -105,7 +115,7 @@ pub fn draw(rows: &[(String, String)], seed: u64) -> Result<Drawn, String> {
     let n = carrying;
     let mut values: Vec<&str> = df
         .iter()
-        .filter(|(_, count)| **count >= MAP_MIN_DF)
+        .filter(|(value, count)| **count >= MAP_MIN_DF && !exclude.contains(**value))
         .map(|(value, _)| *value)
         .collect();
     values.sort_unstable();
@@ -134,7 +144,7 @@ pub fn draw(rows: &[(String, String)], seed: u64) -> Result<Drawn, String> {
             y: round(c[1], 5),
         })
         .collect();
-    let labels = region_labels(rows, &points);
+    let labels = region_labels(rows, &points, exclude);
     Ok(Drawn {
         unplaced: n - points.len(),
         points,
@@ -148,7 +158,11 @@ pub fn draw(rows: &[(String, String)], seed: u64) -> Result<Drawn, String> {
 /// count-in-region times IDF, the weight the map itself uses, so a tag common everywhere does
 /// not name every region. A tag that already names an ancestor is skipped, so each zoom level
 /// brings new words. A tag on fewer than `MAP_MIN_DF` titles never labels anything.
-fn region_labels(rows: &[(String, String)], points: &[Point]) -> Vec<Label> {
+fn region_labels(
+    rows: &[(String, String)],
+    points: &[Point],
+    exclude: &HashSet<String>,
+) -> Vec<Label> {
     let mut df: HashMap<&str, usize> = HashMap::new();
     let mut titles = 0usize;
     let mut last: Option<&str> = None;
@@ -162,7 +176,7 @@ fn region_labels(rows: &[(String, String)], points: &[Point]) -> Vec<Label> {
     let n = titles as f64;
     let mut tags: HashMap<&str, Vec<&str>> = HashMap::new();
     for (item_id, value) in rows {
-        if df[value.as_str()] >= MAP_MIN_DF {
+        if df[value.as_str()] >= MAP_MIN_DF && !exclude.contains(value) {
             tags.entry(item_id).or_default().push(value);
         }
     }

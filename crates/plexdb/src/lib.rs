@@ -16,6 +16,8 @@ pub mod enrich_mdblist_ratings;
 pub mod enrich_tmdb;
 pub mod enrich_tmdb_language;
 pub mod enrich_wikidata;
+pub mod explore;
+pub mod explore_views;
 pub mod frame_encoder;
 pub mod frame_media;
 pub mod frame_quant;
