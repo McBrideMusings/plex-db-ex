@@ -1,10 +1,8 @@
 """`LivePlexClient` against recorded responses, never a live server.
 
 `tests/fixtures/plex/*.json` were captured from a real Plex server's
-`/library/sections`, `/library/sections/<key>/all`, `/status/sessions/history/all`,
-and `/devices` endpoints, trimmed to the fields this client reads (`history.json`
-and `devices.json` use synthetic ids and names rather than a real account's data —
-watch history is personal in a way a movie's metadata is not). `httpx.MockTransport`
+`/library/sections` and `/library/sections/<key>/all` endpoints, trimmed to the
+fields this client reads. `httpx.MockTransport`
 serves them back over the exact request-building and JSON-parsing code
 `LivePlexClient` uses against a real server, so this is a genuine test of the
 adapter — just with no socket.
@@ -42,11 +40,6 @@ _RECORDED = {
         "/library/sections/2/all",
         "type=4&includeGuids=1&X-Plex-Container-Start=0&X-Plex-Container-Size=500",
     ): "section_2_type_4.json",
-    ("/devices", ""): "devices.json",
-    (
-        "/status/sessions/history/all",
-        "sort=viewedAt%3Adesc&X-Plex-Container-Start=0&X-Plex-Container-Size=200",
-    ): "history.json",
 }
 
 
@@ -182,49 +175,10 @@ def test_collection_children_lists_every_member_of_one_collection() -> None:
     assert [c["title"] for c in children] == ["The Dark Knight", "Batman Begins"]
 
 
-def test_devices_lists_every_device_with_its_client_identifier_and_platform() -> None:
-    devices = _client().devices()
-
-    assert [(d["id"], d["platform"], d["clientIdentifier"]) for d in devices] == [
-        (10, "Roku", "device-alpha-001"),
-        (11, "Chromecast", ""),
-        (12, "iOS", "device-gamma-003"),
-    ]
-
-
-def test_history_with_no_cutoff_fetches_the_whole_recorded_history() -> None:
-    events = _client().history()
-
-    assert [e["historyKey"] for e in events] == [
-        "/status/sessions/history/2001",
-        "/status/sessions/history/2000",
-        "/status/sessions/history/1999",
-        "/status/sessions/history/1998",
-    ]
-
-
-def test_history_sends_the_since_viewed_at_cutoff_as_plexs_own_filter_operator() -> None:
-    seen_query = ""
-
-    def _capture(request: httpx.Request) -> httpx.Response:
-        nonlocal seen_query
-        seen_query = request.url.query.decode()
-        return httpx.Response(200, json={"MediaContainer": {"totalSize": 0, "Metadata": []}})
-
-    http = httpx.Client(transport=httpx.MockTransport(_capture))
-    client = LivePlexClient("http://plex.example:32400", "t", http=http)
-
-    events = client.history(since_viewed_at=1700000000)
-
-    assert events == []
-    assert "viewedAt%3E=1700000000" in seen_query
-
-
 def test_accounts_lists_every_account_including_the_id_zero_placeholder() -> None:
     """Confirmed live (2026-08-10): `/accounts` returns `MediaContainer.Account`
     with `id` and `name`; id 0 is a placeholder with an empty `name` on the
-    live server. Synthetic ids/names here, same reasoning as `devices.json`
-    and `history.json` — an account list is personal data."""
+    live server. The ids and names here are synthetic: an account list is personal data."""
 
     def _handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/accounts"
@@ -306,49 +260,6 @@ def test_items_keeps_paging_past_a_short_page_while_total_size_says_more() -> No
     client = LivePlexClient("http://plex.example:32400", "t", http=http)
 
     assert client.items("2", PLEX_TYPE_EPISODE) == everything
-
-
-def test_history_paginates_until_total_size_is_reached(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # A small page size makes a 3-event history span two pages without a
-    # multi-thousand-row fixture.
-    monkeypatch.setattr(plex_client, "_HISTORY_PAGE_SIZE", 2)
-    pages = {
-        0: {
-            "MediaContainer": {
-                "totalSize": 3,
-                "Metadata": [
-                    {"historyKey": "/status/sessions/history/1", "viewedAt": 100},
-                    {"historyKey": "/status/sessions/history/2", "viewedAt": 101},
-                ],
-            }
-        },
-        2: {
-            "MediaContainer": {
-                "totalSize": 3,
-                "Metadata": [
-                    {"historyKey": "/status/sessions/history/3", "viewedAt": 102},
-                ],
-            }
-        },
-    }
-
-    def _paged(request: httpx.Request) -> httpx.Response:
-        assert request.url.params["X-Plex-Container-Size"] == "2"
-        start = int(request.url.params["X-Plex-Container-Start"])
-        return httpx.Response(200, json=pages[start])
-
-    http = httpx.Client(transport=httpx.MockTransport(_paged))
-    client = LivePlexClient("http://plex.example:32400", "t", http=http)
-
-    events = client.history()
-
-    assert [e["historyKey"] for e in events] == [
-        "/status/sessions/history/1",
-        "/status/sessions/history/2",
-        "/status/sessions/history/3",
-    ]
 
 
 def test_a_200_with_a_non_json_body_raises_plex_error_not_a_json_traceback() -> None:

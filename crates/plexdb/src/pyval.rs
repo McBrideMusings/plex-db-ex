@@ -1,6 +1,7 @@
 //! Python's reading of a JSON value, where a step's rows depend on it: `int(x)`,
 //! `str(x)`, truthiness (`a or b`) and `type(x).__name__`.
 
+use rusqlite::types::Value as Sql;
 use serde_json::Value;
 
 /// Python's `bool(value)` of a decoded JSON value.
@@ -40,6 +41,49 @@ pub fn py_str(value: &Value) -> String {
             _ => n.to_string(),
         },
         other => other.to_string(),
+    }
+}
+
+/// `record.get(key)`: the member, or `null` when absent.
+pub fn get<'a>(record: &'a Value, key: &str) -> &'a Value {
+    record.get(key).unwrap_or(&Value::Null)
+}
+
+/// `a or b`: `a` when it is true, else `b`.
+pub fn or<'a>(a: &'a Value, b: &'a Value) -> &'a Value {
+    if truthy(a) { a } else { b }
+}
+
+/// `str(value)` unless it is `None` or `""` (media's `_text`).
+pub fn text_or_none(value: &Value) -> Option<String> {
+    match value {
+        Value::Null => None,
+        Value::String(text) if text.is_empty() => None,
+        other => Some(py_str(other)),
+    }
+}
+
+/// How sqlite3 binds a JSON scalar: `bool` and `int` as INTEGER, `float` as REAL,
+/// `str` as TEXT, `None` as NULL.
+pub fn sql(value: &Value) -> Sql {
+    match value {
+        Value::Null => Sql::Null,
+        Value::Bool(flag) => Sql::Integer(i64::from(*flag)),
+        Value::Number(n) => match n.as_i64() {
+            Some(int) => Sql::Integer(int),
+            None => Sql::Real(n.as_f64().unwrap_or(f64::NAN)),
+        },
+        Value::String(text) => Sql::Text(text.clone()),
+        other => Sql::Text(other.to_string()),
+    }
+}
+
+/// `value` as a JSON-number comparison key: integers exactly, anything else as a float.
+pub fn number(value: &Value) -> Option<f64> {
+    match value {
+        Value::Number(n) => n.as_f64(),
+        Value::Bool(flag) => Some(f64::from(u8::from(*flag))),
+        _ => None,
     }
 }
 

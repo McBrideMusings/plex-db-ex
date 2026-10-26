@@ -7,6 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
+use plexdb::identity::{canonical_path, derive_item_id, fnv1a_64};
 use plexdb::list_decisions::canonical_list_url;
 use plexdb::pyiso::is_isoformat;
 use plexdb::steps::STEPS;
@@ -43,6 +44,71 @@ fn every_canonical_list_url_case_gives_the_specified_key() {
         })
         .collect();
     assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
+fn roots(case: &Value) -> Vec<String> {
+    case["source_roots"]
+        .as_array()
+        .expect("source_roots is a list")
+        .iter()
+        .map(|root| root.as_str().expect("a root").to_string())
+        .collect()
+}
+
+fn pairs(case: &Value) -> Vec<(String, String)> {
+    case["external_ids"]
+        .as_array()
+        .expect("external_ids is a list")
+        .iter()
+        .map(|pair| {
+            (
+                pair[0].as_str().expect("a namespace").to_string(),
+                pair[1].as_str().expect("a value").to_string(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn every_item_id_case_derives_the_published_id() {
+    let spec = fixture("item_id.json");
+    let section = |name: &str| {
+        spec[name]
+            .as_array()
+            .unwrap_or_else(|| panic!("{name} is a list"))
+            .clone()
+    };
+    let mut wrong = Vec::new();
+    for case in section("item_id_cases") {
+        let got = derive_item_id(
+            &pairs(&case),
+            case["canonical_path"].as_str().expect("a path"),
+        );
+        if got != case["expect"].as_str().expect("expect") {
+            wrong.push(format!("{}: got {got}", case["name"]));
+        }
+    }
+    for case in section("canonical_path_cases") {
+        let got = canonical_path(case["raw"].as_str().expect("raw"), &roots(&case));
+        if got != case["expect"].as_str().expect("expect") {
+            wrong.push(format!("{}: got {got:?}", case["name"]));
+        }
+    }
+    for case in section("end_to_end_cases") {
+        let canonical = canonical_path(case["raw"].as_str().expect("raw"), &roots(&case));
+        let got = derive_item_id(&pairs(&case), &canonical);
+        if got != case["expect"].as_str().expect("expect") {
+            wrong.push(format!("{}: got {got}", case["name"]));
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
+#[test]
+fn the_path_hash_is_fnv1a_as_published() {
+    assert_eq!(fnv1a_64(""), 0xCBF2_9CE4_8422_2325);
+    assert_eq!(fnv1a_64("a"), 0xAF63_DC4C_8601_EC8C);
+    assert_eq!(fnv1a_64("foobar"), 0x8594_4171_F739_67E8);
 }
 
 #[test]

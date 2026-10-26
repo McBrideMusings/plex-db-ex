@@ -114,12 +114,11 @@ Every copy in this project therefore goes through `VACUUM INTO`, which reads thr
 connection, sees the sidecar, and writes one self-contained file with no sidecars of its own. That
 is what `plexdb publish` already used for snapshots ([`store.py`][store.py]), what
 [`tools/baseline.sh`][baseline.sh] uses for pulls and manual backups, and what
-[`plexdb/backup.py`][backup.py] uses before a migration.
+[`migrate.rs`][migrate.rs] uses before a migration and `repair-fs-identities` before it moves ids.
 
 [store.py]: https://github.com/McBrideMusings/plex-db-ex/blob/main/plexdb/store.py
 [migrate.rs]: https://github.com/McBrideMusings/plex-db-ex/blob/main/crates/plexdb/src/migrate.rs
 [baseline.sh]: https://github.com/McBrideMusings/plex-db-ex/blob/main/tools/baseline.sh
-[backup.py]: https://github.com/McBrideMusings/plex-db-ex/blob/main/plexdb/backup.py
 
 ```
 admin pull-baseline      # consistent copy, host -> ./data/plexdb.db
