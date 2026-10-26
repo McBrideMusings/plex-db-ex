@@ -812,10 +812,15 @@ pub fn harvest(
     let mut frames = open_frames(frames_path)?;
     let now = inputs.now;
     set_indexing(&frames, None, &now())?;
-    let result = run_titles(&mut frames, &parts, inputs, options, log, &mut float);
-    // The title in hand is released whether the run ended or failed.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_titles(&mut frames, &parts, inputs, options, log, &mut float)
+    }));
+    // The title in hand is released whether the run ended, failed or panicked.
     let released = set_indexing(&frames, None, &now());
-    let result = result?;
+    let result = match result {
+        Ok(result) => result?,
+        Err(panic) => std::panic::resume_unwind(panic),
+    };
     released?;
     Ok(result)
 }
@@ -922,6 +927,13 @@ fn parse_args(args: &[String]) -> Result<Options, Failure> {
     Ok(options)
 }
 
+/// Print a progress line. A closed stdout pipe loses the line; it never panics, which
+/// would abandon the run's `frame_harvest` row.
+fn say(line: &str) {
+    use std::io::Write;
+    let _ = writeln!(std::io::stdout(), "{line}");
+}
+
 pub fn run(args: &[String]) -> Result<(), Failure> {
     let options = parse_args(args)?;
     (|| -> Result<(), StoreError> {
@@ -941,9 +953,15 @@ pub fn run(args: &[String]) -> Result<(), Failure> {
             &config.ffprobe,
             &config.decode,
             Some(Box::new(move |reason: &str| {
-                println!("frame decode: cuda failed, decoding on the CPU: {reason}");
+                say(&format!(
+                    "frame decode: cuda failed, decoding on the CPU: {reason}"
+                ));
                 if let Err(err) = write_decoder_fallback(&fallback_path, reason) {
-                    eprintln!("could not record the decoder fallback: {err}");
+                    use std::io::Write;
+                    let _ = writeln!(
+                        std::io::stderr(),
+                        "could not record the decoder fallback: {err}"
+                    );
                 }
             })),
         );
@@ -980,14 +998,14 @@ pub fn run(args: &[String]) -> Result<(), Failure> {
                 now: &Local::now,
             },
             &options,
-            &mut |line| println!("{line}"),
+            &mut say,
         )?;
-        println!(
+        say(&format!(
             "{NAME} stopped: {}; {} indexed, {} failed",
             result.stopped,
             crate::frames_cmd::group_thousands(result.indexed as i64),
             crate::frames_cmd::group_thousands(result.failed as i64)
-        );
+        ));
         Ok(())
     })()
     .map_err(crate::steps::failure)
