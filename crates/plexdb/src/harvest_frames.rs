@@ -896,10 +896,6 @@ fn run_titles(
 
 // --- the command ----------------------------------------------------------------
 
-fn which(program: &str) -> bool {
-    crate::frames_cmd::which(program)
-}
-
 fn parse_args(args: &[String]) -> Result<Options, Failure> {
     let usage = || {
         Failure::Usage(format!(
@@ -926,16 +922,12 @@ fn parse_args(args: &[String]) -> Result<Options, Failure> {
     Ok(options)
 }
 
-fn failure(err: StoreError) -> Failure {
-    crate::steps::failure(err)
-}
-
 pub fn run(args: &[String]) -> Result<(), Failure> {
     let options = parse_args(args)?;
     (|| -> Result<(), StoreError> {
         let config = FrameConfig::from_env()?;
         let path = config.require_frames_path()?;
-        if !which(&config.ffmpeg) || !which(&config.ffprobe) {
+        if !crate::frames_cmd::which(&config.ffmpeg) || !crate::frames_cmd::which(&config.ffprobe) {
             return Err(StoreError::Store(format!(
                 "{} and {} must be installed (or named by PLEXDB_FFMPEG and PLEXDB_FFPROBE) \
                  to harvest frames",
@@ -993,16 +985,12 @@ pub fn run(args: &[String]) -> Result<(), Failure> {
         println!(
             "{NAME} stopped: {}; {} indexed, {} failed",
             result.stopped,
-            frames_group(result.indexed),
-            frames_group(result.failed)
+            crate::frames_cmd::group_thousands(result.indexed as i64),
+            crate::frames_cmd::group_thousands(result.failed as i64)
         );
         Ok(())
     })()
-    .map_err(failure)
-}
-
-fn frames_group(n: usize) -> String {
-    crate::frames_cmd::group_thousands(n as i64)
+    .map_err(crate::steps::failure)
 }
 
 #[cfg(test)]

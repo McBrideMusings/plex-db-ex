@@ -159,10 +159,19 @@ def stream(
 
     thread = threading.Thread(target=forward, daemon=True)
     thread.start()
-    with child.stdout:
-        for line in child.stdout:
-            on_line(line.rstrip("\n"))
+    try:
+        with child.stdout:
+            for line in child.stdout:
+                on_line(line.rstrip("\n"))
+    except BaseException:
+        # A failing `on_line` must not leave the child running, holding its locks.
+        child.kill()
+        child.wait()
+        raise
+    finally:
+        thread.join()
     code = child.wait()
-    thread.join()
     if code != 0:
-        _check(code, "".join(errors))
+        # The last line is the binary's own `error:` line; earlier ones are progress.
+        lines = [line for line in "".join(errors).splitlines() if line.strip()]
+        _check(code, lines[-1] if lines else "")
