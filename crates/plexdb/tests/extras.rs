@@ -327,3 +327,177 @@ fn a_library_holding_extras_cannot_change_its_root() {
     let err = fold(&mut w).expect_err("refused").to_string();
     assert!(err.contains("root cannot change"), "{err}");
 }
+
+const YOUTUBE_RULE: &str = r#"{"match": "^(?P<id>[A-Za-z0-9_-]{11})(\\.f\\d+)?$",
+    "set": {"source_url": "https://www.youtube.com/watch?v={id}"}}"#;
+
+fn declaration_with(root: &str, parsers: &str) -> String {
+    format!(
+        r#"[{{"name": "Music Videos", "root": "{root}/musicvideos", "type": "music-video",
+            "fields": [{{"name": "artist", "kind": "text"}}, {{"name": "title", "kind": "text"}}],
+            "parsers": {parsers}}}]"#
+    )
+}
+
+fn source_urls(conn: &Connection) -> Vec<(String, Option<String>)> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT i.title, e.source_url FROM extra_item e JOIN items i USING (item_id) \
+             ORDER BY i.title",
+        )
+        .expect("prepare");
+    stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .expect("query")
+        .collect::<Result<_, _>>()
+        .expect("rows")
+}
+
+#[test]
+fn a_parser_proposes_a_source_url_from_the_names_of_real_files() {
+    let mut w = world();
+    fs::write(
+        &w.json,
+        declaration_with(&w.root, &format!("[{YOUTUBE_RULE}]")),
+    )
+    .expect("json");
+    fold(&mut w).expect("fold");
+    for name in [
+        "3YxaaGgTQYM.mp4",
+        "NgylvUo3piE.f328.mp4",
+        "ghibli.mp4",
+        "9_minutes_of_funny_forgotten_RHONY_moments_nqug8aoUc4o_.mp4",
+    ] {
+        put(&w, name, name);
+    }
+    walk(&mut w, T1);
+
+    let want = |id: &str| Some(format!("https://www.youtube.com/watch?v={id}"));
+    assert_eq!(
+        source_urls(&w.conn),
+        vec![
+            ("3YxaaGgTQYM".to_string(), want("3YxaaGgTQYM")),
+            (
+                "9_minutes_of_funny_forgotten_RHONY_moments_nqug8aoUc4o_".to_string(),
+                None
+            ),
+            ("NgylvUo3piE.f328".to_string(), want("NgylvUo3piE")),
+            ("ghibli".to_string(), None),
+        ]
+    );
+}
+
+#[test]
+fn a_parser_proposes_fields_as_path_sourced_enrichment_and_the_first_rule_wins() {
+    let mut w = world();
+    let rules = r#"[{"match": "^(?P<artist>.+) - (?P<title>.+)$",
+                     "set": {"artist": "{artist}", "title": "{title}"}},
+                    {"match": "^(?P<a>.+) - ", "set": {"artist": "{a}!"}}]"#;
+    fs::write(&w.json, declaration_with(&w.root, rules)).expect("json");
+    fold(&mut w).expect("fold");
+    put(&w, "Daft Punk - One More Time.mp4", "x");
+    walk(&mut w, T1);
+
+    let rows: Vec<(String, String, String)> = {
+        let mut stmt = w
+            .conn
+            .prepare(
+                "SELECT key, value, source FROM enrichment WHERE namespace = 'extra' ORDER BY key",
+            )
+            .expect("prepare");
+        stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .expect("query")
+            .collect::<Result<_, _>>()
+            .expect("rows")
+    };
+    assert_eq!(
+        rows,
+        vec![
+            ("artist".into(), "Daft Punk".into(), "path".into()),
+            ("title".into(), "One More Time".into(), "path".into()),
+        ]
+    );
+    let title: String = w
+        .conn
+        .query_row("SELECT title FROM items WHERE type = 'extra'", [], |row| {
+            row.get(0)
+        })
+        .expect("title");
+    assert_eq!(title, "One More Time");
+}
+
+#[test]
+fn a_person_set_source_url_survives_a_rescan() {
+    let mut w = world();
+    fs::write(
+        &w.json,
+        declaration_with(&w.root, &format!("[{YOUTUBE_RULE}]")),
+    )
+    .expect("json");
+    fold(&mut w).expect("fold");
+    let path = put(&w, "3YxaaGgTQYM.mp4", "first");
+    walk(&mut w, T1);
+    w.conn
+        .execute(
+            "UPDATE extra_item SET source_url = 'https://vimeo.com/1'",
+            [],
+        )
+        .expect("person sets it");
+
+    fs::write(&path, "second, longer").expect("rewrite");
+    walk(&mut w, T2);
+    put(&w, "NgylvUo3piE.f328.mp4", "other");
+    walk(&mut w, T2);
+
+    assert_eq!(
+        source_urls(&w.conn),
+        vec![
+            (
+                "3YxaaGgTQYM".to_string(),
+                Some("https://vimeo.com/1".to_string())
+            ),
+            (
+                "NgylvUo3piE.f328".to_string(),
+                Some("https://www.youtube.com/watch?v=NgylvUo3piE".to_string())
+            ),
+        ]
+    );
+}
+
+#[test]
+fn a_bad_parser_makes_fold_extras_refuse_the_file_and_keep_the_stored_declaration() {
+    let mut w = world();
+    fold(&mut w).expect("fold the plain declaration");
+    let stored = count(&w.conn, "SELECT COUNT(*) FROM extra_library");
+    for (rules, why) in [
+        (
+            r#"[{"match": "(unclosed", "set": {"title": "{x}"}}]"#,
+            "not a regex",
+        ),
+        (
+            r#"[{"match": "^(?P<id>.+)$", "set": {"mood": "{id}"}}]"#,
+            "neither a declared field nor source_url",
+        ),
+        (
+            r#"[{"match": "^(?P<id>.+)$", "set": {"title": "{nope}"}}]"#,
+            "not a group of its match",
+        ),
+        (r#"{"match": "x"}"#, "not a list"),
+        (r#"[{"match": "x", "set": {}}]"#, "empty set"),
+    ] {
+        fs::write(&w.json, declaration_with(&w.root, rules)).expect("json");
+        match fold(&mut w) {
+            Err(ExtrasError::Refused(message)) => {
+                assert!(message.contains(why), "{message} lacks {why}")
+            }
+            other => panic!("expected a refusal for {rules}, got {other:?}"),
+        }
+    }
+    assert_eq!(count(&w.conn, "SELECT COUNT(*) FROM extra_library"), stored);
+    assert_eq!(
+        count(
+            &w.conn,
+            "SELECT COUNT(*) FROM extra_library WHERE parsers IS NOT NULL"
+        ),
+        0
+    );
+}

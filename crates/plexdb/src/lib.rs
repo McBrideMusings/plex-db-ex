@@ -22,7 +22,11 @@ pub mod explore;
 pub mod explore_views;
 pub mod extras_cmd;
 pub mod extras_declaration;
+<<<<<<< HEAD
 pub mod extras_near;
+=======
+pub mod extras_parsers;
+>>>>>>> d527bcf54bbc377345bd430b0066916e668670f2
 pub mod extras_views;
 pub mod extras_walk;
 pub mod frame_encoder;

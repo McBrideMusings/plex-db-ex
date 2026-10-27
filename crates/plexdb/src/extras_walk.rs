@@ -20,6 +20,7 @@ use plexdb_store::StoreError;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
+use crate::extras_parsers;
 use crate::identity::{canonical_path, fnv1a_64};
 
 pub const NAME: &str = "extras-walk";
@@ -140,6 +141,18 @@ pub fn apply(
         |row| row.get(0),
     )?;
     stats.first_scan = items == 0;
+    let stored_parsers: Option<String> = tx.query_row(
+        "SELECT parsers FROM extra_library WHERE name = ?",
+        [library],
+        |row| row.get(0),
+    )?;
+    let rules = match extras_parsers::from_json(stored_parsers.as_deref()) {
+        Ok(parsers) => extras_parsers::compile(&parsers),
+        Err(why) => {
+            eprintln!("extras-walk {library}: {why}");
+            Vec::new()
+        }
+    };
     let on_disk: HashSet<&str> = found.iter().map(|file| file.path.as_str()).collect();
     let mut moved_from: HashSet<String> = HashSet::new();
     for file in found {
@@ -221,6 +234,7 @@ pub fn apply(
                         params![item_id, library, stats.first_scan as i64, now],
                     )?;
                     insert_file(&tx, &file.path, &item_id, true, file, sha, now)?;
+                    propose(&tx, &item_id, &stem, &rules, now)?;
                     stats.new_items += 1;
                 }
             }
@@ -247,6 +261,42 @@ pub fn apply(
     choose_primaries(&tx, library)?;
     tx.commit()?;
     Ok(stats)
+}
+
+/// What the library's parsers propose for a new item, from its file stem. Run once, when
+/// the item is made: a value already there, a person's included, is never replaced.
+fn propose(
+    tx: &Connection,
+    item_id: &str,
+    stem: &str,
+    rules: &[extras_parsers::Compiled],
+    now: &str,
+) -> Result<(), StoreError> {
+    for (key, value) in extras_parsers::propose(rules, stem) {
+        match key.as_str() {
+            "source_url" => {
+                tx.execute(
+                    "UPDATE extra_item SET source_url = ? WHERE item_id = ? AND source_url IS NULL",
+                    params![value, item_id],
+                )?;
+            }
+            _ => {
+                tx.execute(
+                    "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) \
+                     SELECT ?1, 'extra', 'path', ?2, ?3, ?4 WHERE NOT EXISTS \
+                     (SELECT 1 FROM enrichment WHERE item_id = ?1 AND namespace = 'extra' AND key = ?2)",
+                    params![item_id, key, value, now],
+                )?;
+                if key == "title" {
+                    tx.execute(
+                        "UPDATE items SET title = ? WHERE item_id = ?",
+                        params![value, item_id],
+                    )?;
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn insert_file(
