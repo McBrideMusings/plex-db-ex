@@ -130,6 +130,9 @@ fn one_way(from: &Frames, to: &Frames) -> f64 {
 
 /// The score of two items' frames, or `None` when the gates rule the pair out.
 fn score(a: &Frames, b: &Frames) -> Option<f64> {
+    if a.last_ms <= 0 || b.last_ms <= 0 {
+        return None;
+    }
     let longer = a.last_ms.max(b.last_ms) as f64;
     let slack = (DURATION_SLACK.0 as f64).max(longer * DURATION_SLACK.1);
     if (a.last_ms - b.last_ms).abs() as f64 > slack {
@@ -355,6 +358,18 @@ pub fn apply(conn: &mut Connection, prepared: &Prepared, now: &str) -> Result<St
             kept = next;
         }
         if kept == pair.merged {
+            continue;
+        }
+        // `prepare` read `organized` before the lock; a person may have organized the later
+        // item since, and an organized item is never hidden behind an unorganized one.
+        let organized = |tx: &Connection, id: &str| -> Result<i64, StoreError> {
+            Ok(tx.query_row(
+                "SELECT organized FROM extra_item WHERE item_id = ?1",
+                [id],
+                |row| row.get(0),
+            )?)
+        };
+        if organized(&tx, &pair.merged)? > organized(&tx, &kept)? {
             continue;
         }
         tx.execute(

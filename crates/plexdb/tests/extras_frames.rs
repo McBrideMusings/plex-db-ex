@@ -480,3 +480,23 @@ fn a_video_of_another_length_or_other_frames_is_not_folded() {
     assert_eq!(stats.folded, 0);
     assert_eq!(count(&w.conn, "SELECT count(*) FROM extra_merge"), 0);
 }
+
+#[test]
+fn an_item_organized_after_the_comparison_is_never_hidden_behind_an_unorganized_one() {
+    let mut w = near_world();
+    w.conn
+        .execute("UPDATE extra_item SET organized = 0", [])
+        .expect("queue all");
+    let readonly = extras_near::open_frames_readonly(&w.frames_path).expect("ro");
+    let prepared = extras_near::prepare(&w.conn, &readonly, 0.97).expect("prepare");
+    assert_eq!(prepared.pairs.len(), 1);
+    w.conn
+        .execute(
+            "UPDATE extra_item SET organized = 1 WHERE item_id = 'fs:copy'",
+            [],
+        )
+        .expect("a person organizes the later item");
+    let stats = extras_near::apply(&mut w.conn, &prepared, T1).expect("apply");
+    assert_eq!(stats.folded, 0);
+    assert_eq!(count(&w.conn, "SELECT count(*) FROM extra_merge"), 0);
+}

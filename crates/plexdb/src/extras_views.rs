@@ -11,20 +11,22 @@ use crate::staleness::parse_micros;
 /// Most ids one `fields` call may ask for.
 pub const MAX_IDS: usize = 1000;
 
-/// Every moment something about an extra changed, joined by `|`: its first sighting, its
-/// organizing, its primary file going missing, each file joining it, and each field or tag
-/// value written for it. The writer stamps in the local offset and other writers in UTC, so the
-/// latest is picked by instant in [`changed_at`], never by text.
 /// An extra folded into another by the near-duplicate pass is that item's second file: it is
 /// never listed or answered as an item of its own.
 const LIVE: &str = "NOT EXISTS (SELECT 1 FROM extra_merge m WHERE m.merged_item_id = ei.item_id)";
 
+/// Every moment something about an extra changed, joined by `|`: its first sighting, its
+/// organizing, its primary file going missing, each file joining it, and each field or tag
+/// value written for it. The writer stamps in the local offset and other writers in UTC, so the
+/// latest is picked by instant in [`changed_at`], never by text.
 const MOMENTS: &str = "ei.first_seen || '|' || COALESCE(ei.organized_at, '') || '|' || \
     COALESCE(pf.missing_since, '') || '|' || \
     COALESCE((SELECT group_concat(first_seen, '|') FROM extra_file f \
               WHERE f.item_id = ei.item_id), '') || '|' || \
     COALESCE((SELECT group_concat(merged_at, '|') FROM extra_merge m \
               WHERE m.kept_item_id = ei.item_id), '') || '|' || \
+    COALESCE((SELECT group_concat(fetched_at, '|') FROM enrichment_cursor c \
+              WHERE c.item_id = ei.item_id AND c.namespace = 'extras' AND c.source = 'near' AND c.key = 'split'), '') || '|' || \
     COALESCE((SELECT group_concat(fetched_at, '|') FROM enrichment e \
               WHERE e.item_id = ei.item_id AND e.namespace IN ('extra', 'keywords')), '')";
 
