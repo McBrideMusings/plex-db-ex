@@ -296,3 +296,34 @@ fn a_tick_refuses_while_a_sweep_holds_the_writer_lock() {
     drop(sweep);
     assert!(open_store_exclusive(&w.store).expect("asked").is_some());
 }
+
+#[test]
+fn a_new_file_at_a_moved_files_old_path_is_a_conflict_not_a_copy() {
+    let mut w = world();
+    fold(&mut w).expect("fold");
+    let old = put(&w, "p.mkv", "first video");
+    walk(&mut w, T1);
+    let moved = format!("{}/musicvideos/q.mkv", w.root);
+    fs::rename(&old, &moved).expect("move");
+    walk(&mut w, T2);
+    put(&w, "p.mkv", "a different video");
+    let stats = walk_all(&mut w.conn, &w.roots, None, "2026-10-27T00:20:00+00:00").expect("walk");
+    assert_eq!(stats[0].id_conflicts, 1);
+    assert_eq!(count(&w.conn, "SELECT COUNT(*) FROM extra_file"), 1);
+}
+
+#[test]
+fn a_library_holding_extras_cannot_change_its_root() {
+    let mut w = world();
+    fold(&mut w).expect("fold");
+    put(&w, "a.mkv", "x");
+    walk(&mut w, T1);
+    fs::create_dir_all(format!("{}/other", w.root)).expect("dir");
+    fs::write(
+        &w.json,
+        declaration(&w.root).replace("/musicvideos", "/other"),
+    )
+    .expect("write");
+    let err = fold(&mut w).expect_err("refused").to_string();
+    assert!(err.contains("root cannot change"), "{err}");
+}

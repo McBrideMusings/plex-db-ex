@@ -102,8 +102,7 @@ def run_ticks(
         if outcome == "refused":
             continue
         last_tick = now
-        if outcome == "ran":
-            seen = before
+        seen = before
 
 
 def start() -> None:

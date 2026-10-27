@@ -81,11 +81,21 @@ pub fn run_tick(args: &[String]) -> Result<(), Failure> {
     let config = Config::from_env().map_err(failure)?;
     let roots = Sources::from_env();
     let roots = roots.require_roots(NEEDS_ROOTS).map_err(failure)?;
+    // Listing and hashing is the slow part and only reads, so it runs before the store is
+    // asked for; the lock is held for the fold and the writes alone.
+    let prepared = {
+        let conn = open_readonly(&config.store_path).map_err(failure)?;
+        extras_walk::prepare(&conn, None).map_err(failure)?
+    };
     let Some(mut store) = open_store_exclusive(&config.store_path).map_err(failure)? else {
         return Err(Failure::Busy("a writer has the store open".into()));
     };
     let folded = fold(&mut store.conn, &config, roots);
-    walk(&mut store.conn, roots).map_err(failure)?;
+    let stats = extras_walk::apply_prepared(&mut store.conn, &prepared, roots, &Now::read().iso())
+        .map_err(failure)?;
+    for line in extras_walk::describe(&stats) {
+        println!("{line}");
+    }
     folded.map_err(extras_failure)
 }
 

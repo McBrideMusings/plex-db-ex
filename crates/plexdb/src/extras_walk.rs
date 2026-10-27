@@ -151,15 +151,15 @@ pub fn apply(
             )
             .optional()?;
         if let Some((size, mtime, missing_since)) = row {
-            if missing_since.is_some() {
-                stats.returned += 1;
-            }
+            let back = missing_since.is_some();
             if size == Some(file.size) && mtime == Some(file.mtime) {
+                stats.returned += back as usize;
                 tx.execute(
                     "UPDATE extra_file SET last_seen = ?, missing_since = NULL WHERE path = ?",
                     params![now, file.path],
                 )?;
             } else if let Some(sha) = hashes.get(&file.path) {
+                stats.returned += back as usize;
                 tx.execute(
                     "UPDATE extra_file SET size = ?, mtime = ?, sha256 = ?, last_seen = ?, \
                      missing_since = NULL WHERE path = ?",
@@ -200,21 +200,14 @@ pub fn apply(
         } else {
             let canonical = canonical_path(&file.path, source_roots);
             let item_id = format!("fs:{:016x}", fnv1a_64(&canonical));
-            let existing: Option<bool> = tx
-                .query_row(
-                    "SELECT EXISTS (SELECT 1 FROM extra_item WHERE item_id = ?) \
-                     FROM items WHERE item_id = ?",
-                    params![item_id, item_id],
-                    |row| row.get(0),
-                )
-                .optional()?;
-            match existing {
-                Some(true) => {
-                    insert_file(&tx, &file.path, &item_id, false, file, sha, now)?;
-                    stats.copies_joined += 1;
-                }
-                Some(false) => stats.id_conflicts += 1,
-                None => {
+            let taken: bool = tx.query_row(
+                "SELECT EXISTS (SELECT 1 FROM items WHERE item_id = ?)",
+                [&item_id],
+                |row| row.get(0),
+            )?;
+            match taken {
+                true => stats.id_conflicts += 1,
+                false => {
                     let stem = Path::new(&file.path)
                         .file_stem()
                         .map_or_else(String::new, |stem| stem.to_string_lossy().into_owned());
@@ -309,6 +302,90 @@ pub fn stored_libraries(conn: &Connection) -> Result<Vec<(String, String)>, Stor
     Ok(rows)
 }
 
+/// One library's listing and the hashes of the files that need one, read without
+/// writing the store.
+pub struct Prepared {
+    pub name: String,
+    pub root: String,
+    pub skipped: String,
+    pub found: Vec<Found>,
+    pub hashes: HashMap<String, String>,
+}
+
+/// List every stored library, or the one named `only`, and hash the files that are new or
+/// changed. Only reads `conn`, so a caller can do this, the slow part, without holding the
+/// writer lock.
+pub fn prepare(conn: &Connection, only: Option<&str>) -> Result<Vec<Prepared>, StoreError> {
+    let mut all = Vec::new();
+    for (name, root) in stored_libraries(conn)? {
+        if only.is_some_and(|only| only != name) {
+            continue;
+        }
+        let mut prepared = Prepared {
+            name,
+            root: root.clone(),
+            skipped: String::new(),
+            found: Vec::new(),
+            hashes: HashMap::new(),
+        };
+        if !Path::new(&root).is_dir() {
+            prepared.skipped = format!("{root} is not a directory");
+        } else {
+            match list_files(Path::new(&root)) {
+                Ok(found) => prepared.found = found,
+                Err(err) => prepared.skipped = format!("cannot list {root}: {err}"),
+            }
+        }
+        if prepared.skipped.is_empty() {
+            for path in needing_hash(conn, &prepared.found)? {
+                match sha256_file(Path::new(&path)) {
+                    Ok(sha) => {
+                        prepared.hashes.insert(path, sha);
+                    }
+                    Err(err) => eprintln!("extras-walk: cannot read {path}: {err}"),
+                }
+            }
+        }
+        all.push(prepared);
+    }
+    Ok(all)
+}
+
+/// Write what [`prepare`] read. A library whose stored root changed since is left for the
+/// next walk.
+pub fn apply_prepared(
+    conn: &mut Connection,
+    prepared: &[Prepared],
+    source_roots: &[String],
+    now: &str,
+) -> Result<Vec<LibraryStats>, StoreError> {
+    let current: HashMap<String, String> = stored_libraries(conn)?.into_iter().collect();
+    let mut all = Vec::new();
+    for lib in prepared {
+        let skipped = if !lib.skipped.is_empty() {
+            lib.skipped.clone()
+        } else if current.get(&lib.name) != Some(&lib.root) {
+            "its declaration changed during the walk".into()
+        } else {
+            all.push(apply(
+                conn,
+                &lib.name,
+                &lib.found,
+                &lib.hashes,
+                source_roots,
+                now,
+            )?);
+            continue;
+        };
+        all.push(LibraryStats {
+            name: lib.name.clone(),
+            skipped,
+            ..LibraryStats::default()
+        });
+    }
+    Ok(all)
+}
+
 /// Walk every stored library, or the one named `only`.
 pub fn walk_all(
     conn: &mut Connection,
@@ -316,39 +393,8 @@ pub fn walk_all(
     only: Option<&str>,
     now: &str,
 ) -> Result<Vec<LibraryStats>, StoreError> {
-    let mut all = Vec::new();
-    for (name, root) in stored_libraries(conn)? {
-        if only.is_some_and(|only| only != name) {
-            continue;
-        }
-        let skip = |why: String| LibraryStats {
-            name: name.clone(),
-            skipped: why,
-            ..LibraryStats::default()
-        };
-        if !Path::new(&root).is_dir() {
-            all.push(skip(format!("{root} is not a directory")));
-            continue;
-        }
-        let found = match list_files(Path::new(&root)) {
-            Ok(found) => found,
-            Err(err) => {
-                all.push(skip(format!("cannot list {root}: {err}")));
-                continue;
-            }
-        };
-        let mut hashes = HashMap::new();
-        for path in needing_hash(conn, &found)? {
-            match sha256_file(Path::new(&path)) {
-                Ok(sha) => {
-                    hashes.insert(path, sha);
-                }
-                Err(err) => eprintln!("extras-walk: cannot read {path}: {err}"),
-            }
-        }
-        all.push(apply(conn, &name, &found, &hashes, source_roots, now)?);
-    }
-    Ok(all)
+    let prepared = prepare(conn, only)?;
+    apply_prepared(conn, &prepared, source_roots, now)
 }
 
 /// The names in `stats`, for a report line.

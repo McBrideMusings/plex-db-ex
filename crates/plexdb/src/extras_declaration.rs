@@ -285,8 +285,22 @@ pub fn fold(
         stats.removed += 1;
     }
     for library in libraries {
-        if stored(&tx, &library.name)?.as_ref() == Some(library) {
+        let old = stored(&tx, &library.name)?;
+        if old.as_ref() == Some(library) {
             continue;
+        }
+        if let Some(old) = old.filter(|old| old.root != library.root) {
+            let items: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM extra_item WHERE library = ?",
+                [&library.name],
+                |row| row.get(0),
+            )?;
+            if items > 0 {
+                return refused(format!(
+                    "library {:?} holds {items} extra(s) under {:?}; its root cannot change to {:?}",
+                    library.name, old.root, library.root
+                ));
+            }
         }
         stats.changed += 1;
         tx.execute(

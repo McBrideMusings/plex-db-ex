@@ -61,6 +61,31 @@ def test_a_failed_tick_waits_for_the_next_interval(tmp_path: Path) -> None:
     assert attempts == [30.0, 630.0]
 
 
+def test_a_failed_tick_is_not_retried_every_poll_after_a_decisions_change(tmp_path: Path) -> None:
+    decisions = tmp_path / "extra_decisions.json"
+    now = [0.0]
+    attempts: list[float] = []
+
+    def sleep(seconds: float) -> None:
+        now[0] += seconds
+        if now[0] == 60.0:
+            decisions.write_text("[]")
+
+    def tick() -> str:
+        attempts.append(now[0])
+        return "failed"
+
+    extras_tick.run_ticks(
+        every_minutes=10,
+        decisions=decisions,
+        tick=tick,
+        sleep=sleep,
+        clock=lambda: now[0],
+        iterations=10,
+    )
+    assert attempts == [30.0, 60.0]
+
+
 def test_a_changed_decisions_file_ticks_within_a_poll(tmp_path: Path) -> None:
     decisions = tmp_path / "extra_decisions.json"
     now = [0.0]
