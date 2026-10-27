@@ -26,6 +26,27 @@ them and the four decision files, with the time of each decision masked. A map o
 UMAP in Python, so that comparison leaves out positions and region labels. The page names the layout
 "holomap". The container still runs the Python explorer.
 
+## Extras routes
+
+Two routes serve organized extras to consumers ([ADR-0030](./adr/0030-an-extras-library-is-a-declared-folder-the-writer-walks-and-a-person-organizes),
+`crates/plexdb/src/extras_views.rs`). An extra with `organized = 0` never appears in either.
+
+- `GET /api/extras/items[?since=<cursor>]` lists organized extras, oldest change first:
+  `item_id`, `library`, `type` (the library's declared type), `title`, `year`, `duration_ms` and
+  `path` (of the primary file), `missing` (true when the primary file is missing or absent),
+  `source_url` and `changed_at`. The answer also carries `cursor`, the latest `changed_at`
+  returned; pass it as `since` to get only extras changed after it. With no `since` every
+  organized extra is listed. A `since` that is not a timestamp gets a 400. An extra changes when it
+  is first seen, organized, loses its primary file, gains a file, or has a field or tag value
+  written; a file that returns after going missing changes nothing by itself. Stamps are compared as
+  instants, whatever offset they were written in. The writer stamps a tick before it commits, so a
+  change committed after a reader fetched a later cursor is not returned again.
+- `POST /api/extras/fields` with `{"ids": [...]}` (at most 1000, `Content-Type: application/json`)
+  returns `items`, keyed by id, each with its `library`, its declared `fields` (`name`, `kind`,
+  `required`, `values`) and its `tags`. Every list of values is ordered person first, then each
+  scraper by name, then `path`, each as `{value, source}`. An id that is not an organized extra is
+  omitted.
+
 ## Related tags
 
 Selecting a tag opens its panel with two tabs, **Related tags** and **Titles**, each with its count.

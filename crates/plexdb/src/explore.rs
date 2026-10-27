@@ -43,6 +43,7 @@ use crate::explore_views::{
     check_kind, cotags_json, display_labels, draw_map, draw_network, map_json, network_done_json,
     stored_map, stored_network, title_details, title_kind, titles_json,
 };
+use crate::extras_views::{MAX_IDS, extras_fields, extras_items};
 use crate::keyword_views::{keyword_rows, merge_map};
 use crate::list_file::{DecideError, decide as decide_list, list_book_in};
 use crate::lists::{list_detail, list_table, with_pending};
@@ -807,6 +808,41 @@ async fn doctor_title_search(State(app): State<Shared>, RawQuery(raw): RawQuery)
     doctor_route(app, raw, Doctor::Titles).await
 }
 
+async fn extras_items_get(State(app): State<Shared>, RawQuery(raw): RawQuery) -> Response {
+    let query = Query(parse_query(raw));
+    blocking(move || {
+        let conn = app.open()?;
+        extras_items(&conn, query.first("since"))
+    })
+    .await
+}
+
+async fn extras_fields_post(State(app): State<Shared>, request: Request) -> Response {
+    decide(request, move |body| {
+        let invalid = || ExploreError::Invalid("ids must be a list of item ids".into());
+        let ids = body
+            .get("ids")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(invalid)?
+            .iter()
+            .map(|id| id.as_str().map(str::to_string).ok_or_else(invalid))
+            .collect::<Result<Vec<_>, _>>()?;
+        if ids.len() > MAX_IDS {
+            return Err(ExploreError::Invalid(format!(
+                "ids is over {MAX_IDS} items"
+            )));
+        }
+        if ids.iter().any(|id| id.chars().count() > MAX_ITEM_ID) {
+            return Err(ExploreError::Invalid(format!(
+                "an id is over {MAX_ITEM_ID} characters"
+            )));
+        }
+        let conn = app.open()?;
+        extras_fields(&conn, &ids)
+    })
+    .await
+}
+
 /// Forward a request this server does not answer to the Python explorer.
 async fn forward(State(app): State<Shared>, request: Request) -> Response {
     let path = request.uri().path().to_string();
@@ -929,6 +965,11 @@ fn router(app: Shared) -> Router {
         .route(
             "/api/doctor/titles",
             get(doctor_title_search).fallback(forward),
+        )
+        .route("/api/extras/items", get(extras_items_get).fallback(forward))
+        .route(
+            "/api/extras/fields",
+            post(extras_fields_post).fallback(forward),
         )
         .fallback(forward)
         .with_state(app)
