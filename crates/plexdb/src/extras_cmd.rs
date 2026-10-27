@@ -1,16 +1,22 @@
 //! The extras steps as commands: `fold-extras`, `extras-walk`, `extras status` and the
 //! `extras-tick` that `plexdb schedule` runs every `PLEXDB_EXTRAS_EVERY` minutes
-//! (ADR-0030).
+//! (ADR-0030), and the commands that record a person's decisions: `extras set|tag|organize`
+//! append to `extra_decisions.json`, `extras undo` reverses a move.
 
 use plexdb_store::{Config, StoreError, open_readonly, open_store, open_store_exclusive};
 use rusqlite::Connection;
 
+use crate::decisions::FoldError;
+use crate::extras_decisions::{self as decisions, Decision, Entry, SOURCE_URL};
 use crate::extras_declaration::{self as declaration, EXTRAS_FILE, ExtrasError};
+use crate::extras_organize;
 use crate::extras_walk;
 use crate::sources::Sources;
 use crate::staleness::Now;
 use crate::steps::{Failure, failure};
 
+pub const DECISIONS: &str = decisions::NAME;
+pub const ORGANIZE: &str = extras_organize::NAME;
 pub const TICK: &str = "extras-tick";
 pub const COMMAND: &str = "extras";
 
@@ -52,6 +58,64 @@ fn no_args(name: &str, args: &[String]) -> Result<(), Failure> {
     }
 }
 
+fn fold_failure(err: FoldError) -> Failure {
+    match err {
+        FoldError::File(err) => Failure::Failed(err.0),
+        FoldError::Store(err) => failure(err),
+        FoldError::Sqlite(err) => failure(StoreError::from(err)),
+    }
+}
+
+/// Fold `extra_decisions.json`, then act on its organize decisions, printing the report.
+fn fold_decisions(
+    conn: &mut Connection,
+    config: &Config,
+    roots: &[String],
+) -> Result<(), FoldError> {
+    let path = config.decisions_file(decisions::FILE);
+    let now = Now::read().iso();
+    let stats = decisions::fold(conn, &path, roots, &now)?;
+    for line in decisions::describe(&stats, &path) {
+        println!("{line}");
+    }
+    if stats.file_found {
+        for line in extras_organize::run_pending(conn, &path, &now)? {
+            println!("{line}");
+        }
+    }
+    Ok(())
+}
+
+/// `fold-extra-decisions`: apply `extra_decisions.json` (set, tag, delete, split).
+pub fn run_fold_decisions(args: &[String]) -> Result<(), Failure> {
+    no_args(DECISIONS, args)?;
+    let config = Config::from_env().map_err(failure)?;
+    let roots = Sources::from_env();
+    let roots = roots.require_roots(NEEDS_ROOTS).map_err(failure)?;
+    let mut store = open_store(&config.store_path).map_err(failure)?;
+    let path = config.decisions_file(decisions::FILE);
+    let stats =
+        decisions::fold(&mut store.conn, &path, roots, &Now::read().iso()).map_err(fold_failure)?;
+    for line in decisions::describe(&stats, &path) {
+        println!("{line}");
+    }
+    Ok(())
+}
+
+/// `extras-organize`: act on the organize decisions in `extra_decisions.json`.
+pub fn run_organize(args: &[String]) -> Result<(), Failure> {
+    no_args(ORGANIZE, args)?;
+    let config = Config::from_env().map_err(failure)?;
+    let mut store = open_store(&config.store_path).map_err(failure)?;
+    let path = config.decisions_file(decisions::FILE);
+    let lines = extras_organize::run_pending(&mut store.conn, &path, &Now::read().iso())
+        .map_err(fold_failure)?;
+    for line in lines {
+        println!("{line}");
+    }
+    Ok(())
+}
+
 /// `fold-extras`.
 pub fn run_fold(args: &[String]) -> Result<(), Failure> {
     no_args(declaration::NAME, args)?;
@@ -72,7 +136,7 @@ pub fn run_walk(args: &[String]) -> Result<(), Failure> {
     walk(&mut store.conn, roots).map_err(failure)
 }
 
-/// `extras-tick`: fold, then walk, as the store's only writer. A sweep or another step
+/// `extras-tick`: fold, walk, fold the decisions and organize, as the store's only writer. A sweep or another step
 /// holding the writer lock refuses the tick (exit 75) rather than queueing it behind. A
 /// refused `extras.json` does not stop the walk, which uses the declaration stored; the
 /// tick then ends as a failure carrying why.
@@ -96,7 +160,9 @@ pub fn run_tick(args: &[String]) -> Result<(), Failure> {
     for line in extras_walk::describe(&stats) {
         println!("{line}");
     }
-    folded.map_err(extras_failure)
+    let decided = fold_decisions(&mut store.conn, &config, roots);
+    folded.map_err(extras_failure)?;
+    decided.map_err(fold_failure)
 }
 
 /// One line per library: files, items, in queue, organized, missing, more than one file.
@@ -136,20 +202,154 @@ pub fn status_lines(conn: &Connection) -> Result<Vec<String>, StoreError> {
     Ok(lines)
 }
 
-/// `plexdb extras <subcommand>`; `status` is the one there is.
+fn usage() -> Failure {
+    Failure::Usage(
+        "extras takes status, set <item_id> <field> <value>, tag <item_id> <tag>, \
+         organize [--dry-run] [<item_id>...] or undo <move_id>"
+            .into(),
+    )
+}
+
+fn record(config: &Config, decision: Decision) -> Result<(), Failure> {
+    let path = config.decisions_file(decisions::FILE);
+    let entry = Entry {
+        decision,
+        decided_at: Now::read().iso(),
+    };
+    decisions::record(&path, &entry).map_err(|err| Failure::Failed(err.0))?;
+    println!("recorded in {}", path.display());
+    Ok(())
+}
+
+fn require_item(conn: &Connection, item_id: &str) -> Result<String, Failure> {
+    decisions::library_of(conn, item_id)
+        .map_err(|err| failure(StoreError::from(err)))?
+        .ok_or_else(|| Failure::Failed(format!("{item_id} is not an extra in the store")))
+}
+
+fn run_set(config: &Config, item_id: &str, field: &str, value: &str) -> Result<(), Failure> {
+    let conn = open_readonly(&config.store_path).map_err(failure)?;
+    let library = require_item(&conn, item_id)?;
+    if field != SOURCE_URL {
+        let kind: Option<String> = conn
+            .query_row(
+                "SELECT kind FROM extra_field WHERE library = ? AND name = ?",
+                [&library, field],
+                |row| row.get(0),
+            )
+            .ok();
+        let Some(kind) = kind else {
+            return Err(Failure::Failed(format!(
+                "{library} declares no field {field}"
+            )));
+        };
+        decisions::field_values(&kind, field, value).map_err(Failure::Failed)?;
+    }
+    record(
+        config,
+        Decision::Set {
+            item_id: item_id.into(),
+            field: field.into(),
+            value: value.into(),
+        },
+    )
+}
+
+fn run_tag(config: &Config, item_id: &str, tag: &str) -> Result<(), Failure> {
+    let conn = open_readonly(&config.store_path).map_err(failure)?;
+    require_item(&conn, item_id)?;
+    if tag.trim().is_empty() {
+        return Err(Failure::Failed("the tag is empty".into()));
+    }
+    record(
+        config,
+        Decision::Tag {
+            item_id: item_id.into(),
+            tag: tag.into(),
+        },
+    )
+}
+
+fn run_organize_decision(config: &Config, args: &[String]) -> Result<(), Failure> {
+    let dry = args.iter().any(|arg| arg == "--dry-run");
+    let items: Vec<&String> = args.iter().filter(|arg| *arg != "--dry-run").collect();
+    let conn = open_readonly(&config.store_path).map_err(failure)?;
+    let path = config.decisions_file(decisions::FILE);
+    let entries = decisions::load(&path)
+        .map_err(|err| Failure::Failed(err.0))?
+        .unwrap_or_default();
+    let overlay = extras_organize::Overlay::of(&conn, &entries).map_err(failure)?;
+    if dry {
+        let wanted: Vec<String> = if items.is_empty() {
+            extras_organize::pending(&conn, &entries).map_err(failure)?
+        } else {
+            items.iter().map(|item| (*item).clone()).collect()
+        };
+        println!(
+            "extras organize --dry-run: {} item(s), nothing moved",
+            wanted.len()
+        );
+        for item_id in wanted {
+            println!(
+                "{}",
+                extras_organize::plan(&conn, &item_id, &overlay)
+                    .map_err(failure)?
+                    .line()
+            );
+        }
+        return Ok(());
+    }
+    if items.is_empty() {
+        return Err(Failure::Usage(
+            "extras organize takes one or more item ids, or --dry-run alone".into(),
+        ));
+    }
+    for item_id in &items {
+        require_item(&conn, item_id)?;
+        let plan = extras_organize::plan(&conn, item_id, &overlay).map_err(failure)?;
+        if let extras_organize::Action::Refused(why) = &plan.action {
+            return Err(Failure::Failed(format!(
+                "{item_id}: {why}; nothing was recorded"
+            )));
+        }
+    }
+    for item_id in &items {
+        record(
+            config,
+            Decision::Organize {
+                item_id: (*item_id).clone(),
+            },
+        )?;
+    }
+    Ok(())
+}
+
+fn run_undo(config: &Config, id: &str) -> Result<(), Failure> {
+    let move_id: i64 = id
+        .parse()
+        .map_err(|_| Failure::Usage(format!("extras undo takes a move id, got {id}")))?;
+    let mut store = open_store(&config.store_path).map_err(failure)?;
+    let line =
+        extras_organize::undo(&mut store.conn, move_id, &Now::read().iso()).map_err(failure)?;
+    println!("{line}");
+    Ok(())
+}
+
+/// `plexdb extras <subcommand>`.
 pub fn run(args: &[String]) -> Result<(), Failure> {
+    let config = || Config::from_env().map_err(failure);
     match args {
         [sub] if sub == "status" => {
-            let config = Config::from_env().map_err(failure)?;
-            let conn = open_readonly(&config.store_path).map_err(failure)?;
+            let conn = open_readonly(&config()?.store_path).map_err(failure)?;
             for line in status_lines(&conn).map_err(failure)? {
                 println!("{line}");
             }
             Ok(())
         }
-        _ => Err(Failure::Usage(format!(
-            "extras takes status, got {}",
-            args.join(" ")
-        ))),
+        [sub, item_id, field, value] if sub == "set" => run_set(&config()?, item_id, field, value),
+        [sub, item_id, tag] if sub == "tag" => run_tag(&config()?, item_id, tag),
+        [sub, rest @ ..] if sub == "organize" => run_organize_decision(&config()?, rest),
+        [sub, id] if sub == "undo" => run_undo(&config()?, id),
+        _ => Err(usage()),
     }
 }

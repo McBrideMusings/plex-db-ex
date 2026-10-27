@@ -1582,13 +1582,42 @@ too, best-effort, after `walk` and before `prune-frames`.
   height, then the largest size, then the lowest path.
   Filename parsers fill `source_url` and proposals, scrapers with `auto = true` run, and a file no
   longer found gets `missing_since`.
-- `fold-extra-decisions` applies `set`, `tag`, `organize`, `delete <path>` (refused for the primary
-  file) and `split <merged_item_id>` from `extra_decisions.json`.
-- `extras-organize` acts on each `organize` decision: it refuses while a required field is empty;
-  the target is root/template(fields) plus the original extension; a target holding the same
-  SHA-256 deletes the duplicate; any other file at the target leaves the extra unorganized and
-  reports it; otherwise it renames the file, writes `extra_moved`, updates `extra_file.path`, keeps
-  the id and sets `organized = 1`. `plexdb extras organize --dry-run` prints the moves.
+- `fold-extra-decisions` applies `extra_decisions.json`, a JSON list of entries with a `decision`, a
+  `decided_at` (ISO 8601) and the text fields the decision names; a newer entry on the same subject
+  replaces the older, and a fold applies the whole file each time without changing a row twice.
+  The whole file is checked first; an entry the declaration refuses is reported and the rest apply.
+  - `set` (`item_id`, `field`, `value`) writes a `person` row in `enrichment` namespace `extra`
+    (`fetched_at` is the decision's `decided_at`, `rank` the position in a list). The field must be
+    declared in `extra_field`, or be `source_url`, which sets `extra_item.source_url`. `int` takes a
+    whole number, `year` four digits, `list` values separated by `;`. An empty value clears the
+    person's rows for the field. Setting `title` also replaces `items.title`.
+  - `tag` (`item_id`, `tag`) adds the tag to the item's `keyword_surfaces` rows with source `person`
+    and rederives its `keywords` rows through the same writer the keyword sources use.
+  - `delete` (`path`) removes the file from the share and its `extra_file` row; it is refused for an
+    item's `primary_file = 1` row, so an item always keeps one file.
+  - `split` (`merged_item_id`) gives the merged item its own `items` and `extra_item` rows back,
+    moves the file whose path hashes to that id (`fs:<fnv1a>` of the canonical path) out of the kept
+    item, and deletes the `extra_merge` row. It is refused when no file of the kept item hashes to
+    the id.
+  - `organize` (`item_id`) is left for `extras-organize`.
+- `extras-organize` acts on each `organize` decision whose item has no `organized_at` or one older
+  than the decision's `decided_at`: it refuses while a required field is empty, or a field the
+  template names has no value (a person's value wins, a list joins with `, `); the target is
+  root/template(fields) plus the original extension, with `/` and control characters in a value
+  replaced by `-`, and a library with no template keeps the file name under the root. Only the
+  primary file moves. A target holding the same SHA-256 deletes the duplicate and the item takes the
+  file that was there; any other file at the target leaves the extra unorganized and reports
+  "target taken"; otherwise it renames the file, writes `extra_moved`, updates `extra_file.path`,
+  keeps the id and sets `organized = 1` and `organized_at`. Emptied folders stay.
+  `plexdb extras organize --dry-run [<item_id>...]` prints the moves for the pending decisions (or
+  the named items) and changes nothing. `plexdb extras undo <move_id>` moves the file back, puts the
+  extra back in the queue with `organized_at` set to the undo time (so the decision that made the
+  move is not applied again) and deletes the `extra_moved` row.
+
+`plexdb extras set <item_id> <field> <value>`, `plexdb extras tag <item_id> <tag>` and
+`plexdb extras organize <item_id>...` check the request against the store read-only and append one
+entry to `extra_decisions.json` (beside the other decisions files); `organize` refuses an item the
+plan refuses. The next tick applies them.
 
 `plexdb extras status` prints, per library: files (not missing), items, in queue, organized,
 missing files, and items with more than one file; the frames indexed and checks failed columns
