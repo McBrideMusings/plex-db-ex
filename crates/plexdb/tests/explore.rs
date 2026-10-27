@@ -989,3 +989,40 @@ fn extras_scan_touches_the_decisions_file_the_tick_watches() {
         "[]\n"
     );
 }
+
+#[test]
+fn extras_fetch_records_a_decision_only_when_a_scraper_matches_the_source_url() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    extras_ui_world(dir.path());
+    let scraper = dir.path().join("scrapers/demo");
+    std::fs::create_dir_all(&scraper).expect("scraper dir");
+    std::fs::write(
+        scraper.join("scraper.toml"),
+        "match = ['^https://example\\.test/']\nrun = \"demo.sh\"\n",
+    )
+    .expect("toml");
+    std::fs::write(scraper.join("demo.sh"), "#!/bin/sh\n").expect("script");
+    let conn = rusqlite::Connection::open(dir.path().join("plexdb.db")).expect("store");
+    conn.execute(
+        "UPDATE extra_item SET source_url = 'https://example.test/v' WHERE item_id = 'fs:queued'",
+        [],
+    )
+    .expect("url");
+    drop(conn);
+    let explorer = Explorer::start(dir.path(), None);
+
+    let queue = explorer.json("/api/extras/queue?library=Clips");
+    assert_eq!(queue["items"][0]["scrapers"], json!(["demo"]));
+    assert_eq!(queue["items"][1]["scrapers"], json!([]));
+
+    let decisions = dir.path().join("extra_decisions.json");
+    let (status, reply) = explorer.post_json("/api/extras/fetch", &json!({"item_id": "fs:blank"}));
+    assert_eq!(status, 400, "{reply}");
+    assert!(!decisions.exists());
+    let (status, reply) = explorer.post_json("/api/extras/fetch", &json!({"item_id": "fs:queued"}));
+    assert_eq!(status, 200, "{reply}");
+    let written: Value =
+        serde_json::from_str(&std::fs::read_to_string(&decisions).expect("file")).expect("json");
+    assert_eq!(written[0]["decision"], "fetch");
+    assert_eq!(written[0]["item_id"], "fs:queued");
+}

@@ -79,6 +79,25 @@ def _populate(path: Path) -> None:
         conn.commit()
 
 
+def test_an_extra_is_not_a_title_plex_stopped_matching(tmp_path: Path) -> None:
+    path = tmp_path / "plexdb.db"
+    init(path)
+    _populate(path)
+    with open_store(path) as conn:
+        conn.execute("INSERT INTO items (item_id, type, title) VALUES ('fs:clip', 'extra', 'Clip')")
+        conn.execute(
+            "INSERT INTO extra_library (name, root, type, declared_at) "
+            "VALUES ('mv', '/media/mv', 'music_video', '2026-08-11T00:00:00+00:00')"
+        )
+        conn.execute(
+            "INSERT INTO extra_item (item_id, library, organized, first_seen) "
+            "VALUES ('fs:clip', 'mv', 1, '2026-08-11T00:00:00+00:00')"
+        )
+        conn.commit()
+
+    assert inspect(path, tmp_path / "backups", now=NOW).fs_identities == 1
+
+
 def test_a_current_populated_store_is_healthy_and_reports_what_is_in_it(tmp_path: Path) -> None:
     path = tmp_path / "plexdb.db"
     init(path)

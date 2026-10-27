@@ -7,7 +7,7 @@
         {
           "id": "damaged-files",
           "title": "Damaged or rule-breaking files",
-          "sql": "SELECT i.title, p.file, c.kind, c.error, c.checked_at\nFROM media_check c\nJOIN media_part p ON p.part_id = c.part_id\nJOIN items i ON i.item_id = p.item_id\nWHERE c.ok = 0\n  AND NOT (c.kind = 'decode' AND c.error = 'ffmpeg timed out')\nORDER BY c.checked_at DESC, i.title, p.file",
+          "sql": "SELECT i.title, p.file, c.kind, c.error, c.checked_at\nFROM media_check c\nJOIN media_part p ON p.part_id = c.part_id\nJOIN items i ON i.item_id = p.item_id\nWHERE c.ok = 0\n  AND NOT (c.kind = 'decode' AND c.error = 'ffmpeg timed out')\nUNION ALL\nSELECT i.title, f.path, c.kind, c.error, c.checked_at\nFROM extra_check c\nJOIN extra_file f ON f.path = c.path\nJOIN items i ON i.item_id = f.item_id\nWHERE c.ok = 0\n  AND NOT (c.kind = 'decode' AND c.error = 'ffmpeg timed out')\nORDER BY checked_at DESC, title, file",
           "chart": "line",
           "value": "rows",
           "unit": "files",

@@ -3060,8 +3060,24 @@ function urlRow(f, disabled) {
   const syncOpen = () => { open.hidden = !/^https?:\/\//.test(input.value.trim()); open.href = input.value.trim(); };
   syncOpen();
   input.addEventListener("input", () => { f.url = input.value; f.urlTouched = true; input.classList.remove("prop"); syncOpen(); edited(f); });
-  return [el("label", {}, "Source URL"), el("div", { className: "xcell" }, el("div", { className: "xline" }, input, open),
-    ...(prop ? [el("div", { className: "xwhy prop" }, "set from the file name")] : []))];
+  const why = el("div", { className: "xwhy prop" }, prop ? "set from the file name" : "");
+  why.hidden = !prop;
+  const fetchable = !disabled && f.item.scrapers.length > 0 && f.url.trim() === (f.item.source_url || "");
+  const kids = [input, open];
+  if (fetchable) {
+    const ask = el("button", { type: "button", className: "plain" }, "Fetch metadata");
+    ask.addEventListener("click", async () => {
+      ask.disabled = true;
+      try {
+        await sendJSON("POST", "/api/extras/fetch", { item_id: f.item.item_id });
+        why.hidden = false; why.className = "xwhy";
+        why.textContent = `Asked: the next tick runs ${f.item.scrapers.join(", ")} on this link, and its proposals appear here.`;
+        clearTimeout(extras.poll); extras.poll = setTimeout(pollQueue, 40000);
+      } catch (err) { why.hidden = false; why.className = "xwhy need"; why.textContent = err.message; ask.disabled = false; }
+    });
+    kids.push(ask);
+  }
+  return [el("label", {}, "Source URL"), el("div", { className: "xcell" }, el("div", { className: "xline" }, ...kids), why)];
 }
 
 function tagsRow(f, disabled) {

@@ -935,7 +935,9 @@ mod tests {
                  CREATE TABLE media_check (part_id INTEGER, kind TEXT, ok INTEGER,
                                            error TEXT, checked_at TEXT);
                  CREATE TABLE extra_item (item_id TEXT, library TEXT);
-                 CREATE TABLE extra_file (item_id TEXT, path TEXT, missing_since TEXT);",
+                 CREATE TABLE extra_file (path TEXT, item_id TEXT, missing_since TEXT);
+                 CREATE TABLE extra_check (path TEXT, kind TEXT, ok INTEGER,
+                                           error TEXT, checked_at TEXT);",
             )
             .expect("schema");
         let (stats, lines) = record(dir.path(), &dir.path().join(PANELS_FILE), DAY1).expect("run");

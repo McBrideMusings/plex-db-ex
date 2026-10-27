@@ -155,6 +155,8 @@ struct App {
     store: PathBuf,
     /// Where `name_decisions.json` sits.
     names: PathBuf,
+    /// The `scrapers/` folder beside `extras.json`.
+    scrapers: PathBuf,
     merges: Book,
     roles: Book,
     name_decisions: Book,
@@ -856,9 +858,11 @@ async fn extras_queue_get(State(app): State<Shared>, RawQuery(raw): RawQuery) ->
             }
         };
         let conn = app.open()?;
+        let (scrapers, _) = crate::extras_scrapers::discover(&app.scrapers);
         extras_ui::queue(
             &conn,
             &app.extra_decisions,
+            &scrapers,
             library,
             number("offset", 0)?,
             number("limit", 5)?,
@@ -919,6 +923,21 @@ async fn extras_file_post(State(app): State<Shared>, request: Request) -> Respon
     .await
 }
 
+async fn extras_fetch_post(State(app): State<Shared>, request: Request) -> Response {
+    decide(request, move |body| {
+        let conn = app.open()?;
+        let (scrapers, _) = crate::extras_scrapers::discover(&app.scrapers);
+        let _held = app
+            .extras_lock
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let answer = extras_ui::fetch(&conn, &app.extra_decisions, &scrapers, &body)?;
+        log_decision(format!("extras fetch {}", dumps_compact(&answer)));
+        Ok(answer)
+    })
+    .await
+}
+
 async fn extras_scan_post(State(app): State<Shared>, request: Request) -> Response {
     decide(request, move |_| {
         let _held = app
@@ -928,6 +947,14 @@ async fn extras_scan_post(State(app): State<Shared>, request: Request) -> Respon
         let answer = extras_ui::request_scan(&app.extra_decisions)?;
         log_decision(format!("extras scan {}", dumps_compact(&answer)));
         Ok(answer)
+    })
+    .await
+}
+
+async fn extras_scrapers_get(State(app): State<Shared>) -> Response {
+    blocking(move || {
+        let conn = app.open()?;
+        Ok(crate::extras_scrapers::listing(&conn, &app.scrapers)?)
     })
     .await
 }
@@ -1090,7 +1117,15 @@ fn router(app: Shared) -> Router {
         .route("/api/extras/save", post(extras_save_post).fallback(forward))
         .route("/api/extras/file", post(extras_file_post).fallback(forward))
         .route("/api/extras/scan", post(extras_scan_post).fallback(forward))
+        .route(
+            "/api/extras/fetch",
+            post(extras_fetch_post).fallback(forward),
+        )
         .route("/api/extras/items", get(extras_items_get).fallback(forward))
+        .route(
+            "/api/extras/scrapers",
+            get(extras_scrapers_get).fallback(forward),
+        )
         .route(
             "/api/extras/fields",
             post(extras_fields_post).fallback(forward),
@@ -1166,6 +1201,7 @@ pub fn run(args: &[String]) -> Result<(), Failure> {
     let app = Arc::new(App {
         store: store.clone(),
         names: name_book(&dir).path().to_path_buf(),
+        scrapers: dir.join(crate::extras_scrapers::DIR),
         merges: merge_book(&dir),
         roles: role_book(&dir),
         name_decisions: name_book(&dir),

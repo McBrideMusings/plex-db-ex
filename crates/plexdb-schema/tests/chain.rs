@@ -110,6 +110,7 @@ fn an_empty_store_reaches_every_table_the_schema_holds_and_nothing_else() {
         "extra_merge",
         "extra_moved",
         "extra_check",
+        "extra_scrape",
         "reader_shape",
         "schema_version",
     ]

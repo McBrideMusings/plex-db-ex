@@ -1442,7 +1442,7 @@ judge (its file is not on the media mount, or ffprobe is missing or ran past its
 row, so the next run tries it again. Neither `plexdb-reader` nor `READER_SHAPE` reads the table.
 
 Plex DB-EX's seeded Library health dashboard draws "Damaged or rule-breaking files" as a line panel:
-every check with `ok = 0` except a timed-out decode, with the title, the file and the error, newest first. "Decode progress"
+every check in `media_check` and `extra_check` with `ok = 0` except a timed-out decode, with the title, the file (an extra's path) and the error, newest first. "Decode progress"
 is a gauge panel over one row: `parts_decoded`, `parts_total` and `oldest_decode` (the oldest
 `checked_at` of a `decode` row).
 
@@ -1543,13 +1543,23 @@ wherever it sits and however it is named. `organized_at` is the UTC time a Save 
 extra the first walk of an empty library marked organized. `source_url` is optional on every extra
 and is what scrapers match on.
 
+An extra has an `fs:` id and no `plex_items`, `plays` or `enrichment` rows. A reader that means the titles Plex lists therefore filters `items.type` to `movie`, `show` or `episode`, or joins `plex_items`, `plays` or `enrichment`; `plexdb check`'s `fs: identities` count and `repair-fs-identities` leave out every `extra_item` row.
+
 `extra_file` is one row per file. An item has exactly one `primary_file = 1` row, plus one per
 exact copy or near duplicate folded into it. `sha256` is of the whole file; `height` and
 `duration_ms` describe its video, NULL until known. `missing_since` is the UTC time a walk first
 did not find the file, cleared when it returns. `extra_merge` records each near duplicate folded
 into another item with the Frame-index similarity that folded it (`extras-near`, below): the folded item's files move to the kept item as non-primary files and its `items` and `extra_item` rows are deleted. A Split gives the file its own item back under the same `fs:` id and deletes the row. `extra_moved` is one row per rename an organize made;
 `plexdb extras undo <move_id>` reverses one. `extra_check` holds `check-files`' verdicts with
-`media_check`'s meaning, keyed by path.
+`media_check`'s meaning, keyed by path. `check-files` judges every `extra_file` with a video
+extension (mkv, mp4, m4v, mov, avi, wmv, flv, webm, mpg, mpeg, ts, m2ts, mts, vob, ogv, 3gp, divx) whose
+`missing_since` is NULL the way it judges a part: the path is read as it stands (an extras root sits
+under `PLEX_SOURCE_ROOTS` on this process's own mount, so nothing maps it), a file with no `header`
+row is probed, and `decode` runs over `PLEXDB_DECODE_BATCH` extras, counted apart from the parts'
+batch. `duration_ms`, once something fills it, is held to the same 2%. A moved file keeps its checks
+(`ON UPDATE CASCADE`); `extras-walk` deletes a path's checks when it re-reads the file because its
+size or mtime changed, so the new bytes are judged by the next night's `check-files` (it runs before
+`extras-walk` in a sweep). Extras are checked even where `PLEXDB_MEDIA_DIR` is unset. A file the run could not judge gets no row.
 
 **Extras in the Frame index.** `harvest-frames` indexes an extra from its primary `extra_file` row,
 read at `PLEXDB_MEDIA_DIR` plus that path, with `frame_index_state.part_id` NULL. It takes an extra
@@ -1581,10 +1591,10 @@ and a copy joins the item.
 ### The extras tick
 
 ```
-fold-extras → extras-walk → fold-extra-decisions → extras-organize
+fold-extras → extras-walk → fold-extra-decisions → extras-organize → scrapers
 ```
 
-`plexdb schedule` runs these four as the store's only writer (`plexdb-rs extras-tick`, which
+`plexdb schedule` runs these five as the store's only writer (`plexdb-rs extras-tick`, which
 takes the writer lock exclusive without waiting and exits 75 while a sweep holds it) every `PLEXDB_EXTRAS_EVERY` minutes
 (default 10) and within a minute of `extra_decisions.json` changing; the nightly sweep runs them
 too, best-effort, after `walk` and before `prune-frames`.
@@ -1620,6 +1630,7 @@ too, best-effort, after `walk` and before `prune-frames`.
     item, and deletes the `extra_merge` row. It is refused when no file of the kept item hashes to
     the id.
   - `organize` (`item_id`) is left for `extras-organize`.
+  - `fetch` (`item_id`) is left for the tick's scraper step.
 - `extras-organize` acts on each `organize` decision whose item has no `organized_at` or one older
   than the decision's `decided_at`: it refuses while a required field is empty, or a field the
   template names has no value (a person's value wins, a list joins with `, `); the target is
@@ -1685,6 +1696,57 @@ when the item has no value for that field yet; a `title` also replaces the `item
 made from the stem. A value a person set is never replaced, and a rescan, a move or a changed file
 makes no new item, so it proposes nothing. Parsers and scrapers do not know each other:
 `source_url` is the only link between them.
+
+## Version 27 — scraper results
+
+```
+extra_scrape   item_id TEXT → extra_item ON DELETE CASCADE, scraper TEXT NOT NULL, url TEXT NOT NULL,
+               ran_at TEXT NOT NULL, ok INTEGER NOT NULL (0 | 1), attempts INTEGER NOT NULL, error TEXT,
+               answered TEXT, PK (item_id, scraper)
+```
+
+Additive; `reader_shape` stays at 10. One row is the last run of one scraper on one extra.
+
+**Scrapers.** A scraper is a subfolder of `scrapers/` beside `extras.json` (the same directory
+`PLEXDB_EXPLORE_SAVED_PATH` names), holding an executable and a `scraper.toml`: `match` (a list of
+regexes, any one matching `source_url`), `run` (a file in that folder), optional `auto` (default
+`false`), `timeout` (seconds per attempt, default 30) and `retries` (extra attempts after a
+failure, default 2). A folder named `person`, `path` or `keywords` (sources a scraper must not write as), or whose `scraper.toml` cannot be read, or whose regex does not
+compile, is listed with why and never runs. The executable is started with the URL as `argv[1]`,
+an empty environment but `PATH`, and the scraper's folder as its directory, and prints one flat
+JSON object. A scraper only reads metadata: nothing downloads media.
+
+The store keeps the keys of that object that the item's library declares in `extra_field`, plus
+`tags`; any other key is dropped and named in the tick's output. A key the object leaves out
+changes nothing. A value is checked as `plexdb extras set` checks it (`int`, `year`, a `list`
+split on `;` or given as a JSON list); a value that fails the check fails the run. Kept values go
+to `enrichment` namespace `extra` with `source` the scraper's name, replacing only that scraper's
+rows for the keys it printed, so a `person` value and a `path` value stay and two scrapers that
+disagree each keep their own. `tags` become `keywords` rows with the scraper's name as source.
+`items.title` is never changed by a scraper.
+
+The first time the tick finds no `scrapers/` folder it
+copies in the shipped `youtube` scraper, a stdlib-only Python script that asks YouTube's oEmbed
+endpoint for the video's title and channel, drops "(Official Video)"-style tags from the title,
+and prints `title`, `artist` (the text before " - ") and `featured` (after "ft."/"feat."). A person
+may edit or delete it; it is not copied again while the folder exists. Its `auto` is `true`.
+
+**When scrapers run.** The last step of `extras-tick`, with no writer lock held while they run:
+- `auto = true` scrapers run once on each queued item (`organized = 0`) whose `source_url` matches
+  and has no `extra_scrape` row for the scraper on that URL (a failed run counts; only a fetch
+  repeats it);
+- every matching scraper, `auto` or not, runs for an item a `fetch` decision names (`plexdb extras
+  fetch <item_id>`, which the Extras tab's "Fetch metadata" appends to `extra_decisions.json`)
+  unless its `extra_scrape.answered` already holds that decision's `decided_at`, which a run
+  answering a fetch records.
+
+A tick makes at most 50 runs; the rest are owed next tick. The shipped scraper needs `python3` on
+`PATH`, which the image has; elsewhere a missing interpreter shows as the run's error. The results
+are stored under the writer lock afterwards; a tick that cannot get the lock drops
+them and the runs are owed again at the next tick. A failure writes `ok = 0` with `error` and the
+`attempts` made, and leaves earlier proposals as they were. `GET /api/extras/scrapers` and
+`plexdb extras scrapers` list each scraper with its regexes, `auto`, whether it is executable, its
+run counts and its last result; `POST /api/extras/fields` carries each item's `scrapes`.
 
 ## The original language of a title
 

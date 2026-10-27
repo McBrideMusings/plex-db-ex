@@ -9,13 +9,11 @@ its Cuts and Shots, embeds the sampled frames and replaces the title's rows in `
 
 `FfmpegMedia` is the other half: ffprobe and ffmpeg over a part's file under
 `PLEXDB_MEDIA_DIR`, read-only. The Search tab cuts a frame or a clip with it
-(`plexdb/explore_search.py`) and the file checks probe and decode with it
-(`plexdb/media_check.py`).
+(`plexdb/explore_search.py`).
 """
 
 from __future__ import annotations
 
-import json
 import os
 import sqlite3
 import subprocess
@@ -24,7 +22,6 @@ import time
 from collections.abc import Callable, Sequence
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 from . import frames, rust
 from .config import Config
@@ -41,9 +38,7 @@ __all__ = [
 
 #: Frames cut out per ffmpeg process.
 _EXTRACT_CHUNK = 24
-#: The longest one ffmpeg or ffprobe process may run: a full decode for the file check,
-#: minutes for anything else.
-_DECODE_TIMEOUT_S = 6 * 3600
+#: The longest one ffmpeg or ffprobe process may run.
 _PROBE_TIMEOUT_S = 900
 
 #: Why a run stopped, as `harvest-frames` prints it (`crates/plexdb/src/harvest_frames.rs`).
@@ -108,42 +103,6 @@ class FfmpegMedia:
             raise MediaTimeout(
                 f"{what}: {argv[0]} ran past {timeout_s:.0f} s", f"{Path(argv[0]).name} timed out"
             ) from None
-
-    def probe(self, path: Path) -> tuple[dict[str, Any] | None, str]:
-        """ffprobe's streams and format for `path`: `(report, "")`, or `(None, why)` when
-        ffprobe ran and rejected the file (`why` is its last stderr line, without the path).
-        A missing binary or a run past the time limit (`MediaTimeout`) is a `MediaError`,
-        since the file
-        itself was not judged."""
-        argv = [
-            self._ffprobe, "-v", "error", "-show_format", "-show_streams",
-            "-print_format", "json", str(path),
-        ]  # fmt: skip
-        done = self._run(argv, f"{path}: probe")
-        if done.returncode != 0:
-            lines = [ln for ln in done.stderr.strip().splitlines() if ln.strip()]
-            why = lines[-1].replace(f"{path}: ", "").strip() if lines else ""
-            return None, why or f"ffprobe exited {done.returncode}"
-        try:
-            report = json.loads(done.stdout or "{}")
-        except ValueError:
-            return None, "ffprobe printed output that is not JSON"
-        return (report, "") if isinstance(report, dict) else (None, "ffprobe printed no report")
-
-    def decode(self, path: Path) -> str:
-        """Decode every frame of `path` and throw it away: `""` when ffmpeg reported nothing,
-        else its error output with the path replaced by `<file>`. A missing binary is a
-        `MediaError`, since the file itself was not judged; a run past the time limit is a
-        `MediaTimeout`."""
-        argv = [
-            self._ffmpeg, "-nostdin", "-v", "error", "-i", str(path), "-f", "null", "-",
-        ]  # fmt: skip
-        done = self._run(argv, f"{path}: decode", timeout_s=_DECODE_TIMEOUT_S)
-        lines = [ln.replace(str(path), "<file>").strip() for ln in done.stderr.splitlines()]
-        lines = [ln for ln in lines if ln]
-        if done.returncode != 0 and not lines:
-            return f"ffmpeg exited {done.returncode}"
-        return "\n".join(lines[:5])
 
     def frames(
         self, path: Path, times_ms: Sequence[int], *, height: int = 224

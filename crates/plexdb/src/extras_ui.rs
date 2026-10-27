@@ -16,6 +16,7 @@ use crate::explore_views::ExploreError;
 use crate::extras_decisions::{self as decisions, Decision, Entry, NAMESPACE, PERSON, SOURCE_URL};
 use crate::extras_organize::{self, Action, Overlay};
 use crate::extras_parsers;
+use crate::extras_scrapers::Scraper;
 use crate::identity::{canonical_path, fnv1a_64};
 use crate::pyjson::Json;
 use crate::staleness::{Now, parse_micros};
@@ -294,6 +295,7 @@ fn opt_int(value: Option<i64>) -> Json {
 pub fn queue(
     conn: &Connection,
     decisions_path: &Path,
+    scrapers: &[Scraper],
     library: &str,
     offset: usize,
     limit: usize,
@@ -373,6 +375,7 @@ pub fn queue(
         let url_set = sets
             .get(&(item_id.clone(), SOURCE_URL.to_string()))
             .and_then(|v| v.first().cloned());
+        let stored_url = source_url.clone();
         let url = url_set.clone().or(source_url);
         let url_proposed = url_set.is_none()
             && url.as_deref().is_some_and(|url| {
@@ -434,6 +437,16 @@ pub fn queue(
             ("fields", Json::Array(field_cards)),
             ("source_url", Json::opt_str(url)),
             ("source_url_proposed", Json::Bool(url_proposed)),
+            (
+                "scrapers",
+                Json::Array(
+                    scrapers
+                        .iter()
+                        .filter(|s| stored_url.as_deref().is_some_and(|url| s.handles(url)))
+                        .map(|s| Json::str(&s.name))
+                        .collect(),
+                ),
+            ),
             ("tags", strings(&tags)),
             ("proposed_tags", strings(&proposed_tags)),
             ("proposer", Json::opt_str(proposer)),
@@ -886,6 +899,48 @@ pub fn request_scan(decisions_path: &Path) -> Result<Json, ExploreError> {
     }
     Ok(Json::object([
         ("requested_at", Json::str(Now::read().iso())),
+        ("file", Json::str(decisions_path.display().to_string())),
+    ]))
+}
+
+/// Ask for a scraper run on an extra's stored `source_url`: records a `fetch` decision, which the
+/// next tick answers by running every scraper that matches the URL. Refused when no scraper
+/// matches, so the page's button and this route agree.
+pub fn fetch(
+    conn: &Connection,
+    decisions_path: &Path,
+    scrapers: &[Scraper],
+    body: &serde_json::Map<String, serde_json::Value>,
+) -> Result<Json, ExploreError> {
+    let item_id = text_of(
+        body.get("item_id").unwrap_or(&serde_json::Value::Null),
+        "item_id",
+    )?;
+    let url: Option<Option<String>> = conn
+        .query_row(
+            "SELECT source_url FROM extra_item WHERE item_id = ? AND organized = 0",
+            [&item_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(Some(url)) = url else {
+        return Err(ExploreError::Invalid(format!(
+            "{item_id} is not in the queue or has no source URL"
+        )));
+    };
+    if !scrapers.iter().any(|s| s.handles(&url)) {
+        return Err(ExploreError::Invalid(format!("no scraper matches {url}")));
+    }
+    let decided_at = Now::read().iso();
+    decisions::record(
+        decisions_path,
+        &Entry {
+            decision: Decision::Fetch { item_id },
+            decided_at: decided_at.clone(),
+        },
+    )?;
+    Ok(Json::object([
+        ("decided_at", Json::str(decided_at)),
         ("file", Json::str(decisions_path.display().to_string())),
     ]))
 }

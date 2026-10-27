@@ -69,8 +69,13 @@ pub struct ApplyResult {
     pub duplicates_dropped: BTreeMap<String, usize>,
 }
 
+/// Every `fs:` title Plex lists. An extra carries an `fs:` id too, but Plex never lists it, so
+/// leaving it in would count each one as a title that left the library.
 fn fs_item_ids(conn: &Connection) -> Result<Vec<String>, StoreError> {
-    let mut stmt = conn.prepare("SELECT item_id FROM items WHERE item_id LIKE 'fs:%'")?;
+    let mut stmt = conn.prepare(
+        "SELECT item_id FROM items WHERE item_id LIKE 'fs:%' \
+         AND item_id NOT IN (SELECT item_id FROM extra_item)",
+    )?;
     let mut ids: Vec<String> = stmt
         .query_map([], |row| row.get(0))?
         .collect::<Result<_, _>>()?;

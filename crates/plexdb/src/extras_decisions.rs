@@ -9,6 +9,7 @@
 //! | `set`      | `item_id`, `field`, `value`    | a `person` row in `enrichment` namespace `extra` |
 //! | `tag`      | `item_id`, `tag`               | a `person` keyword through `keyword_surfaces`    |
 //! | `organize` | `item_id`                      | acted on by `extras-organize`, not here          |
+//! | `fetch`    | `item_id`                      | acted on by the tick's scraper step, not here    |
 //! | `delete`   | `path`                         | the file and its row, never a primary file       |
 //! | `split`    | `merged_item_id`               | the merged item's file gets its own item back    |
 //!
@@ -54,6 +55,9 @@ pub enum Decision {
     Organize {
         item_id: String,
     },
+    Fetch {
+        item_id: String,
+    },
     Delete {
         path: String,
     },
@@ -68,6 +72,7 @@ impl Decision {
             Decision::Set { .. } => "set",
             Decision::Tag { .. } => "tag",
             Decision::Organize { .. } => "organize",
+            Decision::Fetch { .. } => "fetch",
             Decision::Delete { .. } => "delete",
             Decision::Split { .. } => "split",
         }
@@ -78,7 +83,9 @@ impl Decision {
         match self {
             Decision::Set { item_id, field, .. } => vec![self.name(), item_id, field],
             Decision::Tag { item_id, tag } => vec![self.name(), item_id, tag],
-            Decision::Organize { item_id } => vec![self.name(), item_id],
+            Decision::Organize { item_id } | Decision::Fetch { item_id } => {
+                vec![self.name(), item_id]
+            }
             Decision::Delete { path } => vec![self.name(), path],
             Decision::Split { merged_item_id } => vec![self.name(), merged_item_id],
         }
@@ -92,7 +99,9 @@ impl Decision {
                 value,
             } => vec![("item_id", item_id), ("field", field), ("value", value)],
             Decision::Tag { item_id, tag } => vec![("item_id", item_id), ("tag", tag)],
-            Decision::Organize { item_id } => vec![("item_id", item_id)],
+            Decision::Organize { item_id } | Decision::Fetch { item_id } => {
+                vec![("item_id", item_id)]
+            }
             Decision::Delete { path } => vec![("path", path)],
             Decision::Split { merged_item_id } => vec![("merged_item_id", merged_item_id)],
         }
@@ -117,6 +126,8 @@ pub struct FoldStats {
     pub refused: Vec<String>,
     /// Entries left for `extras-organize`.
     pub organize: usize,
+    /// Entries left for the tick's scraper step.
+    pub fetch: usize,
 }
 
 fn text(entry: &Value, field: &str) -> Option<String> {
@@ -166,6 +177,9 @@ pub fn parse(path: &Path, text_in: &str) -> Result<Vec<Entry>, DecisionsFileErro
             "organize" => Decision::Organize {
                 item_id: need(&["item_id"])?.remove(0),
             },
+            "fetch" => Decision::Fetch {
+                item_id: need(&["item_id"])?.remove(0),
+            },
             "delete" => Decision::Delete {
                 path: need(&["path"])?.remove(0),
             },
@@ -174,7 +188,7 @@ pub fn parse(path: &Path, text_in: &str) -> Result<Vec<Entry>, DecisionsFileErro
             },
             other => {
                 return Err(DecisionsFileError(format!(
-                    "{at} has decision '{other}', expected one of set, tag, organize, delete, split"
+                    "{at} has decision '{other}', expected one of set, tag, organize, fetch, delete, split"
                 )));
             }
         };
@@ -522,6 +536,10 @@ pub fn fold(
                 stats.organize += 1;
                 continue;
             }
+            Decision::Fetch { .. } => {
+                stats.fetch += 1;
+                continue;
+            }
             Decision::Delete { path } => apply_delete(&tx, path, &entry.decided_at)?,
             Decision::Split { merged_item_id } => {
                 apply_split(&tx, merged_item_id, source_roots, now)?
@@ -544,12 +562,13 @@ pub fn describe(stats: &FoldStats, path: &Path) -> Vec<String> {
     }
     let mut lines = vec![format!(
         "extra decisions: {} entr(ies) in {path}, {} applied, {} named nothing the store has, \
-         {} refused, {} organize left for extras-organize",
+         {} refused, {} organize left for extras-organize, {} fetch left for the scrapers",
         thousands(stats.entries),
         thousands(stats.applied),
         thousands(stats.unmatched),
         thousands(stats.refused.len()),
         thousands(stats.organize),
+        thousands(stats.fetch),
     )];
     lines.extend(stats.refused.iter().map(|why| format!("  refused: {why}")));
     lines
