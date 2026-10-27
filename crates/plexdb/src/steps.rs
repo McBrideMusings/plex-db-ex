@@ -7,10 +7,10 @@ use plexdb_store::{Config, StoreError, open_store};
 use crate::decisions::FoldError;
 use crate::sources::Sources;
 use crate::{
-    frames_cmd, harvest_frames, judge_steps, keyword_verdicts, latent_users, list_decisions,
-    list_steps, media, merge_decisions, migrate, name_decisions, plays, prune_frames, publish,
-    record_panels, refresh_map, refresh_tagnetwork, repair, repair_fs, role_decisions, search_cmd,
-    source_steps, tmdb_steps, walk,
+    extras_cmd, extras_declaration, extras_walk, frames_cmd, harvest_frames, judge_steps,
+    keyword_verdicts, latent_users, list_decisions, list_steps, media, merge_decisions, migrate,
+    name_decisions, plays, prune_frames, publish, record_panels, refresh_map, refresh_tagnetwork,
+    repair, repair_fs, role_decisions, search_cmd, source_steps, tmdb_steps, walk,
 };
 
 /// Why a step stopped. `Config` is a setting that is absent, which the sweep
@@ -24,6 +24,8 @@ pub enum Failure {
     /// The step ran and printed its report, and its result is still a failure (a
     /// scraper whose pages stopped parsing, a spent quota): exit 1, no `error:` line.
     Reported,
+    /// Another writer has the store, so the step did nothing and may be tried again: exit 75.
+    Busy(String),
 }
 
 /// A step, given the arguments after its name.
@@ -314,6 +316,10 @@ pub const STEPS: &[(&str, Run)] = &[
     (repair::NAME, repair_identities),
     (repair_fs::NAME, repair_fs_identities),
     (prune_frames::NAME, prune_frames),
+    (extras_declaration::NAME, extras_cmd::run_fold),
+    (extras_walk::NAME, extras_cmd::run_walk),
+    (extras_cmd::TICK, extras_cmd::run_tick),
+    (extras_cmd::COMMAND, extras_cmd::run),
     (plays::NAME_INGEST, ingest_plays),
     (plays::NAME_TAUTULLI, enrich_tautulli_plays),
     (list_steps::LISTS, list_steps::lists),

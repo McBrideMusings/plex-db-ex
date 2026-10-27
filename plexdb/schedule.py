@@ -204,6 +204,16 @@ def _start_frame_harvester() -> None:
     print(f"frame harvester on, hours {config.frame_hours}", flush=True)
 
 
+def _start_extras_ticks() -> None:
+    """Start the extras tick (`plexdb/extras_tick.py`): `extras-tick` every
+    `PLEXDB_EXTRAS_EVERY` minutes, and within a minute of `extra_decisions.json`
+    changing. It runs as the store's only writer and is refused while a sweep holds the
+    store, so it never overlaps one."""
+    from . import extras_tick
+
+    extras_tick.start()
+
+
 def run_scheduler(
     *,
     sweep: Callable[[], int] | None = None,
@@ -212,6 +222,7 @@ def run_scheduler(
     migrate: Callable[[], None] | None = None,
     explore: Callable[[], None] | None = None,
     frames: Callable[[], None] | None = None,
+    extras: Callable[[], None] | None = None,
     iterations: int | None = None,
 ) -> int:
     """Migrate the store, then wait until the next scheduled time, run one sweep,
@@ -219,7 +230,7 @@ def run_scheduler(
 
     Runs forever under a container. `iterations` bounds the loop so a test can
     watch it complete a fixed number of cycles; `sweep`, `sleep`, `clock`,
-    `migrate`, `explore` and `frames` are injectable for the same reason. Nothing else
+    `migrate`, `explore`, `frames` and `extras` are injectable for the same reason. Nothing else
     supplies them.
 
     **Plex DB-EX starts after the migration**, when `PLEXDB_EXPLORE_PORT`
@@ -248,6 +259,7 @@ def run_scheduler(
     do_migrate = _migrate_store if migrate is None else migrate
     do_explore = _start_explorer if explore is None else explore
     do_frames = _start_frame_harvester if frames is None else frames
+    do_extras = _start_extras_ticks if extras is None else extras
 
     raw = os.environ.get(SCHEDULE_VAR, "").strip()
     if not raw:
@@ -263,6 +275,7 @@ def run_scheduler(
     do_migrate()
     do_explore()
     do_frames()
+    do_extras()
 
     completed = 0
     while iterations is None or completed < iterations:

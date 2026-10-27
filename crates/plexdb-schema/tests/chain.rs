@@ -103,6 +103,13 @@ fn an_empty_store_reaches_every_table_the_schema_holds_and_nothing_else() {
         "media_part",
         "media_stream",
         "media_check",
+        "extra_library",
+        "extra_field",
+        "extra_item",
+        "extra_file",
+        "extra_merge",
+        "extra_moved",
+        "extra_check",
         "reader_shape",
         "schema_version",
     ]

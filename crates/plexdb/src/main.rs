@@ -6,7 +6,7 @@
 //!
 //! Exit codes: 0 when the step ran, 1 when it failed, 2 for a usage error, and
 //! 78 (`EX_CONFIG`) when a setting it needs is absent, which the sweep reports as
-//! skipped. A failure prints one `error:` line on stderr.
+//! skipped, and 75 (`EX_TEMPFAIL`) when another writer has the store and the step did nothing. A failure prints one `error:` line on stderr.
 
 use std::process::ExitCode;
 
@@ -14,6 +14,9 @@ use plexdb::steps::{self, Failure, STEPS};
 
 /// Agreed with `plexdb/rust.py` `NOT_CONFIGURED`.
 const NOT_CONFIGURED: u8 = 78;
+
+/// Agreed with `plexdb/rust.py` `BUSY`: another writer has the store, try again later.
+const BUSY: u8 = 75;
 
 fn usage() -> String {
     let names: Vec<&str> = STEPS.iter().map(|(name, _)| *name).collect();
@@ -62,6 +65,10 @@ fn report(failure: Failure) -> ExitCode {
         Failure::Config(message) => {
             eprintln!("error: {message}");
             ExitCode::from(NOT_CONFIGURED)
+        }
+        Failure::Busy(message) => {
+            eprintln!("error: {message}");
+            ExitCode::from(BUSY)
         }
         Failure::Reported => ExitCode::FAILURE,
         Failure::Failed(message) => {

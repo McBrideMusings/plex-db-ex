@@ -1125,7 +1125,7 @@ def test_scheduler_serves_the_snapshot_once_one_is_published(
     monkeypatch.setenv("PLEXDB_PATH", str(store))
     monkeypatch.setenv("PLEXDB_SNAPSHOT_PATH", str(snapshot))
 
-    schedule.run_scheduler(migrate=lambda: None, iterations=0)
+    schedule.run_scheduler(migrate=lambda: None, extras=lambda: None, iterations=0)
 
     url = f"http://127.0.0.1:{port}/api/tags?kind=movie"
     assert _get(url)[0] == 503
@@ -1140,7 +1140,7 @@ def test_scheduler_refuses_an_explore_port_it_cannot_read(
     monkeypatch.setenv(schedule.SCHEDULE_VAR, "03:30")
     monkeypatch.setenv(EXPLORE_PORT_VAR, "http")
     with pytest.raises(ConfigError, match=EXPLORE_PORT_VAR):
-        schedule.run_scheduler(migrate=lambda: None, iterations=0)
+        schedule.run_scheduler(migrate=lambda: None, extras=lambda: None, iterations=0)
 
 
 def _send(method: str, url: str, body: object | None = None) -> tuple[int, dict[str, object]]:
@@ -1645,7 +1645,7 @@ def test_scheduler_writes_saved_queries_to_their_own_mount_when_set(
     monkeypatch.setenv("PLEXDB_PATH", str(store))
     monkeypatch.setenv("PLEXDB_SNAPSHOT_PATH", str(snapshot))
 
-    schedule.run_scheduler(migrate=lambda: None, iterations=0)
+    schedule.run_scheduler(migrate=lambda: None, extras=lambda: None, iterations=0)
     publish(store, snapshot)
 
     status, _ = _send(

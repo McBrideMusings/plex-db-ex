@@ -32,9 +32,11 @@ from .store import held_path
 
 __all__ = [
     "HELD_STORE_VAR",
+    "BUSY",
     "NOT_CONFIGURED",
     "STEPS_FILE",
     "RustStep",
+    "RustStepBusy",
     "RustStepError",
     "commands",
     "names",
@@ -47,6 +49,10 @@ __all__ = [
 #: sweep reports the step as skipped, as it does a Python step's `ConfigError`.
 NOT_CONFIGURED = 78
 
+#: The exit code `plexdb-rs` uses when another writer has the store and the step did
+#: nothing (`EX_TEMPFAIL`): the extras tick, which asks for the store as its only writer.
+BUSY = 75
+
 HELD_STORE_VAR = "PLEXDB_HELD_STORE"
 
 STEPS_FILE = Path(__file__).with_name("rust_steps.json")
@@ -54,6 +60,10 @@ STEPS_FILE = Path(__file__).with_name("rust_steps.json")
 
 class RustStepError(PlexdbError):
     """A step `plexdb-rs` ran exited non-zero; the message is its `error:` line."""
+
+
+class RustStepBusy(RustStepError):
+    """A step `plexdb-rs` ran found the store held by another writer and did nothing."""
 
 
 @dataclass(frozen=True)
@@ -112,6 +122,8 @@ def _check(returncode: int, stderr: str) -> int:
     message = stderr.strip().removeprefix("error: ") or f"exit code {returncode}"
     if returncode == NOT_CONFIGURED:
         raise ConfigError(message)
+    if returncode == BUSY:
+        raise RustStepBusy(message)
     raise RustStepError(message)
 
 

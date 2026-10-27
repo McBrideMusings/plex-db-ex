@@ -29,6 +29,9 @@
     "are a fact about a title, not what the sweep publishes a library from.",
     "repair-identities, repair-fs-identities: pointed at a problem a person has diagnosed, never",
     "fired on a timer, so they are commands outside the sweep (ADR-0014).",
+    "fold-extras (24), extras-walk (25): the declared extras libraries, after walk and before",
+    "prune-frames (ADR-0030); best-effort, because they read folders on the media share, not Plex,",
+    "and a failed pass is repeated by the ten-minute tick (plexdb/extras_tick.py).",
     "prune-frames: straight after walk and the identity repairs, the steps that decide which",
     "item_ids exist; best-effort, because without PLEXDB_FRAMES_DIR it is skipped and a failure",
     "leaves only rows that match no title.",
@@ -64,6 +67,8 @@
     {"name": "walk", "order": 20, "policy": "required"},
     {"name": "media-walk", "order": 21, "policy": "best-effort"},
     {"name": "record-panels", "order": 23, "policy": "best-effort"},
+    {"name": "fold-extras", "order": 24, "policy": "best-effort"},
+    {"name": "extras-walk", "order": 25, "policy": "best-effort"},
     {"name": "prune-frames", "order": 27, "policy": "best-effort"},
     {"name": "ingest-plays", "order": 30, "policy": "required"},
     {"name": "enrich-tautulli-plays", "order": 35, "policy": "best-effort"},
@@ -85,5 +90,5 @@
     {"name": "refresh-tagnetwork", "order": 68, "policy": "best-effort"},
     {"name": "publish", "order": 90, "policy": "required"}
   ],
-  "commands": ["lists", "list", "list-decide", "frames", "harvest-frames", "search", "repair-identities", "repair-fs-identities", "latent-users"]
+  "commands": ["lists", "list", "list-decide", "frames", "harvest-frames", "search", "repair-identities", "repair-fs-identities", "latent-users", "extras", "extras-tick"]
 }

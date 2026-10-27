@@ -1506,7 +1506,6 @@ dashboard and panel id, the series key, the value or error, and the elapsed mill
 
 ## Version 25 — extras libraries
 
-Not yet built: plex-db-ex-lyp.6 writes this migration, and this section is its specification.
 Every table is additive; `reader_shape` stays at 10.
 
 ```
@@ -1565,16 +1564,22 @@ and a copy joins the item.
 fold-extras → extras-walk → fold-extra-decisions → extras-organize
 ```
 
-`plexdb schedule` runs these four under the writer lock every `PLEXDB_EXTRAS_EVERY` minutes
+`plexdb schedule` runs these four as the store's only writer (`plexdb-rs extras-tick`, which
+takes the writer lock exclusive without waiting and exits 75 while a sweep holds it) every `PLEXDB_EXTRAS_EVERY` minutes
 (default 10) and within a minute of `extra_decisions.json` changing; the nightly sweep runs them
 too, best-effort, after `walk` and before `prune-frames`.
 
 - `fold-extras` reads `extras.json` and writes `extra_library` and `extra_field`. It refuses the
   whole file, keeping the stored declaration, when a name repeats, a kind is unknown, a template
   names an undeclared field, or a root is not a directory under `PLEX_SOURCE_ROOTS`.
-- `extras-walk` lists files under each root by content, not extension. A file whose size and mtime
-  match its row gets `last_seen` stamped; otherwise the walk hashes the whole file. The first walk
-  of a library with no rows sets `organized = 1` on everything it finds; later files start at 0.
+- `extras-walk` lists files under each root by content, not extension: every regular file, but not
+  a symlink or a name that starts with a dot. A file whose size and mtime match its row gets
+  `last_seen` stamped; otherwise the walk hashes the whole file. The first walk of a library with
+  no extras sets `organized = 1` on everything it finds, so a library whose first walk found an
+  empty folder is still on its first walk when files appear; later files start at 0. A library
+  whose root is not a directory is skipped whole, so an unmounted share marks nothing missing.
+  An item's `primary_file` is its best file: one on disk before a missing one, then the greatest
+  height, then the largest size, then the lowest path.
   Filename parsers fill `source_url` and proposals, scrapers with `auto = true` run, and a file no
   longer found gets `missing_since`.
 - `fold-extra-decisions` applies `set`, `tag`, `organize`, `delete <path>` (refused for the primary
@@ -1585,8 +1590,12 @@ too, best-effort, after `walk` and before `prune-frames`.
   reports it; otherwise it renames the file, writes `extra_moved`, updates `extra_file.path`, keeps
   the id and sets `organized = 1`. `plexdb extras organize --dry-run` prints the moves.
 
-`plexdb extras status` prints, per library: files, items, in queue, organized, missing, more than
-one file, frames indexed and checks failed.
+`plexdb extras status` prints, per library: files (not missing), items, in queue, organized,
+missing files, and items with more than one file; the frames indexed and checks failed columns
+arrive with the steps that write them. `extras.json` is a JSON list with one object per library:
+`name`, `root`, `type`, `fields` (each `name`, `kind`, optional `required`), an optional
+`template` and optional `parsers`. A library that is no longer declared while it holds extras
+refuses the whole file.
 
 ## The original language of a title
 

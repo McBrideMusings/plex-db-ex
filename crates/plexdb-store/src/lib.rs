@@ -241,6 +241,27 @@ impl WriteLock {
     }
 }
 
+impl WriteLock {
+    /// The writer lock held exclusive without waiting, or `None` when another process
+    /// holds it shared or exclusive. A caller that must be the only writer for a while
+    /// (the extras tick) asks this rather than queue behind a sweep.
+    pub fn try_exclusive(store: &Path) -> Result<Option<Self>, StoreError> {
+        if held_by_parent(store) {
+            return Ok(Some(WriteLock { _file: None }));
+        }
+        ensure_parent(store)?;
+        let file = OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(write_lock_path(store))?;
+        match file.try_lock() {
+            Ok(()) => Ok(Some(WriteLock { _file: Some(file) })),
+            Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+            Err(std::fs::TryLockError::Error(err)) => Err(err.into()),
+        }
+    }
+}
+
 /// The migration lock, held exclusive for as long as this value lives. Python's
 /// `store.outside_migration` and `store.held_by` test it.
 ///
@@ -295,6 +316,28 @@ pub fn open_store(path: &Path) -> Result<Store, StoreError> {
     connect(path)
 }
 
+/// Open the store for writing as its only writer: [`open_store`] with the writer lock
+/// taken exclusive without waiting. `None` means a sweep or another step has the store
+/// open, and nothing was opened.
+pub fn open_store_exclusive(path: &Path) -> Result<Option<Store>, StoreError> {
+    if path.is_dir() {
+        return Err(StoreError::Store(format!(
+            "{} is a directory, not a store — point PLEXDB_PATH at a file",
+            path.display()
+        )));
+    }
+    if !path.exists() {
+        return Err(StoreError::Store(format!(
+            "no store at {} — run `plexdb migrate` first",
+            path.display()
+        )));
+    }
+    match WriteLock::try_exclusive(path)? {
+        Some(lock) => connect_under(path, lock).map(Some),
+        None => Ok(None),
+    }
+}
+
 /// Open the store read-only (`store.open_readonly`): any write fails rather than being
 /// applied, and the writer lock is not taken, so a reader never waits on a sweep.
 pub fn open_readonly(path: &Path) -> Result<Connection, StoreError> {
@@ -336,7 +379,10 @@ pub fn create_store(path: &Path) -> Result<Store, StoreError> {
 }
 
 fn connect(path: &Path) -> Result<Store, StoreError> {
-    let lock = WriteLock::shared(path)?;
+    connect_under(path, WriteLock::shared(path)?)
+}
+
+fn connect_under(path: &Path, lock: WriteLock) -> Result<Store, StoreError> {
     let conn = Connection::open(path)
         .map_err(|err| StoreError::Store(format!("cannot open {}: {err}", path.display())))?;
     configure(&conn).map_err(|err| {
