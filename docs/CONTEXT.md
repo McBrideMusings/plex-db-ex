@@ -128,6 +128,14 @@ _Avoid_: clip, scene, cut
 Text a Reader searches the Frame index with, compared by the keyword spelling rule.
 _Avoid_: query, prompt
 
+**Extras library**:
+A folder on the media share that Plex does not index, declared in `extras.json` with its own fields and layout template, whose files the Writer walks into the Store as items.
+_Avoid_: inbox, extras folder, Plex extras (Plex's word for the trailers and featurettes attached to one title)
+
+**Queue**:
+The extras whose `organized` is false — found by a walk, shown in the Extras tab, never returned to a Consumer. Not the Frame harvester's `frame_queue`.
+_Avoid_: inbox, pending, unsorted
+
 ### Architecture
 
 **Writer**:

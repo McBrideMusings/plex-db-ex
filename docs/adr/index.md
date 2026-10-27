@@ -27,10 +27,11 @@ ADR wins; [the PRD](../PRD) already reflects them.
 | [0020](./0020-a-person-may-decide-a-pair-no-judge-saw) | A person may decide a pair no judge saw |
 | [0021](./0021-a-keyword-display-name-is-a-persons-label-beside-enrichment) | A keyword's display name is a person's label beside `enrichment` |
 | [0022](./0022-the-store-depends-on-no-consumer) | The store depends on no consumer |
-| [0023](./0023-the-store-holds-facts-about-plex-library-items-and-nothing-else) | The store holds facts about Plex library items, and nothing else |
+| [0023](./0023-the-store-holds-facts-about-plex-library-items-and-declared-extras-and-nothing-else) | The store holds facts about Plex library items and declared extras, and nothing else |
 | [0024](./0024-the-frame-index-is-a-second-file-readers-attach-in-place) | The frame index is a second file that readers attach in place |
 | [0025](./0025-model-calls-go-to-a-configured-openai-compatible-endpoint) | Model calls go to a configured OpenAI-compatible endpoint |
 | [0026](./0026-the-reader-embeds-a-new-phrase-and-caches-it-beside-its-caller) | The reader embeds a new phrase and caches it beside its caller |
 | [0027](./0027-an-unowned-list-entry-is-stored-by-external-id) | An unowned list entry is stored by external id, never under an `item_id` |
 | [0028](./0028-list-decisions-and-fetch-attempts-are-keyed-by-list-url) | List decisions and fetch attempts are keyed by list URL, in tables beside the facts |
 | [0029](./0029-a-dashboard-panel-is-a-persons-saved-query-and-its-nightly-value-lives-beside-the-store) | A dashboard panel is a person's saved query, and its nightly value lives beside the store |
+| [0030](./0030-an-extras-library-is-a-declared-folder-the-writer-walks-and-a-person-organizes) | An extras library is a declared folder the writer walks and a person organizes |

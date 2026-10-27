@@ -1268,7 +1268,7 @@ person's until an `excluded` or `removed` decision ends it.
 did, and the reason. A fetch that succeeds deletes the row. It is bookkeeping, never a fact
 ([ADR-0013](./adr/0013-bookkeeping-never-shares-a-table-with-facts)), and it is not an
 `enrichment_cursor` row because that table is keyed by `items`, and a list is not an item
-([ADR-0023](./adr/0023-the-store-holds-facts-about-plex-library-items-and-nothing-else),
+([ADR-0023](./adr/0023-the-store-holds-facts-about-plex-library-items-and-declared-extras-and-nothing-else),
 [ADR-0028](./adr/0028-list-decisions-and-fetch-attempts-are-keyed-by-list-url)).
 
 **Refresh rule.** Only the Rust writer's `fold-list-decisions` step (`plexdb-rs`) writes `list_decision`, from
@@ -1503,6 +1503,90 @@ query that fails, a first row with no such column, no rows at all, and a cell th
 second run on the same UTC day replaces that day's entry, except that a failed rerun never replaces a
 recorded `value`. The step logs one line per panel: the
 dashboard and panel id, the series key, the value or error, and the elapsed milliseconds.
+
+## Version 25 — extras libraries
+
+Not yet built: plex-db-ex-lyp.6 writes this migration, and this section is its specification.
+Every table is additive; `reader_shape` stays at 10.
+
+```
+extra_library  name TEXT PK, root TEXT NOT NULL, type TEXT NOT NULL, template TEXT, declared_at TEXT NOT NULL
+extra_field    library TEXT → extra_library, name TEXT, kind TEXT NOT NULL ('text' | 'int' | 'year' | 'list'),
+               required INTEGER NOT NULL (0 | 1), PK (library, name)
+extra_item     item_id TEXT PK → items, library TEXT NOT NULL → extra_library, organized INTEGER NOT NULL (0 | 1),
+               source_url TEXT, first_seen TEXT NOT NULL, organized_at TEXT
+extra_file     path TEXT PK, item_id TEXT NOT NULL → extra_item, primary_file INTEGER NOT NULL (0 | 1),
+               size INTEGER, mtime INTEGER, sha256 TEXT, height INTEGER, duration_ms INTEGER,
+               first_seen TEXT NOT NULL, last_seen TEXT NOT NULL, missing_since TEXT
+extra_merge    merged_item_id TEXT PK, kept_item_id TEXT NOT NULL → extra_item, score REAL NOT NULL,
+               merged_at TEXT NOT NULL
+extra_moved    move_id INTEGER PK, from_path TEXT NOT NULL, to_path TEXT NOT NULL, item_id TEXT NOT NULL,
+               moved_at TEXT NOT NULL
+extra_check    path TEXT → extra_file ON UPDATE CASCADE, kind TEXT NOT NULL ('header' | 'decode'), checked_at TEXT NOT NULL,
+               ok INTEGER NOT NULL (0 | 1), error TEXT, PK (path, kind)
+```
+
+An extras library is a folder Plex does not index, declared by a person in `extras.json`
+([ADR-0030](./adr/0030-an-extras-library-is-a-declared-folder-the-writer-walks-and-a-person-organizes)).
+`extra_library` and `extra_field` hold the declaration as last folded: `root` is an absolute path
+under `PLEX_SOURCE_ROOTS`, `type` is the declaration's own text stored as given, and `template`
+names the library's fields in braces (`{artist}/{title}`) to lay out organized files under the
+root — NULL puts them directly under it. No code names a library or a field; the Extras form, the
+organize move, the scraper filter and the HTTP routes all read these two tables.
+
+`extra_item` is one row per extra, each with an `items` row of the same `item_id`. Its
+`items.type` is `extra`; its `items.title` is the file stem at the first walk, replaced by the
+`title` field's value when the library declares one and it is set. `organized` is
+0 for an extra in the queue, which no consumer route returns, and 1 for an organized extra,
+wherever it sits and however it is named. `organized_at` is the UTC time a Save set it, NULL for an
+extra the first walk of an empty library marked organized. `source_url` is optional on every extra
+and is what scrapers match on.
+
+`extra_file` is one row per file. An item has exactly one `primary_file = 1` row, plus one per
+exact copy or near duplicate folded into it. `sha256` is of the whole file; `height` and
+`duration_ms` describe its video, NULL until known. `missing_since` is the UTC time a walk first
+did not find the file, cleared when it returns. `extra_merge` records each near duplicate folded
+into another item with the Frame-index similarity that folded it; a Split deletes the row and gives
+the files back their own item. `extra_moved` is one row per rename an organize made;
+`plexdb extras undo <move_id>` reverses one. `extra_check` holds `check-files`' verdicts with
+`media_check`'s meaning, keyed by path.
+
+An extra's field values live in `enrichment` under namespace `extra`, keyed by field name, with
+`source` naming who said it: `path` for a filename parser, the scraper's name, or `person`. A
+proposal never overwrites a `person` value. Hand tags are `keywords` rows with source `person`.
+
+**Identity.** A new file's `item_id` is `fs:<fnv1a>` of its canonical path where the walk first
+saw it. A new path whose SHA-256 matches a known file takes that file's id, so a move keeps the id
+and a copy joins the item.
+
+### The extras tick
+
+```
+fold-extras → extras-walk → fold-extra-decisions → extras-organize
+```
+
+`plexdb schedule` runs these four under the writer lock every `PLEXDB_EXTRAS_EVERY` minutes
+(default 10) and within a minute of `extra_decisions.json` changing; the nightly sweep runs them
+too, best-effort, after `walk` and before `prune-frames`.
+
+- `fold-extras` reads `extras.json` and writes `extra_library` and `extra_field`. It refuses the
+  whole file, keeping the stored declaration, when a name repeats, a kind is unknown, a template
+  names an undeclared field, or a root is not a directory under `PLEX_SOURCE_ROOTS`.
+- `extras-walk` lists files under each root by content, not extension. A file whose size and mtime
+  match its row gets `last_seen` stamped; otherwise the walk hashes the whole file. The first walk
+  of a library with no rows sets `organized = 1` on everything it finds; later files start at 0.
+  Filename parsers fill `source_url` and proposals, scrapers with `auto = true` run, and a file no
+  longer found gets `missing_since`.
+- `fold-extra-decisions` applies `set`, `tag`, `organize`, `delete <path>` (refused for the primary
+  file) and `split <merged_item_id>` from `extra_decisions.json`.
+- `extras-organize` acts on each `organize` decision: it refuses while a required field is empty;
+  the target is root/template(fields) plus the original extension; a target holding the same
+  SHA-256 deletes the duplicate; any other file at the target leaves the extra unorganized and
+  reports it; otherwise it renames the file, writes `extra_moved`, updates `extra_file.path`, keeps
+  the id and sets `organized = 1`. `plexdb extras organize --dry-run` prints the moves.
+
+`plexdb extras status` prints, per library: files, items, in queue, organized, missing, more than
+one file, frames indexed and checks failed.
 
 ## The original language of a title
 
