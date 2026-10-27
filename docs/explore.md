@@ -47,6 +47,43 @@ Two routes serve organized extras to consumers ([ADR-0030](./adr/0030-an-extras-
   scraper by name, then `path`, each as `{value, source}`. An id that is not an organized extra is
   omitted.
 
+## The Extras tab
+
+The Extras tab sits between Search and Doctor (`#tab=extras`, a library at `&xlib=<name>`). It reads
+the store and writes only `extra_decisions.json`, beside the other decisions files; the writer's next
+tick folds each decision, moves the file and marks it organized. These routes are served by
+`plexdb-rs explore` (`crates/plexdb/src/extras_ui.rs`); the container still runs the Python
+explorer until it is deleted, so the tab needs the Rust server in front, with the frame and clip
+routes forwarded.
+
+- **Libraries** (`GET /api/extras/status`): per library its root, layout template, declared fields,
+  organized count, queue count and last scan (the latest `extra_file.last_seen`). Scan now is
+  `POST /api/extras/scan`, which rewrites `extra_decisions.json` as it is (an empty list when there is
+  none): the tick loop watches that file's modification time and runs within 30 seconds.
+- **Queue** (`GET /api/extras/queue?library=&limit=&offset=`): one card per extra with `organized = 0`,
+  oldest first, folded near duplicates left out. A card carries the file's facts, the library's declared
+  fields (a person's value, else what a scraper or the filename parser proposed, with who proposed it),
+  tags, `source_url`, and `plan`: what the writer would do with the card as it stands
+  (`extras_organize::plan`, so a required field left empty or a taken target shows here). A save the
+  tick has not applied reads `saving`. The form is built from the declared fields: an input per kind
+  (`text`, `int`, `year`; `list` as chips), required ones starred, plus tags and `source_url`.
+  Dashed values are proposals; Save confirms them. The clip and the four frames come from
+  `/api/search/clip` and `/api/search/frame`, which read an extra once the Frame index holds it.
+- **Save** (`POST /api/extras/save {saves: [{item_id, fields: {name: text}, tags: [..]}], dry_run}`):
+  records one `set` per field sent, one `tag` per tag and an `organize`, only when the writer's plan
+  accepts every card; otherwise it answers 400 and records nothing. `dry_run` answers each card's
+  `plan` and writes nothing, which is how the card's "Will move to" line follows what is typed. Only
+  an extra still in the queue can be saved.
+- **Doctor** (`GET /api/extras/item?item_id=`, a 404 for any other title, which the page then asks
+  `/api/doctor`): the extra's declared fields and its files with size, resolution, duration, SHA-256
+  and the near-merge score of a file the Frame index folded in. `POST /api/extras/file {action,
+  item_id, path}` records a `delete` or a `split`; both are refused for the primary file, and Split
+  for a file that no `extra_merge` row folded in.
+- **Library health**: the seeded dashboard's fifth panel, "Extras with more than one file", is a table
+  with `item_id` and `title` columns. A table panel with both columns links each title to the Doctor
+  tab on that item and does not show the id. A panels file that already exists is not reseeded; add
+  the panel from the Query tab's Add panel with the SQL in `plexdb/panels.py`.
+
 ## Related tags
 
 Selecting a tag opens its panel with two tabs, **Related tags** and **Titles**, each with its count.

@@ -148,7 +148,25 @@ DEFAULT_DASHBOARDS: tuple[dict[str, Any], ...] = (
                 "label": "lang",
                 "number": "tracks",
                 "unit": "audio and subtitle tracks",
-                "width": 3,
+                "width": 1,
+                "height": "tall",
+            },
+            {
+                "id": "extras-with-more-than-one-file",
+                "title": "Extras with more than one file",
+                "sql": (
+                    "SELECT ei.item_id, i.title, ei.library, COUNT(*) AS files\n"
+                    "FROM extra_item ei\n"
+                    "JOIN items i ON i.item_id = ei.item_id\n"
+                    "JOIN extra_file f ON f.item_id = ei.item_id AND f.missing_since IS NULL\n"
+                    "GROUP BY ei.item_id\n"
+                    "HAVING COUNT(*) > 1\n"
+                    "ORDER BY files DESC, i.title, ei.item_id"
+                ),
+                "chart": "table",
+                "value": "rows",
+                "unit": "extras",
+                "width": 2,
                 "height": "tall",
             },
         ],

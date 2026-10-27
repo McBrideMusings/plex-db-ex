@@ -1458,14 +1458,15 @@ else beside the snapshot, else beside the store).
 dashboard reads and the sweep ignores. A file that is not valid JSON or breaks this shape is
 refused whole; so is an unknown `chart`, a `gauge` panel without `total`, a `bar` or `pie` panel
 without `label` and `number`, and a `heatmap` panel without `x`, `y` and `number`. A missing file is created with the Library health dashboard, the first time the
-explorer's `/api/dashboards` or the sweep's `record-panels` reads it: four panels, in this order.
+explorer's `/api/dashboards` or the sweep's `record-panels` reads it: five panels, in this order.
 
 | Panel | `chart` | `value` | Other settings | `width` |
 |---|---|---|---|---|
 | Damaged or rule-breaking files | `line` | `rows` | `unit` `files` | 2 |
 | English original, no English subtitle | `line` | `rows` | `unit` `titles` | 2 |
 | Decode progress | `gauge` | `column:parts_decoded` | `total` `parts_total`, `unit` `parts decoded in full` | 1 |
-| Tracks per language | `bar` | `rows` | `label` `lang`, `number` `tracks`, `unit` `audio and subtitle tracks` | 3 |
+| Tracks per language | `bar` | `rows` | `label` `lang`, `number` `tracks`, `unit` `audio and subtitle tracks` | 1 |
+| Extras with more than one file | `table` | `rows` | `unit` `extras`; columns `item_id`, `title`, `library`, `files` | 2 |
 
 A file that exists is never seeded again, even with a dashboard that holds no panels or a
 `dashboards` list that is empty.

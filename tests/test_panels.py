@@ -42,7 +42,7 @@ def test_the_default_dashboards_are_the_ones_the_rust_sweep_seeds() -> None:
     assert shipped == {"dashboards": json.loads(json.dumps(DEFAULT_DASHBOARDS))}
 
 
-def test_a_missing_panels_file_is_seeded_with_the_four_library_health_panels(
+def test_a_missing_panels_file_is_seeded_with_the_five_library_health_panels(
     tmp_path: Path,
 ) -> None:
     panels = PanelsFile(tmp_path / "explore-panels.json")
@@ -54,7 +54,8 @@ def test_a_missing_panels_file_is_seeded_with_the_four_library_health_panels(
         ("Damaged or rule-breaking files", "line", 2),
         ("English original, no English subtitle", "line", 2),
         ("Decode progress", "gauge", 1),
-        ("Tracks per language", "bar", 3),
+        ("Tracks per language", "bar", 1),
+        ("Extras with more than one file", "table", 2),
     ]
     assert panels.read() == dashboards
 

@@ -1289,6 +1289,7 @@ def test_dashboards_return_each_seeded_panel_with_its_live_rows_and_its_series(
         "english-no-english-subtitle",
         "decode-progress",
         "tracks-per-language",
+        "extras-with-more-than-one-file",
     ]
     assert panels["tracks-per-language"]["live"] == {
         "columns": ["lang", "tracks"],
@@ -1445,7 +1446,7 @@ def test_dashboards_are_created_renamed_and_deleted_with_their_series(
     second = body["dashboard"]["id"]  # type: ignore[index]
     assert len(second) == 32 and body["dashboard"]["name"] == "Second"  # type: ignore[index]
     assert [(d["id"], len(d["panels"])) for d in _dashboards(base_url)] == [
-        ("library-health", 4),
+        ("library-health", 5),
         (second, 0),
     ]
 
@@ -1852,7 +1853,7 @@ def test_a_line_panel_whose_every_night_is_zero_still_draws_its_point(
     assert page.locator("svg text", has_text="NaN").count() == 0
 
 
-def test_the_dashboard_draws_the_four_seeded_panels_and_edit_opens_the_editor(
+def test_the_dashboard_draws_the_five_seeded_panels_and_edit_opens_the_editor(
     browser: Browser, base_url: str
 ) -> None:
     page = browser.new_page(viewport={"width": 1280, "height": 800})
@@ -1865,9 +1866,10 @@ def test_the_dashboard_draws_the_four_seeded_panels_and_edit_opens_the_editor(
         "English original, no English subtitle",
         "Decode progress",
         "Tracks per language",
+        "Extras with more than one file",
     ]
     assert page.locator("#dashpick option:checked").inner_text() == "Library health"
-    assert page.inner_text("#qtitle .sub") == "4 panels \u00b7 recorded nightly by the sweep"
+    assert page.inner_text("#qtitle .sub") == "5 panels \u00b7 recorded nightly by the sweep"
     assert page.is_hidden("#sql")
 
     page.locator(".tile button", has_text="Edit").nth(2).click()

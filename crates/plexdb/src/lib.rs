@@ -26,6 +26,7 @@ pub mod extras_declaration;
 pub mod extras_near;
 pub mod extras_organize;
 pub mod extras_parsers;
+pub mod extras_ui;
 pub mod extras_views;
 pub mod extras_walk;
 pub mod frame_encoder;

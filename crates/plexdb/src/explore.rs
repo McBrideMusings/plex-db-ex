@@ -43,12 +43,14 @@ use crate::explore_views::{
     check_kind, cotags_json, display_labels, draw_map, draw_network, map_json, network_done_json,
     stored_map, stored_network, title_details, title_kind, titles_json,
 };
+use crate::extras_ui;
 use crate::extras_views::{MAX_IDS, extras_fields, extras_items};
 use crate::keyword_views::{keyword_rows, merge_map};
 use crate::list_file::{DecideError, decide as decide_list, list_book_in};
 use crate::lists::{list_detail, list_table, with_pending};
 use crate::pyjson::{Json, dumps_compact};
 use crate::refresh_tagnetwork::Network;
+use crate::sources::Sources;
 use crate::steps::Failure;
 
 pub const NAME: &str = "explore";
@@ -157,6 +159,11 @@ struct App {
     roles: Book,
     name_decisions: Book,
     list_decisions: Book,
+    /// Where `extra_decisions.json` sits, and the lock that keeps two saves from interleaving.
+    extra_decisions: PathBuf,
+    extras_lock: Mutex<()>,
+    /// `PLEX_SOURCE_ROOTS`, which an extra's folded-in files hash their ids against.
+    source_roots: Vec<String>,
     fallback: Option<String>,
     indexes: Keyed<String, TagIndex>,
     spaces: Keyed<String, KeywordSpace>,
@@ -817,6 +824,114 @@ async fn extras_items_get(State(app): State<Shared>, RawQuery(raw): RawQuery) ->
     .await
 }
 
+/// Minutes between extras ticks, as `plexdb schedule` reads `PLEXDB_EXTRAS_EVERY`: unset is 10
+/// and 0 is off.
+fn extras_every_minutes() -> u32 {
+    std::env::var("PLEXDB_EXTRAS_EVERY")
+        .ok()
+        .and_then(|raw| py_strip(&raw).parse().ok())
+        .unwrap_or(10)
+}
+
+async fn extras_status_get(State(app): State<Shared>) -> Response {
+    blocking(move || {
+        let conn = app.open()?;
+        extras_ui::status(&conn, extras_every_minutes())
+    })
+    .await
+}
+
+async fn extras_queue_get(State(app): State<Shared>, RawQuery(raw): RawQuery) -> Response {
+    let query = Query(parse_query(raw));
+    blocking(move || {
+        let library = query
+            .first("library")
+            .ok_or_else(|| ExploreError::Invalid("library is required".into()))?;
+        let number = |name: &str, default: usize| -> Result<usize, ExploreError> {
+            match query.first(name) {
+                None => Ok(default),
+                Some(text) => text
+                    .parse()
+                    .map_err(|_| ExploreError::Invalid(format!("{name} must be a whole number"))),
+            }
+        };
+        let conn = app.open()?;
+        extras_ui::queue(
+            &conn,
+            &app.extra_decisions,
+            library,
+            number("offset", 0)?,
+            number("limit", 5)?,
+        )
+    })
+    .await
+}
+
+async fn extras_item_get(State(app): State<Shared>, RawQuery(raw): RawQuery) -> Response {
+    let query = Query(parse_query(raw));
+    blocking(move || {
+        let item_id = query
+            .first("item_id")
+            .ok_or_else(|| ExploreError::Invalid("item_id is required".into()))?;
+        if item_id.chars().count() > MAX_ITEM_ID {
+            return Err(ExploreError::Invalid(format!(
+                "item_id is over {MAX_ITEM_ID} characters"
+            )));
+        }
+        let conn = app.open()?;
+        extras_ui::item(&conn, &app.extra_decisions, &app.source_roots, item_id)
+    })
+    .await
+}
+
+async fn extras_save_post(State(app): State<Shared>, request: Request) -> Response {
+    decide(request, move |body| {
+        let conn = app.open()?;
+        let _held = app
+            .extras_lock
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let answer = extras_ui::save(&conn, &app.extra_decisions, &body)?;
+        if !body
+            .get("dry_run")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        {
+            log_decision(format!("extras save {}", dumps_compact(&answer)));
+        }
+        Ok(answer)
+    })
+    .await
+}
+
+async fn extras_file_post(State(app): State<Shared>, request: Request) -> Response {
+    decide(request, move |body| {
+        let conn = app.open()?;
+        let _held = app
+            .extras_lock
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let answer =
+            extras_ui::file_decision(&conn, &app.extra_decisions, &app.source_roots, &body)?;
+        log_decision(format!("extras file {}", dumps_compact(&answer)));
+        Ok(answer)
+    })
+    .await
+}
+
+async fn extras_scan_post(State(app): State<Shared>, request: Request) -> Response {
+    decide(request, move |_| {
+        let _held = app
+            .extras_lock
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let answer = extras_ui::request_scan(&app.extra_decisions)?;
+        log_decision(format!("extras scan {}", dumps_compact(&answer)));
+        Ok(answer)
+    })
+    .await
+}
+
 async fn extras_fields_post(State(app): State<Shared>, request: Request) -> Response {
     decide(request, move |body| {
         let invalid = || ExploreError::Invalid("ids must be a list of item ids".into());
@@ -966,6 +1081,15 @@ fn router(app: Shared) -> Router {
             "/api/doctor/titles",
             get(doctor_title_search).fallback(forward),
         )
+        .route(
+            "/api/extras/status",
+            get(extras_status_get).fallback(forward),
+        )
+        .route("/api/extras/queue", get(extras_queue_get).fallback(forward))
+        .route("/api/extras/item", get(extras_item_get).fallback(forward))
+        .route("/api/extras/save", post(extras_save_post).fallback(forward))
+        .route("/api/extras/file", post(extras_file_post).fallback(forward))
+        .route("/api/extras/scan", post(extras_scan_post).fallback(forward))
         .route("/api/extras/items", get(extras_items_get).fallback(forward))
         .route(
             "/api/extras/fields",
@@ -1046,6 +1170,9 @@ pub fn run(args: &[String]) -> Result<(), Failure> {
         roles: role_book(&dir),
         name_decisions: name_book(&dir),
         list_decisions: list_book_in(&dir),
+        extra_decisions: dir.join(crate::extras_decisions::FILE),
+        extras_lock: Mutex::new(()),
+        source_roots: Sources::from_env().source_roots,
         fallback,
         indexes: Keyed::new(2),
         spaces: Keyed::new(2),

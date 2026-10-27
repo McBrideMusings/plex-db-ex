@@ -921,7 +921,8 @@ pub fn doctor_titles(conn: &Connection, q: &str) -> Result<Json, ExploreError> {
     let mut rows: Vec<Found> = conn
         .prepare(
             "SELECT item_id, title, year, type FROM items WHERE title LIKE ? ESCAPE '\\' \
-             AND item_id IN (SELECT item_id FROM keyword_surfaces)",
+             AND (item_id IN (SELECT item_id FROM keyword_surfaces) \
+                  OR item_id IN (SELECT item_id FROM extra_item WHERE organized = 1))",
         )?
         .query_map([like(q)], |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))

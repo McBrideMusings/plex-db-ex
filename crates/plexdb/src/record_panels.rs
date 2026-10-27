@@ -833,7 +833,7 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_panels_file_is_seeded_with_the_four_library_health_panels() {
+    fn a_missing_panels_file_is_seeded_with_the_five_library_health_panels() {
         let dir = tempfile::tempdir().expect("dir");
         let path = dir.path().join(PANELS_FILE);
         let dashboards = read_or_seed(&path).expect("seed");
@@ -848,7 +848,8 @@ mod tests {
                 "damaged-files",
                 "english-no-english-subtitle",
                 "decode-progress",
-                "tracks-per-language"
+                "tracks-per-language",
+                "extras-with-more-than-one-file"
             ]
         );
         let written: Value =
@@ -932,23 +933,25 @@ mod tests {
                  CREATE TABLE media_part (part_id INTEGER, item_id TEXT, file TEXT);
                  CREATE TABLE media_stream (part_id INTEGER, kind TEXT, lang TEXT);
                  CREATE TABLE media_check (part_id INTEGER, kind TEXT, ok INTEGER,
-                                           error TEXT, checked_at TEXT);",
+                                           error TEXT, checked_at TEXT);
+                 CREATE TABLE extra_item (item_id TEXT, library TEXT);
+                 CREATE TABLE extra_file (item_id TEXT, path TEXT, missing_since TEXT);",
             )
             .expect("schema");
         let (stats, lines) = record(dir.path(), &dir.path().join(PANELS_FILE), DAY1).expect("run");
         assert_eq!(
             stats,
             RecordStats {
-                recorded: 4,
+                recorded: 5,
                 failed: 0
             }
         );
-        assert_eq!(lines.len(), 4);
+        assert_eq!(lines.len(), 5);
         assert_eq!(
             read_history(&dir.path().join(HISTORY_FILE))
                 .expect("history")
                 .len(),
-            4
+            5
         );
     }
 

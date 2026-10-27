@@ -668,6 +668,105 @@
   #lightbox .cap { font-variant-numeric: tabular-nums; }
   #lightbox .nav { display: flex; gap: 10px; }
   #lightbox button { font: inherit; padding: 4px 14px; border-radius: 6px; border: 1px solid #888; background: transparent; color: #f2f2ee; cursor: pointer; }
+  /* Extras tab and the Doctor's Files list */
+  .xwrap { padding: 16px 20px 24px; }
+  .xwrap h2 { font-size: 13px; margin: 0 0 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .xbar { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-bottom: 12px; }
+  .xbar .sp { flex: 1; }
+  .xbar .sum { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .xbar .sum b { color: var(--ink); font-weight: 600; }
+  .seg button .n { margin-left: 6px; opacity: .75; font-variant-numeric: tabular-nums; }
+  .xtable { border: 1px solid var(--line); border-radius: 6px; background: var(--panel); overflow-x: auto; }
+  .xtable table { font-size: 13px; }
+  .xtable th { background: var(--panel); }
+  .xtable td.lib { font-weight: 550; }
+  .xtable td.lib .via { display: block; font-weight: 400; color: var(--muted); font-size: 11px; }
+  .xtable td.path, .xmono { font: 12px ui-monospace, Menlo, monospace; overflow-wrap: anywhere; }
+  .xtable td.act { text-align: right; white-space: nowrap; width: 1%; }
+  .xtable td.vm { vertical-align: middle; }
+  .xdim { color: var(--muted); }
+  .xrow { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 4px 18px; background: var(--panel);
+          border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; }
+  .xrow.saving { outline: 2px dashed var(--ink); outline-offset: 2px; }
+  .xrow.saving .xfields, .xrow.saving .xmedia { opacity: .55; }
+  .xmedia { min-width: 0; }
+  .xclip { position: relative; width: 100%; aspect-ratio: 16 / 9; border-radius: 6px; overflow: hidden; background: #000; }
+  .xclip .play { position: absolute; left: 50%; top: 50%; width: 40px; height: 40px; margin: -20px 0 0 -20px; border-radius: 50%;
+                 background: rgba(0,0,0,.55); border: 1px solid rgba(255,255,255,.55); }
+  .xclip .play::after { content: ""; position: absolute; left: 15px; top: 11px; border-left: 14px solid #fff; border-top: 9px solid transparent; border-bottom: 9px solid transparent; }
+  .xclip .dur { position: absolute; right: 6px; bottom: 6px; font-size: 11px; padding: 0 6px; border-radius: 4px; background: rgba(0,0,0,.65); color: #f2f2ee; font-variant-numeric: tabular-nums; }
+  .xclip .bar { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(255,255,255,.25); }
+  .xstrip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; margin-top: 4px; }
+  .xstrip i { display: block; aspect-ratio: 16 / 9; border: 1px solid var(--line); border-radius: 4px; }
+  .xcap { color: var(--muted); font-size: 11px; margin-top: 3px; font-variant-numeric: tabular-nums; }
+  .xmain { min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+  .xhead { display: flex; gap: 8px 12px; align-items: baseline; flex-wrap: wrap; }
+  .xhead .fn { font-weight: 600; overflow-wrap: anywhere; }
+  .xhead .badge { margin-left: 0; }
+  .xhead .grow { flex: 1; }
+  .xhead a { color: var(--accent); text-decoration: none; }
+  .xsub { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; margin-top: -6px; }
+  .xsub code { font: 12px ui-monospace, Menlo, monospace; }
+  .xnote { border: 1px solid var(--line); background: var(--chip); border-radius: 6px; padding: 6px 10px; display: flex; gap: 8px 12px; align-items: center; flex-wrap: wrap; }
+  .xnote .grow { flex: 1; min-width: 12em; }
+  .xnote .grow span { color: var(--muted); }
+  .xfields { display: grid; grid-template-columns: 8em minmax(0, 1fr); gap: 8px 12px; align-items: start; }
+  .xfields > label, .xfields > .lab { color: var(--muted); font-size: 12px; padding-top: 6px; }
+  .xin { font: inherit; width: 100%; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; min-height: 29px; }
+  .xin.empty { color: var(--muted); }
+  .xin.prop { border: 1px dashed var(--accent); background: color-mix(in srgb, var(--accent) 9%, var(--panel)); }
+  .xin.need { border-color: var(--noise); }
+  .xcell { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+  .xline { display: flex; gap: 8px; align-items: center; }
+  .xline .xin { flex: 1; min-width: 0; }
+  .xwhy { font-size: 11px; color: var(--muted); }
+  .xwhy.prop { color: var(--accent); }
+  .xwhy.need { color: var(--noise); }
+  .xchips { border: 1px solid var(--line); border-radius: 6px; background: var(--bg); padding: 3px 5px; min-height: 29px; display: flex; flex-wrap: wrap; gap: 3px; align-items: center; }
+  .xchips .chip { margin: 0; cursor: default; }
+  .xchips .chip:hover { outline: 0; }
+  .xchips .chip.prop { background: color-mix(in srgb, var(--accent) 9%, var(--panel)); border: 1px dashed var(--accent); padding: 0 6px; }
+  .xchips .chip .x { color: var(--muted); margin-left: 5px; }
+  .xchips .add { color: var(--muted); padding: 0 4px; }
+  .xfoot { display: flex; gap: 8px 12px; align-items: center; flex-wrap: wrap; padding-top: 8px; border-top: 1px solid var(--line); }
+  .xfoot .st { color: var(--muted); flex: 1; min-width: 12em; }
+  .xfoot .st.ok { color: var(--green); }
+  .xfoot .st.need { color: var(--noise); }
+  .xfoot .dest { font: 12px ui-monospace, Menlo, monospace; color: var(--ink); overflow-wrap: anywhere; }
+  .xfoot button.primary:disabled, button.primary.off { opacity: .45; cursor: default; }
+  .xpend { display: inline-block; padding: 1px 8px; border-radius: 5px; font-size: 12px; background: var(--chip); color: var(--ink); outline: 2px dashed var(--ink); outline-offset: 1px; }
+  .xbadge { display: inline-block; border-radius: 5px; padding: 0 6px; font-size: 11px; background: var(--chip); color: var(--ink); }
+  .xbadge.pri { background: var(--accent); color: var(--accent-ink); }
+  .xbadge.warn { background: var(--noise-bg); color: var(--noise); }
+  .xlink { color: var(--accent); text-decoration: none; }
+  .xhash { font: 12px ui-monospace, Menlo, monospace; color: var(--muted); }
+  .xscore { white-space: nowrap; }
+  .xscore b { color: var(--ink); font-weight: 600; }
+  .xpath b { font-weight: 600; }
+  #dgrid tr.primary > td { background: color-mix(in srgb, var(--accent) 7%, var(--panel)); }
+  .xfact { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; margin: 4px 0 12px; }
+  .xfact dt { color: var(--muted); }
+  .xfact dd { margin: 0; font-variant-numeric: tabular-nums; }
+  .xdoc h3 { font-size: 16px; margin: 14px 0 2px; }
+  .xdoc h4 { font-size: 11px; margin: 16px 0 6px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .xlink-ex { white-space: nowrap; }
+  .tabwrap td a { color: var(--accent); text-decoration: none; }
+  .tabwrap td a:hover { text-decoration: underline; }
+  .tabwrap td.num, .tabwrap th.num { text-align: right; }
+  .xin:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .xin:disabled { opacity: .7; }
+  .xclip video, .xclip img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+  .xclip button.play { cursor: pointer; padding: 0; }
+  .xclip .nocut { position: absolute; inset: auto 6px 28px 6px; font-size: 11px; color: #f2f2ee; background: rgba(0,0,0,.65); border-radius: 4px; padding: 2px 6px; }
+  .xstrip { position: relative; }
+  .xstrip i { position: relative; overflow: hidden; }
+  .xstrip i img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .xchips input { border: 0; background: transparent; color: var(--ink); font: inherit; min-width: 8em; flex: 1; padding: 0 4px; outline: 0; }
+  .xchips .chip button { border: 0; background: transparent; color: var(--muted); padding: 0 0 0 5px; font: inherit; cursor: pointer; }
+  .xreq { color: var(--noise); margin-left: 2px; }
+  .xfile-row.pending td { opacity: .6; }
+  .xpendnote { display: block; font-size: 11px; color: var(--muted); }
+  @media (max-width: 760px) { .xrow { grid-template-columns: minmax(0, 1fr); } .xfields { grid-template-columns: minmax(0, 1fr); } .xfields > label, .xfields > .lab { padding-top: 0; } }
 </style>
 </head>
 <body>
@@ -680,6 +779,7 @@
     <button type="button" data-tab="merges" aria-pressed="false">Merges</button>
     <button type="button" data-tab="roles" aria-pressed="false">Roles</button>
     <button type="button" data-tab="search" aria-pressed="false">Search</button>
+    <button type="button" data-tab="extras" aria-pressed="false">Extras</button>
     <button type="button" data-tab="doctor" aria-pressed="false">Doctor</button>
   </div>
   <div class="seg tagsonly" role="group" aria-label="Title type">
@@ -885,6 +985,10 @@
     <div class="nav"><button type="button" id="lbprev" aria-label="Previous frame">←</button><button type="button" id="lbnext" aria-label="Next frame">→</button><button type="button" id="lbclose">Close</button></div>
   </div>
 </section>
+<section id="extraswrap" class="xwrap" hidden>
+  <div id="xbar" class="xbar"></div>
+  <div id="xbody"></div>
+</section>
 <section id="doctorwrap" hidden>
   <h2>Tag doctor</h2>
   <p class="mnote">One title's keywords: a row per merge group, and in each source's column the raw spelling that source sent. A merge you propose goes to merge_decisions.json, the same file the Merges tab writes, and the next sweep applies it.</p>
@@ -993,16 +1097,18 @@ function readHash() {
   const p = new URLSearchParams(location.hash.slice(1));
   if (p.get("kind") === "show" || p.get("kind") === "movie") state.kind = p.get("kind");
   if (VIEWS.includes(p.get("view"))) state.view = p.get("view");
-  if (["lists", "query", "merges", "roles", "search", "doctor"].includes(p.get("tab"))) state.tab = p.get("tab");
+  if (["lists", "query", "merges", "roles", "search", "extras", "doctor"].includes(p.get("tab"))) state.tab = p.get("tab");
   state.tag = p.get("tag");
   state.dash = p.get("dash");
   doctor.itemId = p.get("item"); doctor.row = p.get("row");
+  extras.lib = p.get("xlib");
 }
 function writeHash() {
   const p = new URLSearchParams({ kind: state.kind, view: state.view });
   if (state.tab !== "tags") p.set("tab", state.tab);
   if (state.tag) p.set("tag", state.tag);
   if (state.tab === "query" && state.dash) p.set("dash", state.dash);
+  if (state.tab === "extras" && extras.lib) p.set("xlib", extras.lib);
   if (state.tab === "doctor" && doctor.itemId) p.set("item", doctor.itemId);
   if (state.tab === "doctor" && doctor.row) p.set("row", doctor.row);
   history.replaceState(null, "", "#" + p.toString());
@@ -2706,6 +2812,404 @@ document.getElementById("clear").addEventListener("click", () => {
   noise.clear(); saveNoise(); btn.dataset.armed = ""; btn.textContent = "Clear"; render();
 });
 
+// ---- Extras tab ----
+// Libraries declared in extras.json, and each one's queue: the extras no person has saved. A card's
+// form is built from the library's declared fields (/api/extras/queue), so Music Videos and Archival
+// Bumpers are two declarations, not two code paths. Save POSTs the form to /api/extras/save, which
+// writes extra_decisions.json and nothing else; the writer's next tick moves the file to the
+// library's layout template and marks it organized. "Will move to" is the server's own answer
+// (the writer's plan, asked with the form's values laid over the file), not a template rendered here.
+const extras = { status: null, lib: null, shown: 5, queue: null, forms: new Map(), note: "", noteBad: false, poll: 0, error: null };
+const xEl = id => document.getElementById(id);
+const pad2 = n => String(n).padStart(2, "0");
+function utcPair(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso || "";
+  const local = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZoneName: "short" }).replace(/\s*(AM|PM)/, (_, m) => m.toLowerCase());
+  return `${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())} UTC (${local})`;
+}
+function agoText(iso) {
+  const sec = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (!(sec >= 0)) return "";
+  if (sec < 90) return "just now";
+  if (sec < 5400) return `${Math.round(sec / 60)} min ago`;
+  if (sec < 129600) return `${Math.round(sec / 3600)} h ago`;
+  return `${Math.round(sec / 86400)} days ago`;
+}
+const fileSize = n => n === null || n === undefined ? "?" : n >= 1e9 ? (n / 1e9).toFixed(1) + " GB" : n >= 1e6 ? (n / 1e6).toFixed(1) + " MB" : n >= 1e3 ? Math.round(n / 1e3) + " KB" : n + " B";
+const clockText = ms => { if (ms === null || ms === undefined) return "?"; const s = Math.round(ms / 1000); return `${Math.floor(s / 60)}:${pad2(s % 60)}`; };
+const heightText = h => h ? `${h}p` : "?";
+const baseName = p => p.slice(p.lastIndexOf("/") + 1);
+const layoutText = tpl => tpl ? tpl.replace(/\{([^}]*)\}/g, "<$1>") + ".<ext>" : "kept where it is";
+const hueOf = id => { let h = 7; for (const c of id) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
+const gradient = (h, i) => { const a = (h + i * 23) % 360, b = (a + 40) % 360; return `linear-gradient(${100 + i * 31}deg, hsl(${a} 38% 24%), hsl(${b} 45% ${34 + (i % 3) * 8}%) 60%, hsl(${a} 30% 18%))`; };
+const labelOf = name => name === "source_url" ? "Source URL" : name.replace(/_/g, " ").replace(/^./, c => c.toUpperCase());
+const libOf = name => extras.status?.libraries.find(l => l.name === name);
+
+async function initExtras() {
+  xEl("xbody").replaceChildren(el("p", { className: "empty" }, "Loading…"));
+  try {
+    extras.status = await getJSON("/api/extras/status");
+    if (extras.lib && !libOf(extras.lib)) extras.lib = null;
+    if (extras.lib) await loadQueue(); else paintExtras();
+  } catch (err) { xEl("xbar").replaceChildren(); xEl("xbody").replaceChildren(el("p", { className: "bad" }, `Could not load: ${err.message}`)); }
+}
+async function loadQueue() {
+  clearTimeout(extras.poll);
+  const lib = extras.lib;
+  const [status, queue] = await Promise.all([getJSON("/api/extras/status"), getJSON(`/api/extras/queue?library=${encodeURIComponent(lib)}&limit=${extras.shown}`)]);
+  if (extras.lib !== lib) return;
+  extras.status = status; extras.queue = queue;
+  const ids = new Set(queue.items.map(i => i.item_id));
+  for (const id of [...extras.forms.keys()]) if (!ids.has(id)) extras.forms.delete(id);
+  paintExtras();
+  if (queue.items.some(i => i.saving) && state.tab === "extras") extras.poll = setTimeout(pollQueue, 8000);
+}
+function pollQueue() {
+  if (state.tab !== "extras" || !extras.lib) return;
+  if (xEl("xbody").contains(document.activeElement) && document.activeElement.matches("input")) { extras.poll = setTimeout(pollQueue, 8000); return; }
+  loadQueue().catch(() => { extras.poll = setTimeout(pollQueue, 8000); });
+}
+function openLibrary(name) {
+  extras.lib = name; extras.shown = 5; extras.queue = null; extras.note = "";
+  writeHash();
+  if (name) loadQueue().catch(err => { xEl("xbody").replaceChildren(el("p", { className: "bad" }, `Could not load: ${err.message}`)); }); else initExtras();
+}
+
+function xSeg() {
+  const s = extras.status;
+  const mk = (key, text, n) => {
+    const b = el("button", { type: "button" }, text, ...(n === undefined ? [] : [el("span", { className: "n" }, fmt(n))]));
+    b.setAttribute("aria-pressed", String(extras.lib === key));
+    b.addEventListener("click", () => openLibrary(key));
+    return b;
+  };
+  const seg = el("div", { className: "seg", role: "group" }, mk(null, "Libraries"), ...s.libraries.map(l => mk(l.name, l.name, l.queue)));
+  seg.setAttribute("aria-label", "Extras view");
+  return seg;
+}
+
+function paintExtras() {
+  const s = extras.status;
+  if (!s) return;
+  if (!extras.lib) { paintLibraries(); return; }
+  paintExtrasQueue();
+}
+
+async function scanNow(btn) {
+  btn.disabled = true;
+  try {
+    const out = await sendJSON("POST", "/api/extras/scan", {});
+    extras.note = `Scan requested ${utcPair(out.requested_at)} by touching ${out.file}. The writer starts it within 30 seconds.`; extras.noteBad = false;
+  } catch (err) { extras.note = err.message; extras.noteBad = true; }
+  btn.disabled = false;
+  paintExtras();
+}
+const scanButton = () => { const b = el("button", { type: "button", className: "plain" }, "Scan now"); b.addEventListener("click", () => scanNow(b)); return b; };
+const scanWhen = l => {
+  if (!l.last_scan) return el("td", { className: "vm" }, "never");
+  const left = Math.round((new Date(l.last_scan).getTime() + extras.status.every_minutes * 60000 - Date.now()) / 60000);
+  const next = !extras.status.every_minutes ? " · scheduled scans off" : left > 0 ? ` · next in ${left} min` : " · next scan due";
+  return el("td", { className: "vm" }, agoText(l.last_scan), el("span", { className: "cellid", style: "display:block" }, utcPair(l.last_scan) + next));
+};
+
+function paintLibraries() {
+  const s = extras.status;
+  xEl("xbar").replaceChildren(xSeg());
+  if (!s.libraries.length) {
+    xEl("xbody").replaceChildren(el("h2", {}, "Extras libraries"), el("div", { className: "dashempty", style: "max-width:420px" },
+      el("h3", {}, "No extras library is declared."),
+      el("p", {}, "A library is an entry in extras.json beside the decisions files: a root under PLEX_SOURCE_ROOTS, its fields and a layout template. The next tick folds it in.")));
+    return;
+  }
+  const rows = s.libraries.map(l => {
+    const q = el("a", { className: "xlink", href: "#" }, fmt(l.queue));
+    q.addEventListener("click", e => { e.preventDefault(); openLibrary(l.name); });
+    return el("tr", {},
+      el("td", { className: "lib vm" }, l.name, el("span", { className: "via" }, "fields: " + [...l.fields.map(f => f.name), "tags", "source URL"].join(", "))),
+      el("td", { className: "path vm" }, l.root),
+      el("td", { className: "num vm" }, fmt(l.organized)),
+      el("td", { className: "num vm" }, q),
+      el("td", { className: "vm", style: "white-space:nowrap" }, el("span", { className: "xmono" }, layoutText(l.template))),
+      scanWhen(l),
+      el("td", { className: "act vm" }, scanButton()));
+  });
+  const th = (t, c) => el("th", c ? { className: c } : {}, t);
+  const note = el("p", { className: "mnote", style: "margin-top:10px" }, extras.note || "Scan now asks the writer for a scan on the next tick; it does not run here. Organized counts files already in their place; the first scan of an empty library marks everything it finds organized.");
+  if (extras.noteBad) note.classList.add("bad");
+  xEl("xbody").replaceChildren(el("h2", {}, "Extras libraries"),
+    el("p", { className: "mnote" }, `Folders Plex never indexes. Anything dropped anywhere under a library root is found by a scan (every ${s.every_minutes || "—"} minutes, or now) and waits in that library's queue until you save it.`),
+    el("div", { className: "xtable" }, el("table", {}, el("thead", {}, el("tr", {}, th("Library"), th("Root"), th("Organized", "num"), th("In queue", "num"), th("Layout"), th("Last scan"), th(""))), el("tbody", {}, ...rows))),
+    note);
+}
+
+// ---- the queue ----
+const textOf = (v, kind) => kind === "list" ? v.join("; ") : v.trim();
+function formOf(item) {
+  let f = extras.forms.get(item.item_id);
+  if (!f) {
+    f = { item, vals: {}, touched: new Set(), url: item.source_url || "", urlTouched: false, preview: null, token: 0, timer: 0, err: "",
+      tags: [...item.tags.map(t => ({ text: t, state: "saved" })), ...item.proposed_tags.map(t => ({ text: t, state: "proposed" }))] };
+    for (const fd of item.fields) {
+      const base = fd.value.length ? fd.value : fd.proposed;
+      f.vals[fd.name] = fd.kind === "list" ? [...base] : (base[0] ?? "");
+    }
+    extras.forms.set(item.item_id, f);
+  } else f.item = item;
+  return f;
+}
+const proposedField = (f, fd) => fd.value.length === 0 && fd.proposed.length > 0 && !f.touched.has(fd.name);
+const proposedUrl = f => f.item.source_url_proposed && !f.urlTouched;
+function missingRequired(f) {
+  return f.item.fields.filter(fd => fd.required && textOf(f.vals[fd.name], fd.kind) === "").map(fd => fd.name);
+}
+function changesOf(f) {
+  const out = {};
+  for (const fd of f.item.fields) {
+    const cur = textOf(f.vals[fd.name], fd.kind);
+    if (cur !== fd.value.join("; ")) out[fd.name] = cur;
+  }
+  const url = f.url.trim();
+  if (url !== (f.item.source_url || "") || f.item.source_url_proposed) out.source_url = url;
+  return out;
+}
+const saveBody = f => ({ item_id: f.item.item_id, fields: changesOf(f), tags: f.tags.filter(t => t.state !== "saved").map(t => t.text) });
+function readiness(f) {
+  if (f.item.saving) return { saving: true };
+  const missing = missingRequired(f);
+  if (missing.length) return { ok: false, text: "Needs " + missing.join(" and ") };
+  const plan = f.preview || f.item.plan;
+  if (f.pending) return { ok: false, text: "Checking…" };
+  if (plan.status === "refused") return { ok: false, text: plan.why };
+  return { ok: true, plan };
+}
+function schedulePreview(f) {
+  clearTimeout(f.timer);
+  f.pending = true;
+  const token = ++f.token;
+  f.timer = setTimeout(async () => {
+    try {
+      const out = await sendJSON("POST", "/api/extras/save", { saves: [saveBody(f)], dry_run: true });
+      if (token === f.token) { f.preview = out.saved[0].plan; f.err = ""; }
+    } catch (err) { if (token === f.token) f.preview = { status: "refused", why: err.message }; }
+    if (token === f.token) { f.pending = false; f.repaint(); paintXBar(); }
+  }, 250);
+}
+function edited(f, name) {
+  if (name) f.touched.add(name);
+  f.err = "";
+  f.repaint(); paintXBar(); schedulePreview(f);
+}
+
+function chipsEditor(f, get, set, opts = {}) {
+  const box = el("div", { className: "xchips" });
+  const draw = () => {
+    box.replaceChildren(...get().map((c, i) => {
+      const chip = el("span", { className: "chip" + (c.state === "proposed" ? " prop" : "") }, c.text);
+      if (c.state !== "saved" && !opts.disabled) {
+        const x = el("button", { type: "button", title: "Remove", "aria-label": `Remove ${c.text}` }, "×");
+        x.addEventListener("click", () => { set(get().filter((_, j) => j !== i)); draw(); edited(f, opts.field); });
+        chip.append(x);
+      }
+      return chip;
+    }));
+    if (!opts.disabled) {
+      const input = el("input", { type: "text", placeholder: opts.placeholder || "add", autocomplete: "off" });
+      input.setAttribute("aria-label", opts.label);
+      const add = () => {
+        const text = input.value.replace(/,$/, "").trim();
+        if (!text || get().some(c => c.text.toLowerCase() === text.toLowerCase())) { input.value = ""; return; }
+        set([...get(), { text, state: "new" }]); draw(); edited(f, opts.field);
+        box.querySelector("input")?.focus();
+      };
+      input.addEventListener("keydown", e => {
+        if (e.key === "Enter" || e.key === ",") { e.preventDefault(); add(); }
+        else if (e.key === "Backspace" && !input.value) { const last = get().at(-1); if (last && last.state !== "saved") { set(get().slice(0, -1)); draw(); edited(f, opts.field); box.querySelector("input")?.focus(); } }
+      });
+      input.addEventListener("blur", () => { if (input.value.trim()) add(); });
+      box.append(input);
+    }
+  };
+  draw();
+  return box;
+}
+
+function fieldRow(f, fd, disabled) {
+  const label = el("label", {}, labelOf(fd.name), ...(fd.required ? [el("span", { className: "xreq", title: "required" }, "*")] : []));
+  const prop = proposedField(f, fd);
+  let body;
+  if (fd.kind === "list") {
+    const get = () => f.vals[fd.name].map(t => ({ text: t, state: prop && !f.touched.has(fd.name) ? "proposed" : "new" }));
+    body = chipsEditor(f, get, list => { f.vals[fd.name] = list.map(c => c.text); }, { disabled, field: fd.name, label: fd.name, placeholder: "add " + fd.name });
+  } else {
+    const input = el("input", { type: "text", className: "xin" + (prop ? " prop" : "") + (fd.required && f.vals[fd.name].trim() === "" ? " need" : ""), value: f.vals[fd.name], disabled, placeholder: fd.name, autocomplete: "off" });
+    input.setAttribute("aria-label", fd.name);
+    if (fd.kind === "int" || fd.kind === "year") input.inputMode = "numeric";
+    input.addEventListener("input", () => { f.vals[fd.name] = input.value; input.classList.remove("prop"); input.classList.toggle("need", fd.required && input.value.trim() === ""); edited(f, fd.name); });
+    body = input;
+  }
+  const why = prop ? el("div", { className: "xwhy prop" }, `proposed by ${fd.proposed_by === "path" ? "the file name" : fd.proposed_by}`) : fd.required && textOf(f.vals[fd.name], fd.kind) === "" ? el("div", { className: "xwhy need" }, "required") : null;
+  return [label, el("div", { className: "xcell" }, body, ...(why ? [why] : []))];
+}
+
+function urlRow(f, disabled) {
+  const prop = proposedUrl(f);
+  const input = el("input", { type: "text", className: "xin" + (prop ? " prop" : ""), value: f.url, disabled, placeholder: "https://… where this came from", autocomplete: "off" });
+  input.setAttribute("aria-label", "source URL");
+  const open = el("a", { className: "xlink xlink-ex", href: f.url, target: "_blank", rel: "noopener noreferrer" }, "Open ↗");
+  const syncOpen = () => { open.hidden = !/^https?:\/\//.test(input.value.trim()); open.href = input.value.trim(); };
+  syncOpen();
+  input.addEventListener("input", () => { f.url = input.value; f.urlTouched = true; input.classList.remove("prop"); syncOpen(); edited(f); });
+  return [el("label", {}, "Source URL"), el("div", { className: "xcell" }, el("div", { className: "xline" }, input, open),
+    ...(prop ? [el("div", { className: "xwhy prop" }, "set from the file name")] : []))];
+}
+
+function tagsRow(f, disabled) {
+  return [el("label", {}, "Tags"), el("div", { className: "xcell" }, chipsEditor(f, () => f.tags, list => { f.tags = list; }, { disabled, label: "tags", placeholder: "add tag" }))];
+}
+
+function mediaBox(item) {
+  const file = item.file, dur = file?.duration_ms, hue = hueOf(item.item_id);
+  const at = frac => Math.round(dur * frac);
+  const frameUrl = ms => `/api/search/frame?item_id=${encodeURIComponent(item.item_id)}&part=0&t_ms=${ms}`;
+  const clip = el("div", { className: "xclip" });
+  clip.style.background = gradient(hue, 1);
+  if (dur) {
+    const poster = el("img", { alt: "", loading: "lazy", src: frameUrl(at(0.35)) });
+    poster.addEventListener("error", () => poster.remove(), { once: true });
+    clip.append(poster);
+    const play = el("button", { type: "button", className: "play", title: "Play the first two minutes" });
+    play.setAttribute("aria-label", "Play the clip");
+    play.addEventListener("click", () => {
+      const video = el("video", { controls: true, autoplay: true, preload: "auto", src: `/api/search/clip?item_id=${encodeURIComponent(item.item_id)}&part=0&in_ms=0&out_ms=${Math.min(dur, 120000)}` });
+      video.addEventListener("error", () => { video.remove(); clip.append(el("span", { className: "nocut" }, "No clip yet: the Frame index has not read this file.")); }, { once: true });
+      clip.replaceChildren(video);
+    });
+    clip.append(play, el("span", { className: "dur" }, `0:00 / ${clockText(dur)}`), el("span", { className: "bar" }));
+  } else clip.append(el("span", { className: "nocut" }, "Duration unknown"));
+  const strip = el("div", { className: "xstrip" });
+  for (const [i, frac] of [0.1, 0.35, 0.6, 0.85].entries()) {
+    const cell = el("i", {});
+    cell.style.background = gradient(hue, i);
+    if (dur) {
+      const img = el("img", { alt: "", loading: "lazy", src: frameUrl(at(frac)) });
+      img.addEventListener("error", () => img.remove(), { once: true });
+      cell.append(img);
+    }
+    strip.append(cell);
+  }
+  return el("div", { className: "xmedia" }, clip, strip, el("div", { className: "xcap" }, dur ? "4 frames at 10 / 35 / 60 / 85 %" : "No frames: duration unknown"));
+}
+
+function card(item) {
+  const f = formOf(item);
+  const saving = !!item.saving;
+  const file = item.file;
+  const body = el("div", { className: "xfields" });
+  const fill = () => {
+    body.replaceChildren(...item.fields.flatMap(fd => fieldRow(f, fd, saving)), ...urlRow(f, saving), ...tagsRow(f, saving));
+  };
+  fill();
+  const proposer = item.proposer;
+  const noteBox = el("div", { className: "xnote" });
+  const drawNote = () => {
+    const proposed = item.fields.some(fd => proposedField(f, fd)) || proposedUrl(f) || f.tags.some(t => t.state === "proposed");
+    if (item.refused) { noteBox.hidden = false; noteBox.replaceChildren(el("span", { className: "grow" }, el("strong", {}, "The last save was refused. "), el("span", {}, item.refused))); return; }
+    noteBox.hidden = saving;
+    if (proposed) {
+      const confirm = el("button", { type: "button", className: "plain" }, "Confirm all proposed");
+      confirm.addEventListener("click", () => {
+        for (const fd of item.fields) if (proposedField(f, fd)) f.touched.add(fd.name);
+        if (proposedUrl(f)) f.urlTouched = true;
+        f.tags = f.tags.map(t => t.state === "proposed" ? { ...t, state: "new" } : t);
+        fill(); drawNote(); edited(f);
+      });
+      noteBox.replaceChildren(el("span", { className: "grow" }, el("strong", {}, proposer ? `Proposed from ${proposer}. ` : "Proposed from the file name. "),
+        el("span", {}, "Dashed values are proposals; nothing is confirmed until you save.")), confirm);
+    } else {
+      noteBox.replaceChildren(el("span", { className: "grow" }, el("strong", {}, "Nothing to propose. "), el("span", {}, "No scraper or filename rule gave a value for this file.")));
+    }
+  };
+  drawNote();
+  const foot = el("div", { className: "xfoot" });
+  const saveBtn = el("button", { type: "button", className: "primary" }, "Save");
+  saveBtn.addEventListener("click", () => saveCards([f]));
+  f.repaint = () => {
+    const r = readiness(f);
+    saveBtn.disabled = !r.ok; saveBtn.classList.toggle("off", !r.ok);
+    if (r.saving) {
+      foot.replaceChildren(el("span", { className: "st" }, el("span", { className: "xpend" }, "Saving, moves on next tick"), " ", el("span", { className: "xdim" }, "→"), " ", el("span", { className: "dest" }, item.saving.to.to || "")),
+        el("span", { className: "xdim" }, `written to extra_decisions.json ${utcPair(item.saving.decided_at)}`));
+      return;
+    }
+    const st = el("span", { className: "st" + (r.ok ? "" : " need") });
+    if (f.err) { st.className = "st need"; st.textContent = f.err; }
+    else if (r.ok) st.append(...(r.plan.status === "duplicate"
+      ? [el("span", { className: "xdim" }, "Same file already at "), el("span", { className: "dest" }, r.plan.to), el("span", { className: "xdim" }, "; this copy is deleted")]
+      : [el("span", { className: "xdim" }, r.plan.status === "in_place" ? "Already in place at" : "Will move to"), " ", el("span", { className: "dest" }, r.plan.to)]));
+    else st.textContent = r.text;
+    foot.replaceChildren(st, saveBtn);
+  };
+  f.repaint();
+  const badge = item.file_count > 1 ? (() => { const a = el("a", { className: "xlink", href: doctorHref(item.item_id) }, "Doctor"); a.addEventListener("click", e => { e.preventDefault(); openDoctorTab(item.item_id); }); return el("span", { className: "xbadge" }, `${item.file_count} files · `, a); })() : "";
+  const sub = el("div", { className: "xsub" }, el("code", {}, file?.path || "(no file)"), ` · ${fileSize(file?.size)} · ${heightText(file?.height)} · ${clockText(file?.duration_ms)} · found ${agoText(item.found_at)}`);
+  const art = el("article", { className: "xrow" + (saving ? " saving" : "") }, mediaBox(item),
+    el("div", { className: "xmain" }, el("div", { className: "xhead" }, el("span", { className: "fn" }, file ? baseName(file.path) : item.title), badge), sub, noteBox, body, foot));
+  return art;
+}
+
+function queueStats() {
+  const items = extras.queue.items;
+  const forms = items.map(i => extras.forms.get(i.item_id)).filter(Boolean);
+  const complete = forms.filter(f => readiness(f).ok);
+  return { complete, saving: items.filter(i => i.saving).length };
+}
+function paintXBar() {
+  if (!extras.lib || !extras.queue) return;
+  const { complete, saving } = queueStats();
+  const sum = el("span", { className: "sum" }, el("b", {}, fmt(extras.queue.total)), " in queue · ", el("b", {}, fmt(complete.length)), " complete", ...(saving ? [" · ", el("b", {}, fmt(saving)), " saving"] : []));
+  const all = el("button", { type: "button", className: "primary" + (complete.length ? "" : " off"), disabled: !complete.length }, `Save all complete (${complete.length})`);
+  all.addEventListener("click", () => saveCards(complete));
+  xEl("xbar").replaceChildren(xSeg(), el("span", { className: "sp" }), sum, all);
+}
+
+async function saveCards(forms) {
+  if (!forms.length) return;
+  const buttons = xEl("xbody").querySelectorAll("button.primary"), bar = xEl("xbar").querySelectorAll("button.primary");
+  [...buttons, ...bar].forEach(b => { b.disabled = true; });
+  try {
+    await sendJSON("POST", "/api/extras/save", { saves: forms.map(saveBody) });
+    for (const f of forms) extras.forms.delete(f.item.item_id);
+    await loadQueue();
+  } catch (err) {
+    for (const f of forms) { f.err = forms.length === 1 ? err.message : `Not saved: ${err.message}`; f.repaint(); }
+    paintXBar();
+  }
+}
+
+function paintExtrasQueue() {
+  const lib = libOf(extras.lib), q = extras.queue;
+  if (!q) { xEl("xbar").replaceChildren(xSeg()); return; }
+  const head = el("h2", {}, `${lib.name} queue`);
+  const note = el("p", { className: "mnote" }, "Files here are hidden from public reads until saved. Saving writes your answer to ", el("code", {}, "extra_decisions.json"),
+    `; the next tick (within a minute) moves the file to `, el("code", {}, layoutText(lib.template)), " and marks it organized. Plex DB-EX never touches the share.");
+  if (!q.items.length) {
+    xEl("xbody").replaceChildren(head, el("div", { className: "dashempty", style: "max-width:420px" },
+      el("h3", {}, `Nothing waiting in ${lib.name}.`),
+      el("p", {}, `Every file under ${lib.root} is organized.${lib.last_scan ? ` The last scan, ${agoText(lib.last_scan)} at ${utcPair(lib.last_scan)}, found no new files.` : ""} Drop files anywhere under the library root; the next scan queues them here.`),
+      scanButton()));
+    paintXBar();
+    return;
+  }
+  const more = q.total > q.items.length && extras.shown < 500 ? el("div", { className: "more" }, el("span", {}, `Showing ${fmt(q.items.length)} of ${fmt(q.total)} · oldest first`), (() => {
+    const b = el("button", { type: "button", className: "plain" }, `Show ${Math.min(10, q.total - q.items.length)} more`);
+    b.addEventListener("click", () => { extras.shown = Math.min(extras.shown + 10, 500); loadQueue(); });
+    return b;
+  })()) : el("div", { className: "more" }, el("span", {}, `Showing all ${fmt(q.total)} · oldest first`));
+  xEl("xbody").replaceChildren(head, note, ...q.items.map(card), more);
+  paintXBar();
+}
+
 // ---- Doctor tab ----
 // One title's keywords from /api/doctor: a row per merge group (the keyword the group folds into,
 // or the stored keyword when it is in no group), a column per source holding the raw spellings
@@ -2714,9 +3218,17 @@ document.getElementById("clear").addEventListener("click", () => {
 // merge_decisions.json and the next sweep folds it in. "Rename…" POSTs a display name for the
 // group's keyword to /api/names (name_decisions.json); a name is only ever shown, never computed on.
 const doctorCache = new Map();
+// An extra answers /api/extras/item; any other title's keywords come from /api/doctor.
+async function doctorFetch(itemId) {
+  const res = await fetch(`/api/extras/item?item_id=${encodeURIComponent(itemId)}`);
+  if (res.status === 404) return getJSON(`/api/doctor?item_id=${encodeURIComponent(itemId)}`);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || res.statusText);
+  return body;
+}
 function doctorDetail(itemId) {
   if (!doctorCache.has(itemId)) {
-    doctorCache.set(itemId, getJSON(`/api/doctor?item_id=${encodeURIComponent(itemId)}`).catch(err => { doctorCache.delete(itemId); throw err; }));
+    doctorCache.set(itemId, doctorFetch(itemId).catch(err => { doctorCache.delete(itemId); throw err; }));
   }
   return doctorCache.get(itemId);
 }
@@ -2741,6 +3253,80 @@ async function loadDoctor() {
   } catch (err) { if (doctor.itemId === itemId) qEl("dbody").replaceChildren(el("p", { className: "bad" }, `Could not load: ${err.message}`)); }
 }
 
+// An extra in the Doctor tab: its declared fields and its Files list. Delete and Split are
+// decisions in extra_decisions.json (POST /api/extras/file) that the next tick applies; neither is
+// offered on the primary file, and Split only where the Frame index folded the file in.
+const shortSha = s => s ? `${s.slice(0, 12)}…${s.slice(-6)}` : "—";
+async function extraFileDecision(d, file, action) {
+  try {
+    const out = await sendJSON("POST", "/api/extras/file", { action, item_id: d.item_id, path: file.path });
+    doctorCache.delete(d.item_id);
+    doctor.data = await doctorDetail(d.item_id);
+    paintDoctor();
+    dStatus(action === "delete"
+      ? `Delete of ${baseName(file.path)} recorded ${utcPair(out.decided_at)}. The next tick removes the file from the share.`
+      : `Split of ${baseName(file.path)} recorded ${utcPair(out.decided_at)}. The next tick gives it its own extra.`);
+  } catch (err) { dStatus(err.message, true); }
+}
+function extraFileRow(d, file) {
+  const mark = file.primary ? el("span", { className: "xbadge pri" }, "primary") : "";
+  const score = file.primary ? el("span", { className: "xdim" }, "primary")
+    : file.identical ? el("span", {}, el("b", {}, "identical"), " ", el("span", { className: "xdim" }, "same SHA-256"))
+    : file.score !== null ? el("span", {}, el("b", {}, file.score.toFixed(2)), " ", el("span", { className: "xdim" }, "Frame index"))
+    : el("span", { className: "xdim" }, "—");
+  const act = el("td", { className: "act" });
+  if (file.pending) {
+    act.append(el("span", { className: "xpendnote" }, file.pending === "delete" ? "Delete recorded; the next tick removes it" : "Split recorded; the next tick applies it"));
+  } else {
+    if (!file.primary) {
+      const del = el("button", { type: "button", className: "plain danger" }, "Delete");
+      let armed = 0;
+      del.addEventListener("click", () => {
+        if (!armed) {
+          armed = setTimeout(() => { armed = 0; del.textContent = "Delete"; dStatus(""); }, 4000);
+          del.textContent = "Delete it?";
+          dStatus(`Press Delete again to remove ${baseName(file.path)} from the share.`);
+          return;
+        }
+        clearTimeout(armed); armed = 0; extraFileDecision(d, file, "delete");
+      });
+      act.append(del);
+    }
+    if (file.splittable) {
+      const split = el("button", { type: "button", className: "plain" }, "Split");
+      split.addEventListener("click", () => extraFileDecision(d, file, "split"));
+      act.append(split);
+    }
+  }
+  const sha = el("td", { className: "xhash", title: file.sha256 || "no digest yet" }, shortSha(file.sha256));
+  return el("tr", { className: (file.primary ? "primary" : "") + (file.pending ? " xfile-row pending" : "") },
+    el("td", {}, mark), el("td", { className: "xmono" }, file.path + (file.missing ? " (missing)" : "")),
+    el("td", { className: "num", style: "text-align:right;white-space:nowrap" }, fileSize(file.size)),
+    el("td", {}, heightText(file.height)), el("td", {}, clockText(file.duration_ms)), sha,
+    el("td", { className: "xscore" }, score), act);
+}
+function paintExtraDoctor(d) {
+  const facts = el("dl", { className: "xfact" });
+  const row = (k, v) => facts.append(el("dt", {}, k), el("dd", {}, v));
+  for (const fd of d.fields) {
+    const top = fd.values.length ? fd.values.filter(v => v.source === fd.values[0].source).map(v => v.value) : [];
+    row(labelOf(fd.name), top.length ? top.join(", ") : "—");
+  }
+  row("Item id", el("span", { className: "xmono" }, d.item_id));
+  row("State", d.organized ? "organized" : "in the Extras queue");
+  if (d.source_url) row("Source URL", d.source_url);
+  if (d.tags.length) row("Tags", d.tags.join(", "));
+  const head = el("tr", {}, el("th", {}, ""), el("th", {}, "Path"), el("th", { style: "text-align:right" }, "Size"), el("th", {}, "Resolution"), el("th", {}, "Duration"), el("th", {}, "SHA-256"), el("th", {}, "Near-merge score"), el("th", {}, ""));
+  const n = d.files.length;
+  qEl("dbody").replaceChildren(el("div", { className: "xdoc" },
+    el("h3", {}, d.year ? `${d.title} (${d.year})` : d.title, " ", el("span", { className: "badge" }, `Extra · ${d.library}`)),
+    facts,
+    el("h4", {}, "Files ", el("span", { className: "n", style: "font-weight:400" }, `${n} file${n === 1 ? "" : "s"}, one extra`)),
+    el("p", { className: "mnote", style: "margin-top:0" }, "Files that hash the same, or that the Frame index finds near-identical, were folded into this extra automatically. Delete removes the file from the share on the next tick. Split gives a folded-in file its own extra again."),
+    el("div", { id: "dgrid" }, el("table", {}, el("thead", {}, head), el("tbody", {}, ...d.files.map(f => extraFileRow(d, f))))),
+    el("div", { id: "dstatus" })));
+}
+
 function viaText(r) {
   const v = r.via;
   if (!v) return "through other keywords in its group";
@@ -2754,6 +3340,7 @@ function paintDoctor() {
     if (!doctor.itemId) qEl("dbody").replaceChildren(el("p", { className: "empty" }, "Search a title, or open one from a pinned card's \"Sources and remapping\"."));
     return;
   }
+  if (d.files) { paintExtraDoctor(d); return; }
   const sources = d.sources.map(s => s.source);
   const groups = new Map();
   for (const s of d.sources) {
@@ -3861,11 +4448,12 @@ function setTab(tab) {
   qEl("mergewrap").hidden = tab !== "merges";
   qEl("rolewrap").hidden = tab !== "roles";
   qEl("searchwrap").hidden = tab !== "search";
+  qEl("extraswrap").hidden = tab !== "extras";
   qEl("doctorwrap").hidden = tab !== "doctor";
   if (tab === "tags") { document.getElementById("error").hidden = !document.getElementById("error").textContent; setView(state.view); }
   else {
     document.body.classList.remove("shell"); document.getElementById("error").hidden = true; writeHash();
-    if (tab === "lists") initLists(); else if (tab === "query") initQuery(); else if (tab === "merges") initMerges(); else if (tab === "roles") initRoles(); else if (tab === "search") initSearch(); else initDoctor();
+    if (tab === "lists") initLists(); else if (tab === "query") initQuery(); else if (tab === "merges") initMerges(); else if (tab === "roles") initRoles(); else if (tab === "search") initSearch(); else if (tab === "extras") initExtras(); else initDoctor();
   }
 }
 
@@ -4086,10 +4674,28 @@ function pieChart(panel) {
 function tableChart(panel) {
   const { columns, rows } = panel.live;
   const cell = v => v === null || v === undefined ? "" : typeof v === "number" ? fmt(v) : String(v);
-  const body = rows.slice(0, 50).map(r => el("tr", {}, ...r.map(v => el("td", { title: cell(v) }, cell(v)))));
-  const wrap = el("div", { className: "tabwrap" }, el("table", {}, el("thead", {}, el("tr", {}, ...columns.map(c => el("th", {}, c)))), el("tbody", {}, ...body)));
-  if (rows.length <= 50 && !panel.live.truncated) return wrap;
-  return el("div", {}, wrap, el("div", { className: "tilenote" }, `First 50 of ${fmt(rows.length)}${panel.live.truncated ? "+" : ""} rows`));
+  // A table with item_id and title columns links each title to the Doctor tab on that item and
+  // does not show the id.
+  const idAt = columns.indexOf("item_id"), titleAt = columns.indexOf("title");
+  const linked = idAt >= 0 && titleAt >= 0;
+  const shown = columns.map((_, i) => i).filter(i => !(linked && i === idAt));
+  const cellFor = (r, i) => {
+    const text = cell(r[i]);
+    const td = el("td", { title: text, className: typeof r[i] === "number" ? "num" : "" });
+    if (linked && i === titleAt) {
+      const a = el("a", { href: doctorHref(String(r[idAt])), title: "Open in the Doctor tab" }, text);
+      a.addEventListener("click", e => { e.preventDefault(); openDoctorTab(String(r[idAt])); });
+      td.append(a);
+    } else td.append(text);
+    return td;
+  };
+  const body = rows.slice(0, 50).map(r => el("tr", {}, ...shown.map(i => cellFor(r, i))));
+  const wrap = el("div", { className: "tabwrap" }, el("table", {}, el("thead", {}, el("tr", {}, ...shown.map(i => el("th", { className: rows.some(r => typeof r[i] === "number") ? "num" : "" }, columns[i])))), el("tbody", {}, ...body)));
+  const big = rows.length > 50 || panel.live.truncated;
+  const note = (big ? `First 50 of ${fmt(rows.length)}${panel.live.truncated ? "+" : ""} rows` : panel.unit ? `${fmt(rows.length)} ${panel.unit}` : "")
+    + (linked ? `${big || panel.unit ? " · " : ""}a title opens in the Doctor tab` : "");
+  if (!note) return wrap;
+  return el("div", {}, wrap, el("div", { className: "tilenote" }, note));
 }
 
 function heatmapChart(panel) {

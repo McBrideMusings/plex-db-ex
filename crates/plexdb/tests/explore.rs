@@ -734,3 +734,258 @@ fn extras_fields_put_person_values_ahead_of_scraper_and_path_values() {
         (400, Some("ids must be a list of item ids"))
     );
 }
+
+/// A library of real files so the writer's plan can say where a save would move them: one
+/// queued extra holding a path-parsed title, another with nothing, and an organized extra with
+/// a second file that was folded into it.
+fn extras_ui_world(dir: &Path) -> std::path::PathBuf {
+    let root = dir.join("lib");
+    std::fs::create_dir_all(root.join("new")).expect("dirs");
+    for name in ["new/queued.mp4", "new/blank.mp4", "kept.mkv", "copy.mp4"] {
+        std::fs::write(root.join(name), name).expect("file");
+    }
+    let conn = common::store(dir);
+    conn.execute(
+        "INSERT INTO extra_library (name, root, type, template, declared_at) \
+         VALUES ('Clips', ?, 'clip', '{artist}/{title}', '2026-10-01T00:00:00+00:00')",
+        [root.to_str().expect("utf-8")],
+    )
+    .expect("library");
+    conn.execute_batch(
+        "INSERT INTO extra_field VALUES ('Clips', 'artist', 'text', 1), ('Clips', 'title', 'text', 1), \
+         ('Clips', 'year', 'year', 0);",
+    )
+    .expect("fields");
+    let add = |id: &str, organized: i64, file: &str, primary: i64, seen: &str| {
+        let path = root.join(file).to_str().expect("utf-8").to_string();
+        let held: i64 = conn
+            .query_row("SELECT COUNT(*) FROM items WHERE item_id = ?", [id], |r| {
+                r.get(0)
+            })
+            .expect("count");
+        if held == 0 {
+            conn.execute(
+                "INSERT INTO items (item_id, type, title) VALUES (?, 'extra', ?)",
+                (id, id),
+            )
+            .expect("item");
+            conn.execute(
+                "INSERT INTO extra_item (item_id, library, organized, first_seen) VALUES (?, 'Clips', ?, ?)",
+                (id, organized, seen),
+            )
+            .expect("extra");
+        }
+        conn.execute(
+            "INSERT INTO extra_file (path, item_id, primary_file, size, height, duration_ms, first_seen, last_seen) \
+             VALUES (?, ?, ?, 10, 480, 60000, ?, ?)",
+            (path, id, primary, seen, seen),
+        )
+        .expect("file");
+    };
+    add(
+        "fs:queued",
+        0,
+        "new/queued.mp4",
+        1,
+        "2026-10-05T00:00:00+00:00",
+    );
+    add(
+        "fs:blank",
+        0,
+        "new/blank.mp4",
+        1,
+        "2026-10-06T00:00:00+00:00",
+    );
+    add("fs:kept", 1, "kept.mkv", 1, "2026-10-02T00:00:00+00:00");
+    add("fs:kept", 1, "copy.mp4", 0, "2026-10-03T00:00:00+00:00");
+    conn.execute(
+        "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) \
+         VALUES ('fs:queued', 'extra', 'path', 'title', 'Proposed Title', '2026-10-05T00:00:00+00:00')",
+        [],
+    )
+    .expect("proposal");
+    root
+}
+
+#[test]
+fn extras_queue_lists_unsaved_extras_with_proposals_and_what_saving_would_do() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = extras_ui_world(dir.path());
+    let explorer = Explorer::start(dir.path(), None);
+
+    let status = explorer.json("/api/extras/status");
+    let clips = &status["libraries"][0];
+    assert_eq!(
+        (
+            clips["name"].as_str(),
+            clips["organized"].as_i64(),
+            clips["queue"].as_i64(),
+            clips["files"].as_i64()
+        ),
+        (Some("Clips"), Some(1), Some(2), Some(4))
+    );
+    assert_eq!(clips["last_scan"], "2026-10-06T00:00:00+00:00");
+
+    let queue = explorer.json("/api/extras/queue?library=Clips");
+    assert_eq!(queue["total"], 2);
+    let ids: Vec<&str> = queue["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .map(|i| i["item_id"].as_str().expect("id"))
+        .collect();
+    assert_eq!(ids, ["fs:queued", "fs:blank"], "oldest first");
+    let queued = &queue["items"][0];
+    let title = queued["fields"]
+        .as_array()
+        .expect("fields")
+        .iter()
+        .find(|f| f["name"] == "title")
+        .expect("title field");
+    assert_eq!(title["proposed"], json!(["Proposed Title"]));
+    assert_eq!(title["proposed_by"], "path");
+    assert_eq!(
+        queued["plan"],
+        json!({"status": "refused", "why": "required field artist is empty"})
+    );
+    assert_eq!(queued["saving"], Value::Null);
+    assert_eq!(
+        queued["file"]["path"],
+        root.join("new/queued.mp4").to_str().expect("utf-8")
+    );
+    let (status, _, _) = explorer.get("/api/extras/queue?library=Nope");
+    assert_eq!(status, 404);
+}
+
+#[test]
+fn extras_save_records_decisions_only_for_a_complete_card_and_dry_run_records_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    extras_ui_world(dir.path());
+    let explorer = Explorer::start(dir.path(), None);
+    let decisions = dir.path().join("extra_decisions.json");
+
+    let complete =
+        json!({"item_id": "fs:queued", "fields": {"artist": "Daft Punk"}, "tags": ["electronic"]});
+    let (status, reply) = explorer.post_json(
+        "/api/extras/save",
+        &json!({"saves": [complete], "dry_run": true}),
+    );
+    assert_eq!(status, 200, "{reply}");
+    assert_eq!(reply["saved"][0]["plan"]["status"], "move");
+    assert_eq!(
+        reply["saved"][0]["plan"]["to"],
+        "Daft Punk/Proposed Title.mp4"
+    );
+    assert!(!decisions.exists(), "a dry run writes nothing");
+
+    let blank = json!({"item_id": "fs:blank", "fields": {"artist": "Nobody"}});
+    let (status, reply) =
+        explorer.post_json("/api/extras/save", &json!({"saves": [complete, blank]}));
+    assert_eq!(status, 400, "{reply}");
+    assert_eq!(
+        reply["error"],
+        "fs:blank: required field title is empty; nothing was recorded"
+    );
+    assert!(!decisions.exists(), "one refused card records none of them");
+
+    let (status, reply) = explorer.post_json("/api/extras/save", &json!({"saves": [complete]}));
+    assert_eq!(status, 200, "{reply}");
+    let written: Value =
+        serde_json::from_str(&std::fs::read_to_string(&decisions).expect("file")).expect("json");
+    let kinds: Vec<&str> = written
+        .as_array()
+        .expect("list")
+        .iter()
+        .map(|e| e["decision"].as_str().expect("decision"))
+        .collect();
+    assert_eq!(kinds, ["set", "tag", "organize"]);
+
+    let queue = explorer.json("/api/extras/queue?library=Clips");
+    let saving = &queue["items"][0]["saving"];
+    assert_eq!(saving["to"]["to"], "Daft Punk/Proposed Title.mp4");
+
+    let (status, reply) = explorer.post_json(
+        "/api/extras/save",
+        &json!({"saves": [{"item_id": "fs:kept", "fields": {"artist": "X"}}]}),
+    );
+    assert_eq!(
+        (status, reply["error"].as_str()),
+        (400, Some("fs:kept is already organized"))
+    );
+    let (status, reply) = explorer.post_json(
+        "/api/extras/save",
+        &json!({"saves": [{"item_id": "fs:blank", "fields": {"colour": "red"}}]}),
+    );
+    assert_eq!(
+        (status, reply["error"].as_str()),
+        (400, Some("Clips declares no field colour"))
+    );
+}
+
+#[test]
+fn extras_doctor_lists_files_and_delete_and_split_are_refused_on_the_primary() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = extras_ui_world(dir.path());
+    let explorer = Explorer::start(dir.path(), None);
+    let decisions = dir.path().join("extra_decisions.json");
+
+    let item = explorer.json("/api/extras/item?item_id=fs:kept");
+    let files = item["files"].as_array().expect("files");
+    assert_eq!(files.len(), 2);
+    assert_eq!(
+        (files[0]["primary"].as_bool(), files[1]["primary"].as_bool()),
+        (Some(true), Some(false))
+    );
+    assert_eq!(files[0]["splittable"], false);
+    let (status, _, _) = explorer.get("/api/extras/item?item_id=fs:nothing");
+    assert_eq!(status, 404);
+
+    let primary = root.join("kept.mkv");
+    let copy = root.join("copy.mp4");
+    for action in ["delete", "split"] {
+        let (status, reply) = explorer.post_json(
+            "/api/extras/file",
+            &json!({"action": action, "item_id": "fs:kept", "path": primary.to_str().expect("utf-8")}),
+        );
+        assert_eq!(
+            (status, reply["error"].as_str()),
+            (400, Some("the primary file is neither deleted nor split")),
+            "{action}"
+        );
+    }
+    let (status, reply) = explorer.post_json(
+        "/api/extras/file",
+        &json!({"action": "split", "item_id": "fs:kept", "path": copy.to_str().expect("utf-8")}),
+    );
+    assert_eq!(
+        status, 400,
+        "an exact copy was not folded by the Frame index: {reply}"
+    );
+    assert!(!decisions.exists());
+
+    let (status, reply) = explorer.post_json(
+        "/api/extras/file",
+        &json!({"action": "delete", "item_id": "fs:kept", "path": copy.to_str().expect("utf-8")}),
+    );
+    assert_eq!(status, 200, "{reply}");
+    let written: Value =
+        serde_json::from_str(&std::fs::read_to_string(&decisions).expect("file")).expect("json");
+    assert_eq!(written[0]["decision"], "delete");
+    let item = explorer.json("/api/extras/item?item_id=fs:kept");
+    assert_eq!(item["files"][1]["pending"], "delete");
+}
+
+#[test]
+fn extras_scan_touches_the_decisions_file_the_tick_watches() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    extras_ui_world(dir.path());
+    let explorer = Explorer::start(dir.path(), None);
+    let decisions = dir.path().join("extra_decisions.json");
+    assert!(!decisions.exists());
+    let (status, reply) = explorer.post_json("/api/extras/scan", &json!({}));
+    assert_eq!(status, 200, "{reply}");
+    assert_eq!(
+        std::fs::read_to_string(&decisions).expect("created"),
+        "[]\n"
+    );
+}
