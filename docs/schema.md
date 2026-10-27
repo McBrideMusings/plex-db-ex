@@ -1546,19 +1546,14 @@ and is what scrapers match on.
 exact copy or near duplicate folded into it. `sha256` is of the whole file; `height` and
 `duration_ms` describe its video, NULL until known. `missing_since` is the UTC time a walk first
 did not find the file, cleared when it returns. `extra_merge` records each near duplicate folded
-into another item with the Frame-index similarity that folded it (`extras-near`, below). The folded
-item keeps its `items` and `extra_item` rows and its own `extra_file` rows; the row is what hides it. A reader
-lists, queues and answers the items with no `extra_merge` row as `merged_item_id`, and reads an
-item's files as its own plus those of the items folded into it (`kept_item_id`). A Split deletes the row and
-the item is whole again. `extra_moved` is one row per rename an organize made;
+into another item with the Frame-index similarity that folded it (`extras-near`, below): the folded item's files move to the kept item as non-primary files and its `items` and `extra_item` rows are deleted. A Split gives the file its own item back under the same `fs:` id and deletes the row. `extra_moved` is one row per rename an organize made;
 `plexdb extras undo <move_id>` reverses one. `extra_check` holds `check-files`' verdicts with
 `media_check`'s meaning, keyed by path.
 
 **Extras in the Frame index.** `harvest-frames` indexes an extra from its primary `extra_file` row,
 read at `PLEXDB_MEDIA_DIR` plus that path, with `frame_index_state.part_id` NULL. It takes an extra
 still in the queue (`organized = 0`) and never indexed before anything queued, and an organized extra
-never indexed after the Plex titles that were never indexed. An extra whose primary file is missing,
-and one folded into another, is skipped. Plex DB-EX's frame and clip routes name an extra's part
+never indexed after the Plex titles that were never indexed. An extra whose primary file is missing is skipped. Plex DB-EX's frame and clip routes name an extra's part
 `0` and cut from `extra_file`.
 
 **`extras-near`** runs in every `extras-tick`, after the walk. It compares the vectors of each extra
@@ -1567,11 +1562,10 @@ whose `frame_index_state.indexed_at` differs from the one recorded in `enrichmen
 every other indexed extra of its library. Two items are scored only when their last-frame times
 differ by at most 2 s or 5 %, whichever is larger, and their mean vectors have a cosine of at least
 0.9. The score is the lower of the two directions of: the mean, over one item's frames, of the best
-cosine against the other's frames. A score of `PLEXDB_EXTRAS_NEAR` (default 0.97) or more writes
-`extra_merge` with the later item (organized before unorganized, then earlier `first_seen`, then
-`item_id` decide which is kept) as `merged_item_id`, removes the folded item's rows from
-`frames.db` (skipped while a harvester runs, finished at the next tick), and takes it off the
-harvester's list. A Split deletes the `extra_merge` row and writes an `enrichment_cursor` row
+cosine against the other's frames. A score of `PLEXDB_EXTRAS_NEAR` (default 0.97) or more folds
+the later item (organized before unorganized, then earlier `first_seen`, then `item_id` decide
+which is kept) into the other as above, and removes the folded item's rows from `frames.db`
+(skipped while a harvester runs, finished at the next tick). A Split deletes the `extra_merge` row and writes an `enrichment_cursor` row
 with `key` `split`, which stops any later pass from folding that item again; the harvester then
 indexes it again.
 
@@ -1607,13 +1601,42 @@ too, best-effort, after `walk` and before `prune-frames`.
   height, then the largest size, then the lowest path.
   Filename parsers fill `source_url` and proposals, scrapers with `auto = true` run, and a file no
   longer found gets `missing_since`.
-- `fold-extra-decisions` applies `set`, `tag`, `organize`, `delete <path>` (refused for the primary
-  file) and `split <merged_item_id>` from `extra_decisions.json`.
-- `extras-organize` acts on each `organize` decision: it refuses while a required field is empty;
-  the target is root/template(fields) plus the original extension; a target holding the same
-  SHA-256 deletes the duplicate; any other file at the target leaves the extra unorganized and
-  reports it; otherwise it renames the file, writes `extra_moved`, updates `extra_file.path`, keeps
-  the id and sets `organized = 1`. `plexdb extras organize --dry-run` prints the moves.
+- `fold-extra-decisions` applies `extra_decisions.json`, a JSON list of entries with a `decision`, a
+  `decided_at` (ISO 8601) and the text fields the decision names; a newer entry on the same subject
+  replaces the older, and a fold applies the whole file each time without changing a row twice.
+  The whole file is checked first; an entry the declaration refuses is reported and the rest apply.
+  - `set` (`item_id`, `field`, `value`) writes a `person` row in `enrichment` namespace `extra`
+    (`fetched_at` is the decision's `decided_at`, `rank` the position in a list). The field must be
+    declared in `extra_field`, or be `source_url`, which sets `extra_item.source_url`. `int` takes a
+    whole number, `year` four digits, `list` values separated by `;`. An empty value clears the
+    person's rows for the field. Setting `title` also replaces `items.title`.
+  - `tag` (`item_id`, `tag`) adds the tag to the item's `keyword_surfaces` rows with source `person`
+    and rederives its `keywords` rows through the same writer the keyword sources use.
+  - `delete` (`path`) removes the file from the share and its `extra_file` row; it is refused for an
+    item's `primary_file = 1` row, so an item always keeps one file.
+  - `split` (`merged_item_id`) gives the merged item its own `items` and `extra_item` rows back,
+    moves the file whose path hashes to that id (`fs:<fnv1a>` of the canonical path) out of the kept
+    item, and deletes the `extra_merge` row. It is refused when no file of the kept item hashes to
+    the id.
+  - `organize` (`item_id`) is left for `extras-organize`.
+- `extras-organize` acts on each `organize` decision whose item has no `organized_at` or one older
+  than the decision's `decided_at`: it refuses while a required field is empty, or a field the
+  template names has no value (a person's value wins, a list joins with `, `); the target is
+  root/template(fields) plus the original extension, with `/` and control characters in a value
+  replaced by `-`, and a library with no template keeps the file name under the root. Only the
+  primary file moves. A target holding the same SHA-256 deletes the duplicate and the item takes the
+  file that was there; any other file at the target leaves the extra unorganized and reports
+  "target taken"; otherwise it renames the file, writes `extra_moved`, updates `extra_file.path`,
+  keeps the id and sets `organized = 1` and `organized_at`. Emptied folders stay.
+  `plexdb extras organize --dry-run [<item_id>...]` prints the moves for the pending decisions (or
+  the named items) and changes nothing. `plexdb extras undo <move_id>` moves the file back, puts the
+  extra back in the queue with `organized_at` set to the undo time (so the decision that made the
+  move is not applied again) and deletes the `extra_moved` row.
+
+`plexdb extras set <item_id> <field> <value>`, `plexdb extras tag <item_id> <tag>` and
+`plexdb extras organize <item_id>...` check the request against the store read-only and append one
+entry to `extra_decisions.json` (beside the other decisions files); `organize` refuses an item the
+plan refuses. The next tick applies them.
 
 `plexdb extras status` prints, per library: files (not missing), items, in queue, organized,
 missing files, and items with more than one file; the frames indexed and checks failed columns

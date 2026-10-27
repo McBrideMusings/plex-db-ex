@@ -4,10 +4,11 @@
 //! cannot join them. Once both are in the Frame index their frame vectors say they are the
 //! same video. For each extra whose index entry is new since its last comparison, this
 //! compares its vectors with every other indexed extra of its library. A pair at or above
-//! `PLEXDB_EXTRAS_NEAR` becomes one item: the later item gets an `extra_merge` row naming the
-//! earlier, its frames leave `frames.db` and the harvester skips it. Its files and rows stay
-//! where they are, so [`split`] restores it by deleting the `extra_merge` row; the harvester
-//! then indexes it again.
+//! `PLEXDB_EXTRAS_NEAR` becomes one item: the later item's files move to the earlier, its
+//! `items` and `extra_item` rows are deleted, an `extra_merge` row records the fold, and its
+//! frames leave `frames.db`. A Split decision (`extras_decisions`) gives its file its own item
+//! back under the same `fs:` id and writes the `split` cursor row below, so this pass never
+//! folds that item again.
 //!
 //! **Score.** For two items, the mean over one item's frames of the best cosine against the
 //! other's frames, taken both ways, and the lower of the two. A cut-down copy of a video
@@ -38,11 +39,11 @@ pub const THRESHOLD_VAR: &str = "PLEXDB_EXTRAS_NEAR";
 pub const DEFAULT_THRESHOLD: f64 = 0.97;
 
 /// The `enrichment_cursor` triple recording when an extra's index entry was last compared.
-const CURSOR_NAMESPACE: &str = "extras";
-const CURSOR_SOURCE: &str = "near";
+pub const CURSOR_NAMESPACE: &str = "extras";
+pub const CURSOR_SOURCE: &str = "near";
 const COMPARED: &str = "compared";
 /// A person split this item from the items it was folded into: never fold it again.
-const SPLIT: &str = "split";
+pub const SPLIT: &str = "split";
 
 /// Last-frame times further apart than this (milliseconds, or this share of the longer one)
 /// are different videos.
@@ -224,10 +225,8 @@ pub fn prepare(
     };
     let mut candidates: Vec<Candidate> = Vec::new();
     {
-        let mut stmt = store.prepare(
-            "SELECT ei.item_id, ei.library, ei.organized, ei.first_seen FROM extra_item ei \
-             WHERE NOT EXISTS (SELECT 1 FROM extra_merge m WHERE m.merged_item_id = ei.item_id)",
-        )?;
+        let mut stmt =
+            store.prepare("SELECT item_id, library, organized, first_seen FROM extra_item")?;
         let rows = stmt.query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
@@ -332,10 +331,10 @@ fn kept_of(tx: &Connection, item_id: &str) -> Result<Option<String>, StoreError>
         .optional()?)
 }
 
-/// Write what [`prepare`] found: one `extra_merge` row per fold, and a cursor row for each
-/// entry compared. A pair whose items are no longer both extras, or whose later item is
-/// already folded, is dropped; a kept item that was itself folded since resolves to the item
-/// it was folded into.
+/// Write what [`prepare`] found: per fold, an `extra_merge` row and the folded item's files
+/// moved to the kept one, and a cursor row for each entry compared. A pair whose items are no
+/// longer both extras, or whose later item is already folded, is dropped; a kept item that was
+/// itself folded since resolves to the item it was folded into.
 pub fn apply(conn: &mut Connection, prepared: &Prepared, now: &str) -> Result<Stats, StoreError> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let mut stats = Stats::default();
@@ -377,6 +376,18 @@ pub fn apply(conn: &mut Connection, prepared: &Prepared, now: &str) -> Result<St
              VALUES (?1, ?2, ?3, ?4)",
             params![pair.merged, kept, pair.score, now],
         )?;
+        let library: String = tx.query_row(
+            "SELECT library FROM extra_item WHERE item_id = ?1",
+            [&kept],
+            |row| row.get(0),
+        )?;
+        tx.execute(
+            "UPDATE extra_file SET item_id = ?1, primary_file = 0 WHERE item_id = ?2",
+            params![kept, pair.merged],
+        )?;
+        tx.execute("DELETE FROM extra_item WHERE item_id = ?1", [&pair.merged])?;
+        tx.execute("DELETE FROM items WHERE item_id = ?1", [&pair.merged])?;
+        crate::extras_walk::choose_primaries(&tx, &library)?;
         tx.execute(
             "UPDATE extra_merge SET kept_item_id = ?1 WHERE kept_item_id = ?2",
             params![kept, pair.merged],
@@ -402,40 +413,6 @@ pub fn apply(conn: &mut Connection, prepared: &Prepared, now: &str) -> Result<St
     }
     tx.commit()?;
     Ok(stats)
-}
-
-/// Why a split was refused.
-#[derive(Debug)]
-pub enum SplitError {
-    NotMerged(String),
-    Store(StoreError),
-}
-
-impl From<rusqlite::Error> for SplitError {
-    fn from(err: rusqlite::Error) -> Self {
-        SplitError::Store(err.into())
-    }
-}
-
-/// Undo one fold: delete the `extra_merge` row of `merged_item_id` and remember that a person
-/// kept it apart, so no later comparison folds it again. The item returns to the queue and the
-/// HTTP routes; the harvester indexes it again.
-pub fn split(conn: &mut Connection, merged_item_id: &str, now: &str) -> Result<(), SplitError> {
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let removed = tx.execute(
-        "DELETE FROM extra_merge WHERE merged_item_id = ?1",
-        [merged_item_id],
-    )?;
-    if removed == 0 {
-        return Err(SplitError::NotMerged(merged_item_id.to_string()));
-    }
-    tx.execute(
-        "INSERT OR REPLACE INTO enrichment_cursor \
-         (item_id, namespace, source, key, fetched_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![merged_item_id, CURSOR_NAMESPACE, CURSOR_SOURCE, SPLIT, now],
-    )?;
-    tx.commit()?;
-    Ok(())
 }
 
 /// Remove every folded extra's rows from `frames.db`, so a search finds the video once and the

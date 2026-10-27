@@ -20,8 +20,7 @@
 //!
 //! **Extras** (ADR-0030) are indexed from their primary `extra_file` row, read at
 //! `PLEXDB_MEDIA_DIR/<that path>` like any other file, with `frame_index_state.part_id`
-//! NULL: no Plex part exists. An extra the near-duplicate pass folded into another
-//! (`extra_merge`) and one whose primary file is missing are not worked on.
+//! NULL: no Plex part exists. An extra whose primary file is missing is not worked on.
 //!
 //! **Sampling.** The title ends at its last video frame, as the scdet pass decodes
 //! it: a container can carry seconds of audio past the video, and a frame asked
@@ -228,8 +227,7 @@ pub fn extra_parts(store: &Connection) -> Result<Extras, StoreError> {
     let mut statement = store.prepare(
         "SELECT ei.item_id, ei.organized, f.path, COALESCE(f.size, 0) FROM extra_item ei \
          JOIN extra_file f ON f.item_id = ei.item_id AND f.primary_file = 1 \
-         WHERE f.missing_since IS NULL AND NOT EXISTS \
-           (SELECT 1 FROM extra_merge m WHERE m.merged_item_id = ei.item_id) \
+         WHERE f.missing_since IS NULL \
          ORDER BY ei.first_seen, ei.item_id",
     )?;
     let rows = statement.query_map([], |row| {

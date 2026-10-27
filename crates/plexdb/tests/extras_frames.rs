@@ -9,12 +9,13 @@ use std::path::{Path, PathBuf};
 
 use common::{FakePlex, store};
 use plexdb::extras_cmd::status_lines;
-use plexdb::extras_near::{self, SplitError};
-use plexdb::extras_views::{extras_fields, extras_items};
+use plexdb::extras_near;
+use plexdb::extras_views::extras_items;
 use plexdb::frame_encoder::{Embedded, Encoder, EncoderError};
 use plexdb::frame_media::{Cut, Jpegs, MediaError, MediaReader, Scan};
 use plexdb::frames::{FRAME_DIMS, open_frames};
 use plexdb::harvest_frames::{Inputs, Options, harvest};
+use plexdb::identity::{canonical_path, fnv1a_64};
 use plexdb::localtime::Local;
 use plexdb::plex::{Section, TYPE_EPISODE, TYPE_MOVIE};
 use rusqlite::Connection;
@@ -170,19 +171,6 @@ fn extras_are_indexed_without_a_part_and_in_the_order_the_tab_and_plex_set() {
         "/library/mv/g.mkv",
         Some(T1),
     );
-    add_extra(
-        &conn,
-        "fs:folded",
-        0,
-        "2026-10-22T00:00:00+00:00",
-        "/library/mv/f.mkv",
-        None,
-    );
-    conn.execute(
-        "INSERT INTO extra_merge VALUES ('fs:folded', 'fs:organized', 0.99, ?1)",
-        [T1],
-    )
-    .expect("merge");
 
     let mut plex = FakePlex {
         sections: vec![Section {
@@ -227,8 +215,8 @@ fn extras_are_indexed_without_a_part_and_in_the_order_the_tab_and_plex_set() {
     )
     .expect("the harvest runs");
 
-    // The waiting extra first, then the Plex movie, then the organized extra; the missing and
-    // the folded extras are left alone.
+    // The waiting extra first, then the Plex movie, then the organized extra; the extra with a
+    // missing file is left alone.
     assert_eq!(result.titles, ["fs:waiting", "tmdb:1", "fs:organized"]);
     assert_eq!(result.indexed, 3);
     assert_eq!(
@@ -255,7 +243,7 @@ fn extras_are_indexed_without_a_part_and_in_the_order_the_tab_and_plex_set() {
     assert_eq!(
         count(
             &index,
-            "SELECT count(*) FROM frame_index_state WHERE item_id IN ('fs:gone', 'fs:folded')"
+            "SELECT count(*) FROM frame_index_state WHERE item_id IN ('fs:gone')"
         ),
         0
     );
@@ -298,14 +286,28 @@ struct Near {
     conn: Connection,
     frames_path: PathBuf,
     frames: Connection,
+    first: String,
+    copy: String,
+    other: String,
+}
+
+/// The id the walk gives a file at `path`.
+fn id_of(path: &str) -> String {
+    let roots = vec!["/library".to_string()];
+    format!("fs:{:016x}", fnv1a_64(&canonical_path(path, &roots)))
 }
 
 fn near_world() -> Near {
     let dir = tempfile::tempdir().expect("tempdir");
     let conn = store(dir.path());
+    let (first, copy, other) = (
+        id_of("/library/mv/a.mkv"),
+        id_of("/library/mv/a-720.mkv"),
+        id_of("/library/mv/b.mkv"),
+    );
     add_extra(
         &conn,
-        "fs:first",
+        &first,
         1,
         "2026-10-20T00:00:00+00:00",
         "/library/mv/a.mkv",
@@ -313,7 +315,7 @@ fn near_world() -> Near {
     );
     add_extra(
         &conn,
-        "fs:copy",
+        &copy,
         0,
         "2026-10-21T00:00:00+00:00",
         "/library/mv/a-720.mkv",
@@ -321,7 +323,7 @@ fn near_world() -> Near {
     );
     add_extra(
         &conn,
-        "fs:other",
+        &other,
         0,
         "2026-10-22T00:00:00+00:00",
         "/library/mv/b.mkv",
@@ -329,35 +331,17 @@ fn near_world() -> Near {
     );
     let frames_path = dir.path().join("frames/frames.db");
     let frames = open_frames(&frames_path).expect("frames");
-    index_extra(
-        &frames,
-        "fs:first",
-        0,
-        4,
-        60_000,
-        "2026-10-27T01:00:00+00:00",
-    );
-    index_extra(
-        &frames,
-        "fs:copy",
-        0,
-        4,
-        60_300,
-        "2026-10-27T01:01:00+00:00",
-    );
-    index_extra(
-        &frames,
-        "fs:other",
-        300,
-        4,
-        60_000,
-        "2026-10-27T01:02:00+00:00",
-    );
+    index_extra(&frames, &first, 0, 4, 60_000, "2026-10-27T01:00:00+00:00");
+    index_extra(&frames, &copy, 0, 4, 60_300, "2026-10-27T01:01:00+00:00");
+    index_extra(&frames, &other, 300, 4, 60_000, "2026-10-27T01:02:00+00:00");
     Near {
         dir,
         conn,
         frames_path,
         frames,
+        first,
+        copy,
+        other,
     }
 }
 
@@ -372,7 +356,10 @@ fn two_encodes_of_one_video_fold_into_the_earlier_item_and_split_restores_both()
     let mut w = near_world();
     let stats = pass(&mut w, T1);
     assert_eq!(stats.folded, 1);
-    assert_eq!(stats.compared, 3);
+    assert_eq!(
+        stats.compared, 2,
+        "the folded item is gone before its cursor is written"
+    );
     let (merged, kept, score): (String, String, f64) = w
         .conn
         .query_row(
@@ -381,26 +368,51 @@ fn two_encodes_of_one_video_fold_into_the_earlier_item_and_split_restores_both()
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .expect("the one merge");
-    assert_eq!((merged.as_str(), kept.as_str()), ("fs:copy", "fs:first"));
+    assert_eq!(
+        (merged.as_str(), kept.as_str()),
+        (w.copy.as_str(), w.first.as_str())
+    );
     assert!(score >= 0.97, "{score}");
+
+    // The folded item's files joined the kept one and its own rows are gone.
+    assert_eq!(
+        count(
+            &w.conn,
+            &format!(
+                "SELECT count(*) FROM extra_file WHERE item_id = '{}'",
+                w.first
+            )
+        ),
+        2
+    );
+    assert_eq!(
+        count(
+            &w.conn,
+            &format!("SELECT count(*) FROM items WHERE item_id = '{}'", w.copy)
+        ),
+        0
+    );
+    assert_eq!(count(&w.conn, "SELECT count(*) FROM extra_item"), 2);
+    assert_eq!(
+        count(
+            &w.conn,
+            "SELECT count(*) FROM extra_file WHERE primary_file = 1"
+        ),
+        2
+    );
 
     // Folded frames leave the Frame index; the other two items stay.
     let cleaned = extras_near::clean_frames(&w.frames_path, &w.conn).expect("clean");
     assert_eq!(cleaned, Some(1));
-    assert_eq!(
-        count(
-            &w.frames,
-            "SELECT count(*) FROM frame_vec WHERE item_id = 'fs:copy'"
-        ),
-        0
-    );
-    assert_eq!(
-        count(
-            &w.frames,
-            "SELECT count(*) FROM frame_index_state WHERE item_id = 'fs:copy'"
-        ),
-        0
-    );
+    for table in ["frame_vec", "frame_index_state"] {
+        assert_eq!(
+            count(
+                &w.frames,
+                &format!("SELECT count(*) FROM {table} WHERE item_id = '{}'", w.copy)
+            ),
+            0
+        );
+    }
     assert_eq!(count(&w.frames, "SELECT count(*) FROM frame_queue"), 2);
     assert_eq!(
         count(&w.frames, "SELECT count(*) FROM frame_index_state"),
@@ -411,7 +423,7 @@ fn two_encodes_of_one_video_fold_into_the_earlier_item_and_split_restores_both()
     let again = pass(&mut w, T1);
     assert_eq!((again.folded, again.compared), (0, 0));
 
-    // The folded item is not an item of its own to consumers, and its file counts for the kept one.
+    // Consumers see two items, and the kept one has two files.
     w.conn
         .execute("UPDATE extra_item SET organized = 1", [])
         .expect("organize");
@@ -419,14 +431,10 @@ fn two_encodes_of_one_video_fold_into_the_earlier_item_and_split_restores_both()
         .map(|j| plexdb::pyjson::dumps_compact(&j))
         .expect("items");
     assert!(
-        listed.contains("fs:first") && listed.contains("fs:other"),
+        listed.contains(&w.first) && listed.contains(&w.other),
         "{listed}"
     );
-    assert!(!listed.contains("fs:copy"), "{listed}");
-    let fields = extras_fields(&w.conn, &["fs:copy".into()])
-        .map(|j| plexdb::pyjson::dumps_compact(&j))
-        .expect("fields");
-    assert!(!fields.contains("fs:copy"), "{fields}");
+    assert!(!listed.contains(&w.copy), "{listed}");
     assert_eq!(
         status_lines(&w.conn).expect("status"),
         [
@@ -434,35 +442,36 @@ fn two_encodes_of_one_video_fold_into_the_earlier_item_and_split_restores_both()
         ]
     );
 
-    // Split deletes the merge, and the item is whole again.
-    let mut conn = Connection::open(w.dir.path().join("plexdb.db")).expect("open");
-    extras_near::split(&mut conn, "fs:copy", T1).expect("split");
-    assert_eq!(count(&conn, "SELECT count(*) FROM extra_merge"), 0);
-    let listed = extras_items(&conn, None)
-        .map(|j| plexdb::pyjson::dumps_compact(&j))
-        .expect("items");
-    assert!(listed.contains("fs:copy"), "{listed}");
+    // A Split decision gives the file its own item back.
+    let decisions = w.dir.path().join("extra_decisions.json");
+    std::fs::write(
+        &decisions,
+        format!(
+            r#"[{{"decision": "split", "merged_item_id": "{}", "decided_at": "{T1}"}}]"#,
+            w.copy
+        ),
+    )
+    .expect("decisions");
+    let roots = vec!["/library".to_string()];
+    plexdb::extras_decisions::fold(&mut w.conn, &decisions, &roots, T1).expect("fold");
+    assert_eq!(count(&w.conn, "SELECT count(*) FROM extra_merge"), 0);
+    assert_eq!(count(&w.conn, "SELECT count(*) FROM extra_item"), 3);
     assert_eq!(
-        status_lines(&conn).expect("status"),
+        status_lines(&w.conn).expect("status"),
         [
             "Music Videos: files 3, items 3, in queue 0, organized 3, missing 0, more than one file 0"
         ]
     );
-    assert!(matches!(
-        extras_near::split(&mut conn, "fs:copy", T1),
-        Err(SplitError::NotMerged(_))
-    ));
 
     // Indexed again, it is not folded again: a person kept it apart.
     index_extra(
         &w.frames,
-        "fs:copy",
+        &w.copy,
         0,
         4,
         60_300,
         "2026-10-28T01:00:00+00:00",
     );
-    w.conn = conn;
     let after = pass(&mut w, T1);
     assert_eq!((after.folded, after.compared), (0, 1));
 }
@@ -472,8 +481,8 @@ fn a_video_of_another_length_or_other_frames_is_not_folded() {
     let mut w = near_world();
     w.frames
         .execute(
-            "UPDATE frame_index_state SET duration_ms = 90000 WHERE item_id = 'fs:copy'",
-            [],
+            "UPDATE frame_index_state SET duration_ms = 90000 WHERE item_id = ?",
+            [&w.copy],
         )
         .expect("longer");
     let stats = pass(&mut w, T1);
@@ -492,8 +501,8 @@ fn an_item_organized_after_the_comparison_is_never_hidden_behind_an_unorganized_
     assert_eq!(prepared.pairs.len(), 1);
     w.conn
         .execute(
-            "UPDATE extra_item SET organized = 1 WHERE item_id = 'fs:copy'",
-            [],
+            "UPDATE extra_item SET organized = 1 WHERE item_id = ?",
+            [&w.copy],
         )
         .expect("a person organizes the later item");
     let stats = extras_near::apply(&mut w.conn, &prepared, T1).expect("apply");
