@@ -175,6 +175,22 @@ struct Table {
     pending: &'static str,
     /// Every file with its `decode` row's time, never-decoded first: `(key, file)`.
     decode_order: &'static str,
+    /// Only files with a video extension are judged. An extras library lists every file
+    /// under its root, a `.nfo` or `.jpg` beside a video included.
+    video_only: bool,
+}
+
+/// Extensions of the files ffprobe is asked about in a [`Table::video_only`] table.
+const VIDEO_EXTENSIONS: [&str; 17] = [
+    "mkv", "mp4", "m4v", "mov", "avi", "wmv", "flv", "webm", "mpg", "mpeg", "ts", "m2ts", "mts",
+    "vob", "ogv", "3gp", "divx",
+];
+
+fn is_video(file: &str) -> bool {
+    Path::new(file)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| VIDEO_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
 }
 
 const PARTS: Table = Table {
@@ -190,6 +206,7 @@ const PARTS: Table = Table {
     decode_order: "SELECT p.part_id, p.file FROM media_part p LEFT JOIN media_check c \
                    ON c.part_id = p.part_id AND c.kind = 'decode' \
                    ORDER BY c.checked_at IS NOT NULL, c.checked_at, p.part_id",
+    video_only: false,
 };
 
 const EXTRAS: Table = Table {
@@ -202,6 +219,7 @@ const EXTRAS: Table = Table {
     decode_order: "SELECT f.path, f.path FROM extra_file f LEFT JOIN extra_check c \
                    ON c.path = f.path AND c.kind = 'decode' WHERE f.missing_since IS NULL \
                    ORDER BY c.checked_at IS NOT NULL, c.checked_at, f.path",
+    video_only: true,
 };
 
 /// A row key, which is a part id or a path.
@@ -265,7 +283,10 @@ fn check_table(
             Ok((read_key(table, row)?, row.get(1)?, row.get(2)?))
         })?
         .collect::<Result<_, _>>()?;
-    for (key, file, recorded) in pending {
+    for (key, file, recorded) in pending
+        .into_iter()
+        .filter(|(_, file, _)| !table.video_only || is_video(file))
+    {
         if limit.is_some_and(|limit| stats.checked >= limit) {
             break;
         }
@@ -306,7 +327,10 @@ fn decode_batch_of(
         .prepare(table.decode_order)?
         .query_map([], |row| Ok((read_key(table, row)?, row.get(1)?)))?
         .collect::<Result<_, _>>()?;
-    for (key, file) in files {
+    for (key, file) in files
+        .into_iter()
+        .filter(|(_, file)| !table.video_only || is_video(file))
+    {
         if stats.decoded >= batch {
             break;
         }
@@ -416,18 +440,19 @@ pub fn run(args: &[String]) -> Result<(), Failure> {
     (|| {
         let config = FrameConfig::from_env()?;
         let decode_batch = decode_batch_setting()?;
-        let media_dir = config.media_dir.clone().ok_or_else(|| {
-            StoreError::Config(
+        // The parts need the mount; the extras, read where they stand, do not. Without
+        // it the parts are left unjudged, the extras are checked, and the run ends as
+        // a missing setting so the sweep reports it.
+        let unset = if config.media_dir.is_none() {
+            Some(
                 "PLEXDB_MEDIA_DIR is not set, so no video file can be read; mount the library \
-                 read-only and name the directory Plex calls PLEX_SOURCE_ROOTS"
-                    .into(),
+                 read-only and name the directory Plex calls PLEX_SOURCE_ROOTS",
             )
-        })?;
-        if config.source_roots.is_empty() {
-            return Err(StoreError::Config(
-                "PLEX_SOURCE_ROOTS is not set, so Plex's file paths cannot be mapped".into(),
-            ));
-        }
+        } else if config.source_roots.is_empty() {
+            Some("PLEX_SOURCE_ROOTS is not set, so Plex's file paths cannot be mapped")
+        } else {
+            None
+        };
         if !crate::frames_cmd::which(&config.ffprobe) {
             return Err(StoreError::Store(format!(
                 "{} must be installed (or named by PLEXDB_FFPROBE) to check files",
@@ -436,7 +461,16 @@ pub fn run(args: &[String]) -> Result<(), Failure> {
         }
         let media = FfmpegMedia::new(&config.ffmpeg, &config.ffprobe, "cpu", None);
         let roots = config.source_roots.clone();
-        let locate = move |plex_file: &str| local_path(&media_dir, plex_file, &roots);
+        let media_dir = config.media_dir.clone().unwrap_or_default();
+        let locate = move |plex_file: &str| {
+            if unset.is_some() {
+                return Err(MediaError::new(
+                    "the media mount is not configured",
+                    "no mount",
+                ));
+            }
+            local_path(&media_dir, plex_file, &roots)
+        };
         let store = open_store(&Config::from_env()?.store_path)?;
         let limit = limit.map(|n| usize::try_from(n).unwrap_or(0));
         let stats = check_files(
@@ -450,7 +484,10 @@ pub fn run(args: &[String]) -> Result<(), Failure> {
         for line in describe(&stats) {
             println!("{line}");
         }
-        Ok(())
+        match unset {
+            Some(why) => Err(StoreError::Config(why.into())),
+            None => Ok(()),
+        }
     })()
     .map_err(failure)
 }
@@ -758,6 +795,20 @@ mod tests {
             ),
             (0, Some("[mov] moov atom not found".into()))
         );
+    }
+
+    #[test]
+    fn a_sidecar_beside_an_extra_is_not_judged() {
+        let dir = tempfile::tempdir().expect("dir");
+        let conn = store(dir.path());
+        extra(&conn, &touch(dir.path(), "clip.MKV"));
+        extra(&conn, &touch(dir.path(), "clip.nfo"));
+        let media = Fake::new();
+
+        let stats = check_files(&conn, &media, &here, None, 5, NOW).expect("run");
+
+        assert_eq!((stats.extras.checked, stats.extras.decoded), (1, 1));
+        assert_eq!(media.probed.borrow().len(), 1);
     }
 
     #[test]

@@ -1548,13 +1548,15 @@ did not find the file, cleared when it returns. `extra_merge` records each near 
 into another item with the Frame-index similarity that folded it; a Split deletes the row and gives
 the files back their own item. `extra_moved` is one row per rename an organize made;
 `plexdb extras undo <move_id>` reverses one. `extra_check` holds `check-files`' verdicts with
-`media_check`'s meaning, keyed by path. `check-files` judges every `extra_file` whose
+`media_check`'s meaning, keyed by path. `check-files` judges every `extra_file` with a video
+extension (mkv, mp4, m4v, mov, avi, wmv, flv, webm, mpg, mpeg, ts, m2ts, mts, vob, ogv, 3gp, divx) whose
 `missing_since` is NULL the way it judges a part: the path is read as it stands (an extras root sits
 under `PLEX_SOURCE_ROOTS` on this process's own mount, so nothing maps it), a file with no `header`
 row is probed, and `decode` runs over `PLEXDB_DECODE_BATCH` extras, counted apart from the parts'
 batch. `duration_ms`, once something fills it, is held to the same 2%. A moved file keeps its checks
 (`ON UPDATE CASCADE`); `extras-walk` deletes a path's checks when it re-reads the file because its
-size or mtime changed, so the new bytes are judged. A file the run could not judge gets no row.
+size or mtime changed, so the new bytes are judged by the next night's `check-files` (it runs before
+`extras-walk` in a sweep). Extras are checked even where `PLEXDB_MEDIA_DIR` is unset. A file the run could not judge gets no row.
 
 An extra's field values live in `enrichment` under namespace `extra`, keyed by field name, with
 `source` naming who said it: `path` for a filename parser, the scraper's name, or `person`. A
