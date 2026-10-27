@@ -336,10 +336,16 @@ def _sorted_keys(concatenated: str) -> tuple[str, ...]:
 def _fs_identities(conn: sqlite3.Connection, tables: set[str]) -> int:
     """Titles Plex reported no external id for, so their identity is a path hash
     (ADR-0002). A rising count means Plex has stopped matching titles it used
-    to."""
+    to. An extra carries an `fs:` id by design and Plex never lists it, so it is
+    left out."""
     if "items" not in tables:
         return 0
-    row = conn.execute("SELECT count(*) FROM items WHERE item_id LIKE 'fs:%'").fetchone()
+    extras = (
+        " AND item_id NOT IN (SELECT item_id FROM extra_item)" if "extra_item" in tables else ""
+    )
+    row = conn.execute(
+        f"SELECT count(*) FROM items WHERE item_id LIKE 'fs:%'{extras}"  # noqa: S608
+    ).fetchone()
     return int(row[0])
 
 

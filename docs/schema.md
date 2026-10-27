@@ -1542,6 +1542,8 @@ wherever it sits and however it is named. `organized_at` is the UTC time a Save 
 extra the first walk of an empty library marked organized. `source_url` is optional on every extra
 and is what scrapers match on.
 
+An extra has an `fs:` id and no `plex_items`, `plays` or `enrichment` rows. A reader that means the titles Plex lists therefore filters `items.type` to `movie`, `show` or `episode`, or joins `plex_items`, `plays` or `enrichment`; `plexdb check`'s `fs: identities` count and `repair-fs-identities` leave out every `extra_item` row.
+
 `extra_file` is one row per file. An item has exactly one `primary_file = 1` row, plus one per
 exact copy or near duplicate folded into it. `sha256` is of the whole file; `height` and
 `duration_ms` describe its video, NULL until known. `missing_since` is the UTC time a walk first
