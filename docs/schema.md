@@ -1597,6 +1597,46 @@ arrive with the steps that write them. `extras.json` is a JSON list with one obj
 `template` and optional `parsers`. A library that is no longer declared while it holds extras
 refuses the whole file.
 
+## Version 26 — filename parsers
+
+```
+extra_library  parsers TEXT   -- the library's parsers as JSON text, NULL for none
+```
+
+Additive; `reader_shape` stays at 10. `parsers` holds what `fold-extras` validated, as
+`[{"match": <regex>, "set": {<field>: <template>}}]`.
+
+**`source_url`.** Every extra has an optional `extra_item.source_url`: where the file came from.
+Nothing assumes one exists or that it is a particular site. It is NULL until a parser, a scraper
+or a person sets it.
+
+**Parsers.** A library's `parsers` list holds rules. A rule's `match` is a regex (Rust `regex`
+syntax) with named groups, run on the file stem (the name without its last extension). Its `set`
+maps a field name, or `source_url`, to a template whose `{group}` names fill from the match:
+
+```json
+"parsers": [
+  {"match": "^(?P<id>[A-Za-z0-9_-]{11})(\\.f\\d+)?$",
+   "set": {"source_url": "https://www.youtube.com/watch?v={id}"}}
+]
+```
+
+That rule is the Music Videos entry's default. No code names YouTube; it is configuration.
+
+`fold-extras` refuses the whole file, keeping the stored declaration, when `parsers` is not a
+list, a rule has no text `match` or no non-empty `set`, a `match` does not compile, a `set` key is
+neither a field the library declares nor `source_url`, or a template names a `{group}` its
+`match` lacks.
+
+`extras-walk` runs the rules once, when it makes a new item, on that file's stem. Every matching
+rule proposes its values; for a key two rules both set, the one listed first wins; a template
+naming a group that did not take part in the match proposes nothing. `source_url` is written only
+while it is NULL. A field value goes to `enrichment` as namespace `extra`, source `path`, and only
+when the item has no value for that field yet; a `title` also replaces the `items.title` the walk
+made from the stem. A value a person set is never replaced, and a rescan, a move or a changed file
+makes no new item, so it proposes nothing. Parsers and scrapers do not know each other:
+`source_url` is the only link between them.
+
 ## The original language of a title
 
 `enrich-tmdb-language` writes one `enrichment` row per movie and show carrying a `tmdb` external id:

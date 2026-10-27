@@ -14,6 +14,8 @@ use rusqlite::{Connection, TransactionBehavior, params};
 use serde_json::Value;
 use thiserror::Error;
 
+use crate::extras_parsers::{self, Parser};
+
 pub const NAME: &str = "fold-extras";
 pub const EXTRAS_FILE: &str = "extras.json";
 
@@ -54,6 +56,7 @@ pub struct Library {
     pub kind: String,
     pub template: Option<String>,
     pub fields: Vec<Field>,
+    pub parsers: Vec<Parser>,
 }
 
 /// What a fold did.
@@ -210,25 +213,36 @@ pub fn parse(
                 other.name, other.root
             ));
         }
+        let parsers = match entry.get("parsers") {
+            None | Some(Value::Null) => Vec::new(),
+            Some(raw) => {
+                let names: Vec<&str> = fields.iter().map(|field| field.name.as_str()).collect();
+                extras_parsers::parse(raw, &at, &names).map_err(ExtrasError::Refused)?
+            }
+        };
         libraries.push(Library {
             name,
             root,
             kind,
             template,
             fields,
+            parsers,
         });
     }
     Ok(libraries)
 }
 
 fn stored(conn: &Connection, name: &str) -> Result<Option<Library>, ExtrasError> {
-    let mut stmt = conn.prepare("SELECT root, type, template FROM extra_library WHERE name = ?")?;
+    let mut stmt =
+        conn.prepare("SELECT root, type, template, parsers FROM extra_library WHERE name = ?")?;
     let mut rows = stmt.query([name])?;
     let Some(row) = rows.next()? else {
         return Ok(None);
     };
-    let (root, kind, template): (String, String, Option<String>) =
-        (row.get(0)?, row.get(1)?, row.get(2)?);
+    let (root, kind, template, parsers): (String, String, Option<String>, Option<String>) =
+        (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?);
+    let parsers = extras_parsers::from_json(parsers.as_deref())
+        .map_err(|why| ExtrasError::Refused(format!("library {name:?}: {why}")))?;
     let mut stmt = conn
         .prepare("SELECT name, kind, required FROM extra_field WHERE library = ? ORDER BY rowid")?;
     let fields = stmt
@@ -246,6 +260,7 @@ fn stored(conn: &Connection, name: &str) -> Result<Option<Library>, ExtrasError>
         kind,
         template,
         fields,
+        parsers,
     }))
 }
 
@@ -304,15 +319,17 @@ pub fn fold(
         }
         stats.changed += 1;
         tx.execute(
-            "INSERT INTO extra_library (name, root, type, template, declared_at) \
-             VALUES (?, ?, ?, ?, ?) \
+            "INSERT INTO extra_library (name, root, type, template, parsers, declared_at) \
+             VALUES (?, ?, ?, ?, ?, ?) \
              ON CONFLICT (name) DO UPDATE SET root = excluded.root, type = excluded.type, \
-             template = excluded.template, declared_at = excluded.declared_at",
+             template = excluded.template, parsers = excluded.parsers, \
+             declared_at = excluded.declared_at",
             params![
                 library.name,
                 library.root,
                 library.kind,
                 library.template,
+                extras_parsers::to_json(&library.parsers),
                 now
             ],
         )?;

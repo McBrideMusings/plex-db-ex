@@ -24,6 +24,8 @@ libc = "0.2"
 rusqlite = { workspace = true, features = ["hooks", "limits"] }
 # `preserve_order`: a list's JSON keeps the key order `plexdb lists --json` prints it in.
 serde_json = { workspace = true, features = ["preserve_order"] }
+# Extras filename parsers (plex-db-ex-lyp.16): a rule is a regex with named groups.
+regex = "1.11"
 sha2 = "0.10"
 # `frame_vec` is a vec0 virtual table (ADR-0024): the harvester writes it, so the
 # extension loads in this crate too, at the version the workspace pins.
