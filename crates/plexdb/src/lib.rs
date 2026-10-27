@@ -24,6 +24,8 @@ pub mod extras_cmd;
 pub mod extras_decisions;
 pub mod extras_declaration;
 pub mod extras_organize;
+pub mod extras_parsers;
+pub mod extras_views;
 pub mod extras_walk;
 pub mod frame_encoder;
 pub mod frame_media;

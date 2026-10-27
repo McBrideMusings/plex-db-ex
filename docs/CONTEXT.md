@@ -151,7 +151,7 @@ Any process that opens the Snapshot and the Frame index read-only. A Reader writ
 the Store's; its Phrase cache belongs to its caller.
 
 **Consumer**:
-A project that uses the Store — today `etv-station` (via plugin only) and `curator`.
+A project that uses the Store — today `etv-station` (via plugin, and over Plex DB-EX's extras HTTP routes for organized extras) and `curator`.
 
 **Sweep**:
 One scheduled run of the Writer: every Step in order, ending in a published Snapshot. Runs

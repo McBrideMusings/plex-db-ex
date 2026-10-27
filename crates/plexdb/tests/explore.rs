@@ -589,3 +589,148 @@ fn a_role_decision_and_a_list_decision_wait_for_the_sweep() {
         )
     );
 }
+
+fn extras_world(dir: &Path) {
+    let conn = common::store(dir);
+    conn.execute_batch(
+        "INSERT INTO extra_library VALUES ('Music Videos', '/m', 'music-video', NULL, '2026-10-01T00:00:00+00:00');
+         INSERT INTO extra_field VALUES ('Music Videos', 'artist', 'text', 1), ('Music Videos', 'year', 'year', 0);",
+    )
+    .expect("library");
+    let add = |id: &str, organized: i64, seen: &str, missing: Option<&str>| {
+        conn.execute(
+            "INSERT INTO items (item_id, type, title, year) VALUES (?, 'extra', ?, 1999)",
+            (id, format!("T {id}")),
+        )
+        .expect("item");
+        conn.execute(
+            "INSERT INTO extra_item (item_id, library, organized, source_url, first_seen, organized_at) \
+             VALUES (?, 'Music Videos', ?, 'https://example.test/v', ?, ?)",
+            (id, organized, seen, seen),
+        )
+        .expect("extra");
+        conn.execute(
+            "INSERT INTO extra_file (path, item_id, primary_file, duration_ms, first_seen, last_seen, missing_since) \
+             VALUES (?, ?, 1, 180000, ?, ?, ?)",
+            (format!("/m/{id}.mkv"), id, seen, seen, missing),
+        )
+        .expect("file");
+    };
+    add("fs:a", 1, "2026-10-02T00:00:00+00:00", None);
+    add(
+        "fs:b",
+        1,
+        "2026-10-03T00:00:00+00:00",
+        Some("2026-10-04T00:00:00+00:00"),
+    );
+    add("fs:queued", 0, "2026-10-05T00:00:00+00:00", None);
+    for (source, value) in [
+        ("path", "Path Name"),
+        ("scraper", "Scraped"),
+        ("person", "Person"),
+    ] {
+        conn.execute(
+            "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) \
+             VALUES ('fs:a', 'extra', ?, 'artist', ?, '2026-10-02T00:00:00+00:00')",
+            (source, value),
+        )
+        .expect("field");
+    }
+    conn.execute(
+        "INSERT INTO enrichment (item_id, namespace, source, key, value, fetched_at) \
+         VALUES ('fs:a', 'keywords', 'person', 'keyword', 'live', '2026-10-06T00:00:00+00:00')",
+        [],
+    )
+    .expect("tag");
+}
+
+#[test]
+fn extras_items_list_organized_extras_and_since_returns_only_later_changes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    extras_world(dir.path());
+    let explorer = Explorer::start(dir.path(), None);
+
+    let all = explorer.json("/api/extras/items");
+    let ids: Vec<&str> = all["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .map(|item| item["item_id"].as_str().expect("id"))
+        .collect();
+    assert_eq!(ids, ["fs:b", "fs:a"], "queued fs:queued never appears");
+    assert_eq!(all["cursor"], "2026-10-06T00:00:00+00:00");
+    let b = &all["items"][0];
+    assert_eq!(b["missing"], true);
+    assert_eq!(b["path"], "/m/fs:b.mkv");
+    assert_eq!(b["duration_ms"], 180000);
+    assert_eq!(b["year"], 1999);
+    assert_eq!(b["library"], "Music Videos");
+    assert_eq!(b["type"], "music-video");
+    assert_eq!(b["source_url"], "https://example.test/v");
+
+    let later = explorer.json("/api/extras/items?since=2026-10-04T00:00:00%2B00:00");
+    let ids: Vec<&str> = later["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .map(|item| item["item_id"].as_str().expect("id"))
+        .collect();
+    assert_eq!(ids, ["fs:a"], "fs:b changed at the cursor, not after it");
+    let none = explorer.json("/api/extras/items?since=2026-10-06T00:00:00%2B00:00");
+    assert_eq!(none["items"], json!([]));
+    assert_eq!(none["cursor"], "2026-10-06T00:00:00+00:00");
+    // A stamp in another offset is ordered by instant: 10:00-04:00 is 14:00Z, after 12:00Z.
+    let conn = rusqlite::Connection::open(dir.path().join("plexdb.db")).expect("open");
+    conn.execute(
+        "UPDATE extra_item SET organized_at = '2026-10-07T10:00:00-04:00' WHERE item_id = 'fs:b'",
+        [],
+    )
+    .expect("restamp");
+    let mixed = explorer.json("/api/extras/items?since=2026-10-07T12%3A00%3A00%2B00%3A00");
+    assert_eq!(mixed["items"][0]["item_id"], "fs:b");
+    assert_eq!(mixed["cursor"], "2026-10-07T10:00:00-04:00");
+    let (status, _, _) = explorer.get("/api/extras/items?since=yesterday");
+    assert_eq!(status, 400);
+}
+
+#[test]
+fn extras_fields_put_person_values_ahead_of_scraper_and_path_values() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    extras_world(dir.path());
+    let explorer = Explorer::start(dir.path(), None);
+
+    let (status, reply) = explorer.post_json(
+        "/api/extras/fields",
+        &json!({"ids": ["fs:a", "fs:a", "fs:queued", "fs:nope"]}),
+    );
+    assert_eq!(status, 200, "{reply}");
+    let items = reply["items"].as_object().expect("items");
+    assert_eq!(items.keys().collect::<Vec<_>>(), ["fs:a"]);
+    let fields = items["fs:a"]["fields"].as_array().expect("fields");
+    assert_eq!(fields.len(), 2, "both declared fields, valued or not");
+    let artist = fields
+        .iter()
+        .find(|f| f["name"] == "artist")
+        .expect("artist");
+    let sources: Vec<&str> = artist["values"]
+        .as_array()
+        .expect("values")
+        .iter()
+        .map(|v| v["source"].as_str().expect("source"))
+        .collect();
+    assert_eq!(sources, ["person", "scraper", "path"]);
+    assert_eq!(artist["values"][0]["value"], "Person");
+    assert_eq!(artist["required"], true);
+    let year = fields.iter().find(|f| f["name"] == "year").expect("year");
+    assert_eq!(year["values"], json!([]));
+    assert_eq!(
+        items["fs:a"]["tags"],
+        json!([{"value": "live", "source": "person"}])
+    );
+
+    let (status, reply) = explorer.post_json("/api/extras/fields", &json!({"ids": "fs:a"}));
+    assert_eq!(
+        (status, reply["error"].as_str()),
+        (400, Some("ids must be a list of item ids"))
+    );
+}
