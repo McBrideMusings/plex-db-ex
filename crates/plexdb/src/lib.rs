@@ -22,11 +22,8 @@ pub mod explore;
 pub mod explore_views;
 pub mod extras_cmd;
 pub mod extras_declaration;
-<<<<<<< HEAD
 pub mod extras_parsers;
-=======
 pub mod extras_views;
->>>>>>> 447217867990fe40bba32abc6a55ea99787543a6
 pub mod extras_walk;
 pub mod frame_encoder;
 pub mod frame_media;
