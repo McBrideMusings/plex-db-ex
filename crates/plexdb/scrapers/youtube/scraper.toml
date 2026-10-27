@@ -1,0 +1,5 @@
+# Proposes a title, artist and featured artists for a YouTube link from YouTube's oEmbed
+# endpoint. It fetches text only, never the video. Edit it, or delete this folder.
+match = ['^https?://(www\.|m\.|music\.)?youtube\.com/watch\?', '^https?://youtu\.be/']
+run = "youtube.py"
+auto = true

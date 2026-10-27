@@ -153,6 +153,8 @@ struct App {
     store: PathBuf,
     /// Where `name_decisions.json` sits.
     names: PathBuf,
+    /// The `scrapers/` folder beside `extras.json`.
+    scrapers: PathBuf,
     merges: Book,
     roles: Book,
     name_decisions: Book,
@@ -817,6 +819,14 @@ async fn extras_items_get(State(app): State<Shared>, RawQuery(raw): RawQuery) ->
     .await
 }
 
+async fn extras_scrapers_get(State(app): State<Shared>) -> Response {
+    blocking(move || {
+        let conn = app.open()?;
+        Ok(crate::extras_scrapers::listing(&conn, &app.scrapers)?)
+    })
+    .await
+}
+
 async fn extras_fields_post(State(app): State<Shared>, request: Request) -> Response {
     decide(request, move |body| {
         let invalid = || ExploreError::Invalid("ids must be a list of item ids".into());
@@ -968,6 +978,10 @@ fn router(app: Shared) -> Router {
         )
         .route("/api/extras/items", get(extras_items_get).fallback(forward))
         .route(
+            "/api/extras/scrapers",
+            get(extras_scrapers_get).fallback(forward),
+        )
+        .route(
             "/api/extras/fields",
             post(extras_fields_post).fallback(forward),
         )
@@ -1042,6 +1056,7 @@ pub fn run(args: &[String]) -> Result<(), Failure> {
     let app = Arc::new(App {
         store: store.clone(),
         names: name_book(&dir).path().to_path_buf(),
+        scrapers: dir.join(crate::extras_scrapers::DIR),
         merges: merge_book(&dir),
         roles: role_book(&dir),
         name_decisions: name_book(&dir),

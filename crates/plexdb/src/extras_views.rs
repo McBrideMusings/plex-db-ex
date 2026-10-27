@@ -144,6 +144,26 @@ fn values(
     ))
 }
 
+/// The last run of each scraper on the item: when, whether it worked, and why not.
+fn scrapes(conn: &Connection, item_id: &str) -> Result<Json, ExploreError> {
+    let mut statement = conn.prepare_cached(
+        "SELECT scraper, ran_at, ok, attempts, error FROM extra_scrape \
+         WHERE item_id = ? ORDER BY scraper",
+    )?;
+    let rows = statement
+        .query_map([item_id], |row| {
+            Ok(Json::object([
+                ("scraper", Json::Str(row.get(0)?)),
+                ("ran_at", Json::Str(row.get(1)?)),
+                ("ok", Json::Bool(row.get::<_, i64>(2)? == 1)),
+                ("attempts", Json::Int(row.get(3)?)),
+                ("error", Json::opt_str(row.get(4)?)),
+            ]))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Json::Array(rows))
+}
+
 /// Each organized id's declared fields and tags, values ordered person, scraper, path. An id
 /// that is not an organized extra is left out of `items`.
 pub fn extras_fields(conn: &Connection, ids: &[String]) -> Result<Json, ExploreError> {
@@ -186,6 +206,7 @@ pub fn extras_fields(conn: &Connection, ids: &[String]) -> Result<Json, ExploreE
             id.clone(),
             Json::object([
                 ("library", Json::Str(library)),
+                ("scrapes", scrapes(conn, id)?),
                 ("fields", Json::Array(fields)),
                 ("tags", values(conn, id, "keywords", "keyword")?),
             ]),

@@ -10,6 +10,7 @@ use crate::decisions::FoldError;
 use crate::extras_decisions::{self as decisions, Decision, Entry, SOURCE_URL};
 use crate::extras_declaration::{self as declaration, EXTRAS_FILE, ExtrasError};
 use crate::extras_organize;
+use crate::extras_scrapers;
 use crate::extras_walk;
 use crate::sources::Sources;
 use crate::staleness::Now;
@@ -19,6 +20,8 @@ pub const DECISIONS: &str = decisions::NAME;
 pub const ORGANIZE: &str = extras_organize::NAME;
 pub const TICK: &str = "extras-tick";
 pub const COMMAND: &str = "extras";
+/// Most scraper runs one tick makes.
+const MAX_RUNS_PER_TICK: usize = 50;
 
 const NEEDS_ROOTS: &str = "PLEX_SOURCE_ROOTS must be set in .env to fold or walk extras \
      libraries: every library root must sit under one, and an extra's item_id hashes its path \
@@ -161,8 +164,103 @@ pub fn run_tick(args: &[String]) -> Result<(), Failure> {
         println!("{line}");
     }
     let decided = fold_decisions(&mut store.conn, &config, roots);
+    drop(store);
+    let scraped = scrape(&config);
     folded.map_err(extras_failure)?;
-    decided.map_err(fold_failure)
+    decided.map_err(fold_failure)?;
+    scraped
+}
+
+/// Run the scrapers that are owed: seed the shipped one into a missing `scrapers/` folder,
+/// work out the runs, make them with no lock held, then take the writer lock to store the
+/// results. A busy writer drops the results; the runs are owed again next tick, because no
+/// row recorded them.
+fn scrape(config: &Config) -> Result<(), Failure> {
+    let dir = config.decisions_file(extras_scrapers::DIR);
+    match extras_scrapers::seed(&dir) {
+        Ok(true) => println!(
+            "extras scrapers: shipped the youtube scraper into {}",
+            dir.display()
+        ),
+        Ok(false) => {}
+        Err(err) => eprintln!("extras scrapers: cannot seed {}: {err}", dir.display()),
+    }
+    let (scrapers, broken) = extras_scrapers::discover(&dir);
+    for folder in &broken {
+        eprintln!(
+            "extras scrapers: {} cannot run: {}",
+            folder.name, folder.why
+        );
+    }
+    let entries = decisions::load(&config.decisions_file(decisions::FILE))
+        .map_err(|err| Failure::Failed(err.0))?
+        .unwrap_or_default();
+    let jobs = {
+        let conn = open_readonly(&config.store_path).map_err(failure)?;
+        extras_scrapers::due(&conn, &scrapers, &entries)
+            .map_err(|err| failure(StoreError::from(err)))?
+    };
+    if jobs.is_empty() {
+        return Ok(());
+    }
+    // Results are stored after the batch, so a bound keeps one tick short; the rest are
+    // still owed and run on the next.
+    let jobs = &jobs[..jobs.len().min(MAX_RUNS_PER_TICK)];
+    let done = extras_scrapers::execute(&scrapers, jobs);
+    let Some(mut store) = open_store_exclusive(&config.store_path).map_err(failure)? else {
+        return Err(Failure::Busy(
+            "a writer has the store open; the scraper results are dropped and run again".into(),
+        ));
+    };
+    let stats = extras_scrapers::apply(&mut store.conn, &done, &Now::read().iso())
+        .map_err(|err| failure(StoreError::from(err)))?;
+    for line in extras_scrapers::describe(&stats, done.len()) {
+        println!("{line}");
+    }
+    Ok(())
+}
+
+/// `extras scrapers`: each scraper with its regexes, auto setting and last result.
+fn run_scrapers(config: &Config) -> Result<(), Failure> {
+    let conn = open_readonly(&config.store_path).map_err(failure)?;
+    let dir = config.decisions_file(extras_scrapers::DIR);
+    let listing =
+        extras_scrapers::listing(&conn, &dir).map_err(|err| failure(StoreError::from(err)))?;
+    println!("{}", crate::pyjson::dumps_indent2(&listing));
+    Ok(())
+}
+
+fn run_fetch(config: &Config, item_id: &str) -> Result<(), Failure> {
+    let conn = open_readonly(&config.store_path).map_err(failure)?;
+    require_item(&conn, item_id)?;
+    let url: Option<String> = conn
+        .query_row(
+            "SELECT source_url FROM extra_item WHERE item_id = ?",
+            [item_id],
+            |row| row.get(0),
+        )
+        .map_err(|err| failure(StoreError::from(err)))?;
+    if url.is_none() {
+        return Err(Failure::Failed(format!(
+            "{item_id} has no source_url to scrape"
+        )));
+    }
+    let (scrapers, _) = extras_scrapers::discover(&config.decisions_file(extras_scrapers::DIR));
+    if !scrapers
+        .iter()
+        .any(|scraper| scraper.handles(url.as_deref().unwrap_or("")))
+    {
+        return Err(Failure::Failed(format!(
+            "no scraper matches {}",
+            url.unwrap_or_default()
+        )));
+    }
+    record(
+        config,
+        Decision::Fetch {
+            item_id: item_id.into(),
+        },
+    )
 }
 
 /// One line per library: files, items, in queue, organized, missing, more than one file.
@@ -205,7 +303,7 @@ pub fn status_lines(conn: &Connection) -> Result<Vec<String>, StoreError> {
 fn usage() -> Failure {
     Failure::Usage(
         "extras takes status, set <item_id> <field> <value>, tag <item_id> <tag>, \
-         organize [--dry-run] [<item_id>...] or undo <move_id>"
+         organize [--dry-run] [<item_id>...], fetch <item_id>, scrapers or undo <move_id>"
             .into(),
     )
 }
@@ -350,6 +448,8 @@ pub fn run(args: &[String]) -> Result<(), Failure> {
         [sub, item_id, tag] if sub == "tag" => run_tag(&config()?, item_id, tag),
         [sub, rest @ ..] if sub == "organize" => run_organize_decision(&config()?, rest),
         [sub, id] if sub == "undo" => run_undo(&config()?, id),
+        [sub, item_id] if sub == "fetch" => run_fetch(&config()?, item_id),
+        [sub] if sub == "scrapers" => run_scrapers(&config()?),
         _ => Err(usage()),
     }
 }

@@ -28,7 +28,7 @@ UMAP in Python, so that comparison leaves out positions and region labels. The p
 
 ## Extras routes
 
-Two routes serve organized extras to consumers ([ADR-0030](./adr/0030-an-extras-library-is-a-declared-folder-the-writer-walks-and-a-person-organizes),
+Three routes serve extras to consumers and the settings page ([ADR-0030](./adr/0030-an-extras-library-is-a-declared-folder-the-writer-walks-and-a-person-organizes),
 `crates/plexdb/src/extras_views.rs`). An extra with `organized = 0` never appears in either.
 
 - `GET /api/extras/items[?since=<cursor>]` lists organized extras, oldest change first:
@@ -45,7 +45,11 @@ Two routes serve organized extras to consumers ([ADR-0030](./adr/0030-an-extras-
   returns `items`, keyed by id, each with its `library`, its declared `fields` (`name`, `kind`,
   `required`, `values`) and its `tags`. Every list of values is ordered person first, then each
   scraper by name, then `path`, each as `{value, source}`. An id that is not an organized extra is
-  omitted.
+  omitted. Each item also carries `scrapes`: the last run of each scraper on it (`scraper`,
+  `ran_at`, `ok`, `attempts`, `error`).
+- `GET /api/extras/scrapers` lists each scraper in the `scrapers/` folder beside `extras.json`:
+  `name`, `match` (its regexes), `run`, `auto`, `executable`, `runs_ok`, `runs_failed`, `last`
+  (`ran_at`, `item_id`, `ok`, `error`, or null) and `problem` (why a folder cannot run, else null).
 
 ## Related tags
 
