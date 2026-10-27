@@ -932,6 +932,9 @@ mod tests {
                  CREATE TABLE media_part (part_id INTEGER, item_id TEXT, file TEXT);
                  CREATE TABLE media_stream (part_id INTEGER, kind TEXT, lang TEXT);
                  CREATE TABLE media_check (part_id INTEGER, kind TEXT, ok INTEGER,
+                                           error TEXT, checked_at TEXT);
+                 CREATE TABLE extra_file (path TEXT, item_id TEXT);
+                 CREATE TABLE extra_check (path TEXT, kind TEXT, ok INTEGER,
                                            error TEXT, checked_at TEXT);",
             )
             .expect("schema");
