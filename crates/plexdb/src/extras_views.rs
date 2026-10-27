@@ -15,10 +15,16 @@ pub const MAX_IDS: usize = 1000;
 /// organizing, its primary file going missing, each file joining it, and each field or tag
 /// value written for it. The writer stamps in the local offset and other writers in UTC, so the
 /// latest is picked by instant in [`changed_at`], never by text.
+/// An extra folded into another by the near-duplicate pass is that item's second file: it is
+/// never listed or answered as an item of its own.
+const LIVE: &str = "NOT EXISTS (SELECT 1 FROM extra_merge m WHERE m.merged_item_id = ei.item_id)";
+
 const MOMENTS: &str = "ei.first_seen || '|' || COALESCE(ei.organized_at, '') || '|' || \
     COALESCE(pf.missing_since, '') || '|' || \
     COALESCE((SELECT group_concat(first_seen, '|') FROM extra_file f \
               WHERE f.item_id = ei.item_id), '') || '|' || \
+    COALESCE((SELECT group_concat(merged_at, '|') FROM extra_merge m \
+              WHERE m.kept_item_id = ei.item_id), '') || '|' || \
     COALESCE((SELECT group_concat(fetched_at, '|') FROM enrichment e \
               WHERE e.item_id = ei.item_id AND e.namespace IN ('extra', 'keywords')), '')";
 
@@ -50,7 +56,7 @@ pub fn extras_items(conn: &Connection, since: Option<&str>) -> Result<Json, Expl
          JOIN items i ON i.item_id = ei.item_id \
          JOIN extra_library l ON l.name = ei.library \
          LEFT JOIN extra_file pf ON pf.item_id = ei.item_id AND pf.primary_file = 1 \
-         WHERE ei.organized = 1"
+         WHERE ei.organized = 1 AND {LIVE}"
     );
     let mut found: Vec<(i64, String, Json)> = Vec::new();
     let mut statement = conn.prepare(&sql)?;
@@ -155,7 +161,8 @@ pub fn extras_fields(conn: &Connection, ids: &[String]) -> Result<Json, ExploreE
         }
         let library: Option<String> = conn
             .query_row(
-                "SELECT library FROM extra_item WHERE item_id = ? AND organized = 1",
+                "SELECT library FROM extra_item ei WHERE item_id = ? AND organized = 1 AND NOT EXISTS \
+                 (SELECT 1 FROM extra_merge m WHERE m.merged_item_id = ei.item_id)",
                 [id],
                 |row| row.get(0),
             )

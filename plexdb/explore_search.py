@@ -70,6 +70,9 @@ LIGHTBOX_HEIGHT = 540
 CLIP_WIDTH = 640
 #: The longest window a clip may cut: a Shot is seconds, never minutes.
 MAX_CLIP_MS = 120_000
+
+#: The `part` in the URL of an extra's frame or clip: no Plex part exists, and Plex's start at 1.
+EXTRA_PART = 0
 #: Seconds a failed tokenizer load is remembered before the next attempt.
 RETRY_SECONDS = 30.0
 FORMULA = "score = phrase similarity − weight × strongest negative similarity"
@@ -598,7 +601,8 @@ class SearchTab:
         return out
 
     def _parts(self, ids: list[str]) -> dict[str, int]:
-        """The Plex part each title was indexed from; a title outside the Frame index is absent."""
+        """The Plex part each title was indexed from; a title outside the Frame index is absent.
+        An extra has no Plex part and reads as `EXTRA_PART`."""
         out: dict[str, int] = {}
         try:
             conn = self._frames_conn()
@@ -610,10 +614,10 @@ class SearchTab:
                 marks = ",".join("?" * len(chunk))
                 for r in conn.execute(
                     f"SELECT item_id, part_id FROM frame_index_state "
-                    f"WHERE item_id IN ({marks}) AND part_id IS NOT NULL",
+                    f"WHERE item_id IN ({marks}) AND model IS NOT NULL",
                     chunk,
                 ):
-                    out[r[0]] = int(r[1])
+                    out[r[0]] = EXTRA_PART if r[1] is None else int(r[1])
         return out
 
     def _indexed(self) -> list[str]:
@@ -891,11 +895,12 @@ class SearchTab:
                 ).fetchone()
         except SearchUnavailable as err:
             raise NoFrame(str(err)) from None
-        if row is None or row[0] is None:
+        if row is None:
             raise NoFrame(f"{item_id} is not in the Frame index")
-        if int(row[0]) != asked:
+        part = EXTRA_PART if row[0] is None else int(row[0])
+        if part != asked:
             raise NoFrame(f"{item_id} was re-indexed from another file; search again")
-        return int(row[0]), None if row[1] is None else int(row[1])
+        return part, None if row[1] is None else int(row[1])
 
     def _media(self) -> FfmpegMedia:
         if self._media_factory is not None:
@@ -915,6 +920,11 @@ class SearchTab:
         problem = self._media_problem()
         if problem:
             raise SearchUnavailable(problem)
+        if part == EXTRA_PART:
+            path = locator(self._config)(self._extra_path(item_id))
+            with self._file_lock:
+                self._file_cache[(item_id, part)] = path
+            return path
         with open_readonly(self._store) as conn:
             keys = [
                 str(r[0])
@@ -934,6 +944,18 @@ class SearchTab:
         with self._file_lock:
             self._file_cache[(item_id, part)] = path
         return path
+
+    def _extra_path(self, item_id: str) -> str:
+        """Where the store says an extra's primary file is: Plex knows nothing of it."""
+        with open_readonly(self._store) as conn:
+            row = conn.execute(
+                "SELECT path FROM extra_file WHERE item_id = ? AND primary_file = 1 "
+                "AND missing_since IS NULL",
+                (item_id,),
+            ).fetchone()
+        if row is None:
+            raise NoFrame(f"{item_id} has no file on disk")
+        return str(row[0])
 
     def _cut(self, item_id: str, part: int, make: Callable[[], bytes]) -> Callable[[], bytes]:
         def run() -> bytes:

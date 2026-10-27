@@ -271,6 +271,7 @@ enrichment_cursor(
 | `ratings` | `mdblist` | `fetched` | `enrich-mdblist-ratings`, one per title in a batch that answered, written even when MDBList left the title out of its answer or had no non-null rating |
 | `ratings` | `mdblist` | `attempted` | `enrich-mdblist-ratings`, for every title in a batch whose request failed: scheduling only, never freshness, ordered and cleared the same way as Letterboxd's |
 | `tmdb_edges` | `tmdb` | `fetched_recommendations`, `fetched_similar` | `enrich-tmdb-edges`, one per title per edge type |
+| `extras` | `near` | `compared`, `split` | `extras-near`: `compared` is one per indexed extra, its `fetched_at` the `frame_index_state.indexed_at` it was compared at; `split` is written by a Split and means never fold this extra again |
 
 **`source` joined this table's primary key in the same schema v10 that added it to `enrichment`**
 ([ADR-0016](./adr/0016-keywords-are-one-source-agnostic-namespace-with-a-source-column)): a
@@ -1545,10 +1546,34 @@ and is what scrapers match on.
 exact copy or near duplicate folded into it. `sha256` is of the whole file; `height` and
 `duration_ms` describe its video, NULL until known. `missing_since` is the UTC time a walk first
 did not find the file, cleared when it returns. `extra_merge` records each near duplicate folded
-into another item with the Frame-index similarity that folded it; a Split deletes the row and gives
-the files back their own item. `extra_moved` is one row per rename an organize made;
+into another item with the Frame-index similarity that folded it (`extras-near`, below). The folded
+item keeps its `items` and `extra_item` rows and its own `extra_file` rows; the row is what hides it. A reader
+lists, queues and answers the items with no `extra_merge` row as `merged_item_id`, and reads an
+item's files as its own plus those of the items folded into it (`kept_item_id`). A Split deletes the row and
+the item is whole again. `extra_moved` is one row per rename an organize made;
 `plexdb extras undo <move_id>` reverses one. `extra_check` holds `check-files`' verdicts with
 `media_check`'s meaning, keyed by path.
+
+**Extras in the Frame index.** `harvest-frames` indexes an extra from its primary `extra_file` row,
+read at `PLEXDB_MEDIA_DIR` plus that path, with `frame_index_state.part_id` NULL. It takes an extra
+still in the queue (`organized = 0`) and never indexed before anything queued, and an organized extra
+never indexed after the Plex titles that were never indexed. An extra whose primary file is missing,
+and one folded into another, is skipped. Plex DB-EX's frame and clip routes name an extra's part
+`0` and cut from `extra_file`.
+
+**`extras-near`** runs in every `extras-tick`, after the walk. It compares the vectors of each extra
+whose `frame_index_state.indexed_at` differs from the one recorded in `enrichment_cursor`
+(`namespace` `extras`, `source` `near`, `key` `compared`, `fetched_at` = that `indexed_at`) with
+every other indexed extra of its library. Two items are scored only when their last-frame times
+differ by at most 2 s or 5 %, whichever is larger, and their mean vectors have a cosine of at least
+0.9. The score is the lower of the two directions of: the mean, over one item's frames, of the best
+cosine against the other's frames. A score of `PLEXDB_EXTRAS_NEAR` (default 0.97) or more writes
+`extra_merge` with the later item (organized before unorganized, then earlier `first_seen`, then
+`item_id` decide which is kept) as `merged_item_id`, removes the folded item's rows from
+`frames.db` (skipped while a harvester runs, finished at the next tick), and takes it off the
+harvester's list. A Split deletes the `extra_merge` row and writes an `enrichment_cursor` row
+with `key` `split`, which stops any later pass from folding that item again; the harvester then
+indexes it again.
 
 An extra's field values live in `enrichment` under namespace `extra`, keyed by field name, with
 `source` naming who said it: `path` for a filename parser, the scraper's name, or `person`. A
@@ -1655,7 +1680,7 @@ another width is a migration.
 ```sql
 CREATE TABLE frame_index_state (
     item_id       TEXT PRIMARY KEY,
-    part_id       INTEGER,     -- the Plex media part read
+    part_id       INTEGER,     -- the Plex media part read; NULL for an extra (no Plex part)
     model         TEXT,        -- the encoder model that produced frame_vec
     model_version TEXT,
     dims          INTEGER,     -- vector width
