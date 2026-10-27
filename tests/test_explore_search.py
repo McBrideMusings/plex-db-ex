@@ -28,6 +28,7 @@ from plexdb.explore import make_server
 from plexdb.explore_search import (
     TOKEN_LIMIT,
     MediaCache,
+    NoFrame,
     PhraseTokenizer,
     SearchTab,
 )
@@ -872,3 +873,46 @@ def test_the_frame_index_bar_asks_plex_for_names_once_inside_the_cache_window(
     tab.frames_health()
     tab.frames_health()
     assert len(asked) == 1
+
+
+def test_an_extra_has_no_plex_part_so_its_frames_are_cut_from_its_own_file(
+    served: dict[str, Any],
+) -> None:
+    with open_store(served["store"]) as conn:
+        conn.execute("INSERT INTO items (item_id, type, title) VALUES ('fs:x', 'extra', 'Clip')")
+        conn.execute(
+            "INSERT INTO extra_library (name, root, type, declared_at) "
+            "VALUES ('Music Videos', '/media/mv', 'music-video', ?)",
+            (NOW,),
+        )
+        conn.execute(
+            "INSERT INTO extra_item (item_id, library, organized, first_seen) "
+            "VALUES ('fs:x', 'Music Videos', 1, ?)",
+            (NOW,),
+        )
+        conn.execute(
+            "INSERT INTO extra_file (path, item_id, primary_file, first_seen, last_seen) "
+            "VALUES ('/media/mv/clip.mkv', 'fs:x', 1, ?, ?)",
+            (NOW, NOW),
+        )
+        conn.commit()
+    with open_frames(served["frames"]) as frames:
+        frames.execute(
+            "INSERT INTO frame_index_state (item_id, part_id, model, model_version, dims, "
+            "quant, indexed_at) VALUES ('fs:x', NULL, ?, 'v1', 768, 'int8', ?)",
+            (MODEL, NOW),
+        )
+        frames.commit()
+    tab = served["tab"]
+    assert tab._parts(["fs:x", "imdb:tt1"]) == {"fs:x": 0, "imdb:tt1": 11}
+    assert tab._extra_path("fs:x") == "/media/mv/clip.mkv"
+    urllib.request.urlopen(served["url"] + "/api/search/frame?item_id=fs:x&part=0&t_ms=0").read()
+    assert served["media"].calls[-1][:2] == ("frames", 0)
+    with pytest.raises(urllib.error.HTTPError) as err:
+        urllib.request.urlopen(served["url"] + "/api/search/frame?item_id=fs:x&part=5&t_ms=0")
+    assert err.value.code == 404
+    with open_store(served["store"]) as conn:
+        conn.execute("UPDATE extra_file SET missing_since = ?", (NOW,))
+        conn.commit()
+    with pytest.raises(NoFrame):
+        tab._extra_path("fs:x")

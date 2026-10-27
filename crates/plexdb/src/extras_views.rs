@@ -19,6 +19,8 @@ const MOMENTS: &str = "ei.first_seen || '|' || COALESCE(ei.organized_at, '') || 
     COALESCE(pf.missing_since, '') || '|' || \
     COALESCE((SELECT group_concat(first_seen, '|') FROM extra_file f \
               WHERE f.item_id = ei.item_id), '') || '|' || \
+    COALESCE((SELECT group_concat(merged_at, '|') FROM extra_merge m \
+              WHERE m.kept_item_id = ei.item_id), '') || '|' || \
     COALESCE((SELECT group_concat(fetched_at, '|') FROM enrichment e \
               WHERE e.item_id = ei.item_id AND e.namespace IN ('extra', 'keywords')), '')";
 

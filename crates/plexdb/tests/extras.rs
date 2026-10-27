@@ -501,3 +501,54 @@ fn a_bad_parser_makes_fold_extras_refuse_the_file_and_keep_the_stored_declaratio
         0
     );
 }
+
+struct Rejects;
+
+impl plexdb::check_files::FileChecker for Rejects {
+    fn probe(
+        &self,
+        _: &Path,
+    ) -> Result<plexdb::check_files::Probe, plexdb::frame_media::MediaError> {
+        Ok(plexdb::check_files::Probe::Rejected(
+            "moov atom not found".into(),
+        ))
+    }
+
+    fn decode(&self, _: &Path) -> Result<String, plexdb::frame_media::MediaError> {
+        Ok(String::new())
+    }
+}
+
+fn check(world: &World) {
+    let here = |file: &str| Ok(std::path::PathBuf::from(file));
+    plexdb::check_files::check_files(&world.conn, &Rejects, &here, None, 0, T2).expect("check");
+}
+
+#[test]
+fn a_verdict_follows_a_moved_file_and_goes_when_the_file_is_replaced() {
+    let mut w = world();
+    fold(&mut w).expect("fold");
+    let old = put(&w, "a/song.mkv", "content one");
+    walk(&mut w, T1);
+    check(&w);
+    let verdict = "SELECT COUNT(*) FROM extra_check c JOIN extra_file f ON f.path = c.path \
+                   WHERE c.kind = 'header' AND c.ok = 0";
+    assert_eq!(count(&w.conn, verdict), 1);
+
+    let new = format!("{}/musicvideos/b/renamed.mkv", w.root);
+    fs::create_dir_all(Path::new(&new).parent().expect("parent")).expect("dirs");
+    fs::rename(&old, &new).expect("move");
+    walk(&mut w, T2);
+    assert_eq!(count(&w.conn, verdict), 1);
+    assert_eq!(
+        count(
+            &w.conn,
+            &format!("SELECT COUNT(*) FROM extra_check WHERE path = '{new}'")
+        ),
+        1
+    );
+
+    fs::write(&new, "replaced with other, longer bytes").expect("replace");
+    walk(&mut w, "2026-10-27T00:20:00+00:00");
+    assert_eq!(count(&w.conn, "SELECT COUNT(*) FROM extra_check"), 0);
+}

@@ -159,6 +159,27 @@ fn a_title_that_left_plex_is_skipped_and_counted_not_guessed_at() {
 }
 
 #[test]
+fn an_extra_is_not_counted_as_a_title_that_left_plex() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let conn = store(dir.path());
+    conn.execute_batch(
+        "INSERT INTO items (item_id, type, title) VALUES ('fs:clip', 'extra', 'Clip'); \
+         INSERT INTO extra_library (name, root, type, declared_at) \
+           VALUES ('mv', '/media/mv', 'music_video', '2026-01-01T00:00:00+00:00'); \
+         INSERT INTO extra_item (item_id, library, organized, first_seen) \
+           VALUES ('fs:clip', 'mv', 1, '2026-01-01T00:00:00+00:00');",
+    )
+    .expect("extra");
+
+    let plan = plan_fs_repairs(&conn, &recorded(), &roots()).expect("plan");
+
+    assert_eq!(
+        (plan.fs_found, plan.moves.len(), plan.not_in_plex),
+        (0, 0, 0)
+    );
+}
+
+#[test]
 fn two_ids_converging_on_one_path_merge_and_each_source_keeps_its_own_keyword() {
     let dir = tempfile::tempdir().expect("tempdir");
     let conn = store(dir.path());

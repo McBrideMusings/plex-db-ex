@@ -178,6 +178,8 @@ pub fn apply(
                      missing_since = NULL WHERE path = ?",
                     params![file.size, file.mtime, sha, now, file.path],
                 )?;
+                // A verdict is about the bytes it judged.
+                tx.execute("DELETE FROM extra_check WHERE path = ?", [&file.path])?;
             } else {
                 stats.unreadable += 1;
             }

@@ -271,6 +271,7 @@ enrichment_cursor(
 | `ratings` | `mdblist` | `fetched` | `enrich-mdblist-ratings`, one per title in a batch that answered, written even when MDBList left the title out of its answer or had no non-null rating |
 | `ratings` | `mdblist` | `attempted` | `enrich-mdblist-ratings`, for every title in a batch whose request failed: scheduling only, never freshness, ordered and cleared the same way as Letterboxd's |
 | `tmdb_edges` | `tmdb` | `fetched_recommendations`, `fetched_similar` | `enrich-tmdb-edges`, one per title per edge type |
+| `extras` | `near` | `compared`, `split` | `extras-near`: `compared` is one per indexed extra, its `fetched_at` the `frame_index_state.indexed_at` it was compared at; `split` is written by a Split and means never fold this extra again |
 
 **`source` joined this table's primary key in the same schema v10 that added it to `enrichment`**
 ([ADR-0016](./adr/0016-keywords-are-one-source-agnostic-namespace-with-a-source-column)): a
@@ -1441,7 +1442,7 @@ judge (its file is not on the media mount, or ffprobe is missing or ran past its
 row, so the next run tries it again. Neither `plexdb-reader` nor `READER_SHAPE` reads the table.
 
 Plex DB-EX's seeded Library health dashboard draws "Damaged or rule-breaking files" as a line panel:
-every check with `ok = 0` except a timed-out decode, with the title, the file and the error, newest first. "Decode progress"
+every check in `media_check` and `extra_check` with `ok = 0` except a timed-out decode, with the title, the file (an extra's path) and the error, newest first. "Decode progress"
 is a gauge panel over one row: `parts_decoded`, `parts_total` and `oldest_decode` (the oldest
 `checked_at` of a `decode` row).
 
@@ -1541,14 +1542,42 @@ wherever it sits and however it is named. `organized_at` is the UTC time a Save 
 extra the first walk of an empty library marked organized. `source_url` is optional on every extra
 and is what scrapers match on.
 
+An extra has an `fs:` id and no `plex_items`, `plays` or `enrichment` rows. A reader that means the titles Plex lists therefore filters `items.type` to `movie`, `show` or `episode`, or joins `plex_items`, `plays` or `enrichment`; `plexdb check`'s `fs: identities` count and `repair-fs-identities` leave out every `extra_item` row.
+
 `extra_file` is one row per file. An item has exactly one `primary_file = 1` row, plus one per
 exact copy or near duplicate folded into it. `sha256` is of the whole file; `height` and
 `duration_ms` describe its video, NULL until known. `missing_since` is the UTC time a walk first
 did not find the file, cleared when it returns. `extra_merge` records each near duplicate folded
-into another item with the Frame-index similarity that folded it; a Split deletes the row and gives
-the files back their own item. `extra_moved` is one row per rename an organize made;
+into another item with the Frame-index similarity that folded it (`extras-near`, below): the folded item's files move to the kept item as non-primary files and its `items` and `extra_item` rows are deleted. A Split gives the file its own item back under the same `fs:` id and deletes the row. `extra_moved` is one row per rename an organize made;
 `plexdb extras undo <move_id>` reverses one. `extra_check` holds `check-files`' verdicts with
-`media_check`'s meaning, keyed by path.
+`media_check`'s meaning, keyed by path. `check-files` judges every `extra_file` with a video
+extension (mkv, mp4, m4v, mov, avi, wmv, flv, webm, mpg, mpeg, ts, m2ts, mts, vob, ogv, 3gp, divx) whose
+`missing_since` is NULL the way it judges a part: the path is read as it stands (an extras root sits
+under `PLEX_SOURCE_ROOTS` on this process's own mount, so nothing maps it), a file with no `header`
+row is probed, and `decode` runs over `PLEXDB_DECODE_BATCH` extras, counted apart from the parts'
+batch. `duration_ms`, once something fills it, is held to the same 2%. A moved file keeps its checks
+(`ON UPDATE CASCADE`); `extras-walk` deletes a path's checks when it re-reads the file because its
+size or mtime changed, so the new bytes are judged by the next night's `check-files` (it runs before
+`extras-walk` in a sweep). Extras are checked even where `PLEXDB_MEDIA_DIR` is unset. A file the run could not judge gets no row.
+
+**Extras in the Frame index.** `harvest-frames` indexes an extra from its primary `extra_file` row,
+read at `PLEXDB_MEDIA_DIR` plus that path, with `frame_index_state.part_id` NULL. It takes an extra
+still in the queue (`organized = 0`) and never indexed before anything queued, and an organized extra
+never indexed after the Plex titles that were never indexed. An extra whose primary file is missing is skipped. Plex DB-EX's frame and clip routes name an extra's part
+`0` and cut from `extra_file`.
+
+**`extras-near`** runs in every `extras-tick`, after the walk. It compares the vectors of each extra
+whose `frame_index_state.indexed_at` differs from the one recorded in `enrichment_cursor`
+(`namespace` `extras`, `source` `near`, `key` `compared`, `fetched_at` = that `indexed_at`) with
+every other indexed extra of its library. Two items are scored only when their last-frame times
+differ by at most 2 s or 5 %, whichever is larger, and their mean vectors have a cosine of at least
+0.9. The score is the lower of the two directions of: the mean, over one item's frames, of the best
+cosine against the other's frames. A score of `PLEXDB_EXTRAS_NEAR` (default 0.97) or more folds
+the later item (organized before unorganized, then earlier `first_seen`, then `item_id` decide
+which is kept) into the other as above, and removes the folded item's rows from `frames.db`
+(skipped while a harvester runs, finished at the next tick). A Split deletes the `extra_merge` row and writes an `enrichment_cursor` row
+with `key` `split`, which stops any later pass from folding that item again; the harvester then
+indexes it again.
 
 An extra's field values live in `enrichment` under namespace `extra`, keyed by field name, with
 `source` naming who said it: `path` for a filename parser, the scraper's name, or `person`. A
@@ -1776,7 +1805,7 @@ another width is a migration.
 ```sql
 CREATE TABLE frame_index_state (
     item_id       TEXT PRIMARY KEY,
-    part_id       INTEGER,     -- the Plex media part read
+    part_id       INTEGER,     -- the Plex media part read; NULL for an extra (no Plex part)
     model         TEXT,        -- the encoder model that produced frame_vec
     model_version TEXT,
     dims          INTEGER,     -- vector width

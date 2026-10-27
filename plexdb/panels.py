@@ -26,7 +26,6 @@ from .config import Config
 from .decisions import decisions_dir
 from .errors import NoSuchPanel, PanelsFileError
 from .explore import QueryError, TooManyQueries, run_query
-from .media_check import DECODE_TIMED_OUT
 
 __all__ = [
     "DEFAULT_DASHBOARDS",
@@ -69,6 +68,10 @@ HASH_DIGITS = 12
 
 _PANEL_FIELDS = ("id", "title", "sql", "chart", "value", "width", "height")
 
+#: The `error` `check-files` (`crates/plexdb/src/check_files.rs`) leaves on a decode that ran
+#: past its time limit: a slow mount, not a damaged file, so the damaged-files panel omits it.
+DECODE_TIMED_OUT = "ffmpeg timed out"
+
 #: What `explore-panels.json` holds when the file is first created: the Library health
 #: dashboard. An existing file, even one with no dashboards, is never seeded again.
 DEFAULT_DASHBOARDS: tuple[dict[str, Any], ...] = (
@@ -86,7 +89,14 @@ DEFAULT_DASHBOARDS: tuple[dict[str, Any], ...] = (
                     "JOIN items i ON i.item_id = p.item_id\n"
                     "WHERE c.ok = 0\n"
                     f"  AND NOT (c.kind = 'decode' AND c.error = '{DECODE_TIMED_OUT}')\n"
-                    "ORDER BY c.checked_at DESC, i.title, p.file"
+                    "UNION ALL\n"
+                    "SELECT i.title, f.path, c.kind, c.error, c.checked_at\n"
+                    "FROM extra_check c\n"
+                    "JOIN extra_file f ON f.path = c.path\n"
+                    "JOIN items i ON i.item_id = f.item_id\n"
+                    "WHERE c.ok = 0\n"
+                    f"  AND NOT (c.kind = 'decode' AND c.error = '{DECODE_TIMED_OUT}')\n"
+                    "ORDER BY checked_at DESC, title, file"
                 ),
                 "chart": "line",
                 "value": "rows",

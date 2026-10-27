@@ -494,6 +494,18 @@ fn apply_split(
         "DELETE FROM extra_merge WHERE merged_item_id = ?",
         [merged_item_id],
     )?;
+    // Kept apart by a person: `extras-near` never folds this item again.
+    tx.execute(
+        "INSERT OR REPLACE INTO enrichment_cursor (item_id, namespace, source, key, fetched_at) \
+         VALUES (?, ?, ?, ?, ?)",
+        params![
+            merged_item_id,
+            crate::extras_near::CURSOR_NAMESPACE,
+            crate::extras_near::CURSOR_SOURCE,
+            crate::extras_near::SPLIT,
+            now
+        ],
+    )?;
     extras_walk::choose_primaries(tx, &library)?;
     Ok(Outcome::Applied)
 }

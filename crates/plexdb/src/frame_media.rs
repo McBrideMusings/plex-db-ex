@@ -29,6 +29,8 @@ type ScanParts = (Vec<Cut>, i64, usize);
 pub struct MediaError {
     pub message: String,
     pub reason: String,
+    /// The process ran past its time limit and was killed, so the file was not judged.
+    pub timed_out: bool,
 }
 
 impl MediaError {
@@ -36,6 +38,15 @@ impl MediaError {
         MediaError {
             message: message.into(),
             reason: reason.into(),
+            timed_out: false,
+        }
+    }
+
+    fn timeout(message: impl Into<String>, reason: impl Into<String>) -> Self {
+        MediaError {
+            message: message.into(),
+            reason: reason.into(),
+            timed_out: true,
         }
     }
 }
@@ -257,7 +268,7 @@ pub fn classify_decode_stderr(stderr: &str) -> (Vec<String>, usize) {
     (errors, warnings)
 }
 
-fn rounded_ms(seconds: f64) -> i64 {
+pub fn rounded_ms(seconds: f64) -> i64 {
     (seconds * 1000.0).round_ties_even() as i64
 }
 
@@ -301,7 +312,7 @@ pub fn parse_scdet(text: &str) -> Result<Vec<Cut>, MediaError> {
 }
 
 /// Python's `float(text)` for the numbers ffmpeg prints.
-fn py_float(text: &str) -> Option<f64> {
+pub fn py_float(text: &str) -> Option<f64> {
     let text = text.trim();
     match text.to_ascii_lowercase().as_str() {
         "nan" | "+nan" | "-nan" => return Some(f64::NAN),
@@ -449,7 +460,7 @@ fn run(argv: &[String], what: &str, timeout: Duration) -> Result<Ran, MediaError
             Ok(None) if started.elapsed() > timeout => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(MediaError::new(
+                return Err(MediaError::timeout(
                     format!(
                         "{what}: {} ran past {:.0} s",
                         argv[0],
@@ -766,6 +777,123 @@ impl FfmpegMedia {
         }
         Ok(found)
     }
+}
+
+impl FfmpegMedia {
+    /// ffprobe's streams and format for `path` (`plexdb/frame_harvest.py`'s `probe`):
+    /// `Ok(Ok(report))`, or `Ok(Err(why))` when ffprobe ran and rejected the file (`why` is
+    /// its last stderr line, without the path). A missing binary or a run past the time
+    /// limit is an `Err`, since the file itself was not judged.
+    pub fn probe_report(&self, path: &Path) -> Result<Result<Value, String>, MediaError> {
+        let shown = path.to_string_lossy().into_owned();
+        let argv: Vec<String> = [
+            self.ffprobe.as_str(),
+            "-v",
+            "error",
+            "-show_format",
+            "-show_streams",
+            "-print_format",
+            "json",
+            &shown,
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let done = run(&argv, &format!("{shown}: probe"), PROBE_TIMEOUT)?;
+        if done.code != 0 {
+            let lines: Vec<&str> = py_splitlines(done.stderr.trim())
+                .into_iter()
+                .filter(|line| !line.trim().is_empty())
+                .collect();
+            let why = lines
+                .last()
+                .map(|line| line.replace(&format!("{shown}: "), "").trim().to_string())
+                .unwrap_or_default();
+            return Ok(Err(if why.is_empty() {
+                format!("ffprobe exited {}", done.code)
+            } else {
+                why
+            }));
+        }
+        let out = String::from_utf8_lossy(&done.stdout);
+        let report: Value = match serde_json::from_str(if out.is_empty() { "{}" } else { &out }) {
+            Ok(report) => report,
+            Err(_) => return Ok(Err("ffprobe printed output that is not JSON".into())),
+        };
+        Ok(if report.is_object() {
+            Ok(report)
+        } else {
+            Err("ffprobe printed no report".into())
+        })
+    }
+
+    /// Decode every frame of `path` and throw it away (`frame_harvest.py`'s `decode`):
+    /// `""` when ffmpeg reported nothing, else its first five error lines with the path
+    /// replaced by `<file>`.
+    pub fn decode_errors(&self, path: &Path) -> Result<String, MediaError> {
+        let shown = path.to_string_lossy().into_owned();
+        let argv: Vec<String> = [
+            self.ffmpeg.as_str(),
+            "-nostdin",
+            "-v",
+            "error",
+            "-i",
+            &shown,
+            "-f",
+            "null",
+            "-",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let done = run(&argv, &format!("{shown}: decode"), DECODE_TIMEOUT)?;
+        let lines: Vec<String> = py_splitlines(&done.stderr)
+            .into_iter()
+            .map(|line| line.replace(&shown, "<file>").trim().to_string())
+            .filter(|line| !line.is_empty())
+            .collect();
+        if done.code != 0 && lines.is_empty() {
+            return Ok(format!("ffmpeg exited {}", done.code));
+        }
+        Ok(lines
+            .into_iter()
+            .take(ERROR_LINES_KEPT)
+            .collect::<Vec<_>>()
+            .join("\n"))
+    }
+}
+
+/// `str.splitlines()`: split on every line boundary Python knows, dropping a final empty piece.
+pub fn py_splitlines(text: &str) -> Vec<&str> {
+    let mut lines = Vec::new();
+    let mut start = 0;
+    let mut chars = text.char_indices().peekable();
+    while let Some((at, c)) = chars.next() {
+        if matches!(
+            c,
+            '\n' | '\r'
+                | '\x0b'
+                | '\x0c'
+                | '\x1c'
+                | '\x1d'
+                | '\x1e'
+                | '\u{85}'
+                | '\u{2028}'
+                | '\u{2029}'
+        ) {
+            lines.push(&text[start..at]);
+            let mut end = at + c.len_utf8();
+            if c == '\r' && chars.peek().is_some_and(|(_, next)| *next == '\n') {
+                chars.next();
+                end += 1;
+            }
+            start = end;
+        }
+    }
+    if start < text.len() {
+        lines.push(&text[start..]);
+    }
+    lines
 }
 
 impl MediaReader for FfmpegMedia {

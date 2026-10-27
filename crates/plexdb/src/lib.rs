@@ -5,6 +5,7 @@
 pub mod anilist;
 pub mod args;
 pub mod backoff;
+pub mod check_files;
 pub mod clock;
 pub mod collections;
 pub mod cursors;
@@ -23,6 +24,7 @@ pub mod explore_views;
 pub mod extras_cmd;
 pub mod extras_decisions;
 pub mod extras_declaration;
+pub mod extras_near;
 pub mod extras_organize;
 pub mod extras_parsers;
 pub mod extras_scrapers;

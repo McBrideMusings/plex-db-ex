@@ -92,6 +92,7 @@ OUTPUT_STEPS = frozenset(
         "enrich-wikidata",
         "enrich-mdblist-ratings",
         "enrich-letterboxd",
+        "check-files",
     }
 )
 #: Decisions files a step may write, compared after it ran.
@@ -174,6 +175,24 @@ def _mask_run_times(store: Path, started: str) -> None:
                 if column.endswith(("_at", "_seen")) and kind.upper() == "TEXT":
                     c = _quote(column)
                     conn.execute(f"UPDATE {t} SET {c} = ? WHERE {c} >= ?", (RUN_TIME, started))
+
+
+#: ffmpeg prints the address of its input context in an error line (`[in#0 @ 0x882c38000]`),
+#: which is different on every run.
+_ADDRESS = re.compile(r"@ 0x[0-9a-f]+")
+
+
+def _mask_addresses(store: Path) -> None:
+    """Replace the memory address ffmpeg prints in a verdict's `error` with one marker."""
+    with sqlite3.connect(store) as conn:
+        for table in ("media_check", "extra_check"):
+            for rowid, error in conn.execute(
+                f"SELECT rowid, error FROM {table} WHERE error LIKE '%@ 0x%'"
+            ).fetchall():
+                conn.execute(
+                    f"UPDATE {table} SET error = ? WHERE rowid = ?",
+                    (_ADDRESS.sub("@ <address>", error), rowid),
+                )
 
 
 def _blank_layout(store: Path) -> None:
@@ -361,6 +380,8 @@ def main() -> int:
             _mask_run_times(root / "plexdb.db", started)
             if args.step in LAYOUT_STEPS:
                 _blank_layout(root / "plexdb.db")
+            if args.step == "check-files":
+                _mask_addresses(root / "plexdb.db")
             if args.step in FRAME_COMMANDS and (root / "frames" / "frames.db").exists():
                 _mask_run_times(root / "frames" / "frames.db", started)
         report = diff(sides["python"] / "plexdb.db", sides["rust"] / "plexdb.db")

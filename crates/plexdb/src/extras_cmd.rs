@@ -9,9 +9,11 @@ use rusqlite::Connection;
 use crate::decisions::FoldError;
 use crate::extras_decisions::{self as decisions, Decision, Entry, SOURCE_URL};
 use crate::extras_declaration::{self as declaration, EXTRAS_FILE, ExtrasError};
+use crate::extras_near;
 use crate::extras_organize;
 use crate::extras_scrapers;
 use crate::extras_walk;
+use crate::frames::FrameConfig;
 use crate::sources::Sources;
 use crate::staleness::Now;
 use crate::steps::{Failure, failure};
@@ -139,6 +141,40 @@ pub fn run_walk(args: &[String]) -> Result<(), Failure> {
     walk(&mut store.conn, roots).map_err(failure)
 }
 
+/// What the near-duplicate pass compared before the writer lock, with the Frame index it read
+/// from. `None` when no Frame index is configured or built yet.
+fn near_prepare(
+    config: &Config,
+) -> Result<Option<(std::path::PathBuf, extras_near::Prepared)>, StoreError> {
+    let Some(frames_path) = FrameConfig::from_env()?
+        .frames_path()
+        .filter(|p| p.exists())
+    else {
+        return Ok(None);
+    };
+    let threshold =
+        extras_near::threshold_from(std::env::var(extras_near::THRESHOLD_VAR).ok().as_deref())?;
+    let store = open_readonly(&config.store_path)?;
+    let frames = extras_near::open_frames_readonly(&frames_path)?;
+    let prepared = extras_near::prepare(&store, &frames, threshold)?;
+    Ok(Some((frames_path, prepared)))
+}
+
+/// Write the folds the pass found, then take the folded items out of the Frame index.
+fn near_finish(
+    config: &Config,
+    store: &mut Connection,
+    found: Option<(std::path::PathBuf, extras_near::Prepared)>,
+) -> Result<(), StoreError> {
+    let Some((frames_path, prepared)) = found else {
+        return Ok(());
+    };
+    let stats = extras_near::apply(store, &prepared, &Now::read().iso())?;
+    let cleaned = extras_near::clean_frames(&frames_path, &open_readonly(&config.store_path)?)?;
+    println!("{}", extras_near::describe(&prepared, &stats, cleaned));
+    Ok(())
+}
+
 /// `extras-tick`: fold, walk, fold the decisions and organize, as the store's only writer. A sweep or another step
 /// holding the writer lock refuses the tick (exit 75) rather than queueing it behind. A
 /// refused `extras.json` does not stop the walk, which uses the declaration stored; the
@@ -148,12 +184,13 @@ pub fn run_tick(args: &[String]) -> Result<(), Failure> {
     let config = Config::from_env().map_err(failure)?;
     let roots = Sources::from_env();
     let roots = roots.require_roots(NEEDS_ROOTS).map_err(failure)?;
-    // Listing and hashing is the slow part and only reads, so it runs before the store is
-    // asked for; the lock is held for the fold and the writes alone.
+    // Listing, hashing and comparing vectors is the slow part and only reads, so it runs before
+    // the store is asked for; the lock is held for the fold and the writes alone.
     let prepared = {
         let conn = open_readonly(&config.store_path).map_err(failure)?;
         extras_walk::prepare(&conn, None).map_err(failure)?
     };
+    let near = near_prepare(&config);
     let Some(mut store) = open_store_exclusive(&config.store_path).map_err(failure)? else {
         return Err(Failure::Busy("a writer has the store open".into()));
     };
@@ -163,10 +200,15 @@ pub fn run_tick(args: &[String]) -> Result<(), Failure> {
     for line in extras_walk::describe(&stats) {
         println!("{line}");
     }
+    let near = near.and_then(|found| near_finish(&config, &mut store.conn, found));
+    if let Err(err) = &near {
+        eprintln!("{}: {err}", extras_near::NAME);
+    }
     let decided = fold_decisions(&mut store.conn, &config, roots);
     drop(store);
     let scraped = scrape(&config);
     folded.map_err(extras_failure)?;
+    near.map_err(failure)?;
     decided.map_err(fold_failure)?;
     scraped
 }

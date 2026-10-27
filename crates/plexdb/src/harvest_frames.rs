@@ -8,13 +8,19 @@
 //! from that file under `PLEXDB_MEDIA_DIR`, read-only. It writes `frames.db` alone;
 //! the store is read through a separate read-only connection (ADR-0024).
 //!
-//! **What it works on, in order.** (1) Titles someone queued, oldest first.
+//! **What it works on, in order.** (0) Extras still in the Extras tab queue (`organized = 0`)
+//! that were never indexed, oldest first sighting first: a person is waiting to see them.
+//! (1) Titles someone queued, oldest first.
 //! (2) Titles whose indexed `part_id` is not the part Plex lists now, least recently
 //! indexed first. (3) Titles never indexed, movies before episodes, newest Plex
-//! `addedAt` first. (4) Titles whose `file_hash` changed since they were indexed,
-//! least recently indexed first. A failed attempt records Plex's current part, so a
+//! `addedAt` first, then organized extras never indexed. (4) Titles whose `file_hash`
+//! changed since they were indexed, least recently indexed first. A failed attempt records Plex's current part, so a
 //! title that failed is retried by none of (2) to (4) until its `file_hash` changes
 //! or it is queued again.
+//!
+//! **Extras** (ADR-0030) are indexed from their primary `extra_file` row, read at
+//! `PLEXDB_MEDIA_DIR/<that path>` like any other file, with `frame_index_state.part_id`
+//! NULL: no Plex part exists. An extra whose primary file is missing is not worked on.
 //!
 //! **Sampling.** The title ends at its last video frame, as the scdet pass decodes
 //! it: a container can carry seconds of audio past the video, and a frame asked
@@ -125,7 +131,8 @@ pub fn sample_times(shot_list: &[(i64, i64)]) -> Vec<(i64, usize)> {
 pub struct Part {
     pub kind: String,
     pub added_at: i64,
-    pub part_id: i64,
+    /// `None` for an extra: no Plex part exists.
+    pub part_id: Option<i64>,
     pub size: i64,
     pub file: String,
 }
@@ -188,12 +195,12 @@ pub fn plex_parts(
             let entry = Part {
                 kind: item_type.clone(),
                 added_at: int(get(&record, "addedAt")),
-                part_id: py_int(get(first, "id")).ok_or_else(|| {
+                part_id: Some(py_int(get(first, "id")).ok_or_else(|| {
                     StoreError::Store(format!(
                         "Plex listed a media part with no usable id: {}",
                         get(first, "id")
                     ))
-                })?,
+                })?),
                 size: int(get(first, "size")),
                 file: py_str(or(get(first, "file"), &Value::String(String::new()))),
             };
@@ -208,11 +215,57 @@ pub fn plex_parts(
     Ok(best)
 }
 
+/// The extras the harvester may index, by `item_id`, and which of them are still in the Extras
+/// tab queue: those not folded into another item and with a primary file that is not missing.
+pub struct Extras {
+    pub parts: BTreeMap<String, Part>,
+    /// Earliest sighting first.
+    pub unorganized: Vec<String>,
+}
+
+pub fn extra_parts(store: &Connection) -> Result<Extras, StoreError> {
+    let mut statement = store.prepare(
+        "SELECT ei.item_id, ei.organized, f.path, COALESCE(f.size, 0) FROM extra_item ei \
+         JOIN extra_file f ON f.item_id = ei.item_id AND f.primary_file = 1 \
+         WHERE f.missing_since IS NULL \
+         ORDER BY ei.first_seen, ei.item_id",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, i64>(3)?,
+        ))
+    })?;
+    let mut out = Extras {
+        parts: BTreeMap::new(),
+        unorganized: Vec::new(),
+    };
+    for row in rows {
+        let (item_id, organized, file, size) = row?;
+        if organized == 0 {
+            out.unorganized.push(item_id.clone());
+        }
+        out.parts.insert(
+            item_id,
+            Part {
+                kind: "extra".into(),
+                added_at: 0,
+                part_id: None,
+                size,
+                file,
+            },
+        );
+    }
+    Ok(out)
+}
+
 /// One title the harvester may index, as Plex describes it now.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Candidate {
     pub item_id: String,
-    pub part_id: i64,
+    pub part_id: Option<i64>,
     pub size: i64,
     /// The part's file as Plex names it; the locator says where this process reads it.
     pub file: String,
@@ -230,6 +283,7 @@ struct IndexState {
 }
 
 enum Phase {
+    Unorganized(std::vec::IntoIter<String>),
     Queue,
     PartChanged(std::vec::IntoIter<String>),
     Fresh(std::vec::IntoIter<String>),
@@ -247,12 +301,12 @@ struct Candidates<'a> {
 }
 
 impl<'a> Candidates<'a> {
-    fn new(parts: &'a BTreeMap<String, Part>) -> Self {
+    fn new(parts: &'a BTreeMap<String, Part>, unorganized: Vec<String>) -> Self {
         Candidates {
             parts,
             seen: BTreeSet::new(),
             state: BTreeMap::new(),
-            phase: Phase::Queue,
+            phase: Phase::Unorganized(unorganized.into_iter()),
         }
     }
 
@@ -285,6 +339,22 @@ impl<'a> Candidates<'a> {
     ) -> Result<Option<Candidate>, StoreError> {
         loop {
             match &mut self.phase {
+                Phase::Unorganized(ids) => {
+                    let Some(item_id) = ids.next() else {
+                        self.phase = Phase::Queue;
+                        continue;
+                    };
+                    let tried: bool = frames.query_row(
+                        "SELECT EXISTS (SELECT 1 FROM frame_index_state WHERE item_id = ?1)",
+                        [&item_id],
+                        |row| row.get(0),
+                    )?;
+                    if tried || self.seen.contains(&item_id) {
+                        continue;
+                    }
+                    self.seen.insert(item_id.clone());
+                    return Ok(Some(self.candidate(&item_id, "extra", None)));
+                }
                 Phase::Queue => {
                     let queued: Vec<String> = frames
                         .prepare("SELECT item_id FROM frame_queue ORDER BY queued_at, item_id")?
@@ -321,8 +391,8 @@ impl<'a> Candidates<'a> {
                             .collect();
                         fresh.sort_by(|a, b| {
                             let (pa, pb) = (&self.parts[*a], &self.parts[*b]);
-                            ((pa.kind != "movie"), -pa.added_at, *a).cmp(&(
-                                (pb.kind != "movie"),
+                            (kind_rank(&pa.kind), -pa.added_at, *a).cmp(&(
+                                kind_rank(&pb.kind),
                                 -pb.added_at,
                                 *b,
                             ))
@@ -337,7 +407,7 @@ impl<'a> Candidates<'a> {
                         continue;
                     };
                     if self.seen.contains(&item_id)
-                        || indexed_part.is_none_or(|indexed| indexed == part.part_id)
+                        || indexed_part.is_none_or(|indexed| Some(indexed) == part.part_id)
                     {
                         continue;
                     }
@@ -345,7 +415,7 @@ impl<'a> Candidates<'a> {
                     log(&format!(
                         "{item_id}: indexed part {} is not Plex's part {}",
                         indexed_part.unwrap_or_default(),
-                        part.part_id
+                        part.part_id.unwrap_or_default()
                     ));
                     return Ok(Some(self.candidate(&item_id, "part changed", None)));
                 }
@@ -386,6 +456,15 @@ impl<'a> Candidates<'a> {
                 Phase::Done => return Ok(None),
             }
         }
+    }
+}
+
+/// Movies before episodes before extras.
+fn kind_rank(kind: &str) -> u8 {
+    match kind {
+        "movie" => 0,
+        "episode" => 1,
+        _ => 2,
     }
 }
 
@@ -751,7 +830,8 @@ fn index_title(
          vectors={vector_count} decode_warnings={decode_warnings} reason={}",
         stamp(),
         cand.item_id,
-        cand.part_id,
+        cand.part_id
+            .map_or_else(|| "none".to_string(), |id| id.to_string()),
         cand.size,
         cand.reason
     );
@@ -795,7 +875,7 @@ pub fn harvest(
     } else {
         None
     };
-    let parts = {
+    let (parts, unorganized) = {
         let store =
             Connection::open_with_flags(inputs.store_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
                 .map_err(|err| {
@@ -807,13 +887,24 @@ pub fn harvest(
         store.busy_timeout(std::time::Duration::from_millis(
             plexdb_store::BUSY_TIMEOUT_MS,
         ))?;
-        plex_parts(&store, inputs.plex)?
+        let mut parts = plex_parts(&store, inputs.plex)?;
+        let extras = extra_parts(&store)?;
+        parts.extend(extras.parts);
+        (parts, extras.unorganized)
     };
     let mut frames = open_frames(frames_path)?;
     let now = inputs.now;
     set_indexing(&frames, None, &now())?;
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        run_titles(&mut frames, &parts, inputs, options, log, &mut float)
+        run_titles(
+            &mut frames,
+            &parts,
+            unorganized,
+            inputs,
+            options,
+            log,
+            &mut float,
+        )
     }));
     // The title in hand is released whether the run ended, failed or panicked.
     let released = set_indexing(&frames, None, &now());
@@ -828,6 +919,7 @@ pub fn harvest(
 fn run_titles(
     frames: &mut Connection,
     parts: &BTreeMap<String, Part>,
+    unorganized: Vec<String>,
     inputs: &Inputs<'_>,
     options: &Options,
     log: &mut dyn FnMut(&str),
@@ -841,7 +933,7 @@ fn run_titles(
         now,
     };
     let keep_going = || options.ignore_hours || inside_hours(inputs.hours, &now());
-    let mut candidates = Candidates::new(parts);
+    let mut candidates = Candidates::new(parts, unorganized);
     let mut result = HarvestResult::default();
     let mut rejects = 0usize;
     let mut tagged = |line: &str| log(&format!("frames: {line}"));
