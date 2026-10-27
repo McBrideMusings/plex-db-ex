@@ -329,7 +329,7 @@ fn insert_file(
 
 /// Each item's primary file is its best one: a file on disk before a missing one, then the
 /// greatest height, then the largest size, then the path.
-fn choose_primaries(tx: &Connection, library: &str) -> Result<(), StoreError> {
+pub(crate) fn choose_primaries(tx: &Connection, library: &str) -> Result<(), StoreError> {
     const BEST: &str = "(SELECT g.path FROM extra_file g WHERE g.item_id = extra_file.item_id \
         ORDER BY g.missing_since IS NOT NULL, COALESCE(g.height, -1) DESC, \
         COALESCE(g.size, -1) DESC, g.path LIMIT 1)";

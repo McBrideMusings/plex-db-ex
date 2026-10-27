@@ -320,6 +320,8 @@ pub const STEPS: &[(&str, Run)] = &[
     (prune_frames::NAME, prune_frames),
     (extras_declaration::NAME, extras_cmd::run_fold),
     (extras_walk::NAME, extras_cmd::run_walk),
+    (extras_cmd::DECISIONS, extras_cmd::run_fold_decisions),
+    (extras_cmd::ORGANIZE, extras_cmd::run_organize),
     (extras_cmd::TICK, extras_cmd::run_tick),
     (extras_cmd::COMMAND, extras_cmd::run),
     (plays::NAME_INGEST, ingest_plays),

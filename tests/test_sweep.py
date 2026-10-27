@@ -34,6 +34,8 @@ EXPECTED_SWEEP = [
     ("record-panels", Step.BEST_EFFORT),
     ("fold-extras", Step.BEST_EFFORT),
     ("extras-walk", Step.BEST_EFFORT),
+    ("fold-extra-decisions", Step.BEST_EFFORT),
+    ("extras-organize", Step.BEST_EFFORT),
     ("prune-frames", Step.BEST_EFFORT),
     ("ingest-plays", Step.REQUIRED),
     ("enrich-tautulli-plays", Step.BEST_EFFORT),

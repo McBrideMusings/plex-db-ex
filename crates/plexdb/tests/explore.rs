@@ -593,7 +593,7 @@ fn a_role_decision_and_a_list_decision_wait_for_the_sweep() {
 fn extras_world(dir: &Path) {
     let conn = common::store(dir);
     conn.execute_batch(
-        "INSERT INTO extra_library VALUES ('Music Videos', '/m', 'music-video', NULL, '2026-10-01T00:00:00+00:00');
+        "INSERT INTO extra_library (name, root, type, template, declared_at) VALUES ('Music Videos', '/m', 'music-video', NULL, '2026-10-01T00:00:00+00:00');
          INSERT INTO extra_field VALUES ('Music Videos', 'artist', 'text', 1), ('Music Videos', 'year', 'year', 0);",
     )
     .expect("library");
