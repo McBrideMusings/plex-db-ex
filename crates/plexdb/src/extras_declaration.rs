@@ -241,8 +241,8 @@ fn stored(conn: &Connection, name: &str) -> Result<Option<Library>, ExtrasError>
     };
     let (root, kind, template, parsers): (String, String, Option<String>, Option<String>) =
         (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?);
-    let parsers = extras_parsers::from_json(parsers.as_deref())
-        .map_err(|why| ExtrasError::Refused(format!("library {name:?}: {why}")))?;
+    // A column that does not parse reads as no parsers, so a fold can rewrite it.
+    let parsers = extras_parsers::from_json(parsers.as_deref()).unwrap_or_default();
     let mut stmt = conn
         .prepare("SELECT name, kind, required FROM extra_field WHERE library = ? ORDER BY rowid")?;
     let fields = stmt

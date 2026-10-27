@@ -101,21 +101,22 @@ pub fn from_json(text: Option<&str>) -> Result<Vec<Parser>, String> {
     };
     let mut parsers = Vec::new();
     for rule in rules {
-        let pattern = rule.get("match").and_then(Value::as_str).unwrap_or("");
-        let set = rule
-            .get("set")
-            .and_then(Value::as_object)
-            .map(|set| {
-                set.iter()
-                    .map(|(key, template)| {
-                        (key.clone(), template.as_str().unwrap_or("").to_string())
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let (Some(pattern), Some(set)) = (
+            rule.get("match").and_then(Value::as_str),
+            rule.get("set").and_then(Value::as_object),
+        ) else {
+            return Err("a stored parser lacks its match or set".into());
+        };
+        let mut pairs = Vec::new();
+        for (key, template) in set {
+            let Some(template) = template.as_str() else {
+                return Err(format!("a stored parser's set {key:?} is not text"));
+            };
+            pairs.push((key.clone(), template.to_string()));
+        }
         parsers.push(Parser {
             pattern: pattern.to_string(),
-            set,
+            set: pairs,
         });
     }
     Ok(parsers)
