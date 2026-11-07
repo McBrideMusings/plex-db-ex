@@ -214,6 +214,16 @@ def _start_extras_ticks() -> None:
     extras_tick.start()
 
 
+def _start_audio_harvester() -> None:
+    """Start the audio harvester's interval loop (`plexdb/audio_tick.py`): `harvest-audio`
+    every `PLEXDB_AUDIO_EVERY` minutes, off unless `PLEXDB_AUDIO_SECTIONS` names libraries.
+    It holds the store's writer lock only to write each result, so it never holds up a
+    sweep."""
+    from . import audio_tick
+
+    audio_tick.start()
+
+
 def run_scheduler(
     *,
     sweep: Callable[[], int] | None = None,
@@ -223,6 +233,7 @@ def run_scheduler(
     explore: Callable[[], None] | None = None,
     frames: Callable[[], None] | None = None,
     extras: Callable[[], None] | None = None,
+    audio: Callable[[], None] | None = None,
     iterations: int | None = None,
 ) -> int:
     """Migrate the store, then wait until the next scheduled time, run one sweep,
@@ -230,8 +241,8 @@ def run_scheduler(
 
     Runs forever under a container. `iterations` bounds the loop so a test can
     watch it complete a fixed number of cycles; `sweep`, `sleep`, `clock`,
-    `migrate`, `explore`, `frames` and `extras` are injectable for the same reason. Nothing else
-    supplies them.
+    `migrate`, `explore`, `frames`, `extras` and `audio` are injectable for the same reason.
+    Nothing else supplies them.
 
     **Plex DB-EX starts after the migration**, when `PLEXDB_EXPLORE_PORT`
     is set, and serves on its own thread for as long as the loop runs.
@@ -260,6 +271,7 @@ def run_scheduler(
     do_explore = _start_explorer if explore is None else explore
     do_frames = _start_frame_harvester if frames is None else frames
     do_extras = _start_extras_ticks if extras is None else extras
+    do_audio = _start_audio_harvester if audio is None else audio
 
     raw = os.environ.get(SCHEDULE_VAR, "").strip()
     if not raw:
@@ -276,6 +288,7 @@ def run_scheduler(
     do_explore()
     do_frames()
     do_extras()
+    do_audio()
 
     completed = 0
     while iterations is None or completed < iterations:

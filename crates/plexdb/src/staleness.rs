@@ -31,6 +31,18 @@ impl Now {
         }
     }
 
+    /// The instant `secs` seconds after the epoch, for a caller that is handed its clock.
+    pub fn at_secs(secs: i64) -> Self {
+        Now {
+            micros: secs.saturating_mul(MICROS),
+        }
+    }
+
+    /// Whole seconds since the epoch.
+    pub fn secs(&self) -> i64 {
+        self.micros.div_euclid(MICROS)
+    }
+
     /// `now.isoformat(timespec="seconds")` in UTC: `2026-10-01T00:00:00+00:00`.
     pub fn iso(&self) -> String {
         let seconds = self.micros.div_euclid(MICROS);

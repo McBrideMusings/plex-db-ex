@@ -88,6 +88,7 @@ pub const MIGRATIONS: &[Migration] = &[
     Sql(include_str!("../migrations/v25.sql")),
     Sql(include_str!("../migrations/v26.sql")),
     Sql(include_str!("../migrations/v27.sql")),
+    Sql(include_str!("../migrations/v28.sql")),
 ];
 
 /// The version a store is at once every migration has been applied.

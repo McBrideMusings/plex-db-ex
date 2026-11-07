@@ -4,6 +4,7 @@
 
 pub mod anilist;
 pub mod args;
+pub mod audio_cmd;
 pub mod backoff;
 pub mod check_files;
 pub mod clock;
@@ -37,6 +38,7 @@ pub mod frame_quant;
 pub mod frames;
 pub mod frames_cmd;
 pub mod gated;
+pub mod harvest_audio;
 pub mod harvest_frames;
 pub mod html;
 pub mod http;

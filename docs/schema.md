@@ -1748,6 +1748,64 @@ them and the runs are owed again at the next tick. A failure writes `ok = 0` wit
 `plexdb extras scrapers` list each scraper with its regexes, `auto`, whether it is executable, its
 run counts and its last result; `POST /api/extras/fields` carries each item's `scrapes`.
 
+## Version 28 — audio facts
+
+```
+audio_facts          file_hash TEXT PRIMARY KEY, facts TEXT NOT NULL, analyzed_at TEXT NOT NULL
+audio_part           part_id INTEGER PRIMARY KEY, item_id TEXT NOT NULL, file_hash TEXT NOT NULL
+                     (index on item_id)
+audio_harvest_state  part_id INTEGER PRIMARY KEY, item_id TEXT NOT NULL, size INTEGER, file_hash TEXT,
+                     outcome TEXT NOT NULL (done | failed | unreachable | excluded), error TEXT,
+                     attempts INTEGER NOT NULL, next_try_at TEXT, updated_at TEXT NOT NULL
+```
+
+Additive; `reader_shape` stays at 10. Written by `plexdb harvest-audio`, the only writer of all three.
+
+- **`audio_facts`** is what the analyzer (`tools/audio-analyze.py`, installed as
+  `plexdb-audio-analyze`) printed for one file's content: its JSON object, verbatim, keyed by the
+  file hash (SHA-256 of the part's size, modification time and first MiB, the hash the Frame
+  harvester uses). The keys are `bpm`, `beat_grid`, `downbeat_phase`, `landing_bar`,
+  `landing_bar_s`, `key`, `scale`, `camelot`, `key_strength`, `beat_confidence`, `bar_energy` and
+  `rms_mean`; a value the file cannot give is `null`. A hash is analyzed once, however many parts
+  or paths carry that content.
+- **`audio_part`** says which analyzed content a Plex media part has, written when the part's
+  outcome is `done`. It has no foreign key to `media_part`: media-walk deletes and re-inserts a
+  record's parts, and a cascade would wipe these rows. A reader joins on `part_id` or `item_id`.
+- **`audio_harvest_state`** is the harvester's bookkeeping, one row per media part it has looked
+  at, and never a fact about a title (ADR-0013). `size` is the part's `media_part.size` when the
+  row was written.
+
+**Outcomes.** `done`: facts stored. `failed`: the analyzer exited non-zero or printed something
+that is not a JSON object; `error` holds its stderr tail, and the part is not tried again while
+`media_part.size` is unchanged. `unreachable`: the file could not be read; retried when
+`next_try_at` passes, an hour after the first attempt and doubling to 24 hours. `excluded`: the
+part's `duration_ms` is `NULL` or over 30 minutes (the analyzer decodes the whole track into
+memory); decided without opening the file and re-evaluated only when the size changes.
+
+**Config.** Off unless `PLEXDB_AUDIO_SECTIONS` names Plex section ids (`plex_items.section_id`),
+comma-separated; with it unset `plexdb harvest-audio` exits 78 and analyzes nothing.
+`PLEXDB_AUDIO_ANALYZER` is the analyzer program (default `plexdb-audio-analyze` on `PATH`), run as
+`<analyzer> <file>`: one JSON object on stdout and exit 0. `PLEXDB_MEDIA_DIR` and
+`PLEX_SOURCE_ROOTS` map Plex's path to a local one, as for `harvest-frames`. `PLEXDB_AUDIO_EVERY`
+is the minutes between runs `plexdb schedule` starts (default 60, `0` off).
+
+**A run.** Candidates are the parts of the configured sections. A part with a terminal state
+(`done`, `failed`, `excluded`) and an unchanged size is skipped without being hashed, so a
+steady-state run reads one query. Never-tried parts go first, then due retries. A part whose hash
+already has `audio_facts` gets an `audio_part` row and `done` with no analysis. If the media root
+itself fails `stat`, the run stops with `blocked: media root <path> unreadable: <error>` (exit 1)
+and the file in hand is not marked `unreachable`. The analyzer runs one file at a time under
+`SCHED_IDLE`, the idle I/O class and nice 19 on Linux (nice 19 elsewhere), with
+`OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS` and `NUMBA_NUM_THREADS` set to 1.
+Analysis holds no store lock: each result is written in its own short transaction. A run lock
+`audio-harvest.lock` beside the store makes a second run exit 75 ("another audio harvest is
+running").
+
+**`plexdb audio status`** prints JSON: `enabled`, `status` (`on`, or `off: PLEXDB_AUDIO_SECTIONS is
+not set`), `running`, and per configured section `done`, `pending`, `failed`, `unreachable` and
+`excluded`. `pending` is a part with no terminal state or a due retry; `unreachable` counts parts
+still waiting for their retry.
+
 ## The original language of a title
 
 `enrich-tmdb-language` writes one `enrichment` row per movie and show carrying a `tmdb` external id:

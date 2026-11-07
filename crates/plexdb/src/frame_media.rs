@@ -896,37 +896,43 @@ pub fn py_splitlines(text: &str) -> Vec<&str> {
     lines
 }
 
+/// sha256 over a file's size, its modification time and its first MiB: what two reads
+/// of the same content share and a re-encode or an overwrite does not. The frame
+/// harvester and the audio harvester key their work on it.
+pub fn file_hash(path: &Path, size: i64) -> Result<String, MediaError> {
+    let unreadable = |err: std::io::Error| {
+        MediaError::new(
+            format!(
+                "{}: cannot read: {}",
+                path.display(),
+                crate::frames::strerror(&err)
+            ),
+            "file unreadable",
+        )
+    };
+    let modified = std::fs::metadata(path)
+        .map_err(unreadable)?
+        .modified()
+        .map_err(unreadable)?;
+    let mut head = Vec::new();
+    std::fs::File::open(path)
+        .map_err(unreadable)?
+        .take(HASH_BYTES as u64)
+        .read_to_end(&mut head)
+        .map_err(unreadable)?;
+    let secs = match modified.duration_since(std::time::UNIX_EPOCH) {
+        Ok(since) => since.as_secs() as i64,
+        Err(before) => -(before.duration().as_secs_f64().ceil() as i64),
+    };
+    let mut digest = Sha256::new();
+    digest.update(format!("{size}|{}|", http_date(secs)).as_bytes());
+    digest.update(&head);
+    Ok(format!("{:x}", digest.finalize()))
+}
+
 impl MediaReader for FfmpegMedia {
-    /// sha256 over the part's size, its modification time and its first MiB.
     fn file_hash(&self, path: &Path, size: i64) -> Result<String, MediaError> {
-        let unreadable = |err: std::io::Error| {
-            MediaError::new(
-                format!(
-                    "{}: cannot read: {}",
-                    path.display(),
-                    crate::frames::strerror(&err)
-                ),
-                "file unreadable",
-            )
-        };
-        let modified = std::fs::metadata(path)
-            .map_err(unreadable)?
-            .modified()
-            .map_err(unreadable)?;
-        let mut head = Vec::new();
-        std::fs::File::open(path)
-            .map_err(unreadable)?
-            .take(HASH_BYTES as u64)
-            .read_to_end(&mut head)
-            .map_err(unreadable)?;
-        let secs = match modified.duration_since(std::time::UNIX_EPOCH) {
-            Ok(since) => since.as_secs() as i64,
-            Err(before) => -(before.duration().as_secs_f64().ceil() as i64),
-        };
-        let mut digest = Sha256::new();
-        digest.update(format!("{size}|{}|", http_date(secs)).as_bytes());
-        digest.update(&head);
-        Ok(format!("{:x}", digest.finalize()))
+        file_hash(path, size)
     }
 
     fn scan(&self, path: &Path) -> Result<Scan, MediaError> {

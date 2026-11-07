@@ -7,8 +7,8 @@ use plexdb_store::{Config, StoreError, open_store};
 use crate::decisions::FoldError;
 use crate::sources::Sources;
 use crate::{
-    check_files, extras_cmd, extras_declaration, extras_walk, frames_cmd, harvest_frames,
-    judge_steps, keyword_verdicts, latent_users, list_decisions, list_steps, media,
+    audio_cmd, check_files, extras_cmd, extras_declaration, extras_walk, frames_cmd, harvest_audio,
+    harvest_frames, judge_steps, keyword_verdicts, latent_users, list_decisions, list_steps, media,
     merge_decisions, migrate, name_decisions, plays, prune_frames, publish, record_panels,
     refresh_map, refresh_tagnetwork, repair, repair_fs, role_decisions, search_cmd, source_steps,
     tmdb_steps, walk,
@@ -331,6 +331,8 @@ pub const STEPS: &[(&str, Run)] = &[
     (list_steps::LIST_DECIDE, list_steps::list_decide),
     (frames_cmd::NAME, frames_cmd::run),
     (harvest_frames::NAME, harvest_frames::run),
+    (harvest_audio::NAME, harvest_audio::run),
+    (audio_cmd::NAME, audio_cmd::run),
     (search_cmd::NAME, search_cmd::run),
     (latent_users::NAME, latent_users::run),
     (record_panels::NAME, record_panels::run),

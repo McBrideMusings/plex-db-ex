@@ -41,6 +41,17 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
+# The audio analyzer `plexdb-rs harvest-audio` runs (tools/audio-analyze.py): Essentia
+# for tempo, beats and key, librosa for onset strength and RMS. A venv keeps the wheels
+# off the system python, and the installed script's shebang points into it, so
+# PLEXDB_AUDIO_ANALYZER's default (`plexdb-audio-analyze` on PATH) needs nothing else.
+RUN python -m venv /opt/audio-venv \
+    && /opt/audio-venv/bin/pip install --no-cache-dir \
+        essentia==2.1b6.dev1389 librosa==1.0.0 numpy==2.5.4
+COPY tools/audio-analyze.py /usr/local/bin/plexdb-audio-analyze
+RUN sed -i '1s|.*|#!/opt/audio-venv/bin/python|' /usr/local/bin/plexdb-audio-analyze \
+    && chmod 755 /usr/local/bin/plexdb-audio-analyze
+
 WORKDIR /app
 
 COPY --from=rust /build/target/release/plexdb-read /usr/local/bin/plexdb-read

@@ -60,6 +60,10 @@
     "whose snapshot is not published has not done what the sweep is for.",
     "harvest-frames: a command, not a step: `plexdb schedule` starts it when PLEXDB_FRAME_HOURS open",
     "and it writes frames.db alone (ADR-0024), so no sweep runs it.",
+    "harvest-audio, audio: commands, not steps: `plexdb schedule` starts harvest-audio every",
+    "PLEXDB_AUDIO_EVERY minutes when PLEXDB_AUDIO_SECTIONS names libraries (plexdb/audio_tick.py),",
+    "and it holds the store's writer lock only for each result, never during a decode, so no sweep",
+    "runs it. `audio status` reports what it has done.",
     "commands: moved to Rust but in no sweep, so they carry no order or policy."
   ],
   "steps": [
@@ -97,5 +101,5 @@
     {"name": "refresh-tagnetwork", "order": 68, "policy": "best-effort"},
     {"name": "publish", "order": 90, "policy": "required"}
   ],
-  "commands": ["lists", "list", "list-decide", "frames", "harvest-frames", "search", "repair-identities", "repair-fs-identities", "latent-users", "extras", "extras-tick"]
+  "commands": ["lists", "list", "list-decide", "frames", "harvest-frames", "harvest-audio", "audio", "search", "repair-identities", "repair-fs-identities", "latent-users", "extras", "extras-tick"]
 }

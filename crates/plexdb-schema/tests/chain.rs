@@ -111,6 +111,9 @@ fn an_empty_store_reaches_every_table_the_schema_holds_and_nothing_else() {
         "extra_moved",
         "extra_check",
         "extra_scrape",
+        "audio_facts",
+        "audio_part",
+        "audio_harvest_state",
         "reader_shape",
         "schema_version",
     ]
@@ -628,5 +631,88 @@ fn v17_renames_a_stem_with_one_new_form_and_refetches_one_that_splits() {
             vec![s("imdb:tt1"), s("Christmas film")],
             vec![s("imdb:tt2"), s("anim")],
         ]
+    );
+}
+
+#[test]
+fn v28_adds_the_three_audio_tables_and_moves_no_row() {
+    let mut conn = store_at(27);
+    conn.execute_batch(
+        "INSERT INTO items (item_id, type, title, year)
+             VALUES ('imdb:tt1', 'movie', 'One', 2000);
+         INSERT INTO media_part (part_id, item_id, rating_key, file, size, fetched_at)
+             VALUES (7, 'imdb:tt1', 'rk1', '/m/one.mkv', 10, '2026-01-01');",
+    )
+    .expect("seed");
+    let before = text(
+        &conn,
+        "SELECT CAST(part_id AS TEXT), file FROM media_part ORDER BY 1",
+    );
+    for table in ["audio_facts", "audio_part", "audio_harvest_state"] {
+        assert!(!tables(&conn).contains(table), "{table} exists before v28");
+    }
+
+    assert_eq!(landed(apply(&mut conn)), (27, SCHEMA_VERSION));
+
+    assert_eq!(
+        columns(&conn, "audio_facts"),
+        ["file_hash", "facts", "analyzed_at"]
+            .into_iter()
+            .map(String::from)
+            .collect()
+    );
+    assert_eq!(
+        columns(&conn, "audio_part"),
+        ["part_id", "item_id", "file_hash"]
+            .into_iter()
+            .map(String::from)
+            .collect()
+    );
+    assert_eq!(
+        columns(&conn, "audio_harvest_state"),
+        [
+            "part_id",
+            "item_id",
+            "size",
+            "file_hash",
+            "outcome",
+            "error",
+            "attempts",
+            "next_try_at",
+            "updated_at"
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect()
+    );
+    for table in ["audio_facts", "audio_part", "audio_harvest_state"] {
+        assert_eq!(
+            text(
+                &conn,
+                &format!("SELECT CAST(count(*) AS TEXT) FROM {table}")
+            ),
+            vec![vec![s("0")]],
+            "{table} starts empty"
+        );
+    }
+    assert_eq!(
+        text(
+            &conn,
+            "SELECT CAST(part_id AS TEXT), file FROM media_part ORDER BY 1"
+        ),
+        before
+    );
+    assert_eq!(
+        text(&conn, "SELECT CAST(version AS TEXT) FROM reader_shape"),
+        vec![vec![Some(READER_SHAPE.to_string())]]
+    );
+    assert!(
+        conn.execute(
+            "INSERT INTO audio_harvest_state (part_id, item_id, outcome, attempts, updated_at)
+             VALUES (1, 'x', 'bogus', 0, 'now')",
+            []
+        )
+        .is_err(),
+        "an unknown outcome is refused"
     );
 }
