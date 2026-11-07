@@ -127,6 +127,7 @@ def test_run_scheduler_starts_the_audio_harvester_beside_the_extras_tick(
         frames=lambda: None,
         extras=lambda: order.append("extras"),
         audio=lambda: order.append("audio"),
+        walk_settings=lambda: None,
         iterations=1,
     )
 

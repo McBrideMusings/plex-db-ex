@@ -77,6 +77,26 @@ def next_fire(now: datetime, at: tuple[int, int]) -> datetime:
     return candidate
 
 
+#: The settings the sweep's required `walk` step cannot run without
+#: (`crates/plexdb/src/sources.rs`, `crates/plexdb/src/steps.rs` `walk`).
+WALK_SETTINGS = ("PLEX_URL", "PLEX_TOKEN", "PLEX_SOURCE_ROOTS")
+
+
+def require_walk_settings() -> None:
+    """Raise `ConfigError` naming every one of `WALK_SETTINGS` that is unset or blank.
+
+    A blank value counts as unset, as it does for `walk` itself: a container recreated
+    from a template whose defaults are empty strings carries the variables with no value.
+    """
+    missing = [name for name in WALK_SETTINGS if not os.environ.get(name, "").strip()]
+    if missing:
+        raise ConfigError(
+            f"{', '.join(missing)} empty or unset: the sweep's required walk step cannot "
+            "read the library, so no sweep would ever publish a snapshot. Recreate the "
+            "container with these set (admin deploy)."
+        )
+
+
 def _migrate_store() -> None:
     """Bring the store to the schema this build expects, and say what happened.
 
@@ -234,6 +254,7 @@ def run_scheduler(
     frames: Callable[[], None] | None = None,
     extras: Callable[[], None] | None = None,
     audio: Callable[[], None] | None = None,
+    walk_settings: Callable[[], None] | None = None,
     iterations: int | None = None,
 ) -> int:
     """Migrate the store, then wait until the next scheduled time, run one sweep,
@@ -241,8 +262,13 @@ def run_scheduler(
 
     Runs forever under a container. `iterations` bounds the loop so a test can
     watch it complete a fixed number of cycles; `sweep`, `sleep`, `clock`,
-    `migrate`, `explore`, `frames`, `extras` and `audio` are injectable for the same reason.
-    Nothing else supplies them.
+    `migrate`, `explore`, `frames`, `extras`, `audio` and `walk_settings` are injectable for
+    the same reason. Nothing else supplies them.
+
+    **It refuses to start without the settings `walk` needs** (`PLEX_URL`, `PLEX_TOKEN`,
+    `PLEX_SOURCE_ROOTS`), checked right after the schedule. `walk` is a required step, so a
+    container started with any of them empty fails every sweep and never publishes; exiting
+    at startup makes that a stopped container instead of a nightly log line nobody reads.
 
     **Plex DB-EX starts after the migration**, when `PLEXDB_EXPLORE_PORT`
     is set, and serves on its own thread for as long as the loop runs.
@@ -272,6 +298,7 @@ def run_scheduler(
     do_frames = _start_frame_harvester if frames is None else frames
     do_extras = _start_extras_ticks if extras is None else extras
     do_audio = _start_audio_harvester if audio is None else audio
+    do_walk_settings = require_walk_settings if walk_settings is None else walk_settings
 
     raw = os.environ.get(SCHEDULE_VAR, "").strip()
     if not raw:
@@ -280,6 +307,7 @@ def run_scheduler(
             f"(the container's TZ decides the zone)"
         )
     at = parse_schedule(raw)
+    do_walk_settings()
 
     # After the schedule is validated and before anything is swept: a container
     # started with a malformed PLEXDB_SCHEDULE has no business migrating a store

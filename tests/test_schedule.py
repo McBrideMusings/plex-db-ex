@@ -73,6 +73,7 @@ def test_run_scheduler_waits_before_the_first_sweep_and_then_repeats(
         clock=lambda: next(times),
         migrate=lambda: None,
         extras=lambda: None,
+        walk_settings=lambda: None,
         iterations=2,
     )
 
@@ -98,6 +99,7 @@ def test_run_scheduler_keeps_going_after_a_sweep_that_failed(
         clock=lambda: datetime(2026, 8, 11, 3, 0),
         migrate=lambda: None,
         extras=lambda: None,
+        walk_settings=lambda: None,
         iterations=3,
     )
 
@@ -115,12 +117,59 @@ def test_run_scheduler_refuses_to_start_with_no_schedule_set(
             sleep=lambda _seconds: None,
             migrate=lambda: migrated.append(1),
             extras=lambda: None,
+            walk_settings=lambda: None,
             iterations=1,
         )
     # Nothing touches the store when the container is misconfigured: a schedule
     # that does not parse means no sweep will ever run, so migrating the file
     # would alter a live database on the way to exiting.
     assert migrated == []
+
+
+@pytest.mark.parametrize("blank", ["PLEX_URL", "PLEX_TOKEN", "PLEX_SOURCE_ROOTS"])
+def test_run_scheduler_refuses_to_start_when_walk_cannot_read_the_library(
+    monkeypatch: pytest.MonkeyPatch, blank: str
+) -> None:
+    """A container recreated from a template with empty defaults carries the variables
+    with no value. `walk` is required, so every sweep would fail and none would publish;
+    the scheduler stops at startup instead, before it touches the store."""
+    monkeypatch.setenv(schedule.SCHEDULE_VAR, "03:30")
+    monkeypatch.setenv("PLEX_URL", "http://plex:32400")
+    monkeypatch.setenv("PLEX_TOKEN", "token")
+    monkeypatch.setenv("PLEX_SOURCE_ROOTS", "/media")
+    monkeypatch.setenv(blank, "  ")
+    migrated: list[int] = []
+    with pytest.raises(ConfigError, match=blank):
+        schedule.run_scheduler(
+            sweep=lambda: 0,
+            sleep=lambda _seconds: None,
+            migrate=lambda: migrated.append(1),
+            extras=lambda: None,
+            iterations=1,
+        )
+    assert migrated == []
+
+
+def test_run_scheduler_starts_when_walk_has_its_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(schedule.SCHEDULE_VAR, "03:30")
+    monkeypatch.setenv("PLEX_URL", "http://plex:32400")
+    monkeypatch.setenv("PLEX_TOKEN", "token")
+    monkeypatch.setenv("PLEX_SOURCE_ROOTS", "/media")
+    migrated: list[int] = []
+    schedule.run_scheduler(
+        sweep=lambda: 0,
+        sleep=lambda _seconds: None,
+        clock=lambda: datetime(2026, 8, 11, 3, 0),
+        migrate=lambda: migrated.append(1),
+        explore=lambda: None,
+        frames=lambda: None,
+        extras=lambda: None,
+        audio=lambda: None,
+        iterations=1,
+    )
+    assert migrated == [1]
 
 
 def test_run_scheduler_migrates_the_store_before_the_first_wait(
@@ -142,6 +191,7 @@ def test_run_scheduler_migrates_the_store_before_the_first_wait(
         clock=lambda: datetime(2026, 8, 11, 3, 0),
         migrate=lambda: order.append("migrate"),
         extras=lambda: None,
+        walk_settings=lambda: None,
         iterations=1,
     )
 
