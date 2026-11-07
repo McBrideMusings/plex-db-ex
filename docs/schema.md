@@ -1783,10 +1783,15 @@ part's `duration_ms` is `NULL` or over 30 minutes (the analyzer decodes the whol
 memory); decided without opening the file and re-evaluated only when the size changes.
 
 **Config.** Off unless `PLEXDB_AUDIO_SECTIONS` names Plex section ids (`plex_items.section_id`),
-comma-separated; with it unset `plexdb harvest-audio` exits 78 and analyzes nothing.
+comma-separated; with it unset `plexdb harvest-audio` exits 78 and analyzes nothing. The sections must be
+movie or show libraries: media-walk lists parts for those only, so a music or photo section has no
+`media_part` rows and the run report and `audio status` flag it (`parts: 0`, "no media_part rows —
+only movie and show sections are walked").
 `PLEXDB_AUDIO_ANALYZER` is the analyzer program (default `plexdb-audio-analyze` on `PATH`), run as
 `<analyzer> <file>`: one JSON object on stdout and exit 0. `PLEXDB_MEDIA_DIR` and
-`PLEX_SOURCE_ROOTS` map Plex's path to a local one, as for `harvest-frames`. `PLEXDB_AUDIO_EVERY`
+`PLEX_SOURCE_ROOTS` map Plex's path to a local one, as for `harvest-frames`. `PLEXDB_AUDIO_TIMEOUT`
+is the seconds one analysis may run (default 900); past it the analyzer and anything it started are
+killed and the part is `failed` with "analyzer timed out after Ns". `PLEXDB_AUDIO_EVERY`
 is the minutes between runs `plexdb schedule` starts (default 60, `0` off).
 
 **A run.** Candidates are the parts of the configured sections. A part with a terminal state
@@ -1794,7 +1799,10 @@ is the minutes between runs `plexdb schedule` starts (default 60, `0` off).
 steady-state run reads one query. Never-tried parts go first, then due retries. A part whose hash
 already has `audio_facts` gets an `audio_part` row and `done` with no analysis. If the media root
 itself fails `stat`, the run stops with `blocked: media root <path> unreadable: <error>` (exit 1)
-and the file in hand is not marked `unreachable`. The analyzer runs one file at a time under
+and the file in hand is not marked `unreachable`. A path under no `PLEX_SOURCE_ROOTS` root (or one leaving the media dir) is a
+configuration error and stops the run the same way, with `blocked: <path> is under none of
+PLEX_SOURCE_ROOTS …` and nothing recorded for it. A part leaving `done` (failed, excluded,
+unreachable) loses its `audio_part` row, so no row points at a file's old facts. The analyzer runs one file at a time under
 `SCHED_IDLE`, the idle I/O class and nice 19 on Linux (nice 19 elsewhere), with
 `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS` and `NUMBA_NUM_THREADS` set to 1.
 Analysis holds no store lock: each result is written in its own short transaction. A run lock
@@ -1802,7 +1810,7 @@ Analysis holds no store lock: each result is written in its own short transactio
 running").
 
 **`plexdb audio status`** prints JSON: `enabled`, `status` (`on`, or `off: PLEXDB_AUDIO_SECTIONS is
-not set`), `running`, and per configured section `done`, `pending`, `failed`, `unreachable` and
+not set`), `running`, and per configured section `parts` (every media part), `done`, `pending`, `failed`, `unreachable` and
 `excluded`. `pending` is a part with no terminal state or a due retry; `unreachable` counts parts
 still waiting for their retry.
 

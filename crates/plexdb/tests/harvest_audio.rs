@@ -6,6 +6,7 @@ mod common;
 
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use plexdb::audio_cmd;
 use plexdb::harvest_audio::{
@@ -65,6 +66,7 @@ impl World {
         let settings = Settings {
             sections: vec!["1".into()],
             analyzer: "unused".into(),
+            timeout: Duration::from_secs(900),
             media_dir: media.clone(),
             source_roots: vec!["/plexroot".into()],
         };
@@ -506,6 +508,7 @@ fn the_analyzer_process_runs_niced_single_threaded_and_reports_a_failure_by_its_
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
     let analyzer = ProcessAnalyzer {
         program: script.to_string_lossy().into_owned(),
+        timeout: Duration::from_secs(60),
     };
 
     let facts = analyzer.analyze(Path::new("/x/good.wav")).expect("facts");
@@ -524,9 +527,132 @@ fn the_analyzer_process_runs_niced_single_threaded_and_reports_a_failure_by_its_
     }
     let missing = ProcessAnalyzer {
         program: "/nonexistent/analyzer".into(),
+        timeout: Duration::from_secs(60),
     };
     assert!(matches!(
         missing.analyze(Path::new("/x/a.wav")),
         Err(AnalyzeError::Unavailable(_))
     ));
+}
+
+#[cfg(unix)]
+#[test]
+fn an_analyzer_past_its_timeout_is_killed_with_its_children_and_recorded_failed() {
+    use std::os::unix::fs::PermissionsExt;
+    let w = World::new();
+    w.part(1, "1", "a.wav", b"aaaa", MIN_20);
+    let script = w._dir.path().join("slow.sh");
+    // `sleep` is a child of the shell: killing only the shell would leave it holding the pipes.
+    std::fs::write(&script, "#!/bin/sh\nsleep 30\necho '{}'\n").unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let analyzer = ProcessAnalyzer {
+        program: script.to_string_lossy().into_owned(),
+        timeout: Duration::from_secs(1),
+    };
+
+    let started = std::time::Instant::now();
+    let report = w.run(&analyzer).expect("run");
+
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(report.failed, 1);
+    let (outcome, _, _, error) = w.state(1);
+    assert_eq!(outcome, "failed");
+    assert_eq!(error.as_deref(), Some("analyzer timed out after 1s"));
+    assert!(!harvest_running(&w.store), "the run lock is released");
+}
+
+#[test]
+fn a_part_that_moves_off_done_loses_its_audio_part_row() {
+    let w = World::new();
+    w.part(1, "1", "a.wav", &[b'a'; 100], MIN_20);
+    let fake = Fake::new();
+    w.run(&fake).expect("run");
+    assert_eq!(w.count("audio_part"), 1);
+
+    // Plex re-lists the part at a new size and the analyzer now fails.
+    std::fs::write(w.media.join("a.wav"), [b'a'; 120]).unwrap();
+    w.conn
+        .execute("UPDATE media_part SET size = 120", [])
+        .unwrap();
+    fake.fail.set(true);
+    let report = w.run(&fake).expect("rerun");
+
+    assert_eq!(report.failed, 1);
+    assert_eq!(w.state(1).0, "failed");
+    assert_eq!(
+        w.count("audio_part"),
+        0,
+        "no row points at the old file's facts"
+    );
+    assert_eq!(
+        w.count("audio_facts"),
+        1,
+        "the old content's facts stay under their hash"
+    );
+
+    // Excluded and unreachable clear it too.
+    fake.fail.set(false);
+    std::fs::write(w.media.join("a.wav"), [b'a'; 130]).unwrap();
+    w.conn
+        .execute("UPDATE media_part SET size = 130", [])
+        .unwrap();
+    w.run(&fake).expect("done again");
+    assert_eq!(w.count("audio_part"), 1);
+    w.conn
+        .execute("UPDATE media_part SET size = 140, duration_ms = NULL", [])
+        .unwrap();
+    w.run(&fake).expect("excluded");
+    assert_eq!(
+        (w.state(1).0.as_str(), w.count("audio_part")),
+        ("excluded", 0)
+    );
+}
+
+#[test]
+fn a_path_under_no_source_root_blocks_the_run_and_records_nothing() {
+    let w = World::new();
+    w.part(1, "1", "a.wav", b"aaaa", MIN_20);
+    w.conn
+        .execute("UPDATE media_part SET file = '/elsewhere/a.wav'", [])
+        .unwrap();
+    let fake = Fake::new();
+
+    let report = w.run(&fake).expect("a blocked run is a report");
+
+    let reason = report.blocked.expect("blocked");
+    assert!(
+        reason.starts_with("blocked: /elsewhere/a.wav is under none of PLEX_SOURCE_ROOTS"),
+        "{reason}"
+    );
+    assert_eq!(fake.calls(), 0);
+    assert!(!w.has_state(1));
+}
+
+#[test]
+fn a_section_with_no_media_part_rows_is_flagged_in_the_report_and_in_status() {
+    let mut w = World::new();
+    w.part(1, "1", "a.wav", b"aaaa", MIN_20);
+    w.settings.sections = vec!["1".into(), "7".into()];
+
+    let report = w.run(&Fake::new()).expect("run");
+
+    assert_eq!(report.empty_sections, ["7"]);
+    assert!(
+        report
+            .describe()
+            .contains("section 7: no media_part rows — only movie and show sections are walked")
+    );
+    let counts = status(&w.store, &w.settings.sections, T0).expect("status");
+    assert_eq!((counts[0].1.parts, counts[1].1.parts), (1, 0));
+    let text = dumps_indent2(&audio_cmd::report(&w.store, &w.settings.sections, T0).unwrap());
+    assert!(text.contains("\"parts\": 0"));
+    assert_eq!(
+        text.matches("only movie and show sections are walked")
+            .count(),
+        1
+    );
 }

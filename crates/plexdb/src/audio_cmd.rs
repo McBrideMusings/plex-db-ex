@@ -15,14 +15,19 @@ pub const NAME: &str = "audio";
 
 fn counts_json(section: &str, counts: &Counts) -> Json {
     let count = |n: usize| Json::Int(n as i64);
-    Json::object([
+    let mut fields = vec![
         ("section_id", Json::str(section)),
+        ("parts", count(counts.parts)),
         ("done", count(counts.done)),
         ("pending", count(counts.pending)),
         ("failed", count(counts.failed)),
         ("unreachable", count(counts.unreachable)),
         ("excluded", count(counts.excluded)),
-    ])
+    ];
+    if counts.parts == 0 {
+        fields.push(("note", Json::str(harvest_audio::EMPTY_SECTION_NOTE)));
+    }
+    Json::object_from(fields)
 }
 
 /// The report `plexdb audio status` prints.

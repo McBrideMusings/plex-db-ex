@@ -31,9 +31,12 @@
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions, TryLockError};
+use std::io::Read;
 use std::os::unix::process::CommandExt;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use plexdb_store::{Config, StoreError, open_readonly, open_store};
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
@@ -49,12 +52,19 @@ pub const NAME: &str = "harvest-audio";
 pub const SECTIONS_VAR: &str = "PLEXDB_AUDIO_SECTIONS";
 pub const ANALYZER_VAR: &str = "PLEXDB_AUDIO_ANALYZER";
 pub const DEFAULT_ANALYZER: &str = "plexdb-audio-analyze";
+pub const TIMEOUT_VAR: &str = "PLEXDB_AUDIO_TIMEOUT";
+/// Seconds one analysis may run before it is killed and recorded `failed`.
+pub const DEFAULT_TIMEOUT_SECS: u64 = 900;
 
 /// A part longer than this is `excluded`: the analyzer decodes the whole track to memory.
 pub const MAX_DURATION_MS: i64 = 1_800_000;
 const RETRY_BASE_SECS: i64 = 3600;
 const RETRY_CAP_SECS: i64 = 86_400;
 const STDERR_TAIL_CHARS: usize = 300;
+
+/// Said of a configured section that has no `media_part` rows: media-walk covers only
+/// movie and show libraries, so a music or photo section looks like a healthy empty one.
+pub const EMPTY_SECTION_NOTE: &str = "no media_part rows — only movie and show sections are walked";
 
 pub const LOCK_FILE: &str = "audio-harvest.lock";
 
@@ -93,6 +103,7 @@ impl Outcome {
 pub struct Settings {
     pub sections: Vec<String>,
     pub analyzer: String,
+    pub timeout: Duration,
     pub media_dir: PathBuf,
     pub source_roots: Vec<String>,
 }
@@ -140,9 +151,24 @@ impl Settings {
             .map(|raw| raw.trim().to_string())
             .filter(|raw| !raw.is_empty())
             .unwrap_or_else(|| DEFAULT_ANALYZER.to_string());
+        let timeout = match std::env::var(TIMEOUT_VAR)
+            .ok()
+            .map(|raw| raw.trim().to_string())
+        {
+            Some(raw) if !raw.is_empty() => match raw.parse::<u64>() {
+                Ok(secs) if secs > 0 => Duration::from_secs(secs),
+                _ => {
+                    return Err(StoreError::Config(format!(
+                        "{TIMEOUT_VAR} must be a whole number of seconds above 0, got {raw:?}"
+                    )));
+                }
+            },
+            _ => Duration::from_secs(DEFAULT_TIMEOUT_SECS),
+        };
         Ok(Settings {
             sections,
             analyzer,
+            timeout,
             media_dir,
             source_roots: frames.source_roots,
         })
@@ -170,6 +196,8 @@ pub trait Analyzer {
 /// one math-library thread, so a decode never takes CPU or disk from Plex or the sweep.
 pub struct ProcessAnalyzer {
     pub program: String,
+    /// A run past this is killed, with everything it started, and is `failed`.
+    pub timeout: Duration,
 }
 
 const SINGLE_THREAD_VARS: [&str; 4] = [
@@ -211,22 +239,75 @@ impl Analyzer for ProcessAnalyzer {
         for var in SINGLE_THREAD_VARS {
             command.env(var, "1");
         }
-        // SAFETY: `lower_priority` only makes async-signal-safe syscalls.
+        // SAFETY: `lower_priority` and `setpgid` only make async-signal-safe syscalls. The
+        // child leads its own process group so a timeout can kill what it started too.
         unsafe {
             command.pre_exec(|| {
+                libc::setpgid(0, 0);
                 lower_priority();
                 Ok(())
             });
         }
-        let output = command.output().map_err(|err| {
+        let mut child = command.spawn().map_err(|err| {
             AnalyzeError::Unavailable(format!("cannot run {}: {err}", self.program))
         })?;
+        let drain = |pipe: Option<Box<dyn Read + Send>>| {
+            std::thread::spawn(move || {
+                let mut bytes = Vec::new();
+                if let Some(mut pipe) = pipe {
+                    let _ = pipe.read_to_end(&mut bytes);
+                }
+                bytes
+            })
+        };
+        let out_reader = drain(
+            child
+                .stdout
+                .take()
+                .map(|p| Box::new(p) as Box<dyn Read + Send>),
+        );
+        let err_reader = drain(
+            child
+                .stderr
+                .take()
+                .map(|p| Box::new(p) as Box<dyn Read + Send>),
+        );
+        let deadline = Instant::now() + self.timeout;
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break Some(status),
+                Ok(None) if Instant::now() >= deadline => break None,
+                Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+                Err(err) => {
+                    kill_group(&mut child);
+                    return Err(AnalyzeError::Unavailable(format!(
+                        "cannot wait for {}: {err}",
+                        self.program
+                    )));
+                }
+            }
+        };
+        let Some(status) = status else {
+            kill_group(&mut child);
+            let _ = out_reader.join();
+            let _ = err_reader.join();
+            return Err(AnalyzeError::Failed(format!(
+                "analyzer timed out after {}s",
+                self.timeout.as_secs()
+            )));
+        };
+        let output = std::process::Output {
+            status,
+            stdout: out_reader.join().unwrap_or_default(),
+            stderr: err_reader.join().unwrap_or_default(),
+        };
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let tail = tail_chars(stderr.trim(), STDERR_TAIL_CHARS);
-            let how = match output.status.code() {
-                Some(code) => format!("exited {code}"),
-                None => "was killed by a signal".to_string(),
+            let how = match (output.status.code(), output.status.signal()) {
+                (Some(code), _) => format!("exited {code}"),
+                (None, Some(signal)) => format!("was killed by signal {signal}"),
+                (None, None) => "was killed".to_string(),
             };
             return Err(AnalyzeError::Failed(if tail.is_empty() {
                 format!("{} {how}", self.program)
@@ -245,6 +326,17 @@ impl Analyzer for ProcessAnalyzer {
         }
         Ok(value)
     }
+}
+
+/// Kill the analyzer's whole process group (a shell or Python wrapper's children hold the
+/// output pipes open) and reap it.
+fn kill_group(child: &mut std::process::Child) {
+    // SAFETY: signalling the group the child made for itself in `pre_exec`.
+    unsafe {
+        libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 fn tail_chars(text: &str, keep: usize) -> String {
@@ -438,6 +530,8 @@ pub struct Report {
     pub excluded: usize,
     /// Set when the media root failed stat and the run stopped there.
     pub blocked: Option<String>,
+    /// Configured sections with no `media_part` rows.
+    pub empty_sections: Vec<String>,
 }
 
 impl Report {
@@ -453,6 +547,9 @@ impl Report {
             self.excluded,
             self.settled
         );
+        for section in &self.empty_sections {
+            line.push_str(&format!("; section {section}: {EMPTY_SECTION_NOTE}"));
+        }
         if let Some(reason) = &self.blocked {
             line.push_str(&format!("; {reason}"));
         }
@@ -488,6 +585,14 @@ fn record(store: &Path, write: &Write, now: &Now) -> Result<(), Failure> {
             "INSERT INTO audio_facts (file_hash, facts, analyzed_at) VALUES (?1, ?2, ?3) \
              ON CONFLICT(file_hash) DO NOTHING",
             params![hash, facts.to_string(), at],
+        )
+        .map_err(store_failure)?;
+    }
+    if write.outcome != Outcome::Done {
+        // The part no longer has the content its old row described.
+        tx.execute(
+            "DELETE FROM audio_part WHERE part_id = ?1",
+            [write.cand.part_id],
         )
         .map_err(store_failure)?;
     }
@@ -559,6 +664,12 @@ pub fn harvest(
     };
     let mut report = Report {
         candidates: found.len(),
+        empty_sections: settings
+            .sections
+            .iter()
+            .filter(|id| !found.iter().any(|cand| &cand.section_id == *id))
+            .cloned()
+            .collect(),
         ..Report::default()
     };
 
@@ -608,8 +719,16 @@ pub fn harvest(
             return Ok(report);
         }
         let now = Now::at_secs(clock());
-        let hashed = local_path(&settings.media_dir, &cand.file, &settings.source_roots)
-            .and_then(|path| file_hash(&path, cand.size.unwrap_or(0)).map(|hash| (path, hash)));
+        // A path the settings cannot map is a configuration error, not a flaky file: stop
+        // and record nothing for it.
+        let path = match local_path(&settings.media_dir, &cand.file, &settings.source_roots) {
+            Ok(path) => path,
+            Err(err) => {
+                report.blocked = Some(format!("blocked: {}", err.message));
+                return Ok(report);
+            }
+        };
+        let hashed = file_hash(&path, cand.size.unwrap_or(0)).map(|hash| (path, hash));
         let (path, hash) = match hashed {
             Ok(found) => found,
             Err(err) => {
@@ -734,6 +853,8 @@ pub fn harvest(
 /// a due `unreachable`; `unreachable` is one still waiting for its retry.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Counts {
+    /// Every media part of the section, whatever its state; 0 means media-walk found none.
+    pub parts: usize,
     pub done: usize,
     pub pending: usize,
     pub failed: usize,
@@ -758,6 +879,7 @@ pub fn status(
         let Some((_, counts)) = by_section.iter_mut().find(|(id, _)| *id == cand.section_id) else {
             continue;
         };
+        counts.parts += 1;
         match classify(cand, known.get(&cand.part_id), now_secs * 1_000_000) {
             Disposition::Settled(Outcome::Done) => counts.done += 1,
             Disposition::Settled(Outcome::Failed) => counts.failed += 1,
@@ -792,6 +914,7 @@ pub fn run(args: &[String]) -> Result<(), Failure> {
     let config = Config::from_env().map_err(failure)?;
     let analyzer = ProcessAnalyzer {
         program: settings.analyzer.clone(),
+        timeout: settings.timeout,
     };
     let report = harvest(
         &config.store_path,
