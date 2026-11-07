@@ -30,9 +30,13 @@ use crate::error::ReaderError;
 /// spellings to normalized forms. Writers' fetch cursors live in
 /// `enrichment_cursor`, not `enrichment` (ADR-0013).
 ///
+/// Shape 29 adds the audio facts accessors: the store must carry `audio_facts`,
+/// `audio_part` and `media_part` (schema versions 23 and 28), so an older store
+/// is refused at open rather than failing at the accessor.
+///
 /// This crate's tests do not compile while this constant differs from
 /// `plexdb_schema::READER_SHAPE` (`tests/common/mod.rs`).
-pub const SUPPORTED_READER_SHAPE: i64 = 10;
+pub const SUPPORTED_READER_SHAPE: i64 = 29;
 
 /// Confirm `conn` is a plexdb store whose `reader_shape` is exactly
 /// [`SUPPORTED_READER_SHAPE`].

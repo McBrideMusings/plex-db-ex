@@ -716,3 +716,22 @@ fn v28_adds_the_three_audio_tables_and_moves_no_row() {
         "an unknown outcome is refused"
     );
 }
+
+#[test]
+fn v29_stamps_reader_shape_29_and_adds_nothing() {
+    let mut conn = store_at(28);
+    assert_eq!(
+        text(&conn, "SELECT CAST(version AS TEXT) FROM reader_shape"),
+        vec![vec![s("10")]]
+    );
+    let before = tables(&conn);
+
+    assert_eq!(landed(apply(&mut conn)), (28, SCHEMA_VERSION));
+
+    assert_eq!(tables(&conn), before);
+    assert_eq!(
+        text(&conn, "SELECT CAST(version AS TEXT) FROM reader_shape"),
+        vec![vec![s("29")]]
+    );
+    assert_eq!(READER_SHAPE, 29);
+}

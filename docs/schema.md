@@ -25,7 +25,7 @@ outright, because a newer writer may have added rows this build cannot see. A st
 ### Reader shape
 
 The store also carries a `reader_shape` table (version 15 on): one row naming the last schema
-version that changed what a reader reads. It is 10 today. `plexdb-reader` opens a store only when
+version that changed what a reader reads. It is 29 today (version 29 added the audio facts accessors). `plexdb-reader` opens a store only when
 `reader_shape` equals its `SUPPORTED_READER_SHAPE`, whatever `schema_version` says, so a deployed
 reader keeps reading a snapshot from a newer writer that has only added tables or columns.
 
@@ -1759,7 +1759,7 @@ audio_harvest_state  part_id INTEGER PRIMARY KEY, item_id TEXT NOT NULL, size IN
                      attempts INTEGER NOT NULL, next_try_at TEXT, updated_at TEXT NOT NULL
 ```
 
-Additive; `reader_shape` stays at 10. Written by `plexdb harvest-audio`, the only writer of all three.
+Additive at version 28; version 29 then bumped `reader_shape` to 29 because the reader reads these tables. Written by `plexdb harvest-audio`, the only writer of all three.
 
 - **`audio_facts`** is what the analyzer (`tools/audio-analyze.py`, installed as
   `plexdb-audio-analyze`) printed for one file's content: its JSON object, verbatim, keyed by the
@@ -1770,7 +1770,12 @@ Additive; `reader_shape` stays at 10. Written by `plexdb harvest-audio`, the onl
   or paths carry that content.
 - **`audio_part`** says which analyzed content a Plex media part has, written when the part's
   outcome is `done`. It has no foreign key to `media_part`: media-walk deletes and re-inserts a
-  record's parts, and a cascade would wipe these rows. A reader joins on `part_id` or `item_id`.
+  record's parts, and a cascade would wipe these rows. A reader joins on `part_id` or `item_id`:
+  `plexdb-reader`'s `Reader::audio_facts_for(item_id)` returns an item's parsed facts object or `None`,
+  and `audio_facts_for_many(ids)` a map of only the items that have facts. Both go through
+  `media_part` joined to `audio_part` joined to `audio_facts`, so a part Plex no longer lists is never read, and the
+  highest `part_id` wins when several parts are analyzed. A stored row that is not valid JSON is a
+  `ReaderError::AudioFacts` naming the item.
 - **`audio_harvest_state`** is the harvester's bookkeeping, one row per media part it has looked
   at, and never a fact about a title (ADR-0013). `size` is the part's `media_part.size` when the
   row was written.

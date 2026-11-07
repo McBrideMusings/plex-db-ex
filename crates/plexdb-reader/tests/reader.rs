@@ -852,3 +852,152 @@ fn tag_neighbours_reads_either_end_of_an_edge_strongest_first() {
             .is_empty()
     );
 }
+
+fn seed_audio(conn: &rusqlite::Connection, sql: &str) {
+    conn.execute_batch(sql).expect("seed audio rows");
+}
+
+const AUDIO_FACTS_JSON: &str = r#"{"bpm":124.5,"beat_grid":[0.1,0.58],"downbeat_phase":0,"landing_bar":12,"landing_bar_s":23.2,"key":"A","scale":"minor","camelot":"8A","key_strength":0.81,"beat_confidence":3.2,"bar_energy":[0.2,0.4],"rms_mean":0.07}"#;
+
+fn audio_fixture() -> (tempfile::TempDir, Reader) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("plexdb.db");
+    let conn = common::build_fixture(&path);
+    seed_audio(
+        &conn,
+        &format!(
+            "INSERT INTO media_part (part_id, item_id, rating_key, file, size, fetched_at) VALUES
+                 (101, 'imdb:tt1', 'rk1', '/m/alpha.mkv', 10, 't'),
+                 (201, 'imdb:tt2', 'rk2', '/m/beta-a.mkv', 10, 't'),
+                 (202, 'imdb:tt2', 'rk2', '/m/beta-b.mkv', 10, 't'),
+                 (301, 'imdb:tt3', 'rk3', '/m/gamma.mkv', 10, 't');
+             INSERT INTO audio_facts (file_hash, facts, analyzed_at) VALUES
+                 ('h-alpha', '{AUDIO_FACTS_JSON}', 't'),
+                 ('h-beta-a', '{{\"bpm\":1}}', 't'),
+                 ('h-beta-b', '{{\"bpm\":2}}', 't'),
+                 ('h-gone', '{{\"bpm\":9}}', 't');
+             INSERT INTO audio_part (part_id, item_id, file_hash) VALUES
+                 (101, 'imdb:tt1', 'h-alpha'),
+                 (201, 'imdb:tt2', 'h-beta-a'),
+                 (202, 'imdb:tt2', 'h-beta-b'),
+                 (999, 'imdb:tt9', 'h-gone');"
+        ),
+    );
+    drop(conn);
+    let reader = Reader::open(&path, None, None).expect("open the fixture store");
+    (dir, reader)
+}
+
+#[test]
+fn audio_facts_for_returns_the_stored_object_for_an_analyzed_title() {
+    let (_dir, reader) = audio_fixture();
+    let facts = reader
+        .audio_facts_for("imdb:tt1")
+        .expect("query audio facts")
+        .expect("an analyzed title has facts");
+    assert_eq!(
+        facts,
+        serde_json::from_str::<serde_json::Value>(AUDIO_FACTS_JSON).unwrap()
+    );
+    let keys: Vec<&str> = facts
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert!(keys.contains(&"beat_grid") && keys.contains(&"landing_bar_s"));
+}
+
+#[test]
+fn audio_facts_for_is_none_for_an_unanalyzed_title() {
+    let (_dir, reader) = audio_fixture();
+    assert_eq!(reader.audio_facts_for("imdb:tt3").expect("query"), None);
+    assert_eq!(reader.audio_facts_for("imdb:nope").expect("query"), None);
+}
+
+#[test]
+fn audio_facts_for_ignores_an_audio_part_whose_part_plex_no_longer_lists() {
+    let (_dir, reader) = audio_fixture();
+    // part 999 has an audio_part row and facts but no media_part row.
+    assert_eq!(reader.audio_facts_for("imdb:tt9").expect("query"), None);
+    let many = reader
+        .audio_facts_for_many(["imdb:tt9"])
+        .expect("query many");
+    assert!(many.is_empty());
+}
+
+#[test]
+fn audio_facts_for_takes_the_highest_part_id_of_two_analyzed_parts() {
+    let (_dir, reader) = audio_fixture();
+    let facts = reader.audio_facts_for("imdb:tt2").unwrap().unwrap();
+    assert_eq!(facts["bpm"], 2);
+    let many = reader.audio_facts_for_many(["imdb:tt2"]).unwrap();
+    assert_eq!(many["imdb:tt2"]["bpm"], 2);
+}
+
+#[test]
+fn audio_facts_for_many_returns_only_analyzed_ids_and_counts_a_repeat_once() {
+    let (_dir, reader) = audio_fixture();
+    let many = reader
+        .audio_facts_for_many(["imdb:tt1", "imdb:tt1", "imdb:tt2", "imdb:tt3", "imdb:nope"])
+        .expect("query many");
+    let mut ids: Vec<&str> = many.keys().map(String::as_str).collect();
+    ids.sort();
+    assert_eq!(ids, vec!["imdb:tt1", "imdb:tt2"]);
+    assert_eq!(many["imdb:tt1"]["bpm"], 124.5);
+    assert!(
+        reader
+            .audio_facts_for_many(std::iter::empty())
+            .expect("empty")
+            .is_empty()
+    );
+}
+
+#[test]
+fn audio_facts_for_many_handles_more_ids_than_the_variable_limit() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("plexdb.db");
+    let conn = common::build_fixture(&path);
+    let mut sql = String::new();
+    for i in 0..1500 {
+        sql.push_str(&format!(
+            "INSERT INTO items (item_id, type, title) VALUES ('bulk:{i}', 'movie', 'B{i}');
+             INSERT INTO media_part (part_id, item_id, rating_key, file, size, fetched_at)
+                 VALUES ({p}, 'bulk:{i}', 'rk', '/m/{i}.mkv', 1, 't');
+             INSERT INTO audio_facts (file_hash, facts, analyzed_at) VALUES ('hb{i}', '{{\"bpm\":{i}}}', 't');
+             INSERT INTO audio_part (part_id, item_id, file_hash) VALUES ({p}, 'bulk:{i}', 'hb{i}');",
+            p = 5000 + i
+        ));
+    }
+    conn.execute_batch(&format!("BEGIN; {sql} COMMIT;"))
+        .expect("seed");
+    drop(conn);
+
+    let reader = Reader::open(&path, None, None).expect("open");
+    let ids: Vec<String> = (0..1500).map(|i| format!("bulk:{i}")).collect();
+    let many = reader
+        .audio_facts_for_many(ids.iter().map(String::as_str))
+        .expect("more ids than the default 999-variable limit must chunk");
+    assert_eq!(many.len(), 1500);
+    assert_eq!(many["bulk:1499"]["bpm"], 1499);
+}
+
+#[test]
+fn audio_facts_with_malformed_json_is_an_error_naming_the_item() {
+    let (_dir, reader) = audio_fixture();
+    let path = _dir.path().join("plexdb.db");
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    seed_audio(
+        &conn,
+        "UPDATE audio_facts SET facts = '{not json' WHERE file_hash = 'h-alpha';",
+    );
+    let err = reader
+        .audio_facts_for("imdb:tt1")
+        .expect_err("malformed JSON");
+    assert!(matches!(err, ReaderError::AudioFacts { .. }));
+    assert!(err.to_string().contains("imdb:tt1"), "{err}");
+    let err = reader
+        .audio_facts_for_many(["imdb:tt1"])
+        .expect_err("malformed JSON, batch");
+    assert!(err.to_string().contains("imdb:tt1"), "{err}");
+}
