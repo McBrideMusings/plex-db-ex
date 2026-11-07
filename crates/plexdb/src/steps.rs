@@ -8,10 +8,10 @@ use crate::decisions::FoldError;
 use crate::sources::Sources;
 use crate::{
     audio_cmd, check_files, extras_cmd, extras_declaration, extras_walk, frames_cmd, harvest_audio,
-    harvest_frames, judge_steps, keyword_verdicts, latent_users, list_decisions, list_steps, media,
-    merge_decisions, migrate, name_decisions, plays, prune_frames, publish, record_panels,
-    refresh_map, refresh_tagnetwork, repair, repair_fs, role_decisions, search_cmd, source_steps,
-    tmdb_steps, walk,
+    harvest_frames, import_audio_facts, judge_steps, keyword_verdicts, latent_users,
+    list_decisions, list_steps, media, merge_decisions, migrate, name_decisions, plays,
+    prune_frames, publish, record_panels, refresh_map, refresh_tagnetwork, repair, repair_fs,
+    role_decisions, search_cmd, source_steps, tmdb_steps, walk,
 };
 
 /// Why a step stopped. `Config` is a setting that is absent, which the sweep
@@ -332,6 +332,7 @@ pub const STEPS: &[(&str, Run)] = &[
     (frames_cmd::NAME, frames_cmd::run),
     (harvest_frames::NAME, harvest_frames::run),
     (harvest_audio::NAME, harvest_audio::run),
+    (import_audio_facts::NAME, import_audio_facts::run),
     (audio_cmd::NAME, audio_cmd::run),
     (search_cmd::NAME, search_cmd::run),
     (latent_users::NAME, latent_users::run),

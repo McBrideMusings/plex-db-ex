@@ -833,7 +833,7 @@ fn facts_exist(conn: &Connection, hash: &str) -> rusqlite::Result<bool> {
     .map(|found| found.is_some())
 }
 
-fn media_root_error(root: &Path) -> Option<String> {
+pub fn media_root_error(root: &Path) -> Option<String> {
     std::fs::metadata(root)
         .err()
         .map(|err| format!("blocked: media root {} unreadable: {err}", root.display()))

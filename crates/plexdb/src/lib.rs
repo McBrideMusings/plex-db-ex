@@ -43,6 +43,7 @@ pub mod harvest_frames;
 pub mod html;
 pub mod http;
 pub mod identity;
+pub mod import_audio_facts;
 pub mod jev;
 pub mod judge_steps;
 pub mod keyword_verdicts;

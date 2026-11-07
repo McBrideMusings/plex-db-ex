@@ -1768,6 +1768,17 @@ Additive at version 28; version 29 then bumped `reader_shape` to 29 because the 
   `landing_bar_s`, `key`, `scale`, `camelot`, `key_strength`, `beat_confidence`, `bar_energy` and
   `rms_mean`; a value the file cannot give is `null`. A hash is analyzed once, however many parts
   or paths carry that content.
+- **`plexdb import-audio-facts <catalog.db> [--dry-run]`** seeds `audio_facts` from etv-station's
+  `entry_audio` table, so `harvest-audio` finds facts for a file's hash and records its part done
+  without decoding it. It opens the catalog read-only, maps each row's `source_path` with
+  `PLEXDB_MEDIA_DIR` and `PLEX_SOURCE_ROOTS`, hashes the file as above at the size `harvest-audio` will use (the store's `media_part.size` or `extra_file.size` for that path, NULL as 0, once per distinct size; the file's own length only when the store has no row for the path, counted as "no store row"), stops with a non-zero exit and writes nothing when `PLEXDB_MEDIA_DIR` is unreadable, and inserts the facts text as
+  the station wrote it (checked to be a JSON object) with the row's `analyzed_at`; a hash that already
+  has facts is left alone, and of two rows with one hash the first by `entry_id` wins. All hashing
+  finishes before the first write, and writes go in transactions of 500 rows. It prints one line with
+  the counts (rows read, imported, already present, duplicate hash, unmapped path, unreadable file,
+  facts not a JSON object); `--dry-run` prints the same with "would import" and writes nothing. It
+  exits 0 when it ran, even with unreadable files, and non-zero for a missing setting, a bad command
+  line or a catalog with no `entry_audio` table. It is a command, not a sweep step.
 - **`audio_part`** says which analyzed content a Plex media part has, written when the part's
   outcome is `done`. It has no foreign key to `media_part`: media-walk deletes and re-inserts a
   record's parts, and a cascade would wipe these rows. A reader joins on `part_id` or `item_id`:

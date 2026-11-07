@@ -101,5 +101,5 @@
     {"name": "refresh-tagnetwork", "order": 68, "policy": "best-effort"},
     {"name": "publish", "order": 90, "policy": "required"}
   ],
-  "commands": ["lists", "list", "list-decide", "frames", "harvest-frames", "harvest-audio", "audio", "search", "repair-identities", "repair-fs-identities", "latent-users", "extras", "extras-tick"]
+  "commands": ["lists", "list", "list-decide", "frames", "harvest-frames", "harvest-audio", "import-audio-facts", "audio", "search", "repair-identities", "repair-fs-identities", "latent-users", "extras", "extras-tick"]
 }
