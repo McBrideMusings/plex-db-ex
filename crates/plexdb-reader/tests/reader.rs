@@ -954,6 +954,48 @@ fn audio_facts_for_many_returns_only_analyzed_ids_and_counts_a_repeat_once() {
 }
 
 #[test]
+fn audio_facts_for_resolves_an_extra_through_its_primary_file_and_follows_a_path_move() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("plexdb.db");
+    let conn = common::build_fixture(&path);
+    seed_audio(
+        &conn,
+        "INSERT INTO items (item_id, type, title) VALUES
+             ('fs:a', 'extra', 'A'), ('fs:gone', 'extra', 'Gone'), ('fs:none', 'extra', 'None');
+         INSERT INTO extra_library (name, root, type, declared_at)
+             VALUES ('Music Videos', '/mv', 'video', 't');
+         INSERT INTO extra_item (item_id, library, organized, first_seen) VALUES
+             ('fs:a', 'Music Videos', 1, 't'), ('fs:gone', 'Music Videos', 1, 't'),
+             ('fs:none', 'Music Videos', 1, 't');
+         INSERT INTO extra_file (path, item_id, primary_file, first_seen, last_seen, missing_since)
+             VALUES ('/mv/a.mkv', 'fs:a', 1, 't', 't', NULL),
+                    ('/mv/gone.mkv', 'fs:gone', 1, 't', 't', 't'),
+                    ('/mv/none.mkv', 'fs:none', 1, 't', 't', NULL);
+         INSERT INTO audio_facts (file_hash, facts, analyzed_at) VALUES
+             ('h-a', '{\"bpm\":77}', 't'), ('h-gone', '{\"bpm\":9}', 't');
+         INSERT INTO audio_extra (path, item_id, file_hash) VALUES
+             ('/mv/a.mkv', 'fs:a', 'h-a'), ('/mv/gone.mkv', 'fs:gone', 'h-gone');",
+    );
+    conn.execute(
+        "UPDATE extra_file SET path = '/mv/Artist/a.mkv' WHERE path = '/mv/a.mkv'",
+        [],
+    )
+    .expect("a move renames the path in place");
+    drop(conn);
+    let reader = Reader::open(&path, None, None).expect("open");
+
+    assert_eq!(reader.audio_facts_for("fs:a").unwrap().unwrap()["bpm"], 77);
+    // A missing primary file and an unanalyzed extra have no facts.
+    assert_eq!(reader.audio_facts_for("fs:gone").unwrap(), None);
+    assert_eq!(reader.audio_facts_for("fs:none").unwrap(), None);
+    let many = reader
+        .audio_facts_for_many(["fs:a", "fs:gone", "fs:none", "imdb:tt1"])
+        .unwrap();
+    assert_eq!(many.len(), 1);
+    assert_eq!(many["fs:a"]["bpm"], 77);
+}
+
+#[test]
 fn audio_facts_for_many_handles_more_ids_than_the_variable_limit() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("plexdb.db");

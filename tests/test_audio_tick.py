@@ -69,29 +69,29 @@ def test_tick_once_reports_busy_failed_and_ran(monkeypatch: pytest.MonkeyPatch) 
     assert "another audio harvest is running" in lines[0] and "boom" in lines[1]
 
 
-def test_it_is_off_without_sections_and_says_so(
+def test_it_is_off_without_libraries_and_says_so(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.delenv(audio_tick.SECTIONS_VAR, raising=False)
+    monkeypatch.delenv(audio_tick.LIBRARIES_VAR, raising=False)
 
     assert audio_tick.start() is False
-    assert "audio harvester off: PLEXDB_AUDIO_SECTIONS unset" in capsys.readouterr().out
+    assert "audio harvester off: PLEXDB_AUDIO_LIBRARIES unset" in capsys.readouterr().out
 
 
 def test_it_is_off_when_every_is_zero(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.setenv(audio_tick.SECTIONS_VAR, "1")
+    monkeypatch.setenv(audio_tick.LIBRARIES_VAR, "Movies")
     monkeypatch.setenv(audio_tick.EVERY_VAR, "0")
 
     assert audio_tick.start() is False
     assert "audio harvester off: PLEXDB_AUDIO_EVERY=0" in capsys.readouterr().out
 
 
-def test_it_starts_a_daemon_thread_when_sections_are_named(
+def test_it_starts_a_daemon_thread_when_libraries_are_named(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.setenv(audio_tick.SECTIONS_VAR, "1, 3")
+    monkeypatch.setenv(audio_tick.LIBRARIES_VAR, "Music Videos, Movies")
     monkeypatch.setenv(audio_tick.EVERY_VAR, "30")
     started: list[tuple[str, bool]] = []
 
@@ -109,7 +109,8 @@ def test_it_starts_a_daemon_thread_when_sections_are_named(
 
     assert audio_tick.start() is True
     assert started == [("audio-harvester", True), ("start", True)]
-    assert "audio harvester on, libraries 1, 3, every 30 minute(s)" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "audio harvester on, libraries Music Videos, Movies, every 30 minute(s)" in out
 
 
 def test_run_scheduler_starts_the_audio_harvester_beside_the_extras_tick(

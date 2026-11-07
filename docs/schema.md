@@ -25,7 +25,7 @@ outright, because a newer writer may have added rows this build cannot see. A st
 ### Reader shape
 
 The store also carries a `reader_shape` table (version 15 on): one row naming the last schema
-version that changed what a reader reads. It is 29 today (version 29 added the audio facts accessors). `plexdb-reader` opens a store only when
+version that changed what a reader reads. It is 30 today (version 29 added the audio facts accessors; version 30 made them resolve an extra's facts too). `plexdb-reader` opens a store only when
 `reader_shape` equals its `SUPPORTED_READER_SHAPE`, whatever `schema_version` says, so a deployed
 reader keeps reading a snapshot from a newer writer that has only added tables or columns.
 
@@ -1759,12 +1759,12 @@ audio_harvest_state  part_id INTEGER PRIMARY KEY, item_id TEXT NOT NULL, size IN
                      attempts INTEGER NOT NULL, next_try_at TEXT, updated_at TEXT NOT NULL
 ```
 
-Additive at version 28; version 29 then bumped `reader_shape` to 29 because the reader reads these tables. Written by `plexdb harvest-audio`, the only writer of all three.
+Additive at version 28; version 29 then bumped `reader_shape` to 29 because the reader reads these tables. Written by `plexdb harvest-audio`, the only writer of all three. Extras have their own pair of tables at [version 30](#version-30-audio-facts-for-extras).
 
 - **`audio_facts`** is what the analyzer (`tools/audio-analyze.py`, installed as
   `plexdb-audio-analyze`) printed for one file's content: its JSON object, verbatim, keyed by the
   file hash (SHA-256 of the part's size, modification time and first MiB, the hash the Frame
-  harvester uses). The keys are `bpm`, `beat_grid`, `downbeat_phase`, `landing_bar`,
+  harvester uses). Plex parts and extras share it. The keys are `bpm`, `beat_grid`, `downbeat_phase`, `landing_bar`,
   `landing_bar_s`, `key`, `scale`, `camelot`, `key_strength`, `beat_confidence`, `bar_energy` and
   `rms_mean`; a value the file cannot give is `null`. A hash is analyzed once, however many parts
   or paths carry that content.
@@ -1787,11 +1787,18 @@ that is not a JSON object; `error` holds its stderr tail, and the part is not tr
 part's `duration_ms` is `NULL` or over 30 minutes (the analyzer decodes the whole track into
 memory); decided without opening the file and re-evaluated only when the size changes.
 
-**Config.** Off unless `PLEXDB_AUDIO_SECTIONS` names Plex section ids (`plex_items.section_id`),
-comma-separated; with it unset `plexdb harvest-audio` exits 78 and analyzes nothing. The sections must be
-movie or show libraries: media-walk lists parts for those only, so a music or photo section has no
-`media_part` rows and the run report and `audio status` flag it (`parts: 0`, "no media_part rows —
-only movie and show sections are walked").
+**Config.** Off unless `PLEXDB_AUDIO_LIBRARIES` names libraries: comma-separated, in the order
+to work them, each a Plex section **title** (`Movies`) or an `extra_library.name` (`Music
+Videos`); a repeated name keeps its first position, and a name that is both resolves to the
+section. With it unset `plexdb harvest-audio` exits 78 and analyzes nothing. The store keeps no
+section titles, so each run makes one Plex `/library/sections` call to turn titles into
+`plex_items.section_id`; a failed call fails the run (Plex is the one required dependency). A name
+that matches neither a section title nor an extras library is reported and skipped, the rest
+still run: in the run's report line (`unknown library X: not a Plex section title or an extras
+library; skipped`) and in `plexdb audio status`. A Plex section must be a movie or show library:
+media-walk lists parts for those only, so a music or photo section has no `media_part` rows and
+the run report and `audio status` flag it (`parts: 0`, "no media_part rows — only movie and show
+sections are walked").
 `PLEXDB_AUDIO_ANALYZER` is the analyzer program (default `plexdb-audio-analyze` on `PATH`), run as
 `<analyzer> <file>`: one JSON object on stdout and exit 0. `PLEXDB_MEDIA_DIR` and
 `PLEX_SOURCE_ROOTS` map Plex's path to a local one, as for `harvest-frames`. `PLEXDB_AUDIO_TIMEOUT`
@@ -1799,25 +1806,72 @@ is the seconds one analysis may run (default 900); past it the analyzer and anyt
 killed and the part is `failed` with "analyzer timed out after Ns". `PLEXDB_AUDIO_EVERY`
 is the minutes between runs `plexdb schedule` starts (default 60, `0` off).
 
-**A run.** Candidates are the parts of the configured sections. A part with a terminal state
-(`done`, `failed`, `excluded`) and an unchanged size is skipped without being hashed, so a
-steady-state run reads one query. Never-tried parts go first, then due retries. A part whose hash
-already has `audio_facts` gets an `audio_part` row and `done` with no analysis. If the media root
+**A run.** The run works library by library in list order. Inside a library, files never tried come
+before due retries; Plex parts go by `part_id`, extras by `extra_item.first_seen, item_id`. A file
+with a terminal state (`done`, `failed`, `excluded`) and an unchanged size is skipped without being
+hashed, so a steady-state run reads one query. A file whose hash already has `audio_facts` gets its
+content row and `done` with no analysis. If the media root
 itself fails `stat`, the run stops with `blocked: media root <path> unreadable: <error>` (exit 1)
 and the file in hand is not marked `unreachable`. A path under no `PLEX_SOURCE_ROOTS` root (or one leaving the media dir) is a
 configuration error and stops the run the same way, with `blocked: <path> is under none of
-PLEX_SOURCE_ROOTS …` and nothing recorded for it. A part leaving `done` (failed, excluded,
-unreachable) loses its `audio_part` row, so no row points at a file's old facts. The analyzer runs one file at a time under
+PLEX_SOURCE_ROOTS …` and nothing recorded for it. A file leaving `done` (failed, excluded,
+unreachable) loses its `audio_part` or `audio_extra` row, so no row points at a file's old facts. The analyzer runs one file at a time under
 `SCHED_IDLE`, the idle I/O class and nice 19 on Linux (nice 19 elsewhere), with
 `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS` and `NUMBA_NUM_THREADS` set to 1.
 Analysis holds no store lock: each result is written in its own short transaction. A run lock
 `audio-harvest.lock` beside the store makes a second run exit 75 ("another audio harvest is
 running").
 
-**`plexdb audio status`** prints JSON: `enabled`, `status` (`on`, or `off: PLEXDB_AUDIO_SECTIONS is
-not set`), `running`, and per configured section `parts` (every media part), `done`, `pending`, `failed`, `unreachable` and
-`excluded`. `pending` is a part with no terminal state or a due retry; `unreachable` counts parts
-still waiting for their retry.
+**`plexdb audio status`** prints JSON: `enabled`, `status` (`on`, or `off: PLEXDB_AUDIO_LIBRARIES is
+not set`), `running`, `libraries`, `unknown` and, when Plex could not answer, `plex_error`.
+`libraries` has one entry per resolved library in list order: `library` (the name), `kind`
+(`section`, with its `section_id`, or `extras`), `parts` (every file of the library),
+`done`, `pending`, `failed`, `unreachable` and `excluded`, and a `note` when `parts` is 0.
+`pending` is a file with no terminal state or a due retry; `unreachable` counts files still
+waiting for their retry. `unknown` lists the listed names that matched nothing. Example:
+
+```json
+{
+  "enabled": true,
+  "status": "on",
+  "running": false,
+  "libraries": [
+    {"library": "Music Videos", "kind": "extras", "parts": 412, "done": 380, "pending": 20, "failed": 2, "unreachable": 0, "excluded": 10},
+    {"library": "Movies", "kind": "section", "section_id": "1", "parts": 2100, "done": 0, "pending": 2100, "failed": 0, "unreachable": 0, "excluded": 0}
+  ],
+  "unknown": ["Concerts"]
+}
+```
+
+## Version 30 — audio facts for extras
+
+```
+audio_extra        path TEXT PRIMARY KEY REFERENCES extra_file(path) ON UPDATE CASCADE ON DELETE CASCADE,
+                   item_id TEXT NOT NULL, file_hash TEXT NOT NULL      (index on item_id)
+audio_extra_state  path TEXT PRIMARY KEY REFERENCES extra_file(path) ON UPDATE CASCADE ON DELETE CASCADE,
+                   item_id TEXT NOT NULL, size INTEGER, file_hash TEXT,
+                   outcome TEXT NOT NULL (done | failed | unreachable | excluded), error TEXT,
+                   attempts INTEGER NOT NULL, next_try_at TEXT, updated_at TEXT NOT NULL
+```
+
+`reader_shape` is 30. An extra has no Plex media part, so `plexdb harvest-audio` keeps its facts
+here: `audio_extra` is `audio_part` for an extra file, and `audio_extra_state` is
+`audio_harvest_state` for one; both point into the shared `audio_facts` by `file_hash`. Both are
+keyed by `extra_file.path` with `ON UPDATE CASCADE ON DELETE CASCADE`, the way `extra_check` is:
+extras-organize and extras-walk rename a moved file's row in place, so its facts follow the move
+with no re-analysis, and deleting the file's row deletes them. (Plex parts are keyed by `part_id`
+without a foreign key because media-walk deletes and re-inserts a record's parts.) `item_id` is a
+copy for convenience, with no foreign key; a reader resolves the item through `extra_file`.
+
+The candidate is an item's primary `extra_file` row with `missing_since IS NULL`, size from
+`extra_file.size`, read under `PLEXDB_MEDIA_DIR` through the same path mapping as the Frame
+harvester. Nothing fills `extra_file.duration_ms`, so an extra with none is probed with `ffprobe`
+(`PLEXDB_FFPROBE`) once its file is reachable: a duration over 30 minutes, or none, is `excluded`;
+a probe error is `failed`. The probe never writes `duration_ms`. A recorded duration is used as it
+is, as for a Plex part.
+
+`plexdb-reader`'s `audio_facts_for(item_id)` and `audio_facts_for_many(ids)` also resolve an extra:
+its primary `extra_file` row (not missing) joined to `audio_extra` joined to `audio_facts`.
 
 ## The original language of a title
 
@@ -1988,6 +2042,9 @@ the directory holds none, so on a fresh directory every count is zero.
 | `schema_version` | `frames.db`'s own version. |
 | `bytes` | The file's size on disk. |
 | `sections` | One entry per Plex section, ordered by section id as a number: `total` is the movies and episodes `plex_items` places there, `indexed` how many of those are indexed. A show has no file and is not counted. |
+| `priority` | One entry per library named in `PLEXDB_FRAME_LIBRARIES` that resolved, in list order: `library` (the name), `indexed` and `total` (the titles of that library: a Plex section's movies and episodes, or an extras library's items with a primary file that is not missing). Empty when the key is unset. Making it takes one Plex sections call. |
+| `priority_unknown` | The names in `PLEXDB_FRAME_LIBRARIES` that are neither a Plex section title nor an extras library. |
+| `priority_error` | Why Plex's sections were unavailable (every Plex name is then in `priority_unknown`); `null` otherwise. |
 | `queued` | Rows in `frame_queue`. |
 | `frame_hours` | `PLEXDB_FRAME_HOURS` as set — `HH:MM-HH:MM` in the process's TZ, an end earlier than the start running past midnight — or `null` when unset. |
 | `inside_hours` | Whether the current time is inside that window; `false` when it is unset. |
@@ -2009,8 +2066,9 @@ now and `--limit N` stops after N titles. It writes `frames.db` alone.
 
 - **Order.** Queued titles, oldest `queued_at` first; then titles whose stored `part_id` is not the
   part Plex lists now (the file was swapped, so frame requests for the old part answer 404),
-  least recently indexed first; then titles with no `frame_index_state` row,
-  movies before episodes, newest Plex `addedAt` first; then titles whose `file_hash` differs from
+  least recently indexed first; then titles with no `frame_index_state` row: first those of the
+  libraries `PLEXDB_FRAME_LIBRARIES` names, in list order, then the rest, each group movies before
+  episodes, newest Plex `addedAt` first; then titles whose `file_hash` differs from
   the stored one, least recently indexed first. A failed title waits for a new `file_hash`, a new
   part or a new queue row. A title with several Plex copies uses the newest copy's first part.
 - **Reading.** Plex names each part's file; `ffmpeg` and `ffprobe` read that file, read-only,

@@ -61,7 +61,7 @@
     "harvest-frames: a command, not a step: `plexdb schedule` starts it when PLEXDB_FRAME_HOURS open",
     "and it writes frames.db alone (ADR-0024), so no sweep runs it.",
     "harvest-audio, audio: commands, not steps: `plexdb schedule` starts harvest-audio every",
-    "PLEXDB_AUDIO_EVERY minutes when PLEXDB_AUDIO_SECTIONS names libraries (plexdb/audio_tick.py),",
+    "PLEXDB_AUDIO_EVERY minutes when PLEXDB_AUDIO_LIBRARIES names libraries (plexdb/audio_tick.py),",
     "and it holds the store's writer lock only for each result, never during a decode, so no sweep",
     "runs it. `audio status` reports what it has done.",
     "commands: moved to Rust but in no sweep, so they carry no order or policy."

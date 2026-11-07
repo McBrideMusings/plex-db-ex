@@ -204,6 +204,7 @@ fn extras_are_indexed_without_a_part_and_in_the_order_the_tab_and_plex_set() {
             encoder: &Encoder1,
             locate: &locate,
             store_path: &dir.path().join("plexdb.db"),
+            priority: &[],
             hours: None,
             now: &at,
         },

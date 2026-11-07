@@ -51,6 +51,7 @@ pub mod latent_users;
 pub mod layout;
 pub mod letterboxd;
 pub mod letterboxd_lists;
+pub mod libraries;
 pub mod list_decisions;
 pub mod list_file;
 pub mod list_search;

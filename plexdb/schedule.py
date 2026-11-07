@@ -236,7 +236,7 @@ def _start_extras_ticks() -> None:
 
 def _start_audio_harvester() -> None:
     """Start the audio harvester's interval loop (`plexdb/audio_tick.py`): `harvest-audio`
-    every `PLEXDB_AUDIO_EVERY` minutes, off unless `PLEXDB_AUDIO_SECTIONS` names libraries.
+    every `PLEXDB_AUDIO_EVERY` minutes, off unless `PLEXDB_AUDIO_LIBRARIES` names libraries.
     It holds the store's writer lock only to write each result, so it never holds up a
     sweep."""
     from . import audio_tick

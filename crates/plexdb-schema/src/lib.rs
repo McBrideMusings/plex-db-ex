@@ -32,7 +32,7 @@ pub const GUARDED_TABLES: [&str; 3] = ["items", "plays", "enrichment"];
 /// sets this to its own version and ends with
 /// `UPDATE reader_shape SET version = <its version>;`, in the same change that
 /// updates `plexdb-reader`. A migration that only adds leaves it alone.
-pub const READER_SHAPE: i64 = 29;
+pub const READER_SHAPE: i64 = 30;
 
 #[derive(Debug, Error)]
 pub enum SchemaError {
@@ -90,6 +90,7 @@ pub const MIGRATIONS: &[Migration] = &[
     Sql(include_str!("../migrations/v27.sql")),
     Sql(include_str!("../migrations/v28.sql")),
     Sql(include_str!("../migrations/v29.sql")),
+    Sql(include_str!("../migrations/v30.sql")),
 ];
 
 /// The version a store is at once every migration has been applied.

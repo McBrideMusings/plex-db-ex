@@ -14,11 +14,14 @@ use crate::frame_encoder::{
 };
 use crate::frame_quant;
 use crate::frames::{
-    self, FrameConfig, StatusInput, decoder_report, migrate_configured, open_frames, queue,
-    section_titles,
+    self, FrameConfig, PriorityStatus, StatusInput, decoder_report, migrate_configured,
+    open_frames, priority_titles, queue, section_titles,
 };
+use crate::libraries::{extra_library_names, resolve};
 use crate::localtime::Local;
+use crate::plex::PlexSource;
 use crate::pyjson::{Json, dumps_indent2};
+use crate::sources::Sources;
 use crate::steps::Failure;
 
 pub const NAME: &str = "frames";
@@ -246,11 +249,13 @@ fn status() -> Result<(), StoreError> {
     let frames_conn = open_frames(&path)?;
     let store_conn = open_readonly(&store.store_path)?;
     let sections = section_titles(&store_conn)?;
+    let priority = priority_status(&store_conn, &sections, &config.priority_libraries)?;
     let report = frames::status(
         &frames_conn,
         &sections,
         &StatusInput {
             path: &path,
+            priority,
             hours: &config.frame_hours,
             now: Local::now(),
             encoder_reachable: reachable,
@@ -260,6 +265,31 @@ fn status() -> Result<(), StoreError> {
     )?;
     println!("{}", dumps_indent2(&report));
     Ok(())
+}
+
+/// `PLEXDB_FRAME_LIBRARIES` resolved for `status`: one Plex sections call, only when names
+/// are listed. If Plex cannot answer, the error is reported and Plex names count as unknown.
+fn priority_status(
+    store: &rusqlite::Connection,
+    sections: &std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
+    names: &[String],
+) -> Result<PriorityStatus, StoreError> {
+    if names.is_empty() {
+        return Ok(PriorityStatus::default());
+    }
+    let (plex_sections, plex_error) = match Sources::from_env()
+        .plex("resolve the names in PLEXDB_FRAME_LIBRARIES")
+        .and_then(|plex| plex.sections())
+    {
+        Ok(found) => (found, None),
+        Err(err) => (Vec::new(), Some(err.to_string())),
+    };
+    let resolved = resolve(names, &plex_sections, &extra_library_names(store)?);
+    Ok(PriorityStatus {
+        libraries: priority_titles(store, sections, &resolved)?,
+        unknown: resolved.unknown,
+        plex_error,
+    })
 }
 
 fn queue_title(item_id: &str, by: &str) -> Result<(), StoreError> {

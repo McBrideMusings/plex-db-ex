@@ -114,6 +114,8 @@ fn an_empty_store_reaches_every_table_the_schema_holds_and_nothing_else() {
         "audio_facts",
         "audio_part",
         "audio_harvest_state",
+        "audio_extra",
+        "audio_extra_state",
         "reader_shape",
         "schema_version",
     ]
@@ -726,12 +728,96 @@ fn v29_stamps_reader_shape_29_and_adds_nothing() {
     );
     let before = tables(&conn);
 
-    assert_eq!(landed(apply(&mut conn)), (28, SCHEMA_VERSION));
+    assert_eq!(landed(apply_chain(&mut conn, &MIGRATIONS[..29])), (28, 29));
 
     assert_eq!(tables(&conn), before);
     assert_eq!(
         text(&conn, "SELECT CAST(version AS TEXT) FROM reader_shape"),
         vec![vec![s("29")]]
     );
-    assert_eq!(READER_SHAPE, 29);
+}
+
+#[test]
+fn v30_adds_the_two_audio_extra_tables_stamps_reader_shape_30_and_cascades_a_path_move() {
+    let mut conn = store_at(29);
+    conn.execute_batch(
+        "INSERT INTO items (item_id, type, title) VALUES ('fs:a', 'extra', 'A');
+         INSERT INTO extra_library (name, root, type, declared_at)
+             VALUES ('Music Videos', '/mv', 'video', 't');
+         INSERT INTO extra_item (item_id, library, organized, first_seen)
+             VALUES ('fs:a', 'Music Videos', 0, 't');
+         INSERT INTO extra_file (path, item_id, primary_file, first_seen, last_seen)
+             VALUES ('/mv/a.mkv', 'fs:a', 1, 't', 't');",
+    )
+    .expect("seed");
+    for table in ["audio_extra", "audio_extra_state"] {
+        assert!(!tables(&conn).contains(table), "{table} exists before v30");
+    }
+
+    assert_eq!(landed(apply(&mut conn)), (29, SCHEMA_VERSION));
+
+    assert_eq!(
+        columns(&conn, "audio_extra"),
+        ["path", "item_id", "file_hash"]
+            .into_iter()
+            .map(String::from)
+            .collect()
+    );
+    assert_eq!(
+        columns(&conn, "audio_extra_state"),
+        [
+            "path",
+            "item_id",
+            "size",
+            "file_hash",
+            "outcome",
+            "error",
+            "attempts",
+            "next_try_at",
+            "updated_at"
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect()
+    );
+    assert_eq!(
+        text(&conn, "SELECT CAST(version AS TEXT) FROM reader_shape"),
+        vec![vec![s("30")]]
+    );
+    assert_eq!(READER_SHAPE, 30);
+
+    conn.execute_batch(
+        "INSERT INTO audio_extra (path, item_id, file_hash) VALUES ('/mv/a.mkv', 'fs:a', 'h');
+         INSERT INTO audio_extra_state (path, item_id, outcome, attempts, updated_at)
+             VALUES ('/mv/a.mkv', 'fs:a', 'done', 1, 't');
+         UPDATE extra_file SET path = '/mv/B/a.mkv' WHERE path = '/mv/a.mkv';",
+    )
+    .expect("a move renames the path in place");
+    for table in ["audio_extra", "audio_extra_state"] {
+        assert_eq!(
+            text(&conn, &format!("SELECT path FROM {table}")),
+            vec![vec![s("/mv/B/a.mkv")]],
+            "{table} follows the move"
+        );
+    }
+    assert!(
+        conn.execute(
+            "INSERT INTO audio_extra_state (path, item_id, outcome, attempts, updated_at)
+             VALUES ('/mv/B/a.mkv2', 'fs:a', 'done', 1, 't')",
+            []
+        )
+        .is_err(),
+        "a state row needs its extra_file"
+    );
+    conn.execute("DELETE FROM extra_file", []).expect("delete");
+    for table in ["audio_extra", "audio_extra_state"] {
+        assert_eq!(
+            text(
+                &conn,
+                &format!("SELECT CAST(count(*) AS TEXT) FROM {table}")
+            ),
+            vec![vec![s("0")]],
+            "{table} goes with the file"
+        );
+    }
 }

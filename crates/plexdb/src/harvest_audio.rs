@@ -1,24 +1,38 @@
 //! `plexdb harvest-audio` — audio facts per file, computed once per file hash
-//! (plex-db-ex-9ak.1).
+//! (plex-db-ex-9ak.1, extras and library order plex-db-ex-9ak.5).
 //!
-//! For every media part of the libraries named in `PLEXDB_AUDIO_SECTIONS` it finds the
-//! file under `PLEXDB_MEDIA_DIR`, hashes it with the frame harvester's
-//! [`file_hash`](crate::frame_media::file_hash) and, when `audio_facts` has no row for that
-//! hash, runs the analyzer (`tools/audio-analyze.py`, installed as `plexdb-audio-analyze`)
-//! and stores the JSON object it prints. Facts are keyed by hash, so the same content under
-//! two parts, or at a new path, is analyzed once; `audio_part` says which content each part
-//! has. The run's bookkeeping is `audio_harvest_state`, one row per part (ADR-0013).
+//! `PLEXDB_AUDIO_LIBRARIES` names, in order, the libraries to work through: each is a Plex
+//! section **title** or an `extra_library.name` ([`crate::libraries`]). The run takes the
+//! libraries one at a time in list order; inside a library, parts never tried come before
+//! due retries (Plex parts by `part_id`, extras by `extra_item.first_seen, item_id`). For
+//! every file it finds the file under `PLEXDB_MEDIA_DIR`, hashes it with the frame
+//! harvester's [`file_hash`](crate::frame_media::file_hash) and, when `audio_facts` has no
+//! row for that hash, runs the analyzer (`tools/audio-analyze.py`, installed as
+//! `plexdb-audio-analyze`) and stores the JSON object it prints. Facts are keyed by hash,
+//! so the same content under two files, or at a new path, is analyzed once. A Plex part's
+//! content is recorded in `audio_part` and its bookkeeping in `audio_harvest_state`, keyed
+//! by `part_id`; an extra's (its primary `extra_file` row that is not missing) in
+//! `audio_extra` and `audio_extra_state`, keyed by `extra_file.path` with a cascading
+//! foreign key, so extras-organize renaming the path keeps them (ADR-0013). A [`Key`] says
+//! which of the two a file is; one loop serves both.
 //!
-//! **Outcomes, one per part.** `done`: facts stored. `failed`: the analyzer exited non-zero
-//! or printed something that is not a JSON object; kept while the part's size is unchanged.
-//! `unreachable`: the file could not be stat'ed or read; retried after an hour, doubling to
-//! a day. `excluded`: no duration, or longer than [`MAX_DURATION_MS`] (the analyzer decodes
-//! the whole track into memory); decided without opening the file.
+//! **Outcomes, one per file.** `done`: facts stored. `failed`: the analyzer (or, for an
+//! extra, the duration probe) exited non-zero or printed something unusable; kept while the
+//! file's size is unchanged. `unreachable`: the file could not be stat'ed or read; retried
+//! after an hour, doubling to a day. `excluded`: no duration, or longer than
+//! [`MAX_DURATION_MS`] (the analyzer decodes the whole track into memory). A Plex part's
+//! duration is known to the store, so it is decided without opening the file. Nothing fills
+//! `extra_file.duration_ms`, so an extra with none is probed with ffprobe
+//! (`PLEXDB_FFPROBE`) once it is reachable; the probe never writes the column.
 //!
-//! **Skipping without hashing.** A part whose state row carries the same size and a
+//! **Names that match nothing.** A listed name that is neither a section title nor an extras
+//! library is reported (in the run's report line and in `plexdb audio status`) and skipped;
+//! the rest still run. Section titles come from one Plex sections call at run start.
+//!
+//! **Skipping without hashing.** A file whose state row carries the same size and a
 //! terminal outcome (`done`, `failed`, `excluded`) is skipped before the file is touched, so
 //! a steady-state run costs one SQL query. The cost is that a file overwritten with the same
-//! size is not noticed: the re-hash happens when Plex's part size changes. A `failed` part
+//! size is not noticed: the re-hash happens when the recorded size changes. A `failed` file
 //! is retried when its hash changes, which only a size change can bring about here.
 //!
 //! **Blocked.** Before each file, and whenever a file is unreachable, the media root is
@@ -30,6 +44,7 @@
 //! lock beside the store (`audio-harvest.lock`) stops two runs overlapping.
 
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io::Read;
 use std::os::unix::process::CommandExt;
@@ -39,36 +54,46 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use plexdb_store::{Config, StoreError, open_readonly, open_store};
-use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
+use rusqlite::types::Value as SqlValue;
+use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 
 use crate::frame_media::{file_hash, local_path};
 use crate::frames::FrameConfig;
+use crate::libraries::{
+    Library, LibraryKind, Resolved, extra_library_names, names_from_env, resolve, unknown_note,
+};
+use crate::plex::{PlexSource, Section};
+use crate::sources::Sources;
 use crate::staleness::{Now, parse_micros};
 use crate::steps::{Failure, failure};
 
 pub const NAME: &str = "harvest-audio";
 
-pub const SECTIONS_VAR: &str = "PLEXDB_AUDIO_SECTIONS";
+pub const LIBRARIES_VAR: &str = "PLEXDB_AUDIO_LIBRARIES";
 pub const ANALYZER_VAR: &str = "PLEXDB_AUDIO_ANALYZER";
 pub const DEFAULT_ANALYZER: &str = "plexdb-audio-analyze";
 pub const TIMEOUT_VAR: &str = "PLEXDB_AUDIO_TIMEOUT";
 /// Seconds one analysis may run before it is killed and recorded `failed`.
 pub const DEFAULT_TIMEOUT_SECS: u64 = 900;
+/// Seconds one duration probe may run before it is killed and recorded `failed`.
+pub const PROBE_TIMEOUT_SECS: u64 = 60;
 
-/// A part longer than this is `excluded`: the analyzer decodes the whole track to memory.
+/// A file longer than this is `excluded`: the analyzer decodes the whole track to memory.
 pub const MAX_DURATION_MS: i64 = 1_800_000;
 const RETRY_BASE_SECS: i64 = 3600;
 const RETRY_CAP_SECS: i64 = 86_400;
 const STDERR_TAIL_CHARS: usize = 300;
 
-/// Said of a configured section that has no `media_part` rows: media-walk covers only
+/// Said of a configured Plex section that has no `media_part` rows: media-walk covers only
 /// movie and show libraries, so a music or photo section looks like a healthy empty one.
 pub const EMPTY_SECTION_NOTE: &str = "no media_part rows — only movie and show sections are walked";
+/// Said of an extras library with no file the harvest can read.
+pub const EMPTY_EXTRAS_NOTE: &str = "no extra_file rows with a present primary file";
 
 pub const LOCK_FILE: &str = "audio-harvest.lock";
 
-/// What a part's state row says happened to it.
+/// What a file's state row says happened to it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
     Done,
@@ -98,39 +123,61 @@ impl Outcome {
     }
 }
 
+/// What identifies a file in the harvest's own tables: a Plex media part, or an extra's
+/// `extra_file.path`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Key {
+    Part(i64),
+    Extra(String),
+}
+
+impl Key {
+    /// `(content table, state table, key column)`.
+    fn tables(&self) -> (&'static str, &'static str, &'static str) {
+        match self {
+            Key::Part(_) => ("audio_part", "audio_harvest_state", "part_id"),
+            Key::Extra(_) => ("audio_extra", "audio_extra_state", "path"),
+        }
+    }
+
+    fn value(&self) -> SqlValue {
+        match self {
+            Key::Part(id) => SqlValue::Integer(*id),
+            Key::Extra(path) => SqlValue::Text(path.clone()),
+        }
+    }
+
+    pub fn label(&self) -> String {
+        match self {
+            Key::Part(id) => format!("part {id}"),
+            Key::Extra(path) => format!("extra {path}"),
+        }
+    }
+
+    fn is_extra(&self) -> bool {
+        matches!(self, Key::Extra(_))
+    }
+}
+
 /// The settings a run reads from the environment.
 #[derive(Debug, Clone)]
 pub struct Settings {
-    pub sections: Vec<String>,
+    /// `PLEXDB_AUDIO_LIBRARIES`, in list order.
+    pub libraries: Vec<String>,
     pub analyzer: String,
+    pub ffprobe: String,
     pub timeout: Duration,
     pub media_dir: PathBuf,
     pub source_roots: Vec<String>,
 }
 
-/// `PLEXDB_AUDIO_SECTIONS`: comma-separated section ids; empty or unset means off.
-pub fn sections_from_env() -> Vec<String> {
-    parse_sections(&std::env::var(SECTIONS_VAR).unwrap_or_default())
-}
-
-pub fn parse_sections(raw: &str) -> Vec<String> {
-    let mut sections: Vec<String> = Vec::new();
-    for part in raw.split(',') {
-        let id = part.trim();
-        if !id.is_empty() && !sections.iter().any(|seen| seen == id) {
-            sections.push(id.to_string());
-        }
-    }
-    sections
-}
-
 impl Settings {
     pub fn from_env() -> Result<Settings, StoreError> {
-        let sections = sections_from_env();
-        if sections.is_empty() {
+        let libraries = names_from_env(LIBRARIES_VAR);
+        if libraries.is_empty() {
             return Err(StoreError::Config(format!(
-                "{SECTIONS_VAR} is not set, so no library is analyzed; name the Plex section \
-                 ids to analyze, comma-separated"
+                "{LIBRARIES_VAR} is not set, so no library is analyzed; name the Plex section \
+                 titles and extras libraries to analyze, comma-separated, in the order to work"
             )));
         }
         let frames = FrameConfig::from_env()?;
@@ -166,13 +213,23 @@ impl Settings {
             _ => Duration::from_secs(DEFAULT_TIMEOUT_SECS),
         };
         Ok(Settings {
-            sections,
+            libraries,
             analyzer,
+            ffprobe: frames.ffprobe,
             timeout,
             media_dir,
             source_roots: frames.source_roots,
         })
     }
+}
+
+/// Resolve `names` against Plex's `sections` and the store's extras libraries.
+pub fn resolve_libraries(
+    conn: &Connection,
+    names: &[String],
+    sections: &[Section],
+) -> rusqlite::Result<Resolved> {
+    Ok(resolve(names, sections, &extra_library_names(conn)?))
 }
 
 // --- the analyzer ---------------------------------------------------------------------
@@ -186,9 +243,14 @@ pub enum AnalyzeError {
     Unavailable(String),
 }
 
-/// Something that turns one audio file into a JSON object of facts.
+/// Something that turns one audio file into a JSON object of facts, and can say how long a
+/// file plays.
 pub trait Analyzer {
     fn analyze(&self, path: &Path) -> Result<Value, AnalyzeError>;
+
+    /// The file's playing time in milliseconds, or `None` when it has no duration. Asked
+    /// only for an extra whose `extra_file.duration_ms` is NULL.
+    fn duration_ms(&self, path: &Path) -> Result<Option<i64>, AnalyzeError>;
 }
 
 /// The analyzer program, run as `<program> <file>`: one JSON object on stdout and exit 0.
@@ -196,6 +258,8 @@ pub trait Analyzer {
 /// one math-library thread, so a decode never takes CPU or disk from Plex or the sweep.
 pub struct ProcessAnalyzer {
     pub program: String,
+    /// The program that probes a duration (`PLEXDB_FFPROBE`), run as `<program> … <file>`.
+    pub ffprobe: String,
     /// A run past this is killed, with everything it started, and is `failed`.
     pub timeout: Duration,
 }
@@ -228,94 +292,106 @@ fn lower_priority() {
     }
 }
 
+/// Run `program args…` idle, to the end or `timeout`, and return its stdout. A run past the
+/// timeout is killed with everything it started and is `Failed`, as is a non-zero exit;
+/// a program that cannot be started is `Unavailable`. `what` names it in a timeout message.
+fn run_idle(
+    program: &str,
+    args: &[&OsStr],
+    timeout: Duration,
+    what: &str,
+) -> Result<Vec<u8>, AnalyzeError> {
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for var in SINGLE_THREAD_VARS {
+        command.env(var, "1");
+    }
+    // SAFETY: `lower_priority` and `setpgid` only make async-signal-safe syscalls. The
+    // child leads its own process group so a timeout can kill what it started too.
+    unsafe {
+        command.pre_exec(|| {
+            libc::setpgid(0, 0);
+            lower_priority();
+            Ok(())
+        });
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|err| AnalyzeError::Unavailable(format!("cannot run {program}: {err}")))?;
+    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut bytes);
+            }
+            bytes
+        })
+    };
+    let out_reader = drain(
+        child
+            .stdout
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
+    let err_reader = drain(
+        child
+            .stderr
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if Instant::now() >= deadline => break None,
+            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+            Err(err) => {
+                kill_group(&mut child);
+                return Err(AnalyzeError::Unavailable(format!(
+                    "cannot wait for {program}: {err}"
+                )));
+            }
+        }
+    };
+    let Some(status) = status else {
+        kill_group(&mut child);
+        let _ = out_reader.join();
+        let _ = err_reader.join();
+        return Err(AnalyzeError::Failed(format!(
+            "{what} timed out after {}s",
+            timeout.as_secs()
+        )));
+    };
+    let output = std::process::Output {
+        status,
+        stdout: out_reader.join().unwrap_or_default(),
+        stderr: err_reader.join().unwrap_or_default(),
+    };
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let tail = tail_chars(stderr.trim(), STDERR_TAIL_CHARS);
+        let how = match (output.status.code(), output.status.signal()) {
+            (Some(code), _) => format!("exited {code}"),
+            (None, Some(signal)) => format!("was killed by signal {signal}"),
+            (None, None) => "was killed".to_string(),
+        };
+        return Err(AnalyzeError::Failed(if tail.is_empty() {
+            format!("{program} {how}")
+        } else {
+            format!("{program} {how}: {tail}")
+        }));
+    }
+    Ok(output.stdout)
+}
+
 impl Analyzer for ProcessAnalyzer {
     fn analyze(&self, path: &Path) -> Result<Value, AnalyzeError> {
-        let mut command = Command::new(&self.program);
-        command
-            .arg(path)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        for var in SINGLE_THREAD_VARS {
-            command.env(var, "1");
-        }
-        // SAFETY: `lower_priority` and `setpgid` only make async-signal-safe syscalls. The
-        // child leads its own process group so a timeout can kill what it started too.
-        unsafe {
-            command.pre_exec(|| {
-                libc::setpgid(0, 0);
-                lower_priority();
-                Ok(())
-            });
-        }
-        let mut child = command.spawn().map_err(|err| {
-            AnalyzeError::Unavailable(format!("cannot run {}: {err}", self.program))
-        })?;
-        let drain = |pipe: Option<Box<dyn Read + Send>>| {
-            std::thread::spawn(move || {
-                let mut bytes = Vec::new();
-                if let Some(mut pipe) = pipe {
-                    let _ = pipe.read_to_end(&mut bytes);
-                }
-                bytes
-            })
-        };
-        let out_reader = drain(
-            child
-                .stdout
-                .take()
-                .map(|p| Box::new(p) as Box<dyn Read + Send>),
-        );
-        let err_reader = drain(
-            child
-                .stderr
-                .take()
-                .map(|p| Box::new(p) as Box<dyn Read + Send>),
-        );
-        let deadline = Instant::now() + self.timeout;
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(status)) => break Some(status),
-                Ok(None) if Instant::now() >= deadline => break None,
-                Ok(None) => std::thread::sleep(Duration::from_millis(20)),
-                Err(err) => {
-                    kill_group(&mut child);
-                    return Err(AnalyzeError::Unavailable(format!(
-                        "cannot wait for {}: {err}",
-                        self.program
-                    )));
-                }
-            }
-        };
-        let Some(status) = status else {
-            kill_group(&mut child);
-            let _ = out_reader.join();
-            let _ = err_reader.join();
-            return Err(AnalyzeError::Failed(format!(
-                "analyzer timed out after {}s",
-                self.timeout.as_secs()
-            )));
-        };
-        let output = std::process::Output {
-            status,
-            stdout: out_reader.join().unwrap_or_default(),
-            stderr: err_reader.join().unwrap_or_default(),
-        };
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let tail = tail_chars(stderr.trim(), STDERR_TAIL_CHARS);
-            let how = match (output.status.code(), output.status.signal()) {
-                (Some(code), _) => format!("exited {code}"),
-                (None, Some(signal)) => format!("was killed by signal {signal}"),
-                (None, None) => "was killed".to_string(),
-            };
-            return Err(AnalyzeError::Failed(if tail.is_empty() {
-                format!("{} {how}", self.program)
-            } else {
-                format!("{} {how}: {tail}", self.program)
-            }));
-        }
-        let value: Value = serde_json::from_slice(&output.stdout).map_err(|err| {
+        let stdout = run_idle(&self.program, &[path.as_os_str()], self.timeout, "analyzer")?;
+        let value: Value = serde_json::from_slice(&stdout).map_err(|err| {
             AnalyzeError::Failed(format!("{} printed no JSON: {err}", self.program))
         })?;
         if !value.is_object() {
@@ -325,6 +401,40 @@ impl Analyzer for ProcessAnalyzer {
             )));
         }
         Ok(value)
+    }
+
+    fn duration_ms(&self, path: &Path) -> Result<Option<i64>, AnalyzeError> {
+        let args: [&OsStr; 7] = [
+            OsStr::new("-v"),
+            OsStr::new("error"),
+            OsStr::new("-show_entries"),
+            OsStr::new("format=duration"),
+            OsStr::new("-of"),
+            OsStr::new("default=noprint_wrappers=1:nokey=1"),
+            path.as_os_str(),
+        ];
+        let stdout = run_idle(
+            &self.ffprobe,
+            &args,
+            Duration::from_secs(PROBE_TIMEOUT_SECS),
+            "ffprobe",
+        )?;
+        parse_probe_duration(&String::from_utf8_lossy(&stdout))
+            .map_err(|text| AnalyzeError::Failed(format!("{} printed {text:?}", self.ffprobe)))
+    }
+}
+
+/// ffprobe's `format=duration` in seconds as milliseconds; `N/A` or nothing is no duration.
+/// An `Err` carries the text that is not a number.
+pub fn parse_probe_duration(text: &str) -> Result<Option<i64>, String> {
+    let text = text.trim();
+    if text.is_empty() || text == "N/A" {
+        return Ok(None);
+    }
+    match text.parse::<f64>() {
+        Ok(secs) if secs.is_finite() && secs > 0.0 => Ok(Some((secs * 1000.0).round() as i64)),
+        Ok(_) => Ok(None),
+        Err(_) => Err(text.to_string()),
     }
 }
 
@@ -349,18 +459,20 @@ fn tail_chars(text: &str, keep: usize) -> String {
 
 // --- candidates and state -------------------------------------------------------------
 
-/// One media part of a configured section.
+/// One file of a configured library: a Plex media part or an extra's primary file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Candidate {
-    pub part_id: i64,
+    pub key: Key,
     pub item_id: String,
-    pub section_id: String,
+    /// Index into the resolved libraries, which is the order the run works in.
+    pub library: usize,
+    /// The path as Plex (or `extra_file.path`) names it; mapped with `local_path`.
     pub file: String,
     pub size: Option<i64>,
     pub duration_ms: Option<i64>,
 }
 
-/// A part's `audio_harvest_state` row.
+/// A file's `audio_harvest_state` / `audio_extra_state` row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct State {
     pub size: Option<i64>,
@@ -370,42 +482,85 @@ pub struct State {
     pub next_try_at: Option<String>,
 }
 
-fn placeholders(count: usize) -> String {
-    vec!["?"; count].join(",")
-}
-
-pub fn candidates(conn: &Connection, sections: &[String]) -> rusqlite::Result<Vec<Candidate>> {
-    if sections.is_empty() {
-        return Ok(Vec::new());
+/// Every file of `libraries`, library by library in the order given: a section's media
+/// parts by `part_id`, an extras library's primary files by `first_seen, item_id`.
+pub fn candidates(conn: &Connection, libraries: &[Library]) -> rusqlite::Result<Vec<Candidate>> {
+    let mut out = Vec::new();
+    for (ix, library) in libraries.iter().enumerate() {
+        match &library.kind {
+            LibraryKind::Section(section_id) => {
+                let mut stmt = conn.prepare(
+                    "SELECT mp.part_id, mp.item_id, mp.file, mp.size, mp.duration_ms \
+                     FROM media_part mp JOIN plex_items pi ON pi.rating_key = mp.rating_key \
+                     WHERE pi.section_id = ?1 ORDER BY mp.part_id",
+                )?;
+                let rows = stmt.query_map([section_id], |row| {
+                    Ok(Candidate {
+                        key: Key::Part(row.get(0)?),
+                        item_id: row.get(1)?,
+                        library: ix,
+                        file: row.get(2)?,
+                        size: row.get(3)?,
+                        duration_ms: row.get(4)?,
+                    })
+                })?;
+                for row in rows {
+                    out.push(row?);
+                }
+            }
+            LibraryKind::Extras => {
+                let mut stmt = conn.prepare(
+                    "SELECT ef.path, ei.item_id, ef.size, ef.duration_ms \
+                     FROM extra_item ei \
+                     JOIN extra_file ef ON ef.item_id = ei.item_id AND ef.primary_file = 1 \
+                     WHERE ei.library = ?1 AND ef.missing_since IS NULL \
+                     ORDER BY ei.first_seen, ei.item_id",
+                )?;
+                let rows = stmt.query_map([&library.name], |row| {
+                    let path: String = row.get(0)?;
+                    Ok(Candidate {
+                        key: Key::Extra(path.clone()),
+                        item_id: row.get(1)?,
+                        library: ix,
+                        file: path,
+                        size: row.get(2)?,
+                        duration_ms: row.get(3)?,
+                    })
+                })?;
+                for row in rows {
+                    out.push(row?);
+                }
+            }
+        }
     }
-    let sql = format!(
-        "SELECT mp.part_id, mp.item_id, pi.section_id, mp.file, mp.size, mp.duration_ms \
-         FROM media_part mp JOIN plex_items pi ON pi.rating_key = mp.rating_key \
-         WHERE pi.section_id IN ({}) ORDER BY mp.part_id",
-        placeholders(sections.len())
-    );
-    let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(params_from_iter(sections), |row| {
-        Ok(Candidate {
-            part_id: row.get(0)?,
-            item_id: row.get(1)?,
-            section_id: row.get(2)?,
-            file: row.get(3)?,
-            size: row.get(4)?,
-            duration_ms: row.get(5)?,
-        })
-    })?;
-    rows.collect()
+    Ok(out)
 }
 
-pub fn states(conn: &Connection) -> rusqlite::Result<HashMap<i64, State>> {
-    let mut stmt = conn.prepare(
-        "SELECT part_id, size, file_hash, outcome, attempts, next_try_at FROM audio_harvest_state",
-    )?;
+pub fn states(conn: &Connection) -> rusqlite::Result<HashMap<Key, State>> {
+    let mut out = HashMap::new();
+    load_states(conn, &Key::Part(0), &mut out)?;
+    load_states(conn, &Key::Extra(String::new()), &mut out)?;
+    Ok(out)
+}
+
+/// The state rows of `kind`'s table, keyed as `kind` keys them.
+fn load_states(
+    conn: &Connection,
+    kind: &Key,
+    out: &mut HashMap<Key, State>,
+) -> rusqlite::Result<()> {
+    let (_, table, column) = kind.tables();
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {column}, size, file_hash, outcome, attempts, next_try_at FROM {table}"
+    ))?;
     let rows = stmt.query_map([], |row| {
+        let key = match kind {
+            Key::Part(_) => Key::Part(row.get(0)?),
+            Key::Extra(_) => Key::Extra(row.get(0)?),
+        };
         let outcome: String = row.get(3)?;
         Ok((
-            row.get::<_, i64>(0)?,
+            key,
             State {
                 size: row.get(1)?,
                 file_hash: row.get(2)?,
@@ -415,21 +570,26 @@ pub fn states(conn: &Connection) -> rusqlite::Result<HashMap<i64, State>> {
             },
         ))
     })?;
-    rows.collect()
+    for row in rows {
+        let (key, state) = row?;
+        out.insert(key, state);
+    }
+    Ok(())
 }
 
-/// What a run does with a part, decided from its row and the clock alone.
+/// What a run does with a file, decided from its row and the clock alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Disposition {
     /// Nothing to do; the state row's outcome stands.
     Settled(Outcome),
     /// Record `excluded` without opening the file.
     Exclude,
-    /// Work on it now. `retry` is true for a part tried before (a due `unreachable`).
+    /// Work on it now. `retry` is true for a file tried before (a due `unreachable`).
     Work { retry: bool },
 }
 
-/// `now_micros` is the clock in microseconds since the epoch.
+/// `now_micros` is the clock in microseconds since the epoch. An extra with no duration is
+/// not excluded here: the run probes it once the file is reachable.
 pub fn classify(cand: &Candidate, state: Option<&State>, now_micros: i64) -> Disposition {
     if let Some(state) = state
         && state.size == cand.size
@@ -440,7 +600,8 @@ pub fn classify(cand: &Candidate, state: Option<&State>, now_micros: i64) -> Dis
     {
         return Disposition::Settled(state.outcome);
     }
-    if cand.duration_ms.is_none_or(|ms| ms > MAX_DURATION_MS) {
+    let probeable = cand.key.is_extra() && cand.duration_ms.is_none();
+    if !probeable && cand.duration_ms.is_none_or(|ms| ms > MAX_DURATION_MS) {
         return Disposition::Exclude;
     }
     match state {
@@ -457,6 +618,18 @@ pub fn classify(cand: &Candidate, state: Option<&State>, now_micros: i64) -> Dis
             }
         }
         _ => Disposition::Work { retry: false },
+    }
+}
+
+/// Why a duration is not analyzed.
+fn exclusion(duration_ms: Option<i64>) -> String {
+    match duration_ms {
+        None => "duration unknown; not analyzed".to_string(),
+        Some(ms) => format!(
+            "{} min is longer than the {} min limit; not analyzed",
+            ms / 60_000,
+            MAX_DURATION_MS / 60_000
+        ),
     }
 }
 
@@ -523,21 +696,27 @@ pub struct Report {
     pub candidates: usize,
     pub settled: usize,
     pub analyzed: usize,
-    /// Parts given the facts of a hash already analyzed, with no analysis.
+    /// Files given the facts of a hash already analyzed, with no analysis.
     pub unchanged: usize,
     pub failed: usize,
     pub unreachable: usize,
     pub excluded: usize,
     /// Set when the media root failed stat and the run stopped there.
     pub blocked: Option<String>,
-    /// Configured sections with no `media_part` rows.
-    pub empty_sections: Vec<String>,
+    /// Resolved libraries with nothing to analyze, with what to say of each.
+    pub empty_libraries: Vec<(String, &'static str)>,
+    /// Listed names that are neither a Plex section title nor an extras library.
+    pub unknown_libraries: Vec<String>,
+    /// Why Plex's sections were unavailable; the names that needed them are in
+    /// `plex_skipped`, not `unknown_libraries`.
+    pub plex_error: Option<String>,
+    pub plex_skipped: Vec<String>,
 }
 
 impl Report {
     pub fn describe(&self) -> String {
         let mut line = format!(
-            "harvest-audio: {} part(s): {} analyzed, {} unchanged hash skipped, {} failed, \
+            "harvest-audio: {} file(s): {} analyzed, {} unchanged hash skipped, {} failed, \
              {} unreachable, {} excluded, {} already settled",
             self.candidates,
             self.analyzed,
@@ -547,8 +726,17 @@ impl Report {
             self.excluded,
             self.settled
         );
-        for section in &self.empty_sections {
-            line.push_str(&format!("; section {section}: {EMPTY_SECTION_NOTE}"));
+        for (library, note) in &self.empty_libraries {
+            line.push_str(&format!("; library {library}: {note}"));
+        }
+        for name in &self.unknown_libraries {
+            line.push_str(&format!("; {}", unknown_note(name)));
+        }
+        if let Some(error) = &self.plex_error {
+            line.push_str(&format!(
+                "; plex sections unavailable: {error}, skipped: {}",
+                self.plex_skipped.join(", ")
+            ));
         }
         if let Some(reason) = &self.blocked {
             line.push_str(&format!("; {reason}"));
@@ -561,7 +749,7 @@ fn store_failure(err: rusqlite::Error) -> Failure {
     Failure::Failed(format!("store: {err}"))
 }
 
-/// One part's new state row, and the `audio_part` / `audio_facts` rows that go with it.
+/// One file's new state row, and the content row / `audio_facts` row that go with it.
 struct Write<'a> {
     cand: &'a Candidate,
     outcome: Outcome,
@@ -571,12 +759,14 @@ struct Write<'a> {
     next_try_at: Option<String>,
     /// The analyzer's object, to insert under `file_hash`.
     facts: Option<&'a Value>,
-    /// Point `audio_part` at `file_hash` (done).
+    /// Point the content row at `file_hash` (done).
     link: bool,
 }
 
 /// Record a result in its own short transaction, holding the writer lock only for it.
 fn record(store: &Path, write: &Write, now: &Now) -> Result<(), Failure> {
+    let (content, state, column) = write.cand.key.tables();
+    let key = write.cand.key.value();
     let mut opened = open_store(store).map_err(failure)?;
     let tx = opened.conn.transaction().map_err(store_failure)?;
     let at = now.iso();
@@ -589,31 +779,36 @@ fn record(store: &Path, write: &Write, now: &Now) -> Result<(), Failure> {
         .map_err(store_failure)?;
     }
     if write.outcome != Outcome::Done {
-        // The part no longer has the content its old row described.
+        // The file no longer has the content its old row described.
         tx.execute(
-            "DELETE FROM audio_part WHERE part_id = ?1",
-            [write.cand.part_id],
+            &format!("DELETE FROM {content} WHERE {column} = ?1"),
+            [&key],
         )
         .map_err(store_failure)?;
     }
     if let (true, Some(hash)) = (write.link, write.file_hash) {
         tx.execute(
-            "INSERT INTO audio_part (part_id, item_id, file_hash) VALUES (?1, ?2, ?3) \
-             ON CONFLICT(part_id) DO UPDATE SET item_id = excluded.item_id, \
-             file_hash = excluded.file_hash",
-            params![write.cand.part_id, write.cand.item_id, hash],
+            &format!(
+                "INSERT INTO {content} ({column}, item_id, file_hash) VALUES (?1, ?2, ?3) \
+                 ON CONFLICT({column}) DO UPDATE SET item_id = excluded.item_id, \
+                 file_hash = excluded.file_hash"
+            ),
+            params![key, write.cand.item_id, hash],
         )
         .map_err(store_failure)?;
     }
     tx.execute(
-        "INSERT INTO audio_harvest_state (part_id, item_id, size, file_hash, outcome, error, \
-         attempts, next_try_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
-         ON CONFLICT(part_id) DO UPDATE SET item_id = excluded.item_id, size = excluded.size, \
-         file_hash = excluded.file_hash, outcome = excluded.outcome, error = excluded.error, \
-         attempts = excluded.attempts, next_try_at = excluded.next_try_at, \
-         updated_at = excluded.updated_at",
+        &format!(
+            "INSERT INTO {state} ({column}, item_id, size, file_hash, outcome, error, \
+             attempts, next_try_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
+             ON CONFLICT({column}) DO UPDATE SET item_id = excluded.item_id, \
+             size = excluded.size, file_hash = excluded.file_hash, \
+             outcome = excluded.outcome, error = excluded.error, \
+             attempts = excluded.attempts, next_try_at = excluded.next_try_at, \
+             updated_at = excluded.updated_at"
+        ),
         params![
-            write.cand.part_id,
+            key,
             write.cand.item_id,
             write.cand.size,
             write.file_hash,
@@ -644,52 +839,87 @@ fn media_root_error(root: &Path) -> Option<String> {
         .map(|err| format!("blocked: media root {} unreadable: {err}", root.display()))
 }
 
-/// Run the harvest once: analyze what has no facts yet, `clock` giving the seconds since
-/// the epoch each time it is asked. Returns the report; a stopped run (`blocked`) is a
-/// report with `blocked` set, an error is a [`Failure`].
+fn empty_note(kind: &LibraryKind) -> &'static str {
+    match kind {
+        LibraryKind::Section(_) => EMPTY_SECTION_NOTE,
+        LibraryKind::Extras => EMPTY_EXTRAS_NOTE,
+    }
+}
+
+/// Run the harvest once: analyze what has no facts yet, library by library in list order.
+/// `sections` is Plex's section list, to turn titles into section ids; `clock` gives the
+/// seconds since the epoch each time it is asked. Returns the report; a stopped run
+/// (`blocked`) is a report with `blocked` set, an error is a [`Failure`].
 pub fn harvest(
     store: &Path,
     settings: &Settings,
+    sections: &[Section],
+    analyzer: &dyn Analyzer,
+    clock: &dyn Fn() -> i64,
+    log: &mut dyn FnMut(&str),
+) -> Result<Report, Failure> {
+    harvest_with(store, settings, sections, None, analyzer, clock, log)
+}
+
+/// [`harvest`] with the error that made `sections` unavailable, if any: names that match
+/// no extras library are then reported as skipped for want of Plex, not as unknown.
+pub fn harvest_with(
+    store: &Path,
+    settings: &Settings,
+    sections: &[Section],
+    plex_error: Option<&str>,
     analyzer: &dyn Analyzer,
     clock: &dyn Fn() -> i64,
     log: &mut dyn FnMut(&str),
 ) -> Result<Report, Failure> {
     let _lock = RunLock::acquire(store)?;
-    let (found, known) = {
+    let (resolved, found, known) = {
         let conn = open_readonly(store).map_err(failure)?;
-        (
-            candidates(&conn, &settings.sections).map_err(store_failure)?,
-            states(&conn).map_err(store_failure)?,
-        )
+        let resolved =
+            resolve_libraries(&conn, &settings.libraries, sections).map_err(store_failure)?;
+        let found = candidates(&conn, &resolved.libraries).map_err(store_failure)?;
+        (resolved, found, states(&conn).map_err(store_failure)?)
     };
     let mut report = Report {
         candidates: found.len(),
-        empty_sections: settings
-            .sections
+        empty_libraries: resolved
+            .libraries
             .iter()
-            .filter(|id| !found.iter().any(|cand| &cand.section_id == *id))
-            .cloned()
+            .enumerate()
+            .filter(|(ix, _)| !found.iter().any(|cand| cand.library == *ix))
+            .map(|(_, library)| (library.name.clone(), empty_note(&library.kind)))
             .collect(),
+        unknown_libraries: if plex_error.is_some() {
+            Vec::new()
+        } else {
+            resolved.unknown.clone()
+        },
+        plex_error: plex_error.map(str::to_string),
+        plex_skipped: if plex_error.is_some() {
+            resolved.unknown.clone()
+        } else {
+            Vec::new()
+        },
         ..Report::default()
     };
+    if let Some(error) = plex_error {
+        log(&format!("plex sections unavailable: {error}"));
+    } else {
+        for name in &resolved.unknown {
+            log(&unknown_note(name));
+        }
+    }
 
-    // Never-tried parts first, then due retries; part_id order inside each.
+    // Library by library in list order; never-tried files first, then due retries.
     let start = Now::at_secs(clock());
-    let mut fresh: Vec<&Candidate> = Vec::new();
-    let mut retries: Vec<&Candidate> = Vec::new();
+    let mut fresh: Vec<Vec<&Candidate>> = vec![Vec::new(); resolved.libraries.len()];
+    let mut retries: Vec<Vec<&Candidate>> = vec![Vec::new(); resolved.libraries.len()];
     for cand in &found {
-        match classify(cand, known.get(&cand.part_id), start.secs() * 1_000_000) {
+        match classify(cand, known.get(&cand.key), start.secs() * 1_000_000) {
             Disposition::Settled(_) => report.settled += 1,
             Disposition::Exclude => {
                 let now = Now::at_secs(clock());
-                let why = match cand.duration_ms {
-                    None => "duration unknown; not analyzed".to_string(),
-                    Some(ms) => format!(
-                        "{} min is longer than the {} min limit; not analyzed",
-                        ms / 60_000,
-                        MAX_DURATION_MS / 60_000
-                    ),
-                };
+                let why = exclusion(cand.duration_ms);
                 record(
                     store,
                     &Write {
@@ -705,24 +935,50 @@ pub fn harvest(
                     &now,
                 )?;
                 report.excluded += 1;
-                log(&format!("part {} excluded: {why}", cand.part_id));
+                log(&format!("{} excluded: {why}", cand.key.label()));
             }
-            Disposition::Work { retry: false } => fresh.push(cand),
-            Disposition::Work { retry: true } => retries.push(cand),
+            Disposition::Work { retry: false } => fresh[cand.library].push(cand),
+            Disposition::Work { retry: true } => retries[cand.library].push(cand),
         }
     }
+    let order: Vec<&Candidate> = fresh
+        .into_iter()
+        .zip(retries)
+        .flat_map(|(fresh, retries)| fresh.into_iter().chain(retries))
+        .collect();
 
-    for cand in fresh.into_iter().chain(retries) {
-        let prior = known.get(&cand.part_id).cloned();
+    for cand in order {
+        let label = cand.key.label();
+        let prior = known.get(&cand.key).cloned();
         if let Some(reason) = media_root_error(&settings.media_dir) {
             report.blocked = Some(reason);
             return Ok(report);
         }
         let now = Now::at_secs(clock());
-        // A path the settings cannot map is a configuration error, not a flaky file: stop
-        // and record nothing for it.
+        // A Plex part's path the settings cannot map is a configuration error, not a flaky
+        // file: stop and record nothing for it. An extra's path is one file's problem: it
+        // is `failed` (kept while its size holds) and later libraries still run.
         let path = match local_path(&settings.media_dir, &cand.file, &settings.source_roots) {
             Ok(path) => path,
+            Err(err) if cand.key.is_extra() => {
+                record(
+                    store,
+                    &Write {
+                        cand,
+                        outcome: Outcome::Failed,
+                        file_hash: None,
+                        error: Some(&err.message),
+                        attempts: prior.as_ref().map_or(0, |state| state.attempts) + 1,
+                        next_try_at: None,
+                        facts: None,
+                        link: false,
+                    },
+                    &now,
+                )?;
+                report.failed += 1;
+                log(&format!("{label} failed: {}", err.message));
+                continue;
+            }
             Err(err) => {
                 report.blocked = Some(format!("blocked: {}", err.message));
                 return Ok(report);
@@ -760,8 +1016,8 @@ pub fn harvest(
                 )?;
                 report.unreachable += 1;
                 log(&format!(
-                    "part {} unreachable (attempt {attempts}, next try {retry_at}): {}",
-                    cand.part_id, err.message
+                    "{label} unreachable (attempt {attempts}, next try {retry_at}): {}",
+                    err.message
                 ));
                 continue;
             }
@@ -794,12 +1050,58 @@ pub fn harvest(
                 &now,
             )?;
             report.unchanged += 1;
-            log(&format!(
-                "part {} unchanged hash {} skipped",
-                cand.part_id,
-                &hash[..12]
-            ));
+            log(&format!("{label} unchanged hash {} skipped", &hash[..12]));
             continue;
+        }
+
+        // An extra with no recorded duration is probed now that its file is reachable.
+        if cand.key.is_extra() && cand.duration_ms.is_none() {
+            match analyzer.duration_ms(&path) {
+                Ok(duration) if duration.is_some_and(|ms| ms <= MAX_DURATION_MS) => {}
+                Ok(duration) => {
+                    let now = Now::at_secs(clock());
+                    let why = exclusion(duration);
+                    record(
+                        store,
+                        &Write {
+                            cand,
+                            outcome: Outcome::Excluded,
+                            file_hash: None,
+                            error: Some(&why),
+                            attempts: 0,
+                            next_try_at: None,
+                            facts: None,
+                            link: false,
+                        },
+                        &now,
+                    )?;
+                    report.excluded += 1;
+                    log(&format!("{label} excluded: {why}"));
+                    continue;
+                }
+                Err(AnalyzeError::Failed(message)) => {
+                    let now = Now::at_secs(clock());
+                    let message = format!("duration probe: {message}");
+                    record(
+                        store,
+                        &Write {
+                            cand,
+                            outcome: Outcome::Failed,
+                            file_hash: Some(&hash),
+                            error: Some(&message),
+                            attempts: prior.as_ref().map_or(0, |state| state.attempts) + 1,
+                            next_try_at: None,
+                            facts: None,
+                            link: false,
+                        },
+                        &now,
+                    )?;
+                    report.failed += 1;
+                    log(&format!("{label} failed: {message}"));
+                    continue;
+                }
+                Err(AnalyzeError::Unavailable(message)) => return Err(Failure::Failed(message)),
+            }
         }
 
         match analyzer.analyze(&path) {
@@ -820,7 +1122,7 @@ pub fn harvest(
                     &now,
                 )?;
                 report.analyzed += 1;
-                log(&format!("part {} done {}", cand.part_id, &hash[..12]));
+                log(&format!("{label} done {}", &hash[..12]));
             }
             Err(AnalyzeError::Failed(message)) => {
                 let now = Now::at_secs(clock());
@@ -839,7 +1141,7 @@ pub fn harvest(
                     &now,
                 )?;
                 report.failed += 1;
-                log(&format!("part {} failed: {message}", cand.part_id));
+                log(&format!("{label} failed: {message}"));
             }
             Err(AnalyzeError::Unavailable(message)) => return Err(Failure::Failed(message)),
         }
@@ -849,11 +1151,11 @@ pub fn harvest(
 
 // --- status ---------------------------------------------------------------------------
 
-/// One section's parts by where they stand. `pending` is a part with no terminal state or
+/// One library's files by where they stand. `pending` is a file with no terminal state or
 /// a due `unreachable`; `unreachable` is one still waiting for its retry.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Counts {
-    /// Every media part of the section, whatever its state; 0 means media-walk found none.
+    /// Every file of the library, whatever its state; 0 means nothing to analyze there.
     pub parts: usize,
     pub done: usize,
     pub pending: usize,
@@ -862,25 +1164,24 @@ pub struct Counts {
     pub excluded: usize,
 }
 
-/// Counts per configured section, in the order the sections were named.
+/// Counts per resolved library, in list order.
 pub fn status(
     store: &Path,
-    sections: &[String],
+    resolved: &Resolved,
     now_secs: i64,
-) -> Result<Vec<(String, Counts)>, StoreError> {
+) -> Result<Vec<(Library, Counts)>, StoreError> {
     let conn = open_readonly(store)?;
-    let found = candidates(&conn, sections)?;
+    let found = candidates(&conn, &resolved.libraries)?;
     let known = states(&conn)?;
-    let mut by_section: Vec<(String, Counts)> = sections
+    let mut by_library: Vec<(Library, Counts)> = resolved
+        .libraries
         .iter()
-        .map(|id| (id.clone(), Counts::default()))
+        .map(|library| (library.clone(), Counts::default()))
         .collect();
     for cand in &found {
-        let Some((_, counts)) = by_section.iter_mut().find(|(id, _)| *id == cand.section_id) else {
-            continue;
-        };
+        let counts = &mut by_library[cand.library].1;
         counts.parts += 1;
-        match classify(cand, known.get(&cand.part_id), now_secs * 1_000_000) {
+        match classify(cand, known.get(&cand.key), now_secs * 1_000_000) {
             Disposition::Settled(Outcome::Done) => counts.done += 1,
             Disposition::Settled(Outcome::Failed) => counts.failed += 1,
             Disposition::Settled(Outcome::Excluded) => counts.excluded += 1,
@@ -888,7 +1189,7 @@ pub fn status(
             Disposition::Exclude | Disposition::Work { .. } => counts.pending += 1,
         }
     }
-    Ok(by_section)
+    Ok(by_library)
 }
 
 // --- the command ----------------------------------------------------------------------
@@ -912,20 +1213,52 @@ pub fn run(args: &[String]) -> Result<(), Failure> {
         )));
     }
     let config = Config::from_env().map_err(failure)?;
+    let (sections, plex_error) = match Sources::from_env()
+        .plex("resolve the names in PLEXDB_AUDIO_LIBRARIES")
+        .and_then(|plex| plex.sections())
+    {
+        Ok(sections) => (sections, None),
+        Err(err) => (Vec::new(), Some(err.to_string())),
+    };
+    let resolved = {
+        let conn = open_readonly(&config.store_path).map_err(failure)?;
+        resolve_libraries(&conn, &settings.libraries, &sections).map_err(store_failure)?
+    };
+    if resolved
+        .libraries
+        .iter()
+        .any(|library| library.kind == LibraryKind::Extras)
+        && !crate::frames_cmd::which(&settings.ffprobe)
+    {
+        return Err(Failure::Config(format!(
+            "{:?} is not on PATH; extras with no recorded duration are probed with it \
+             (set PLEXDB_FFPROBE)",
+            settings.ffprobe
+        )));
+    }
     let analyzer = ProcessAnalyzer {
         program: settings.analyzer.clone(),
+        ffprobe: settings.ffprobe.clone(),
         timeout: settings.timeout,
     };
-    let report = harvest(
+    let report = harvest_with(
         &config.store_path,
         &settings,
+        &sections,
+        plex_error.as_deref(),
         &analyzer,
         &now_secs,
         &mut |line| println!("{line}"),
     )?;
     println!("{}", report.describe());
-    match report.blocked {
-        Some(reason) => Err(Failure::Failed(reason)),
+    if let Some(reason) = report.blocked {
+        return Err(Failure::Failed(reason));
+    }
+    // The extras ran; the failed Plex call still fails the run so the tick logs it.
+    match report.plex_error {
+        Some(error) => Err(Failure::Failed(format!(
+            "plex sections unavailable: {error}"
+        ))),
         None => Ok(()),
     }
 }

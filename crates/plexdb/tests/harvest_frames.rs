@@ -10,10 +10,13 @@ use std::path::{Path, PathBuf};
 use common::{FakePlex, store};
 use plexdb::frame_encoder::{Embedded, Encoder, EncoderError};
 use plexdb::frame_media::{Cut, Jpegs, MediaError, MediaReader, Scan};
-use plexdb::frames::{FRAME_DIMS, open_frames};
+use plexdb::frames::{
+    FRAME_DIMS, PriorityStatus, StatusInput, open_frames, priority_titles, section_titles, status,
+};
 use plexdb::harvest_frames::{
     Inputs, Options, STOP_EMPTY, STOP_ENCODER, STOP_LIMIT, STOP_REJECTED, STOP_WINDOW, harvest,
 };
+use plexdb::libraries::{extra_library_names, resolve};
 use plexdb::localtime::Local;
 use plexdb::plex::{Section, TYPE_EPISODE, TYPE_MOVIE};
 use rusqlite::Connection;
@@ -177,6 +180,17 @@ fn run(
     hours: Option<(u64, u64)>,
     clock: u32,
 ) -> Run {
+    run_priority(world, answer, options, hours, clock, &[])
+}
+
+fn run_priority(
+    world: &World,
+    answer: Answer,
+    options: &Options,
+    hours: Option<(u64, u64)>,
+    clock: u32,
+    priority: &[String],
+) -> Run {
     let frames = world.dir.path().join("frames/frames.db");
     let media = FakeMedia {
         scanned: RefCell::new(Vec::new()),
@@ -197,6 +211,7 @@ fn run(
             encoder: &encoder,
             locate: &locate,
             store_path: &world.dir.path().join("plexdb.db"),
+            priority,
             hours,
             now: &|| at(clock),
         },
@@ -574,6 +589,7 @@ fn a_second_harvester_is_refused_while_one_holds_the_slot() {
             encoder: &encoder,
             locate: &locate,
             store_path: &world.dir.path().join("plexdb.db"),
+            priority: &[],
             hours: None,
             now: &|| at(3),
         },
@@ -614,6 +630,7 @@ fn a_panic_mid_title_leaves_no_title_in_hand() {
                 encoder: &encoder,
                 locate: &locate,
                 store_path: &world.dir.path().join("plexdb.db"),
+                priority: &[],
                 hours: None,
                 now: &|| at(3),
             },
@@ -631,4 +648,170 @@ fn a_panic_mid_title_leaves_no_title_in_hand() {
     assert!(panicked.is_err(), "the panic still reaches the caller");
     let conn = open_frames(&frames).expect("open");
     assert_eq!(count(&conn, "SELECT count(*) FROM frame_harvest"), 0);
+}
+
+/// Two more titles in section `2` ("Concerts"), a Plex that lists them, and an organized
+/// extra `fs:video` in the extras library "Music Videos", all never indexed.
+fn with_concerts_and_music_videos(world: &mut World) {
+    let conn = Connection::open(world.dir.path().join("plexdb.db")).expect("open");
+    conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+    for (item_id, rating_key) in [("tmdb:c1", "30"), ("tmdb:c2", "31")] {
+        conn.execute(
+            "INSERT INTO items (item_id, type, title) VALUES (?1, 'movie', ?1)",
+            [item_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO plex_items (rating_key, item_id, section_id, last_seen) \
+             VALUES (?1, ?2, '2', '2026-01-01')",
+            [rating_key, item_id],
+        )
+        .unwrap();
+    }
+    conn.execute_batch(
+        "INSERT INTO extra_library (name, root, type, declared_at)
+             VALUES ('Music Videos', '/library/mv', 'video', 't');
+         INSERT INTO items (item_id, type, title) VALUES ('fs:video', 'extra', 'V');
+         INSERT INTO extra_item (item_id, library, organized, first_seen)
+             VALUES ('fs:video', 'Music Videos', 1, '2026-10-20T00:00:00+00:00');
+         INSERT INTO extra_file (path, item_id, primary_file, size, first_seen, last_seen)
+             VALUES ('/library/mv/v.mkv', 'fs:video', 1, 900, 't', 't');",
+    )
+    .unwrap();
+    world.plex.sections.push(Section {
+        key: "2".into(),
+        kind: "movie".into(),
+        title: "Concerts".into(),
+    });
+    world.plex.set(
+        "2",
+        TYPE_MOVIE,
+        vec![
+            // Older than every Movies title, so today's order puts them last.
+            movie_record("30", 5, 40, "/media/c1.mkv"),
+            movie_record("31", 6, 41, "/media/c2.mkv"),
+        ],
+    );
+    world.plex.set("2", TYPE_EPISODE, vec![]);
+}
+
+fn names(list: &[&str]) -> Vec<String> {
+    list.iter().map(|name| name.to_string()).collect()
+}
+
+#[test]
+fn never_indexed_titles_of_the_listed_libraries_come_first_in_list_order_then_the_rest() {
+    let mut world = world(
+        &[("tmdb:m1", "10", "movie"), ("tmdb:m2", "11", "movie")],
+        vec![
+            movie_record("10", 900, 7, "/media/m1.mkv"),
+            movie_record("11", 800, 8, "/media/m2.mkv"),
+        ],
+    );
+    with_concerts_and_music_videos(&mut world);
+
+    let none = run_priority(
+        &world,
+        Answer::Vectors,
+        &Options {
+            ignore_hours: true,
+            limit: Some(1),
+            ..Options::default()
+        },
+        None,
+        3,
+        &[],
+    );
+    // Today's order: the newest movie first; extras are last.
+    assert_eq!(none.titles, ["tmdb:m1"]);
+    std::fs::remove_dir_all(world.dir.path().join("frames")).unwrap();
+
+    let ran = run_priority(
+        &world,
+        Answer::Vectors,
+        &Options {
+            ignore_hours: true,
+            ..Options::default()
+        },
+        None,
+        3,
+        &names(&["Music Videos", "Concerts", "No Such Library"]),
+    );
+
+    // The extras library first, then Concerts (today's order inside it: newest first), then
+    // Movies as before.
+    assert_eq!(
+        ran.titles,
+        ["fs:video", "tmdb:c2", "tmdb:c1", "tmdb:m1", "tmdb:m2"]
+    );
+    assert!(
+        ran.log.iter().any(|line| line.contains(
+            "unknown library No Such Library: not a Plex section title or an extras library"
+        )),
+        "{:?}",
+        ran.log
+    );
+}
+
+#[test]
+fn status_lists_the_priority_libraries_in_order_with_how_many_are_indexed() {
+    let mut world = world(
+        &[("tmdb:m1", "10", "movie")],
+        vec![movie_record("10", 900, 7, "/media/m1.mkv")],
+    );
+    with_concerts_and_music_videos(&mut world);
+    let priority = names(&["Music Videos", "Concerts", "Nope"]);
+    // One title indexed: the extras library's.
+    let ran = run_priority(
+        &world,
+        Answer::Vectors,
+        &Options {
+            ignore_hours: true,
+            limit: Some(1),
+            ..Options::default()
+        },
+        None,
+        3,
+        &priority,
+    );
+    assert_eq!(ran.titles, ["fs:video"]);
+
+    let store = Connection::open(world.dir.path().join("plexdb.db")).unwrap();
+    let sections = section_titles(&store).unwrap();
+    let resolved = resolve(
+        &priority,
+        &world.plex.sections,
+        &extra_library_names(&store).unwrap(),
+    );
+    let frames = open_frames(&ran.frames).unwrap();
+    let report = status(
+        &frames,
+        &sections,
+        &StatusInput {
+            path: &ran.frames,
+            priority: PriorityStatus {
+                libraries: priority_titles(&store, &sections, &resolved).unwrap(),
+                unknown: resolved.unknown.clone(),
+                plex_error: None,
+            },
+            hours: "",
+            now: at(3),
+            encoder_reachable: None,
+            ffmpeg_found: true,
+            decoder: "cpu".into(),
+        },
+    )
+    .expect("status");
+    let json: serde_json::Value =
+        serde_json::from_str(&plexdb::pyjson::dumps_indent2(&report)).expect("JSON");
+
+    assert_eq!(
+        json["priority"],
+        json!([
+            {"library": "Music Videos", "indexed": 1, "total": 1},
+            {"library": "Concerts", "indexed": 0, "total": 2},
+        ])
+    );
+    assert_eq!(json["priority_unknown"], json!(["Nope"]));
+    assert_eq!(json["priority_error"], serde_json::Value::Null);
 }

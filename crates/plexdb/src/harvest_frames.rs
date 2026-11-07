@@ -12,8 +12,11 @@
 //! that were never indexed, oldest first sighting first: a person is waiting to see them.
 //! (1) Titles someone queued, oldest first.
 //! (2) Titles whose indexed `part_id` is not the part Plex lists now, least recently
-//! indexed first. (3) Titles never indexed, movies before episodes, newest Plex
-//! `addedAt` first, then organized extras never indexed. (4) Titles whose `file_hash`
+//! indexed first. (3) Titles never indexed: first those of the libraries
+//! `PLEXDB_FRAME_LIBRARIES` names, in list order ([`crate::libraries`]: a Plex section title or
+//! an extras library name; a name that matches nothing is logged and skipped), then the rest;
+//! each group movies before episodes, newest Plex `addedAt` first, then organized extras never
+//! indexed. (4) Titles whose `file_hash`
 //! changed since they were indexed, least recently indexed first. A failed attempt records Plex's current part, so a
 //! title that failed is retried by none of (2) to (4) until its `file_hash` changes
 //! or it is queued again.
@@ -50,8 +53,9 @@ use crate::frames::{
     FRAME_DIMS, FrameConfig, HarvestLock, Window, clear_decoder_fallback, delete_vectors,
     inside_hours, open_frames, parse_hours, py_repr, set_indexing, write_decoder_fallback,
 };
+use crate::libraries::{extra_library_names, resolve, unknown_note};
 use crate::localtime::Local;
-use crate::plex::{PlexSource, TYPE_EPISODE, TYPE_MOVIE};
+use crate::plex::{PlexSource, Section, TYPE_EPISODE, TYPE_MOVIE};
 use crate::pyval::{get, or, py_int, py_str};
 use crate::sources::Sources;
 use crate::steps::Failure;
@@ -135,6 +139,8 @@ pub struct Part {
     pub part_id: Option<i64>,
     pub size: i64,
     pub file: String,
+    /// The library the title is in: its Plex section's title, or `extra_item.library`.
+    pub library: String,
 }
 
 /// `item_id -> Part` for every movie and episode Plex lists with a media part. A title
@@ -142,6 +148,7 @@ pub struct Part {
 pub fn plex_parts(
     store: &Connection,
     plex: &dyn PlexSource,
+    sections: &[Section],
 ) -> Result<BTreeMap<String, Part>, StoreError> {
     let mut wanted: HashMap<String, (String, String, String)> = HashMap::new();
     let mut statement = store.prepare(
@@ -164,17 +171,21 @@ pub fn plex_parts(
         let (rating_key, item_id, section, kind) = row?;
         wanted.insert(rating_key, (item_id, section, kind));
     }
-    let section_types: HashMap<String, String> = plex
-        .sections()?
-        .into_iter()
-        .map(|section| (section.key, section.kind))
+    let section_types: HashMap<&str, (&str, &str)> = sections
+        .iter()
+        .map(|section| {
+            (
+                section.key.as_str(),
+                (section.kind.as_str(), section.title.as_str()),
+            )
+        })
         .collect();
     let section_keys: BTreeSet<&String> = wanted.values().map(|(_, section, _)| section).collect();
     let mut best: BTreeMap<String, Part> = BTreeMap::new();
     for key in section_keys {
-        let plex_type = match section_types.get(key).map(String::as_str) {
-            Some("movie") => TYPE_MOVIE,
-            Some("show") => TYPE_EPISODE,
+        let (plex_type, library) = match section_types.get(key.as_str()) {
+            Some(("movie", title)) => (TYPE_MOVIE, *title),
+            Some(("show", title)) => (TYPE_EPISODE, *title),
             _ => continue,
         };
         for record in plex.items(key, plex_type)? {
@@ -203,6 +214,7 @@ pub fn plex_parts(
                 })?),
                 size: int(get(first, "size")),
                 file: py_str(or(get(first, "file"), &Value::String(String::new()))),
+                library: library.to_string(),
             };
             if best
                 .get(item_id)
@@ -225,7 +237,7 @@ pub struct Extras {
 
 pub fn extra_parts(store: &Connection) -> Result<Extras, StoreError> {
     let mut statement = store.prepare(
-        "SELECT ei.item_id, ei.organized, f.path, COALESCE(f.size, 0) FROM extra_item ei \
+        "SELECT ei.item_id, ei.organized, f.path, COALESCE(f.size, 0), ei.library FROM extra_item ei \
          JOIN extra_file f ON f.item_id = ei.item_id AND f.primary_file = 1 \
          WHERE f.missing_since IS NULL \
          ORDER BY ei.first_seen, ei.item_id",
@@ -236,6 +248,7 @@ pub fn extra_parts(store: &Connection) -> Result<Extras, StoreError> {
             row.get::<_, i64>(1)?,
             row.get::<_, String>(2)?,
             row.get::<_, i64>(3)?,
+            row.get::<_, String>(4)?,
         ))
     })?;
     let mut out = Extras {
@@ -243,7 +256,7 @@ pub fn extra_parts(store: &Connection) -> Result<Extras, StoreError> {
         unorganized: Vec::new(),
     };
     for row in rows {
-        let (item_id, organized, file, size) = row?;
+        let (item_id, organized, file, size, library) = row?;
         if organized == 0 {
             out.unorganized.push(item_id.clone());
         }
@@ -255,6 +268,7 @@ pub fn extra_parts(store: &Connection) -> Result<Extras, StoreError> {
                 part_id: None,
                 size,
                 file,
+                library,
             },
         );
     }
@@ -295,15 +309,22 @@ enum Phase {
 /// a run is seen before the backlog resumes.
 struct Candidates<'a> {
     parts: &'a BTreeMap<String, Part>,
+    /// `PLEXDB_FRAME_LIBRARIES`: a title of an earlier name is indexed first when new.
+    priority: &'a [String],
     seen: BTreeSet<String>,
     state: BTreeMap<String, IndexState>,
     phase: Phase,
 }
 
 impl<'a> Candidates<'a> {
-    fn new(parts: &'a BTreeMap<String, Part>, unorganized: Vec<String>) -> Self {
+    fn new(
+        parts: &'a BTreeMap<String, Part>,
+        priority: &'a [String],
+        unorganized: Vec<String>,
+    ) -> Self {
         Candidates {
             parts,
+            priority,
             seen: BTreeSet::new(),
             state: BTreeMap::new(),
             phase: Phase::Unorganized(unorganized.into_iter()),
@@ -391,7 +412,14 @@ impl<'a> Candidates<'a> {
                             .collect();
                         fresh.sort_by(|a, b| {
                             let (pa, pb) = (&self.parts[*a], &self.parts[*b]);
-                            (kind_rank(&pa.kind), -pa.added_at, *a).cmp(&(
+                            let rank = |part: &Part| {
+                                self.priority
+                                    .iter()
+                                    .position(|name| *name == part.library)
+                                    .unwrap_or(usize::MAX)
+                            };
+                            (rank(pa), kind_rank(&pa.kind), -pa.added_at, *a).cmp(&(
+                                rank(pb),
                                 kind_rank(&pb.kind),
                                 -pb.added_at,
                                 *b,
@@ -857,6 +885,8 @@ pub struct Inputs<'a> {
     pub encoder: &'a dyn Encoder,
     pub locate: Locate<'a>,
     pub store_path: &'a Path,
+    /// `PLEXDB_FRAME_LIBRARIES`, in list order.
+    pub priority: &'a [String],
     pub hours: Option<Window>,
     pub now: &'a dyn Fn() -> Local,
 }
@@ -887,7 +917,11 @@ pub fn harvest(
         store.busy_timeout(std::time::Duration::from_millis(
             plexdb_store::BUSY_TIMEOUT_MS,
         ))?;
-        let mut parts = plex_parts(&store, inputs.plex)?;
+        let sections = inputs.plex.sections()?;
+        for name in resolve(inputs.priority, &sections, &extra_library_names(&store)?).unknown {
+            log(&format!("frames: {}", unknown_note(&name)));
+        }
+        let mut parts = plex_parts(&store, inputs.plex, &sections)?;
         let extras = extra_parts(&store)?;
         parts.extend(extras.parts);
         (parts, extras.unorganized)
@@ -933,7 +967,7 @@ fn run_titles(
         now,
     };
     let keep_going = || options.ignore_hours || inside_hours(inputs.hours, &now());
-    let mut candidates = Candidates::new(parts, unorganized);
+    let mut candidates = Candidates::new(parts, inputs.priority, unorganized);
     let mut result = HarvestResult::default();
     let mut rejects = 0usize;
     let mut tagged = |line: &str| log(&format!("frames: {line}"));
@@ -1086,6 +1120,7 @@ pub fn run(args: &[String]) -> Result<(), Failure> {
                 encoder: &encoder,
                 locate: &locate,
                 store_path: &store.store_path,
+                priority: &config.priority_libraries,
                 hours,
                 now: &Local::now,
             },

@@ -1,18 +1,22 @@
 //! `harvest-audio` against a store built by the real migrations, small files in a temp dir
 //! and a fake analyzer: each outcome, the retry clock, the blocked media root, the
-//! unchanged-hash skip, the run lock and `audio status`'s counts.
+//! unchanged-hash skip, the run lock, `audio status`'s counts, library order, extras and
+//! the duration probe.
 
 mod common;
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use plexdb::audio_cmd;
 use plexdb::harvest_audio::{
     AnalyzeError, Analyzer, MAX_DURATION_MS, ProcessAnalyzer, Report, RunLock, Settings,
-    backoff_secs, harvest, harvest_running, parse_sections, status,
+    backoff_secs, harvest, harvest_running, harvest_with, parse_probe_duration, resolve_libraries,
+    status,
 };
+use plexdb::plex::Section;
 use plexdb::pyjson::dumps_indent2;
 use plexdb::steps::Failure;
 use rusqlite::Connection;
@@ -24,6 +28,9 @@ const HOUR: i64 = 3600;
 struct Fake {
     calls: RefCell<Vec<PathBuf>>,
     fail: Cell<bool>,
+    /// What the duration probe answers per file name; a file not named plays 5 minutes.
+    probe: RefCell<HashMap<String, Result<Option<i64>, AnalyzeError>>>,
+    probes: RefCell<Vec<PathBuf>>,
 }
 
 impl Fake {
@@ -31,10 +38,19 @@ impl Fake {
         Fake {
             calls: RefCell::new(Vec::new()),
             fail: Cell::new(false),
+            probe: RefCell::new(HashMap::new()),
+            probes: RefCell::new(Vec::new()),
         }
     }
     fn calls(&self) -> usize {
         self.calls.borrow().len()
+    }
+    fn analyzed_names(&self) -> Vec<String> {
+        self.calls
+            .borrow()
+            .iter()
+            .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect()
     }
 }
 
@@ -46,6 +62,16 @@ impl Analyzer for Fake {
         }
         Ok(json!({"bpm": 120.0, "key": "C", "scale": "major"}))
     }
+
+    fn duration_ms(&self, path: &Path) -> Result<Option<i64>, AnalyzeError> {
+        self.probes.borrow_mut().push(path.to_path_buf());
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        self.probe
+            .borrow()
+            .get(&name)
+            .cloned()
+            .unwrap_or(Ok(MIN_20))
+    }
 }
 
 struct World {
@@ -54,6 +80,7 @@ struct World {
     media: PathBuf,
     conn: Connection,
     settings: Settings,
+    sections: Vec<Section>,
     clock: Cell<i64>,
 }
 
@@ -63,9 +90,15 @@ impl World {
         let conn = common::store(dir.path());
         let media = dir.path().join("media");
         std::fs::create_dir(&media).expect("media dir");
+        let section = |key: &str, title: &str| Section {
+            key: key.into(),
+            kind: "movie".into(),
+            title: title.into(),
+        };
         let settings = Settings {
-            sections: vec!["1".into()],
+            libraries: vec!["Movies".into()],
             analyzer: "unused".into(),
+            ffprobe: "unused".into(),
             timeout: Duration::from_secs(900),
             media_dir: media.clone(),
             source_roots: vec!["/plexroot".into()],
@@ -76,6 +109,11 @@ impl World {
             media,
             conn,
             settings,
+            sections: vec![
+                section("1", "Movies"),
+                section("2", "TV Shows"),
+                section("7", "Photos"),
+            ],
             clock: Cell::new(T0),
         }
     }
@@ -129,10 +167,74 @@ impl World {
             .expect("part");
     }
 
+    /// An extra in `library` whose primary file `name` under the media dir holds `content`.
+    /// Its `extra_file.path` is `/plexroot/<name>`, as Plex-style roots map it.
+    fn extra(
+        &self,
+        library: &str,
+        item: &str,
+        first_seen: &str,
+        name: &str,
+        content: &[u8],
+        duration_ms: Option<i64>,
+    ) {
+        let path = self.media.join(name);
+        std::fs::write(&path, content).expect("write media");
+        let file = std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .expect("open");
+        file.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000))
+            .expect("same mtime for every file");
+        self.conn
+            .execute(
+                "INSERT OR IGNORE INTO extra_library (name, root, type, declared_at) \
+                 VALUES (?1, '/plexroot', 'video', 't')",
+                [library],
+            )
+            .expect("extra library");
+        self.conn
+            .execute(
+                "INSERT INTO items (item_id, type, title) VALUES (?1, 'extra', ?1)",
+                [item],
+            )
+            .expect("extra item row");
+        self.conn
+            .execute(
+                "INSERT INTO extra_item (item_id, library, organized, first_seen) \
+                 VALUES (?1, ?2, 1, ?3)",
+                [item, library, first_seen],
+            )
+            .expect("extra_item");
+        self.conn
+            .execute(
+                "INSERT INTO extra_file (path, item_id, primary_file, size, duration_ms, \
+                 first_seen, last_seen) VALUES (?1, ?2, 1, ?3, ?4, 't', 't')",
+                rusqlite::params![
+                    format!("/plexroot/{name}"),
+                    item,
+                    content.len() as i64,
+                    duration_ms
+                ],
+            )
+            .expect("extra_file");
+    }
+
+    fn extra_state(&self, path: &str) -> (String, Option<String>) {
+        self.conn
+            .query_row(
+                "SELECT outcome, error FROM audio_extra_state WHERE path = ?1",
+                [path],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("an extra state row")
+    }
+
     fn run(&self, analyzer: &dyn Analyzer) -> Result<Report, Failure> {
         harvest(
             &self.store,
             &self.settings,
+            &self.sections,
             analyzer,
             &|| self.clock.get(),
             &mut |_| {},
@@ -379,6 +481,9 @@ fn a_missing_analyzer_stops_the_run_and_records_nothing() {
         fn analyze(&self, _: &Path) -> Result<Value, AnalyzeError> {
             Err(AnalyzeError::Unavailable("cannot run x".into()))
         }
+        fn duration_ms(&self, _: &Path) -> Result<Option<i64>, AnalyzeError> {
+            Ok(Some(1))
+        }
     }
     let w = World::new();
     w.part(1, "1", "a.wav", b"aaaa", MIN_20);
@@ -407,37 +512,47 @@ fn a_second_run_while_one_holds_the_lock_is_busy() {
 }
 
 #[test]
-fn sections_parse_as_a_deduplicated_comma_list_and_empty_is_off() {
-    assert_eq!(parse_sections(" 1, 2 ,,1 "), ["1", "2"]);
-    assert!(parse_sections("").is_empty());
-}
-
-#[test]
-fn without_sections_the_command_exits_not_configured_and_analyzes_nothing() {
+fn without_libraries_the_command_exits_not_configured_and_analyzes_nothing() {
     let w = World::new();
     w.part(1, "1", "a.wav", b"aaaa", MIN_20);
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_plexdb-rs"))
         .arg("harvest-audio")
         .env("PLEXDB_PATH", &w.store)
-        .env_remove("PLEXDB_AUDIO_SECTIONS")
+        .env_remove("PLEXDB_AUDIO_LIBRARIES")
         .output()
         .expect("run plexdb-rs");
     assert_eq!(out.status.code(), Some(78));
-    assert!(String::from_utf8_lossy(&out.stderr).contains("PLEXDB_AUDIO_SECTIONS is not set"));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("PLEXDB_AUDIO_LIBRARIES is not set"));
     assert!(!w.has_state(1));
 
     let status = std::process::Command::new(env!("CARGO_BIN_EXE_plexdb-rs"))
         .args(["audio", "status"])
         .env("PLEXDB_PATH", &w.store)
-        .env_remove("PLEXDB_AUDIO_SECTIONS")
+        .env_remove("PLEXDB_AUDIO_LIBRARIES")
         .output()
         .expect("run plexdb-rs");
     assert_eq!(status.status.code(), Some(0));
-    assert!(String::from_utf8_lossy(&status.stdout).contains("off: PLEXDB_AUDIO_SECTIONS"));
+    assert!(String::from_utf8_lossy(&status.stdout).contains("off: PLEXDB_AUDIO_LIBRARIES"));
+}
+
+/// `status` over the `names`, resolved against the world's sections and extras libraries.
+fn status_of(w: &World, names: &[&str], now: i64) -> Vec<(String, plexdb::harvest_audio::Counts)> {
+    let names: Vec<String> = names.iter().map(|name| name.to_string()).collect();
+    let resolved = resolve_libraries(&w.conn, &names, &w.sections).expect("resolve");
+    status(&w.store, &resolved, now)
+        .expect("status")
+        .into_iter()
+        .map(|(library, counts)| (library.name, counts))
+        .collect()
+}
+
+fn report_json(w: &World, names: &[&str]) -> String {
+    let names: Vec<String> = names.iter().map(|name| name.to_string()).collect();
+    dumps_indent2(&audio_cmd::report(&w.store, &names, &w.sections, None, T0).expect("report"))
 }
 
 #[test]
-fn status_counts_each_state_per_section() {
+fn status_counts_each_state_per_library() {
     let mut w = World::new();
     w.part(1, "1", "done.wav", b"aaaa", MIN_20);
     w.part(2, "1", "bad.wav", b"bbbbb", MIN_20);
@@ -446,8 +561,7 @@ fn status_counts_each_state_per_section() {
     w.part(5, "2", "other.wav", b"ddddddd", MIN_20);
     let fake = Fake::new();
     // Part 2 fails; the rest run normally.
-    let mut sections = vec!["1".to_string(), "2".to_string()];
-    w.settings.sections.clone_from(&sections);
+    w.settings.libraries = vec!["Movies".into(), "TV Shows".into()];
     struct FailBad(Fake);
     impl Analyzer for FailBad {
         fn analyze(&self, path: &Path) -> Result<Value, AnalyzeError> {
@@ -456,39 +570,340 @@ fn status_counts_each_state_per_section() {
             }
             self.0.analyze(path)
         }
+        fn duration_ms(&self, path: &Path) -> Result<Option<i64>, AnalyzeError> {
+            self.0.duration_ms(path)
+        }
     }
     w.run(&FailBad(fake)).expect("run");
     // A part Plex has added since: no state yet, so it is pending.
     w.part(6, "1", "new.wav", b"eeeeeeee", MIN_20);
 
-    let counts = status(&w.store, &sections, T0).expect("status");
-    let line = |id: &str| {
-        let (_, c) = counts.iter().find(|(s, _)| s == id).unwrap();
+    let counts = status_of(&w, &["Movies", "TV Shows"], T0);
+    let line = |name: &str| {
+        let (_, c) = counts.iter().find(|(s, _)| s == name).unwrap();
         (c.done, c.pending, c.failed, c.unreachable, c.excluded)
     };
-    assert_eq!(line("1"), (1, 1, 1, 1, 1));
-    assert_eq!(line("2"), (1, 0, 0, 0, 0));
+    assert_eq!(line("Movies"), (1, 1, 1, 1, 1));
+    assert_eq!(line("TV Shows"), (1, 0, 0, 0, 0));
 
     // Once the retry is due, the unreachable part is pending again.
-    let later = status(&w.store, &sections, T0 + HOUR).expect("status");
-    let (_, c) = later.iter().find(|(s, _)| s == "1").unwrap();
+    let later = status_of(&w, &["Movies", "TV Shows"], T0 + HOUR);
+    let (_, c) = later.iter().find(|(s, _)| s == "Movies").unwrap();
     assert_eq!((c.pending, c.unreachable), (2, 0));
 
-    let json = audio_cmd::report(&w.store, &sections, T0).expect("report");
-    let text = dumps_indent2(&json);
+    let text = report_json(&w, &["Movies", "TV Shows"]);
     assert!(text.contains("\"enabled\": true") && text.contains("\"running\": false"));
-    sections.clear();
-    let off = dumps_indent2(&audio_cmd::report(&w.store, &sections, T0).expect("off"));
-    assert!(off.contains("\"enabled\": false") && off.contains("off: PLEXDB_AUDIO_SECTIONS"));
+    let off = report_json(&w, &[]);
+    assert!(off.contains("\"enabled\": false") && off.contains("off: PLEXDB_AUDIO_LIBRARIES"));
 }
 
 #[test]
 fn status_on_a_store_with_nothing_harvested_counts_every_part_pending() {
     let w = World::new();
     w.part(1, "1", "a.wav", b"aaaa", MIN_20);
-    let counts = status(&w.store, &["1".to_string()], T0).expect("status");
+    let counts = status_of(&w, &["Movies"], T0);
     assert_eq!(counts[0].1.pending, 1);
     assert_eq!(counts[0].1.done, 0);
+}
+
+#[test]
+fn an_extras_library_listed_first_is_analyzed_before_any_plex_section_and_sections_follow_list_order()
+ {
+    let mut w = World::new();
+    w.part(1, "1", "movie.wav", b"mmmm", MIN_20);
+    w.part(2, "2", "show.wav", b"sssss", MIN_20);
+    // Two extras, the later first sighting inserted first: first_seen decides.
+    w.extra(
+        "Music Videos",
+        "fs:late",
+        "2026-02-01",
+        "late.wav",
+        b"lllllll",
+        MIN_20,
+    );
+    w.extra(
+        "Music Videos",
+        "fs:early",
+        "2026-01-01",
+        "early.wav",
+        b"eeeeee",
+        MIN_20,
+    );
+    w.settings.libraries = vec!["Music Videos".into(), "TV Shows".into(), "Movies".into()];
+    let fake = Fake::new();
+
+    let report = w.run(&fake).expect("run");
+
+    assert_eq!((report.candidates, report.analyzed), (4, 4));
+    assert_eq!(
+        fake.analyzed_names(),
+        ["early.wav", "late.wav", "show.wav", "movie.wav"]
+    );
+    assert!(
+        fake.probes.borrow().is_empty(),
+        "a recorded duration is never probed"
+    );
+    let text = report_json(&w, &["Music Videos", "TV Shows", "Movies"]);
+    assert!(
+        text.find("Music Videos") < text.find("TV Shows")
+            && text.find("TV Shows") < text.find("Movies"),
+        "{text}"
+    );
+}
+
+#[test]
+fn within_a_library_never_tried_parts_come_before_due_retries() {
+    let w = World::new();
+    w.row(1, "1", "missing.wav", 4, MIN_20);
+    let fake = Fake::new();
+    w.run(&fake).expect("first run records it unreachable");
+    w.part(2, "1", "new.wav", b"nnnnn", MIN_20);
+    w.clock.set(T0 + HOUR);
+    std::fs::write(w.media.join("missing.wav"), b"aaaa").unwrap();
+
+    w.run(&fake).expect("rerun");
+
+    assert_eq!(fake.analyzed_names(), ["new.wav", "missing.wav"]);
+}
+
+#[test]
+fn an_extras_facts_are_stored_by_path_and_a_moved_file_keeps_them() {
+    let mut w = World::new();
+    w.extra(
+        "Music Videos",
+        "fs:a",
+        "2026-01-01",
+        "a.wav",
+        b"aaaa",
+        MIN_20,
+    );
+    w.settings.libraries = vec!["Music Videos".into()];
+    let fake = Fake::new();
+
+    let report = w.run(&fake).expect("run");
+
+    assert_eq!((report.candidates, report.analyzed), (1, 1));
+    assert_eq!(w.extra_state("/plexroot/a.wav").0, "done");
+    let (item, hash): (String, String) = w
+        .conn
+        .query_row(
+            "SELECT item_id, file_hash FROM audio_extra WHERE path = '/plexroot/a.wav'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("audio_extra");
+    assert_eq!(item, "fs:a");
+    assert_eq!(w.count("audio_facts"), 1);
+    assert_eq!(w.count("audio_part") + w.count("audio_harvest_state"), 0);
+
+    // extras-organize renames the path in place; the foreign key carries the rows along.
+    std::fs::rename(w.media.join("a.wav"), w.media.join("moved.wav")).unwrap();
+    w.conn
+        .execute(
+            "UPDATE extra_file SET path = '/plexroot/moved.wav' WHERE path = '/plexroot/a.wav'",
+            [],
+        )
+        .unwrap();
+    let moved: String = w
+        .conn
+        .query_row("SELECT file_hash FROM audio_extra", [], |row| row.get(0))
+        .expect("the row followed the file");
+    assert_eq!(moved, hash);
+    assert_eq!(w.extra_state("/plexroot/moved.wav").0, "done");
+
+    let again = w.run(&fake).expect("rerun");
+    assert_eq!((again.settled, again.analyzed), (1, 0));
+    assert_eq!(fake.calls(), 1, "the move cost no analysis");
+
+    // A file that is missing is no candidate, and deleting its row deletes the harvest rows.
+    w.conn
+        .execute("UPDATE extra_file SET missing_since = 't'", [])
+        .unwrap();
+    assert_eq!(w.run(&fake).expect("rerun").candidates, 0);
+    w.conn.execute("DELETE FROM extra_file", []).unwrap();
+    assert_eq!(w.count("audio_extra") + w.count("audio_extra_state"), 0);
+}
+
+#[test]
+fn an_extra_with_no_recorded_duration_is_probed_and_excluded_or_failed_by_the_answer() {
+    let mut w = World::new();
+    w.extra(
+        "Music Videos",
+        "fs:ok",
+        "2026-01-01",
+        "ok.wav",
+        b"1111",
+        None,
+    );
+    w.extra(
+        "Music Videos",
+        "fs:long",
+        "2026-01-02",
+        "long.wav",
+        b"22222",
+        None,
+    );
+    w.extra(
+        "Music Videos",
+        "fs:none",
+        "2026-01-03",
+        "none.wav",
+        b"333333",
+        None,
+    );
+    w.extra(
+        "Music Videos",
+        "fs:bad",
+        "2026-01-04",
+        "bad.wav",
+        b"4444444",
+        None,
+    );
+    w.extra(
+        "Music Videos",
+        "fs:known-long",
+        "2026-01-05",
+        "known-long.wav",
+        b"88888888",
+        Some(MAX_DURATION_MS + 1),
+    );
+    w.settings.libraries = vec!["Music Videos".into()];
+    let fake = Fake::new();
+    fake.probe
+        .borrow_mut()
+        .insert("long.wav".into(), Ok(Some(MAX_DURATION_MS + 1)));
+    fake.probe.borrow_mut().insert("none.wav".into(), Ok(None));
+    fake.probe.borrow_mut().insert(
+        "bad.wav".into(),
+        Err(AnalyzeError::Failed(
+            "ffprobe exited 1: moov atom not found".into(),
+        )),
+    );
+
+    let report = w.run(&fake).expect("run");
+
+    assert_eq!((report.analyzed, report.excluded, report.failed), (1, 3, 1));
+    assert_eq!(fake.analyzed_names(), ["ok.wav"]);
+    assert_eq!(
+        fake.probes.borrow().len(),
+        4,
+        "the known duration was not probed"
+    );
+    assert_eq!(w.extra_state("/plexroot/ok.wav").0, "done");
+    let (outcome, error) = w.extra_state("/plexroot/long.wav");
+    assert_eq!(outcome, "excluded");
+    assert!(error.unwrap().contains("limit"));
+    let (outcome, error) = w.extra_state("/plexroot/none.wav");
+    assert_eq!(outcome, "excluded");
+    assert!(error.unwrap().contains("unknown"));
+    let (outcome, error) = w.extra_state("/plexroot/bad.wav");
+    assert_eq!(outcome, "failed");
+    assert!(error.unwrap().contains("duration probe: ffprobe exited 1"));
+    assert_eq!(w.extra_state("/plexroot/known-long.wav").0, "excluded");
+    let column: Option<i64> = w
+        .conn
+        .query_row(
+            "SELECT duration_ms FROM extra_file WHERE path = '/plexroot/ok.wav'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        column, None,
+        "the probe never writes extra_file.duration_ms"
+    );
+
+    // All settled: a rerun probes and analyzes nothing.
+    let again = w.run(&fake).expect("rerun");
+    assert_eq!((again.settled, fake.probes.borrow().len()), (5, 4));
+}
+
+#[test]
+fn a_listed_name_that_matches_nothing_is_reported_and_skipped_while_the_rest_run() {
+    let mut w = World::new();
+    w.part(1, "1", "a.wav", b"aaaa", MIN_20);
+    w.settings.libraries = vec!["Concerts".into(), "Movies".into()];
+    let mut log = Vec::new();
+
+    let report = harvest(
+        &w.store,
+        &w.settings,
+        &w.sections,
+        &Fake::new(),
+        &|| T0,
+        &mut |line| log.push(line.to_string()),
+    )
+    .expect("run");
+
+    assert_eq!(report.analyzed, 1);
+    assert_eq!(report.unknown_libraries, ["Concerts"]);
+    assert!(
+        report
+            .describe()
+            .contains("unknown library Concerts: not a Plex section title or an extras library"),
+        "{}",
+        report.describe()
+    );
+    assert!(
+        log.iter()
+            .any(|line| line.contains("unknown library Concerts"))
+    );
+    let text = report_json(&w, &["Concerts", "Movies"]);
+    assert!(
+        text.contains("\"unknown\": [\n    \"Concerts\"\n  ]"),
+        "{text}"
+    );
+    assert!(text.contains("\"kind\": \"section\"") && text.contains("\"section_id\": \"1\""));
+}
+
+#[test]
+fn status_names_each_library_with_its_kind_and_counts_extras() {
+    let w = World::new();
+    w.part(1, "1", "a.wav", b"aaaa", MIN_20);
+    w.extra("Music Videos", "fs:a", "2026-01-01", "x.wav", b"xx", MIN_20);
+    w.extra(
+        "Empty Extras",
+        "fs:gone",
+        "2026-01-02",
+        "g.wav",
+        b"gg",
+        MIN_20,
+    );
+    w.conn
+        .execute(
+            "UPDATE extra_file SET missing_since = 't' WHERE item_id = 'fs:gone'",
+            [],
+        )
+        .unwrap();
+
+    let text = report_json(&w, &["Music Videos", "Movies", "Empty Extras", "Nope"]);
+    let json: Value = serde_json::from_str(&text).expect("JSON");
+
+    assert_eq!(json["libraries"][0]["library"], "Music Videos");
+    assert_eq!(json["libraries"][0]["kind"], "extras");
+    assert_eq!(json["libraries"][0]["parts"], 1);
+    assert_eq!(json["libraries"][0]["pending"], 1);
+    assert_eq!(json["libraries"][1]["library"], "Movies");
+    assert_eq!(json["libraries"][1]["kind"], "section");
+    assert_eq!(json["libraries"][1]["section_id"], "1");
+    assert_eq!(json["libraries"][2]["library"], "Empty Extras");
+    assert_eq!(json["libraries"][2]["parts"], 0);
+    assert!(
+        json["libraries"][2]["note"]
+            .as_str()
+            .unwrap()
+            .contains("extra_file")
+    );
+    assert_eq!(json["unknown"], json!(["Nope"]));
+}
+
+#[test]
+fn ffprobe_durations_parse_to_milliseconds() {
+    assert_eq!(parse_probe_duration("212.345000\n"), Ok(Some(212_345)));
+    assert_eq!(parse_probe_duration("N/A\n"), Ok(None));
+    assert_eq!(parse_probe_duration(""), Ok(None));
+    assert_eq!(parse_probe_duration("0.000000"), Ok(None));
+    assert!(parse_probe_duration("garbage").is_err());
 }
 
 #[cfg(unix)]
@@ -508,6 +923,7 @@ fn the_analyzer_process_runs_niced_single_threaded_and_reports_a_failure_by_its_
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
     let analyzer = ProcessAnalyzer {
         program: script.to_string_lossy().into_owned(),
+        ffprobe: "unused".into(),
         timeout: Duration::from_secs(60),
     };
 
@@ -527,6 +943,7 @@ fn the_analyzer_process_runs_niced_single_threaded_and_reports_a_failure_by_its_
     }
     let missing = ProcessAnalyzer {
         program: "/nonexistent/analyzer".into(),
+        ffprobe: "unused".into(),
         timeout: Duration::from_secs(60),
     };
     assert!(matches!(
@@ -547,6 +964,7 @@ fn an_analyzer_past_its_timeout_is_killed_with_its_children_and_recorded_failed(
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
     let analyzer = ProcessAnalyzer {
         program: script.to_string_lossy().into_owned(),
+        ffprobe: "unused".into(),
         timeout: Duration::from_secs(1),
     };
 
@@ -636,23 +1054,145 @@ fn a_path_under_no_source_root_blocks_the_run_and_records_nothing() {
 fn a_section_with_no_media_part_rows_is_flagged_in_the_report_and_in_status() {
     let mut w = World::new();
     w.part(1, "1", "a.wav", b"aaaa", MIN_20);
-    w.settings.sections = vec!["1".into(), "7".into()];
+    w.settings.libraries = vec!["Movies".into(), "Photos".into()];
 
     let report = w.run(&Fake::new()).expect("run");
 
-    assert_eq!(report.empty_sections, ["7"]);
+    assert_eq!(report.empty_libraries.len(), 1);
+    assert_eq!(report.empty_libraries[0].0, "Photos");
     assert!(
-        report
-            .describe()
-            .contains("section 7: no media_part rows — only movie and show sections are walked")
+        report.describe().contains(
+            "library Photos: no media_part rows — only movie and show sections are walked"
+        )
     );
-    let counts = status(&w.store, &w.settings.sections, T0).expect("status");
+    let counts = status_of(&w, &["Movies", "Photos"], T0);
     assert_eq!((counts[0].1.parts, counts[1].1.parts), (1, 0));
-    let text = dumps_indent2(&audio_cmd::report(&w.store, &w.settings.sections, T0).unwrap());
+    let text = report_json(&w, &["Movies", "Photos"]);
     assert!(text.contains("\"parts\": 0"));
     assert_eq!(
         text.matches("only movie and show sections are walked")
             .count(),
         1
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn the_duration_probe_runs_ffprobe_and_reports_its_failure() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("ffprobe.sh");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\n\
+         for last; do :; done\n\
+         case \"$last\" in *bad*) echo 'moov atom not found' >&2; exit 1;; *none*) echo N/A; exit 0;; esac\n\
+         echo 12.5\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let analyzer = ProcessAnalyzer {
+        program: "unused".into(),
+        ffprobe: script.to_string_lossy().into_owned(),
+        timeout: Duration::from_secs(60),
+    };
+
+    assert_eq!(
+        analyzer.duration_ms(Path::new("/x/a.mp4")),
+        Ok(Some(12_500))
+    );
+    assert_eq!(analyzer.duration_ms(Path::new("/x/none.mp4")), Ok(None));
+    match analyzer.duration_ms(Path::new("/x/bad.mp4")) {
+        Err(AnalyzeError::Failed(message)) => {
+            assert!(
+                message.contains("exited 1") && message.contains("moov atom"),
+                "{message}"
+            )
+        }
+        other => panic!("expected failed, got {other:?}"),
+    }
+    let missing = ProcessAnalyzer {
+        program: "unused".into(),
+        ffprobe: "/nonexistent/ffprobe".into(),
+        timeout: Duration::from_secs(60),
+    };
+    assert!(matches!(
+        missing.duration_ms(Path::new("/x/a.mp4")),
+        Err(AnalyzeError::Unavailable(_))
+    ));
+}
+
+#[test]
+fn an_extra_whose_path_cannot_be_mapped_fails_alone_and_later_libraries_still_run() {
+    let mut w = World::new();
+    w.extra(
+        "Music Videos",
+        "fs:odd",
+        "2026-01-01",
+        "odd.wav",
+        b"oooo",
+        MIN_20,
+    );
+    w.conn
+        .execute("UPDATE extra_file SET path = '/elsewhere/odd.wav'", [])
+        .unwrap();
+    w.part(1, "1", "a.wav", b"aaaa", MIN_20);
+    w.settings.libraries = vec!["Music Videos".into(), "Movies".into()];
+    let fake = Fake::new();
+
+    let report = w.run(&fake).expect("run");
+
+    assert_eq!(report.blocked, None);
+    assert_eq!((report.failed, report.analyzed), (1, 1));
+    let (outcome, error) = w.extra_state("/elsewhere/odd.wav");
+    assert_eq!(outcome, "failed");
+    assert!(
+        error
+            .unwrap()
+            .contains("is under none of PLEX_SOURCE_ROOTS")
+    );
+    let again = w.run(&fake).expect("rerun");
+    assert_eq!(
+        (again.settled, again.failed),
+        (2, 0),
+        "kept while the size holds"
+    );
+}
+
+#[test]
+fn without_plex_sections_extras_still_run_and_plex_names_are_skipped_not_unknown() {
+    let mut w = World::new();
+    w.extra(
+        "Music Videos",
+        "fs:a",
+        "2026-01-01",
+        "a.wav",
+        b"aaaa",
+        MIN_20,
+    );
+    w.part(1, "1", "m.wav", b"mmmm", MIN_20);
+    w.settings.libraries = vec!["Movies".into(), "Music Videos".into(), "Nope".into()];
+    let fake = Fake::new();
+
+    let report = harvest_with(
+        &w.store,
+        &w.settings,
+        &[],
+        Some("connection refused"),
+        &fake,
+        &|| T0,
+        &mut |_| {},
+    )
+    .expect("run");
+
+    assert_eq!(fake.analyzed_names(), ["a.wav"]);
+    assert!(report.unknown_libraries.is_empty());
+    assert_eq!(report.plex_skipped, ["Movies", "Nope"]);
+    assert!(
+        report
+            .describe()
+            .contains("; plex sections unavailable: connection refused, skipped: Movies, Nope"),
+        "{}",
+        report.describe()
     );
 }

@@ -24,12 +24,12 @@ Migration = str | Callable[[sqlite3.Connection], None]
 
 #: The version a store is at once every migration in `crates/plexdb-schema` has
 #: been applied (`plexdb_schema::SCHEMA_VERSION`).
-SCHEMA_VERSION = 29
+SCHEMA_VERSION = 30
 
 #: The read shape a fully migrated store carries in its `reader_shape` row
 #: (`plexdb_schema::READER_SHAPE`), which `plexdb-reader`'s
 #: `SUPPORTED_READER_SHAPE` must equal.
-READER_SHAPE = 29
+READER_SHAPE = 30
 
 
 def current_version(conn: sqlite3.Connection) -> int:

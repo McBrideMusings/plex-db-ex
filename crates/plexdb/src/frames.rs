@@ -44,6 +44,8 @@ pub struct FrameConfig {
     /// `PLEXDB_PHRASE_CACHE`: where `plexdb search` keeps embedded phrases (ADR-0026).
     pub phrase_cache: Option<PathBuf>,
     pub frame_hours: String,
+    /// `PLEXDB_FRAME_LIBRARIES`: library names whose never-indexed titles harvest first.
+    pub priority_libraries: Vec<String>,
     pub encoder_url: String,
     pub model: String,
     pub ffmpeg: String,
@@ -92,6 +94,7 @@ impl FrameConfig {
             frames_dir: env_path("PLEXDB_FRAMES_DIR"),
             phrase_cache: env_path("PLEXDB_PHRASE_CACHE"),
             frame_hours: env_text("PLEXDB_FRAME_HOURS"),
+            priority_libraries: crate::libraries::names_from_env("PLEXDB_FRAME_LIBRARIES"),
             encoder_url: env_text("PLEXDB_FRAME_ENCODER_URL"),
             model: env_text("PLEXDB_FRAME_MODEL"),
             ffmpeg: or("PLEXDB_FFMPEG", "ffmpeg"),
@@ -451,9 +454,46 @@ fn section_order(section_id: &str) -> (u8, u64, String) {
     }
 }
 
+/// `PLEXDB_FRAME_LIBRARIES` as `frames status` reports it: each listed library's titles in
+/// list order, the names that matched nothing, and why Plex's sections were unavailable.
+#[derive(Debug, Default, Clone)]
+pub struct PriorityStatus {
+    pub libraries: Vec<(String, BTreeSet<String>)>,
+    pub unknown: Vec<String>,
+    pub plex_error: Option<String>,
+}
+
+/// The titles of each library in `resolved`: a section's movies and episodes (`sections`,
+/// by section id) or an extras library's items with a primary file that is not missing,
+/// the titles the harvester works on.
+pub fn priority_titles(
+    store: &Connection,
+    sections: &BTreeMap<String, BTreeSet<String>>,
+    resolved: &crate::libraries::Resolved,
+) -> rusqlite::Result<Vec<(String, BTreeSet<String>)>> {
+    use crate::libraries::LibraryKind;
+    let mut out = Vec::new();
+    for library in &resolved.libraries {
+        let titles = match &library.kind {
+            LibraryKind::Section(id) => sections.get(id).cloned().unwrap_or_default(),
+            LibraryKind::Extras => store
+                .prepare(
+                    "SELECT ei.item_id FROM extra_item ei \
+                     JOIN extra_file f ON f.item_id = ei.item_id AND f.primary_file = 1 \
+                     WHERE ei.library = ?1 AND f.missing_since IS NULL",
+                )?
+                .query_map([&library.name], |row| row.get::<_, String>(0))?
+                .collect::<Result<BTreeSet<_>, _>>()?,
+        };
+        out.push((library.name.clone(), titles));
+    }
+    Ok(out)
+}
+
 /// What `plexdb frames status` takes besides the two connections.
 pub struct StatusInput<'a> {
     pub path: &'a Path,
+    pub priority: PriorityStatus,
     pub hours: &'a str,
     pub now: Local,
     pub encoder_reachable: Option<bool>,
@@ -507,6 +547,21 @@ pub fn status(
             ])
         })
         .collect();
+    let priority_json: Vec<Json> = input
+        .priority
+        .libraries
+        .iter()
+        .map(|(library, titles)| {
+            Json::object([
+                ("library", Json::str(library)),
+                (
+                    "indexed",
+                    Json::Int(titles.intersection(&indexed).count() as i64),
+                ),
+                ("total", Json::Int(titles.len() as i64)),
+            ])
+        })
+        .collect();
     let window = parse_hours(input.hours)?;
     let indexing = if harvester_running(input.path) {
         indexing(frames)?
@@ -522,6 +577,15 @@ pub fn status(
         ("schema_version", Json::Int(current_version(frames)?)),
         ("bytes", Json::Int(bytes)),
         ("sections", Json::Array(sections_json)),
+        ("priority", Json::Array(priority_json)),
+        (
+            "priority_unknown",
+            Json::Array(input.priority.unknown.iter().map(Json::str).collect()),
+        ),
+        (
+            "priority_error",
+            Json::opt_str(input.priority.plex_error.clone()),
+        ),
         ("queued", Json::Int(queued)),
         (
             "frame_hours",

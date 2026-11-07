@@ -184,7 +184,7 @@ _Avoid_: walker, indexer, scanner
 
 **Audio harvester**:
 The `plexdb harvest-audio` run that analyzes the audio of the files in the libraries
-`PLEXDB_AUDIO_SECTIONS` names, once per file hash, into `audio_facts`.
+`PLEXDB_AUDIO_LIBRARIES` names, once per file hash, into `audio_facts`.
 _Avoid_: audio scanner, tempo indexer
 
 **Phrase cache**:
