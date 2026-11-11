@@ -528,6 +528,19 @@ SEARCH_FRAMES = (
     (1, 0, 2000, 10.0),
 )
 FILE_HEADERS = ("Accept-Ranges", "Content-Range", "Cache-Control")
+#: What the fake Plex answers for each poster title's thumbnail:
+#: (status, Content-Type or none, body bytes, Location or none).
+POSTER_CASES = (
+    (200, "image/jpeg", 2048, None),
+    (200, None, 300, None),
+    (200, "image/webp; charset=binary", 10, None),
+    (204, "image/jpeg", 0, None),
+    (404, "text/plain", 9, None),
+    (500, "text/plain", 5, None),
+    (302, "text/plain", 0, "/elsewhere"),
+    (200, "image/png", 4 << 20, None),
+    (200, "image/png", (4 << 20) + 1, None),
+)
 
 
 def _serve_json(handler_class: type) -> str:
@@ -559,8 +572,32 @@ def search_fixture(
         collection = conn.execute(
             "SELECT collection_id FROM collection ORDER BY collection_id LIMIT 1"
         ).fetchone()
+        poster_ids = [
+            str(r[0])
+            for r in conn.execute(
+                "SELECT DISTINCT item_id FROM plex_items ORDER BY item_id LIMIT ? OFFSET 100",
+                (len(POSTER_CASES),),
+            )
+        ]
+        # The rating key `/api/poster` resolves each title to.
+        poster_keys = [
+            str(
+                conn.execute(
+                    "SELECT rating_key FROM plex_items WHERE item_id = ? "
+                    "ORDER BY last_seen DESC LIMIT 1",
+                    (i,),
+                ).fetchone()[0]
+            )
+            for i in poster_ids
+        ]
     if len(titles) < 3:
         raise SystemExit("error: the store holds fewer than three movies with Plex rating keys")
+    if len(poster_ids) < len(POSTER_CASES):
+        raise SystemExit("error: the store holds too few titles with Plex rating keys")
+    thumbs = {
+        f"/library/metadata/{key}/thumb": case
+        for key, case in zip(poster_keys, POSTER_CASES, strict=True)
+    }
     ids = [str(t[0]) for t in titles]
     keys = [str(t[1]) for t in titles]
     sections = sorted({str(t[2]) for t in titles})
@@ -676,6 +713,9 @@ def search_fixture(
     class Plex(Encoder):
         def do_GET(self) -> None:  # noqa: N802
             path = self.path.split("?")[0]
+            if path in thumbs:
+                self._thumb(thumbs[path])
+                return
             if path.startswith("/library/sections"):
                 body = {
                     "MediaContainer": {
@@ -699,6 +739,19 @@ def search_fixture(
                 body = {"MediaContainer": {"Metadata": []}}
             self._send(200, body)
 
+        def _thumb(self, case: tuple[int, str | None, int, str | None]) -> None:
+            status, content_type, size, location = case
+            if self.headers.get("X-Plex-Token") != "parity":
+                status, content_type, size, location = 401, "text/plain", 4, None
+            self.send_response(status)
+            if content_type is not None:
+                self.send_header("Content-Type", content_type)
+            if location is not None:
+                self.send_header("Location", location)
+            self.send_header("Content-Length", str(size))
+            self.end_headers()
+            self.wfile.write(bytes(i % 251 for i in range(size)))
+
     env = {
         "PLEXDB_FRAME_ENCODER_URL": _serve_json(Encoder),
         "PLEXDB_FRAME_MODEL": SEARCH_MODEL,
@@ -708,7 +761,12 @@ def search_fixture(
         "PLEXDB_MEDIA_DIR": str(media),
         "PLEX_SOURCE_ROOTS": "/library",
     }
-    return {"ids": ids, "collection": collection[0] if collection else "nope", "env": env}
+    return {
+        "ids": ids,
+        "poster_ids": poster_ids,
+        "collection": collection[0] if collection else "nope",
+        "env": env,
+    }
 
 
 def close_json(a: object, b: object, tolerance: float = 1e-5) -> bool:
@@ -901,6 +959,47 @@ def search_tab(
     return asked, differing
 
 
+def poster_routes(fixture: dict[str, object]) -> list[str]:
+    """Every `/api/poster` request to ask: each fake-Plex case twice (the second is a cache hit
+    or, for a refusal, a second fetch), titles with no rating key, and the bad requests."""
+    ids: list[str] = fixture["poster_ids"]  # type: ignore[assignment]
+    asked = [f"/api/poster?item_id={quote(i)}" for i in ids for _ in range(2)]
+    asked += [
+        "/api/poster?item_id=nope",
+        "/api/poster?item_id=" + quote("it's"),
+        "/api/poster?item_id=" + quote("a \"b\" 'c'"),
+        "/api/poster",
+        "/api/poster?item_id=",
+        "/api/poster?item_id=" + "x" * 201,
+        "/api/poster?item_id=" + "x" * 200,
+        "/api/poster/",
+    ]
+    return asked
+
+
+def poster_tab(python: str, rust: str, routes: list[str]) -> list[dict[str, str]]:
+    """Ask both servers each poster route; status, Content-Type, body and Cache-Control."""
+    differing: list[dict[str, str]] = []
+    for route in routes:
+        py = fetch_full(python, route)
+        rs = fetch_full(rust, route)
+        why = compare(route, py[:3], rs[:3])
+        if why is None and py[3] != rs[3]:
+            why = f"headers {py[3]} in Python, {rs[3]} in Rust"
+        if why is not None:
+            differing.append({"route": route[:200], "why": why})
+    return differing
+
+
+def closed_port() -> str:
+    """A local URL nothing listens on."""
+    import socket
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return f"http://127.0.0.1:{sock.getsockname()[1]}"
+
+
 def send(
     base: str, step: tuple[str, dict[str, object] | bytes, str | None]
 ) -> tuple[int, str, bytes]:
@@ -1011,6 +1110,23 @@ def main(argv: list[str] | None = None) -> int:
             search_asked, search_differing = search_tab(python, rust, fixture)
             asked += search_asked
             differing += search_differing
+            posters = poster_routes(fixture)
+            asked += posters
+            differing += poster_tab(python, rust, posters)
+        # Plex unreachable, then not configured: a server pair of each, asked one poster.
+        one = [f"/api/poster?item_id={quote(fixture['poster_ids'][0])}"]  # type: ignore[index]
+        for label, plex_url in (("unreachable", closed_port()), ("unset", "")):
+            pair_env = {**env, "PLEX_URL": plex_url}
+            with (
+                serve(
+                    [sys.executable, "-m", "plexdb.cli", "explore", "--port", "0"], pair_env
+                ) as py,
+                serve([rs_bin, "explore", "--port", "0"], {**rust_env, "PLEX_URL": plex_url}) as rs,
+            ):
+                asked += [f"Plex {label}: {r}" for r in one]
+                differing += [
+                    {**d, "route": f"Plex {label}: {d['route']}"} for d in poster_tab(py, rs, one)
+                ]
         for name in sorted(
             {
                 *(p.name for p in homes["python"].glob("*.json")),

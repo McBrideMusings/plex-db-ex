@@ -38,6 +38,7 @@ use crate::decision_views::{
     role_cell, roles_json, title_doctor,
 };
 use crate::decisions::py_repr;
+use crate::explore_poster::Posters;
 use crate::explore_search::{SearchFailure, Tab, search_log};
 use crate::explore_views::{
     ExploreError, KeywordSpace, MAX_ITEM_ID, MapPayload, Overlay, TagIndex, build_index,
@@ -136,10 +137,10 @@ impl<K: PartialEq + Clone, V> Keyed<K, V> {
 }
 
 /// A claim on one of a route's concurrent-request slots, given back on drop.
-struct Slot<'a>(&'a AtomicUsize);
+pub(crate) struct Slot<'a>(&'a AtomicUsize);
 
 impl<'a> Slot<'a> {
-    fn take(slots: &'a AtomicUsize, limit: usize) -> Option<Self> {
+    pub(crate) fn take(slots: &'a AtomicUsize, limit: usize) -> Option<Self> {
         let mut held = slots.load(Ordering::SeqCst);
         loop {
             if held >= limit {
@@ -192,6 +193,8 @@ struct App {
     keyword_slots: AtomicUsize,
     /// The Search tab (`/api/search/*`).
     search: Tab,
+    /// `/api/poster`'s Plex client, cache and fetch slots.
+    posters: Posters,
 }
 
 type Shared = Arc<App>;
@@ -1379,6 +1382,39 @@ async fn search_indexed(State(app): State<Shared>) -> Response {
     blocking(move || app.search.indexed_titles()).await
 }
 
+/// `/api/poster`: the title's Plex thumbnail. A rating key's poster does not change under
+/// its URL, so the browser keeps it for a week without asking again.
+async fn poster(State(app): State<Shared>, RawQuery(raw): RawQuery) -> Response {
+    let query = Query(parse_query(raw));
+    let item_id = match query.first("item_id") {
+        None => return failed(&ExploreError::Invalid("item_id is required".into())),
+        Some(id) if id.chars().count() > MAX_ITEM_ID => {
+            return failed(&ExploreError::Invalid(format!(
+                "item_id is over {MAX_ITEM_ID} characters"
+            )));
+        }
+        Some(id) => id.to_string(),
+    };
+    let fetched =
+        tokio::task::spawn_blocking(move || app.posters.get(|| app.open(), &item_id)).await;
+    match fetched {
+        Ok(Ok(poster)) => {
+            let mut response = Response::new(Body::from(poster.data));
+            let headers = response.headers_mut();
+            headers.insert(header::CONTENT_TYPE, poster.content_type);
+            headers.insert(
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("public, max-age=604800, immutable"),
+            );
+            response
+        }
+        Ok(Err(err)) => failed(&err),
+        Err(join) => failed(&ExploreError::Internal(format!(
+            "the request failed: {join}"
+        ))),
+    }
+}
+
 async fn search_suggest(State(app): State<Shared>, RawQuery(raw): RawQuery) -> Response {
     let query = Query(parse_query(raw));
     let q = query.first("q").unwrap_or("").to_string();
@@ -1744,6 +1780,7 @@ fn router(app: Shared) -> Router {
         )
         .route("/api/panels/", delete(panel_delete).fallback(forward))
         .route("/api/panels/{*id}", delete(panel_delete).fallback(forward))
+        .route("/api/poster", get(poster).fallback(forward))
         .route("/api/search/status", get(search_status).fallback(forward))
         .route("/api/search/frames", get(search_frames).fallback(forward))
         .route("/api/search/indexed", get(search_indexed).fallback(forward))
@@ -1830,6 +1867,7 @@ pub fn run(args: &[String]) -> Result<(), Failure> {
         .or_else(|| std::env::var("PLEXDB_EXPLORE_FALLBACK").ok())
         .map(|url| py_strip(&url).to_string())
         .filter(|url| !url.is_empty());
+    let frame_config = FrameConfig::from_env().map_err(crate::steps::failure)?;
     let app = Arc::new(App {
         store: store.clone(),
         names: name_book(&dir).path().to_path_buf(),
@@ -1855,11 +1893,8 @@ pub fn run(args: &[String]) -> Result<(), Failure> {
         networks: Keyed::new(6),
         title_slots: AtomicUsize::new(0),
         keyword_slots: AtomicUsize::new(0),
-        search: Tab::new(
-            FrameConfig::from_env().map_err(crate::steps::failure)?,
-            store.clone(),
-            &dir,
-        ),
+        posters: Posters::new(&frame_config.plex_url, &frame_config.plex_token),
+        search: Tab::new(frame_config, store.clone(), &dir),
     });
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

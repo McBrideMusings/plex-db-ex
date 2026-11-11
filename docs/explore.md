@@ -30,14 +30,24 @@ on tokio's blocking pool. A `POST` writes `merge_decisions.json`,
 it never writes the store (`crates/plexdb/src/decision_book.rs` writes the files and
 `decision_views.rs` lays them over the tables). The doctor's `forms` and `names` objects list their
 keys in sorted order, where Python lists them in set order. A body that is not JSON gets a 400 whose
-message is serde's, not Python's. Every other route is forwarded to the Python explorer at
+message is serde's, not Python's. `/api/poster` fetches a title's Plex thumbnail by its newest
+`plex_items.rating_key` with `PLEX_TOKEN` in a header (`crates/plexdb/src/explore_poster.rs`): 2,000
+posters cached in memory, 16 Plex fetches at once, 4 MiB at most, and a week's `Cache-Control` on
+the answer. Its refusals carry httpx's wording, with three differences from Python: a non-2xx
+answer names the status's standard reason phrase where httpx names the one Plex sent; a transport
+failure other than an OS error or a timeout carries ureq's text; and the body is bounded at 60 s
+as a whole where httpx bounds each read at 10 s. A failure other than a timeout is tried once
+more, for a keep-alive connection Plex closed. Every other route is forwarded to the Python explorer at
 `--fallback` (or `PLEXDB_EXPLORE_FALLBACK`) until its slice moves; with none set it answers 404.
 `admin parity explore` starts both over one copy of the pulled store and lists every route whose
 answer differs; it also posts the same decisions to both and compares the replies, the reads after
 them and the four decision files, with the time of each decision masked; it seeds a Search tab
 fixture (a `frames.db` per server, a local encoder and Plex, a `testsrc` video, a WordPiece
 tokenizer) and asks both every Search route, refusal and `Range` variant, comparing `why` as parsed
-JSON with its numbers within 1e-5 (numpy's float32 BLAS and Rust sum in different orders). A map or network drawn live with noise excluded is laid out by holomap in Rust and
+JSON with its numbers within 1e-5 (numpy's float32 BLAS and Rust sum in different orders); the
+same fake Plex answers nine poster cases (a poster, no `Content-Type`, a `Content-Type` with a
+parameter, a 204, a 404, a 500, a 302, exactly 4 MiB and one byte over), each asked twice, and two
+more server pairs ask for a poster with Plex unreachable and with `PLEX_URL` unset. A map or network drawn live with noise excluded is laid out by holomap in Rust and
 UMAP in Python, so that comparison leaves out positions and region labels. The page names the layout
 "holomap". The container still runs the Python explorer.
 

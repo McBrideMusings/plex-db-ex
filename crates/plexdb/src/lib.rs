@@ -22,6 +22,7 @@ pub mod enrich_tmdb_language;
 pub mod enrich_wikidata;
 pub mod explore;
 pub mod explore_media;
+pub mod explore_poster;
 pub mod explore_search;
 pub mod explore_views;
 pub mod explore_why;
