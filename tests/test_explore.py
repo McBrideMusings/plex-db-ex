@@ -2331,8 +2331,10 @@ def test_cautious_lift_marks_down_few_titles_and_the_page_agrees(
 def _related_note(page: Page, df: int, co: list[list[object]]) -> str | None:
     """The caveat text the Related tags tab shows for a tag on `df` titles whose co-occurrence
     is `co` (`[tag, shared, df]` rows), or None when it shows none."""
-    return page.evaluate(
-        """([df, co]) => {
+    return cast(
+        "str | None",
+        page.evaluate(
+            """([df, co]) => {
           showTag("probe");
           Object.assign(cotags, { tag: "probe", kind: state.kind, token: cotags.token + 1,
             data: { tag: "probe", df, titles: 1000, co, stamp: state.data && state.data.stamp } });
@@ -2340,7 +2342,8 @@ def _related_note(page: Page, df: int, co: list[list[object]]) -> str | None:
           const n = document.querySelector("#cobox .cothin");
           return n ? n.textContent : null;
         }""",
-        [df, co],
+            [df, co],
+        ),
     )
 
 

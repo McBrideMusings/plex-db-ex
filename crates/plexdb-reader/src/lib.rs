@@ -250,7 +250,7 @@ impl Reader {
         // limit.
         let max_vars = self
             .conn
-            .limit(rusqlite::limits::Limit::SQLITE_LIMIT_VARIABLE_NUMBER);
+            .limit(rusqlite::limits::Limit::SQLITE_LIMIT_VARIABLE_NUMBER)?;
         let chunk_size = usize::try_from(max_vars)
             .unwrap_or(1)
             .saturating_sub(1)
@@ -343,7 +343,7 @@ impl Reader {
             .collect();
         let max_vars = self
             .conn
-            .limit(rusqlite::limits::Limit::SQLITE_LIMIT_VARIABLE_NUMBER);
+            .limit(rusqlite::limits::Limit::SQLITE_LIMIT_VARIABLE_NUMBER)?;
         // The query binds each id twice (Plex parts, then extras).
         let chunk_size = (usize::try_from(max_vars).unwrap_or(2) / 2).max(1);
 
@@ -944,7 +944,8 @@ mod tests {
         let reader = Reader::open(file.path(), None, None).expect("open the minimal store");
         reader
             .conn
-            .set_limit(rusqlite::limits::Limit::SQLITE_LIMIT_VARIABLE_NUMBER, 3);
+            .set_limit(rusqlite::limits::Limit::SQLITE_LIMIT_VARIABLE_NUMBER, 3)
+            .expect("set the variable limit");
 
         let ids: Vec<String> = (0..10).map(|i| format!("id{i}")).collect();
         let result = reader

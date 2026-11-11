@@ -22,8 +22,10 @@ FROM --platform=linux/amd64 rust:1.97-slim-bookworm AS rust
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-# `plexdb-rs explore` compiles in the page the Python explorer also serves.
+# `plexdb-rs explore` compiles in the page and the Query tab's recipes the Python explorer
+# also serves.
 COPY plexdb/explore.html ./plexdb/explore.html
+COPY plexdb/recipes.json ./plexdb/recipes.json
 RUN cargo build --release --locked -p plexdb-reader --bin plexdb-read -p plexdb --bin plexdb-rs
 
 FROM --platform=linux/amd64 python:3.12-slim

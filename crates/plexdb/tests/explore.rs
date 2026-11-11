@@ -364,22 +364,22 @@ fn a_route_not_yet_moved_goes_to_the_python_explorer() {
     });
     let explorer = Explorer::start(dir.path(), Some(&url));
 
-    let (status, kind, body) = explorer.get("/api/saved?x=1");
+    let (status, kind, body) = explorer.get("/api/search/status?x=1");
     assert_eq!(
         (status, kind.as_str(), body.as_str()),
         (200, "application/json", r#"{"queries":[]}"#)
     );
     let request = fake.join().expect("the fake saw the request");
     assert!(
-        request.starts_with("GET /api/saved?x=1 HTTP/1.1"),
+        request.starts_with("GET /api/search/status?x=1 HTTP/1.1"),
         "{request}"
     );
 
     let alone = Explorer::start(dir.path(), None);
-    let (status, _, body) = alone.get("/api/saved");
+    let (status, _, body) = alone.get("/api/search/status");
     assert_eq!(
         (status, body.as_str()),
-        (404, r#"{"error":"no route /api/saved"}"#)
+        (404, r#"{"error":"no route /api/search/status"}"#)
     );
 }
 

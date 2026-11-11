@@ -257,7 +257,7 @@ impl Reader {
         let ids: Vec<&str> = pool.iter().copied().collect();
         let max_vars = self
             .conn
-            .limit(rusqlite::limits::Limit::SQLITE_LIMIT_VARIABLE_NUMBER);
+            .limit(rusqlite::limits::Limit::SQLITE_LIMIT_VARIABLE_NUMBER)?;
         let chunk_size = usize::try_from(max_vars).unwrap_or(1).max(1);
         let mut rows = Vec::new();
         for chunk in ids.chunks(chunk_size) {

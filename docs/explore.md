@@ -12,7 +12,11 @@ the read-only keyword routes (`/api/tags`, `/api/titles`, `/api/cotags`, `/api/m
 (`crates/plexdb/src/explore.rs`). It also serves the decision routes: the Merges tab
 (`GET`/`POST /api/merges`), the Roles tab (`GET`/`POST /api/roles`), display names
 (`POST /api/names`), the Lists tab (`/api/lists`, `/api/list`, `POST /api/list-decisions`) and the tag
-doctor (`/api/doctor`, `/api/keywords`, `/api/doctor/titles`). A `POST` writes `merge_decisions.json`,
+doctor (`/api/doctor`, `/api/keywords`, `/api/doctor/titles`), and the Query tab: `POST /api/query`,
+`/api/recipes`, the saved queries (`GET`/`PUT`/`DELETE /api/saved`), the dashboards (`GET`/`PUT
+/api/dashboards`, `DELETE /api/dashboards/<id>`) and their panels (`PUT /api/panels`, `POST
+/api/panels/move`, `DELETE /api/panels/<id>`), each statement run by `crates/plexdb/src/query.rs`, two
+at a time. A `POST` writes `merge_decisions.json`,
 `role_decisions.json`, `name_decisions.json` or `list_decisions.json` beside the saved-queries file
 (`PLEXDB_EXPLORE_SAVED_PATH`) as the Python explorer does, one entry per key, replaced by rename;
 it never writes the store (`crates/plexdb/src/decision_book.rs` writes the files and

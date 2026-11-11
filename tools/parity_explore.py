@@ -15,6 +15,12 @@ directory of their own, seeded alike. The replies must match with the time of ea
 (`decided_at` of today) masked, the reads after the writes must match the same way, and so
 must the four decision files at the end.
 
+The Query tab (`/api/query`, `/api/recipes`, `/api/saved`, `/api/dashboards`, `/api/panels`)
+runs the same way: reads first, then an ordered set of saves, edits, moves and deletes against
+each server's own files, then the reads again and the files. A new dashboard or panel gets a
+random id, so each later step names the id its own server handed back, and ids and a
+statement's `elapsed_ms` are masked before the comparison.
+
 A map or network drawn live with tags excluded is laid out by UMAP in Python and by holomap in
 Rust, so only the positions differ there: those routes are compared without positions and
 region labels (the titles, their count and years, the tags and their title counts, the
@@ -73,11 +79,14 @@ def fetch(
 
 
 def today_mask(body: bytes) -> bytes:
-    """`body` with the time of every decision made today replaced, so two servers that made
-    the same decision a second apart agree."""
+    """`body` with what two servers cannot agree on replaced: the time of every decision made
+    today, so two servers that made the same decision a second apart agree; a statement's
+    `elapsed_ms`; and a new dashboard's or panel's random id."""
     today = datetime.datetime.now(datetime.UTC).date().isoformat()
     pattern = rb'"decided_at":\s*"' + today.encode() + rb'T[^"]*"'
-    return re.sub(pattern, b'"decided_at":"<now>"', body)
+    body = re.sub(pattern, b'"decided_at":"<now>"', body)
+    body = re.sub(rb'"elapsed_ms":\s*\d+', b'"elapsed_ms":0', body)
+    return re.sub(rb"\b[0-9a-f]{32}\b", b"<id>", body)
 
 
 @contextlib.contextmanager
@@ -305,6 +314,198 @@ def writes(python: str) -> list[tuple[str, dict[str, object] | bytes, str | None
     return steps
 
 
+#: The Query tab's statements: rows and labels, a result past 500 rows, every kind of cell,
+#: and each way a statement is refused.
+STATEMENTS: tuple[object, ...] = (
+    "SELECT item_id, title, year FROM items ORDER BY item_id LIMIT 20",
+    "SELECT item_id FROM items WHERE type = 'episode' ORDER BY item_id LIMIT 5",
+    "SELECT * FROM items",
+    "SELECT x'00ff', 1e999, -1e999, 1e16, -0.0, 1e-5, 0.1 + 0.2, 2.0, NULL, 'héllo ☃', 7",
+    "SELECT CAST(x'ff' AS TEXT) AS bad",
+    "SELECT 1; -- done",
+    "SELECT 1; SELECT 2",
+    "SELECT ?",
+    "DELETE FROM items",
+    "PRAGMA table_info(items)",
+    "ATTACH 'x.db' AS y",
+    "CREATE TABLE t (x)",
+    "SELEC 1",
+    "SELECT nope FROM items",
+    "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c) SELECT COUNT(*) FROM c",
+    "",
+    "   ",
+    5,
+)
+
+QUERY_READS = ("/api/recipes", "/api/saved", "/api/dashboards")
+
+#: The Query tab's writes, in order, as `(method, route, body, name)`: `name` keeps the id the
+#: reply hands back (`dashboard.id` or `panel.id`) under that name, and `<name>` in a later
+#: route or body is replaced by it, per server.
+BAR = {"title": "Tracks", "chart": "bar", "value": "rows", "label": "lang", "number": "n"}
+BAR_SQL = "SELECT lang, COUNT(*) AS n FROM media_stream GROUP BY lang"
+QUERY_WRITES: tuple[tuple[str, str, object, str | None], ...] = (
+    ("PUT", "/api/saved", {"name": "Parity B", "sql": "SELECT 1", "note": "n"}, None),
+    ("PUT", "/api/saved", {"name": "parity a", "sql": "SELECT 2"}, None),
+    ("PUT", "/api/saved", {"name": " Straße ", "sql": "SELECT 3", "note": None}, None),
+    ("PUT", "/api/saved", {"name": "Parity B", "sql": "SELECT 4", "note": ""}, None),
+    ("PUT", "/api/saved", {"name": "", "sql": "SELECT 1"}, None),
+    ("PUT", "/api/saved", {"name": "x" * 201, "sql": "SELECT 1"}, None),
+    ("PUT", "/api/saved", {"name": "x", "sql": "  "}, None),
+    ("PUT", "/api/saved", {"name": "x", "sql": "SELECT 1", "note": 5}, None),
+    ("DELETE", "/api/saved?name=parity%20a", None, None),
+    ("DELETE", "/api/saved?name=nope", None, None),
+    ("DELETE", "/api/saved", None, None),
+    ("PUT", "/api/dashboards", {"name": "  Parity  "}, "D"),
+    ("PUT", "/api/dashboards", {"id": "<D>", "name": "Parity renamed"}, None),
+    ("PUT", "/api/dashboards", {"name": " "}, None),
+    ("PUT", "/api/dashboards", {"name": "x" * 81}, None),
+    ("PUT", "/api/dashboards", {"id": "a:b", "name": "x"}, None),
+    ("PUT", "/api/dashboards", {"id": "nope", "name": "x"}, None),
+    ("PUT", "/api/dashboards", {"id": 5, "name": "x"}, None),
+    (
+        "PUT",
+        "/api/panels",
+        {"dashboard_id": "<D>", "panel": {**BAR, "sql": BAR_SQL, "width": 2, "height": "tall"}},
+        "P1",
+    ),
+    (
+        "PUT",
+        "/api/panels",
+        {
+            "dashboard_id": "<D>",
+            "panel": {
+                "title": "Count",
+                "sql": "SELECT COUNT(*) AS n FROM items",
+                "chart": "stat",
+                "value": "column:n",
+                "unit": "titles",
+                "width": 1,
+                "height": "short",
+            },
+        },
+        "P2",
+    ),
+    (
+        "PUT",
+        "/api/panels",
+        {
+            "dashboard_id": "<D>",
+            "panel": {
+                **BAR,
+                "id": "<P1>",
+                "title": "Renamed",
+                "sql": BAR_SQL,
+                "width": 4,
+                "height": "short",
+            },
+        },
+        None,
+    ),
+    ("PUT", "/api/panels", {"dashboard_id": "<D>", "panel": "x"}, None),
+    ("PUT", "/api/panels", {"dashboard_id": "<D>", "panel": {**BAR, "sql": " "}}, None),
+    ("PUT", "/api/panels", {"dashboard_id": "<D>", "panel": {**BAR, "sql": "SELEC"}}, None),
+    (
+        "PUT",
+        "/api/panels",
+        {"dashboard_id": "<D>", "panel": {**BAR, "sql": BAR_SQL, "value": "column:zz"}},
+        None,
+    ),
+    (
+        "PUT",
+        "/api/panels",
+        {"dashboard_id": "<D>", "panel": {**BAR, "sql": BAR_SQL, "width": 9, "height": "tall"}},
+        None,
+    ),
+    (
+        "PUT",
+        "/api/panels",
+        {
+            "dashboard_id": "<D>",
+            "panel": {**BAR, "id": "nope", "sql": BAR_SQL, "width": 1, "height": "tall"},
+        },
+        None,
+    ),
+    (
+        "PUT",
+        "/api/panels",
+        {"dashboard_id": "nope", "panel": {**BAR, "sql": BAR_SQL, "width": 1, "height": "tall"}},
+        None,
+    ),
+    (
+        "PUT",
+        "/api/panels",
+        {
+            "dashboard_id": "<D>",
+            "panel": {**BAR, "sql": BAR_SQL, "width": 1, "height": "tall", "label": 3},
+        },
+        None,
+    ),
+    (
+        "PUT",
+        "/api/panels",
+        {
+            "dashboard_id": "<D>",
+            "panel": {**BAR, "id": "a:b", "sql": BAR_SQL, "width": 1, "height": "tall"},
+        },
+        None,
+    ),
+    ("POST", "/api/panels/move", {"dashboard_id": "<D>", "panel_id": "<P2>", "to": 0}, None),
+    ("POST", "/api/panels/move", {"dashboard_id": "<D>", "panel_id": "<P2>", "to": 5}, None),
+    ("POST", "/api/panels/move", {"dashboard_id": "<D>", "panel_id": "<P2>", "to": True}, None),
+    ("POST", "/api/panels/move", {"dashboard_id": "<D>", "panel_id": "nope", "to": 0}, None),
+    ("POST", "/api/panels/move", {"dashboard_id": 1, "panel_id": "<P2>", "to": 0}, None),
+    ("DELETE", "/api/panels/<P1>", None, None),
+    ("DELETE", "/api/panels/nope", None, None),
+    ("DELETE", "/api/dashboards/<D>", None, None),
+    ("DELETE", "/api/dashboards/nope", None, None),
+    ("DELETE", "/api/dashboards/library-health", None, None),
+)
+
+
+def query_tab(python: str, rust: str) -> tuple[list[str], list[dict[str, str]]]:
+    """Ask both servers for the Query tab's reads, statements and writes; returns the steps
+    asked and the ones whose answers differ."""
+    asked: list[str] = []
+    differing: list[dict[str, str]] = []
+
+    def check(label: str, py: tuple[int, str, bytes], rs: tuple[int, str, bytes]) -> None:
+        asked.append(label)
+        why = compare(label, py, rs)
+        if why is not None:
+            differing.append({"route": label[:200], "why": why})
+
+    for route in QUERY_READS:
+        check(route, fetch(python, route), fetch(rust, route))
+    for sql in STATEMENTS:
+        body = json.dumps({"sql": sql}).encode()
+        check(
+            f"POST /api/query {sql!r}",
+            fetch(python, "/api/query", body, method="POST"),
+            fetch(rust, "/api/query", body, method="POST"),
+        )
+    kept: dict[str, dict[str, str]] = {python: {}, rust: {}}
+
+    def fill(text: str, base: str) -> str:
+        for name, value in kept[base].items():
+            text = text.replace(f"<{name}>", value)
+        return text
+
+    for method, route, body, name in QUERY_WRITES:
+        answers = []
+        for base in (python, rust):
+            data = None if body is None else fill(json.dumps(body), base).encode()
+            answer = fetch(base, fill(route, base), data, method=method)
+            if name is not None and answer[0] == 200:
+                reply = json.loads(answer[2])
+                kept[base][name] = (reply.get("dashboard") or reply.get("panel"))["id"]
+            answers.append(answer)
+        check(f"{method} {route} {body!r}", answers[0], answers[1])
+    for route in QUERY_READS:
+        check(f"after the writes: {route}", fetch(python, route), fetch(rust, route))
+    return asked, differing
+
+
 def send(
     base: str, step: tuple[str, dict[str, object] | bytes, str | None]
 ) -> tuple[int, str, bytes]:
@@ -378,6 +579,9 @@ def main(argv: list[str] | None = None) -> int:
                     differing.append({"route": f"after the writes: {route}", "why": why})
             asked += [f"POST {step[0]}" for step in posted]
             asked += after
+            query_asked, query_differing = query_tab(python, rust)
+            asked += query_asked
+            differing += query_differing
         for name in sorted(
             {
                 *(p.name for p in homes["python"].glob("*.json")),

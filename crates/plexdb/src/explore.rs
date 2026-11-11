@@ -25,7 +25,7 @@ use axum::body::{Body, Bytes};
 use axum::extract::{RawQuery, Request, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::response::Response;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post, put};
 use futures_core::Stream;
 use plexdb_store::{Config, EXPLORE_SAVED_PATH_VAR, py_path, py_strip};
 use tokio::sync::mpsc;
@@ -48,8 +48,11 @@ use crate::extras_views::{MAX_IDS, extras_fields, extras_items};
 use crate::keyword_views::{keyword_rows, merge_map};
 use crate::list_file::{DecideError, decide as decide_list, list_book_in};
 use crate::lists::{list_detail, list_table, with_pending};
+use crate::panels::{self, HISTORY_FILE, PANELS_FILE};
 use crate::pyjson::{Json, dumps_compact};
+use crate::query::{QueryError, QuerySlots};
 use crate::refresh_tagnetwork::Network;
+use crate::saved_queries;
 use crate::sources::Sources;
 use crate::steps::Failure;
 
@@ -60,6 +63,9 @@ const DEFAULT_PORT: u16 = 5194;
 
 /// The page: the one file `plexdb/explore.py` also serves.
 const PAGE: &str = include_str!("../../../plexdb/explore.html");
+
+/// The Query tab's starting points, the one file `plexdb/explore.py` also serves.
+const RECIPES: &str = include_str!("../../../plexdb/recipes.json");
 
 /// Concurrent `/api/title`, `/api/titles` and `/api/doctor` requests; a fifth is told to retry.
 const TITLE_SLOTS: usize = 4;
@@ -166,6 +172,14 @@ struct App {
     extras_lock: Mutex<()>,
     /// `PLEX_SOURCE_ROOTS`, which an extra's folded-in files hash their ids against.
     source_roots: Vec<String>,
+    /// The saved-queries file, and the lock that keeps two saves from interleaving.
+    saved: PathBuf,
+    saved_lock: Mutex<()>,
+    /// The dashboards' panels file and the panel history, and the lock every edit holds.
+    panels: PathBuf,
+    history: PathBuf,
+    panels_lock: Mutex<()>,
+    query_slots: QuerySlots,
     fallback: Option<String>,
     indexes: Keyed<String, TagIndex>,
     spaces: Keyed<String, KeywordSpace>,
@@ -985,6 +999,237 @@ async fn extras_fields_post(State(app): State<Shared>, request: Request) -> Resp
     .await
 }
 
+// ---------------------------------------------------------------------------------------
+// The Query tab: statements, recipes, saved queries, dashboards and their panels
+
+impl From<QueryError> for ExploreError {
+    fn from(err: QueryError) -> Self {
+        match err {
+            QueryError::Refused(message) => ExploreError::Invalid(message),
+            QueryError::Busy(message) => ExploreError::Busy(message),
+            QueryError::Store(err) => ExploreError::from(err),
+        }
+    }
+}
+
+fn hold(lock: &Mutex<()>) -> std::sync::MutexGuard<'_, ()> {
+    lock.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Python's `repr` of a list of strings, as a log line prints one.
+fn py_list(items: &[String]) -> String {
+    let shown: Vec<String> = items.iter().map(|item| py_repr(item)).collect();
+    format!("[{}]", shown.join(", "))
+}
+
+async fn query_post(State(app): State<Shared>, request: Request) -> Response {
+    decide(request, move |body| {
+        let Some(serde_json::Value::String(sql)) = body.get("sql") else {
+            return Err(ExploreError::Invalid("sql must be text".into()));
+        };
+        Ok(app.query_slots.run(&app.store, sql)?.json())
+    })
+    .await
+}
+
+async fn recipes_get() -> Response {
+    // The recipes are compiled in, so the body is the same for every request.
+    static BODY: std::sync::OnceLock<Result<String, String>> = std::sync::OnceLock::new();
+    let body = BODY.get_or_init(|| {
+        serde_json::from_str::<serde_json::Value>(RECIPES)
+            .map(|recipes| dumps_compact(&Json::object([("recipes", Json::from(&recipes))])))
+            .map_err(|err| format!("recipes.json: {err}"))
+    });
+    match body {
+        Ok(body) => respond(StatusCode::OK, "application/json", body.clone()),
+        Err(message) => failed(&ExploreError::Internal(message.clone())),
+    }
+}
+
+async fn saved_get(State(app): State<Shared>) -> Response {
+    blocking(move || {
+        let _held = hold(&app.saved_lock);
+        let queries = saved_queries::all(&app.saved)?;
+        Ok(Json::object([("queries", saved_queries::json(&queries))]))
+    })
+    .await
+}
+
+async fn saved_put(State(app): State<Shared>, request: Request) -> Response {
+    decide(request, move |body| {
+        let _held = hold(&app.saved_lock);
+        let queries = saved_queries::upsert(
+            &app.saved,
+            body.get("name"),
+            body.get("sql"),
+            body.get("note"),
+        )?;
+        Ok(Json::object([("queries", saved_queries::json(&queries))]))
+    })
+    .await
+}
+
+async fn saved_delete(State(app): State<Shared>, RawQuery(raw): RawQuery) -> Response {
+    let query = Query(parse_query(raw));
+    blocking(move || {
+        let Some(name) = query.first("name") else {
+            return Err(ExploreError::Invalid("name is required".into()));
+        };
+        let _held = hold(&app.saved_lock);
+        let queries = saved_queries::delete(&app.saved, name)?;
+        Ok(Json::object([("queries", saved_queries::json(&queries))]))
+    })
+    .await
+}
+
+async fn dashboards_get(State(app): State<Shared>) -> Response {
+    blocking(move || {
+        let dashboards = {
+            let _held = hold(&app.panels_lock);
+            panels::read_or_seed(&app.panels)?
+        };
+        let history = panels::read_history(&app.history)?;
+        let body = panels::dashboards_json(&app.store, &app.query_slots, &dashboards, &history)?;
+        Ok(Json::object([("dashboards", body)]))
+    })
+    .await
+}
+
+async fn dashboards_put(State(app): State<Shared>, request: Request) -> Response {
+    decide(request, move |body| {
+        let (id, name) = {
+            let _held = hold(&app.panels_lock);
+            panels::put_dashboard(&app.panels, body.get("id"), body.get("name"))?
+        };
+        log_decision(format!(
+            "dashboard saved {} name={} -> {}",
+            py_repr(&id),
+            py_repr(&name),
+            app.panels.display()
+        ));
+        Ok(Json::object([(
+            "dashboard",
+            Json::object([("id", Json::Str(id)), ("name", Json::Str(name))]),
+        )]))
+    })
+    .await
+}
+
+/// What follows `prefix` in the request's path, percent-decoded as Python's `unquote` does.
+fn path_tail(request: &Request, prefix: &str) -> String {
+    let path = request.uri().path();
+    crate::pyurl::unquote(path.strip_prefix(prefix).unwrap_or_default())
+}
+
+async fn dashboard_delete(State(app): State<Shared>, request: Request) -> Response {
+    let dashboard_id = path_tail(&request, "/api/dashboards/");
+    blocking(move || {
+        let (panel_ids, dropped) = {
+            let _held = hold(&app.panels_lock);
+            let panel_ids = panels::delete_dashboard(&app.panels, &dashboard_id)?;
+            let mut dropped = 0;
+            for panel_id in &panel_ids {
+                dropped += panels::drop_panel(&app.history, panel_id)?;
+            }
+            (panel_ids, dropped)
+        };
+        log_decision(format!(
+            "dashboard deleted {} with {} panels {}, dropped {dropped} series",
+            py_repr(&dashboard_id),
+            panel_ids.len(),
+            py_list(&panel_ids)
+        ));
+        Ok(Json::object([
+            ("deleted", Json::Str(dashboard_id)),
+            ("panels", Json::Int(panel_ids.len() as i64)),
+            ("series_dropped", Json::Int(dropped as i64)),
+        ]))
+    })
+    .await
+}
+
+async fn panels_put(State(app): State<Shared>, request: Request) -> Response {
+    decide(request, move |body| {
+        let Some(serde_json::Value::Object(panel)) = body.get("panel") else {
+            return Err(ExploreError::Invalid("panel must be an object".into()));
+        };
+        let sql = match panel.get("sql") {
+            Some(serde_json::Value::String(sql)) if !py_strip(sql).is_empty() => sql,
+            _ => return Err(ExploreError::Invalid("sql must be text".into())),
+        };
+        // A panel whose query fails is not saved; the error is the query's own.
+        let ran = app.query_slots.run(&app.store, sql)?;
+        if let Some(serde_json::Value::String(value)) = panel.get("value")
+            && let Some(column) = value.strip_prefix("column:")
+            && !ran.columns.iter().any(|name| name == column)
+        {
+            return Err(ExploreError::Invalid(format!(
+                "the query has no column {column}"
+            )));
+        }
+        let stored = {
+            let _held = hold(&app.panels_lock);
+            panels::upsert(&app.panels, body.get("dashboard_id"), panel)?
+        };
+        let field = |name: &str| stored[name].as_str().unwrap_or_default().to_string();
+        log_decision(format!(
+            "panel saved {} in {} chart={} value={} rows={} -> {}",
+            py_repr(&field("id")),
+            py_repr(body["dashboard_id"].as_str().unwrap_or_default()),
+            field("chart"),
+            field("value"),
+            ran.rows.len(),
+            app.panels.display()
+        ));
+        Ok(Json::object([("panel", Json::from(&stored))]))
+    })
+    .await
+}
+
+async fn panel_move(State(app): State<Shared>, request: Request) -> Response {
+    decide(request, move |body| {
+        let order = {
+            let _held = hold(&app.panels_lock);
+            panels::move_panel(
+                &app.panels,
+                body.get("dashboard_id"),
+                body.get("panel_id"),
+                body.get("to"),
+            )?
+        };
+        log_decision(format!(
+            "panel move {} to {} in {} -> {}",
+            py_repr(body["panel_id"].as_str().unwrap_or_default()),
+            body["to"],
+            py_repr(body["dashboard_id"].as_str().unwrap_or_default()),
+            py_list(&order)
+        ));
+        let ids = order.into_iter().map(Json::Str).collect();
+        Ok(Json::object([("panel_ids", Json::Array(ids))]))
+    })
+    .await
+}
+
+async fn panel_delete(State(app): State<Shared>, request: Request) -> Response {
+    let panel_id = path_tail(&request, "/api/panels/");
+    blocking(move || {
+        let dropped = {
+            let _held = hold(&app.panels_lock);
+            panels::delete_panel(&app.panels, &panel_id)?;
+            panels::drop_panel(&app.history, &panel_id)?
+        };
+        log_decision(format!(
+            "panel deleted {}, dropped {dropped} series",
+            py_repr(&panel_id)
+        ));
+        Ok(Json::object([
+            ("deleted", Json::Str(panel_id)),
+            ("series_dropped", Json::Int(dropped as i64)),
+        ]))
+    })
+    .await
+}
+
 /// Forward a request this server does not answer to the Python explorer.
 async fn forward(State(app): State<Shared>, request: Request) -> Response {
     let path = request.uri().path().to_string();
@@ -1130,6 +1375,34 @@ fn router(app: Shared) -> Router {
             "/api/extras/fields",
             post(extras_fields_post).fallback(forward),
         )
+        .route("/api/query", post(query_post).fallback(forward))
+        .route("/api/recipes", get(recipes_get).fallback(forward))
+        .route(
+            "/api/saved",
+            get(saved_get)
+                .put(saved_put)
+                .delete(saved_delete)
+                .fallback(forward),
+        )
+        .route(
+            "/api/dashboards",
+            get(dashboards_get).put(dashboards_put).fallback(forward),
+        )
+        .route(
+            "/api/dashboards/",
+            delete(dashboard_delete).fallback(forward),
+        )
+        .route(
+            "/api/dashboards/{*id}",
+            delete(dashboard_delete).fallback(forward),
+        )
+        .route("/api/panels", put(panels_put).fallback(forward))
+        .route(
+            "/api/panels/move",
+            post(panel_move).delete(panel_delete).fallback(forward),
+        )
+        .route("/api/panels/", delete(panel_delete).fallback(forward))
+        .route("/api/panels/{*id}", delete(panel_delete).fallback(forward))
         .fallback(forward)
         .with_state(app)
 }
@@ -1209,6 +1482,12 @@ pub fn run(args: &[String]) -> Result<(), Failure> {
         extra_decisions: dir.join(crate::extras_decisions::FILE),
         extras_lock: Mutex::new(()),
         source_roots: Sources::from_env().source_roots,
+        saved: saved_file(&store),
+        saved_lock: Mutex::new(()),
+        panels: dir.join(PANELS_FILE),
+        history: dir.join(HISTORY_FILE),
+        panels_lock: Mutex::new(()),
+        query_slots: QuerySlots::default(),
         fallback,
         indexes: Keyed::new(2),
         spaces: Keyed::new(2),
@@ -1246,6 +1525,14 @@ pub fn run(args: &[String]) -> Result<(), Failure> {
             .await
             .map_err(|err| Failure::Failed(format!("the server stopped: {err}")))
     })
+}
+
+/// The saved-queries file: `PLEXDB_EXPLORE_SAVED_PATH` when set, else beside the store.
+fn saved_file(store: &Path) -> PathBuf {
+    match std::env::var(EXPLORE_SAVED_PATH_VAR) {
+        Ok(raw) if !py_strip(&raw).is_empty() => py_path(py_strip(&raw)),
+        _ => store.with_file_name(saved_queries::FILE),
+    }
 }
 
 /// Where the explorer's own files sit (`explore.data_dir`): beside the saved-queries file
