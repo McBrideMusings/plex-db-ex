@@ -33,6 +33,9 @@ sha2 = "0.10"
 # extension loads in this crate too, at the version the workspace pins.
 sqlite-vec = { workspace = true }
 tempfile = "3"
+# The Search tab's token boxes (plex-db-ex-f58.24; the owner approved =0.23.2): loads the
+# encoder model's `tokenizer.json` from disk. No `http`, so nothing is fetched.
+tokenizers = { version = "=0.23.2", default-features = false, features = ["onig"] }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "signal", "sync"] }
 thiserror = { workspace = true }
 # The list harvests' HTTP calls to MDBList and Letterboxd, both https. Only this crate

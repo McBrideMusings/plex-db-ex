@@ -503,10 +503,13 @@ pub struct StatusInput<'a> {
 
 /// What `plexdb frames status` prints. Its shape is documented in docs/schema.md; a key
 /// added here goes there too.
+///
+/// `failed_limit` caps the `failed` list (newest first); `failed_total` counts them all.
 pub fn status(
     frames: &Connection,
     sections: &BTreeMap<String, BTreeSet<String>>,
     input: &StatusInput,
+    failed_limit: Option<usize>,
 ) -> Result<Json, StoreError> {
     let indexed: BTreeSet<String> = frames
         .prepare("SELECT item_id FROM frame_index_state WHERE error IS NULL")?
@@ -520,9 +523,9 @@ pub fn status(
     let failed: Vec<Json> = frames
         .prepare(
             "SELECT item_id, error, reason, indexed_at FROM frame_index_state \
-             WHERE error IS NOT NULL ORDER BY indexed_at DESC, item_id LIMIT -1",
+             WHERE error IS NOT NULL ORDER BY indexed_at DESC, item_id LIMIT ?1",
         )?
-        .query_map([], |row| {
+        .query_map([failed_limit.map_or(-1, |n| n as i64)], |row| {
             Ok(Json::object([
                 ("item_id", Json::Str(row.get(0)?)),
                 ("error", Json::opt_str(row.get(1)?)),

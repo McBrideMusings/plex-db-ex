@@ -38,6 +38,7 @@ use crate::decision_views::{
     role_cell, roles_json, title_doctor,
 };
 use crate::decisions::py_repr;
+use crate::explore_search::{SearchFailure, Tab, search_log};
 use crate::explore_views::{
     ExploreError, KeywordSpace, MAX_ITEM_ID, MapPayload, Overlay, TagIndex, build_index,
     check_kind, cotags_json, display_labels, draw_map, draw_network, map_json, network_done_json,
@@ -45,6 +46,7 @@ use crate::explore_views::{
 };
 use crate::extras_ui;
 use crate::extras_views::{MAX_IDS, extras_fields, extras_items};
+use crate::frames::FrameConfig;
 use crate::keyword_views::{keyword_rows, merge_map};
 use crate::list_file::{DecideError, decide as decide_list, list_book_in};
 use crate::lists::{list_detail, list_table, with_pending};
@@ -188,6 +190,8 @@ struct App {
     networks: Keyed<(String, BTreeSet<String>), Network>,
     title_slots: AtomicUsize,
     keyword_slots: AtomicUsize,
+    /// The Search tab (`/api/search/*`).
+    search: Tab,
 }
 
 type Shared = Arc<App>;
@@ -1323,6 +1327,343 @@ fn proxy(
     Ok(response)
 }
 
+// --- the Search tab (`plexdb/explore_search.py`, routed by `_search_get`/`_search_post`) ---
+
+/// `_query_int`: a whole number of milliseconds, digits only, at most 12 of them.
+fn query_int(query: &Query, name: &str) -> Result<i64, ExploreError> {
+    let raw = query.first(name).unwrap_or("");
+    if raw.is_empty() || raw.len() > 12 || !raw.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(ExploreError::Invalid(format!(
+            "{name} must be a whole number of milliseconds"
+        )));
+    }
+    raw.parse().map_err(|_| {
+        ExploreError::Invalid(format!("{name} must be a whole number of milliseconds"))
+    })
+}
+
+fn query_item_id(query: &Query) -> Result<String, ExploreError> {
+    match query.first("item_id") {
+        Some(id) if !id.is_empty() && id.chars().count() <= MAX_ITEM_ID => Ok(id.to_string()),
+        _ => Err(ExploreError::Invalid("item_id is required".into())),
+    }
+}
+
+/// `dict(query)` as Python prints it in the frame and clip log lines.
+fn query_repr(query: &Query) -> String {
+    let mut seen: Vec<&str> = Vec::new();
+    let mut parts = Vec::new();
+    for (name, value) in &query.0 {
+        if seen.contains(&name.as_str()) {
+            continue;
+        }
+        seen.push(name);
+        parts.push(format!(
+            "{}: {}",
+            crate::frames::py_repr(name),
+            crate::frames::py_repr(value)
+        ));
+    }
+    format!("{{{}}}", parts.join(", "))
+}
+
+async fn search_status(State(app): State<Shared>) -> Response {
+    blocking(move || app.search.status()).await
+}
+
+async fn search_frames(State(app): State<Shared>) -> Response {
+    blocking(move || app.search.frames_health()).await
+}
+
+async fn search_indexed(State(app): State<Shared>) -> Response {
+    blocking(move || app.search.indexed_titles()).await
+}
+
+async fn search_suggest(State(app): State<Shared>, RawQuery(raw): RawQuery) -> Response {
+    let query = Query(parse_query(raw));
+    let q = query.first("q").unwrap_or("").to_string();
+    blocking(move || app.search.suggest(&q)).await
+}
+
+async fn search_collection(State(app): State<Shared>, RawQuery(raw): RawQuery) -> Response {
+    let query = Query(parse_query(raw));
+    let id = match query.first("id") {
+        Some(id) if !id.is_empty() && id.chars().count() <= MAX_ITEM_ID => id.to_string(),
+        _ => return failed(&ExploreError::Invalid("id is required".into())),
+    };
+    blocking(move || app.search.collection(&id)).await
+}
+
+async fn search_tokenize(State(app): State<Shared>, request: Request) -> Response {
+    decide(request, move |body| app.search.tokenize(body.get("texts"))).await
+}
+
+async fn search_pool(State(app): State<Shared>, request: Request) -> Response {
+    decide(request, move |body| app.search.pool(body.get("item_ids"))).await
+}
+
+async fn search_queue(State(app): State<Shared>, request: Request) -> Response {
+    decide(request, move |body| {
+        app.search.queue_missing(body.get("item_ids"))
+    })
+    .await
+}
+
+async fn search_why(State(app): State<Shared>, request: Request) -> Response {
+    // A why is a pass over every indexed frame, so it shares the search slots: an anonymous
+    // caller cannot queue unbounded copies on the blocking pool.
+    decide(request, move |body| {
+        let Some(_slot) = Slot::take(&app.search.search_slots, Tab::SEARCH_SLOTS) else {
+            return Err(ExploreError::Unavailable(Tab::BUSY.into()));
+        };
+        app.search.why(&body)
+    })
+    .await
+}
+
+async fn search_run(State(app): State<Shared>, request: Request) -> Response {
+    let body = match read_body(request).await {
+        Ok(body) => body,
+        Err(err) => return failed(&err),
+    };
+    let began = std::time::Instant::now();
+    let outcome = tokio::task::spawn_blocking(move || {
+        let Some(_slot) = Slot::take(&app.search.search_slots, Tab::SEARCH_SLOTS) else {
+            return Err(SearchFailure::Explore(ExploreError::Unavailable(
+                Tab::BUSY.into(),
+            )));
+        };
+        app.search.search(&body)
+    })
+    .await;
+    match outcome {
+        Ok(Ok(out)) => {
+            eprintln!("explore: {}", search_log(&out, began));
+            json_reply(StatusCode::OK, &out)
+        }
+        Ok(Err(SearchFailure::Explore(err))) => failed(&err),
+        Ok(Err(SearchFailure::EncoderDown(down))) => {
+            eprintln!("explore: search encoder down: {}", down.message());
+            json_reply(
+                StatusCode::SERVICE_UNAVAILABLE,
+                &Json::object([
+                    ("error", Json::Str(down.message())),
+                    (
+                        "encoder_down",
+                        Json::object([
+                            ("url", Json::str(down.url.as_str())),
+                            (
+                                "phrases",
+                                Json::Array(
+                                    down.phrases.iter().map(|p| Json::str(p.as_str())).collect(),
+                                ),
+                            ),
+                            ("reason", Json::str(down.reason.as_str())),
+                        ]),
+                    ),
+                ]),
+            )
+        }
+        Err(join) => failed(&ExploreError::Internal(format!(
+            "the request failed: {join}"
+        ))),
+    }
+}
+
+async fn search_frame(State(app): State<Shared>, request: Request) -> Response {
+    cut_route(app, request, false).await
+}
+
+async fn search_clip(State(app): State<Shared>, request: Request) -> Response {
+    cut_route(app, request, true).await
+}
+
+/// `/api/search/frame` and `/api/search/clip`: the cached cut, streamed, with `Range`.
+async fn cut_route(app: Shared, request: Request, clip: bool) -> Response {
+    let range = request
+        .headers()
+        .get(header::RANGE)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let query = Query(parse_query(request.uri().query().map(str::to_string)));
+    let item_id = match query_item_id(&query) {
+        Ok(id) => id,
+        Err(err) => return failed(&err),
+    };
+    let began = std::time::Instant::now();
+    let shown = query_repr(&query);
+    let cut = tokio::task::spawn_blocking(move || -> Result<PathBuf, ExploreError> {
+        let part = query_int(&query, "part")?;
+        if clip {
+            let in_ms = query_int(&query, "in_ms")?;
+            let out_ms = query_int(&query, "out_ms")?;
+            app.search.clip(&item_id, part, in_ms, out_ms)
+        } else {
+            let t_ms = query_int(&query, "t_ms")?;
+            app.search
+                .frame(&item_id, part, t_ms, query.first("large") == Some("1"))
+        }
+        .inspect(|file| {
+            eprintln!(
+                "explore: {} {} {shown} -> {} ms={}",
+                if clip { "clip" } else { "frame" },
+                crate::frames::py_repr(&item_id),
+                file.file_name()
+                    .map(|n| n.to_string_lossy())
+                    .unwrap_or_default(),
+                began.elapsed().as_millis()
+            );
+        })
+    })
+    .await;
+    match cut {
+        Ok(Ok(file)) => {
+            file_reply(file, if clip { "video/mp4" } else { "image/jpeg" }, range).await
+        }
+        Ok(Err(err)) => failed(&err),
+        Err(join) => failed(&ExploreError::Internal(format!(
+            "the request failed: {join}"
+        ))),
+    }
+}
+
+/// `_send_file`: the whole file, or the one `bytes=` range a browser asks for, streamed
+/// from disk as the client takes it. A cut is named by its title, part, window and size,
+/// and the page puts the part in the URL, so it never changes under its URL.
+async fn file_reply(file: PathBuf, content_type: &'static str, range: Option<String>) -> Response {
+    use std::io::{Read as _, Seek as _, SeekFrom};
+    let opened = tokio::task::spawn_blocking(move || {
+        let handle = std::fs::File::open(&file).map_err(|err| {
+            if err.kind() == std::io::ErrorKind::NotFound {
+                ExploreError::NotFound("the cached cut was evicted; ask again".into())
+            } else {
+                ExploreError::Internal(format!("cannot read {}: {err}", file.display()))
+            }
+        })?;
+        let len = handle
+            .metadata()
+            .map_err(|err| {
+                ExploreError::Internal(format!("cannot read {}: {err}", file.display()))
+            })?
+            .len() as i64;
+        Ok::<_, ExploreError>((handle, len))
+    })
+    .await;
+    let (mut handle, len) = match opened {
+        Ok(Ok(found)) => found,
+        Ok(Err(err)) => return failed(&err),
+        Err(join) => {
+            return failed(&ExploreError::Internal(format!(
+                "the request failed: {join}"
+            )));
+        }
+    };
+    let (mut first, mut last) = (0i64, len - 1);
+    let mut partial = false;
+    if let Some(ask) = range
+        .as_deref()
+        .filter(|a| a.starts_with("bytes=") && !a.contains(','))
+    {
+        let (lo, hi) = ask[6..].split_once('-').unwrap_or((&ask[6..], ""));
+        // Python's `int` is unbounded: a huge number still compares, so the arithmetic runs
+        // in i128 and is clamped back; an unparsable one falls back to the whole file.
+        let int = |text: &str| -> Option<i128> {
+            let text = text.trim();
+            text.strip_prefix('+').unwrap_or(text).parse().ok()
+        };
+        let clamp = |n: i128| n.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64;
+        let (len128, last128) = (i128::from(len), i128::from(last));
+        let asked = if lo.is_empty() {
+            int(hi).map(|n| (clamp(0.max(len128 - n)), last))
+        } else {
+            int(lo).and_then(|f| {
+                if hi.is_empty() {
+                    Some((clamp(f), last))
+                } else {
+                    int(hi).map(|h| (clamp(f), clamp(last128.min(h))))
+                }
+            })
+        };
+        if let Some((f, l)) = asked {
+            if f > l {
+                let mut response = Response::new(Body::empty());
+                *response.status_mut() = StatusCode::RANGE_NOT_SATISFIABLE;
+                response.headers_mut().insert(
+                    header::CONTENT_RANGE,
+                    HeaderValue::from_str(&format!("bytes */{len}")).expect("ascii"),
+                );
+                return response;
+            }
+            (first, last) = (f, l);
+            partial = true;
+        }
+    }
+    let count = (last - first + 1).max(0) as u64;
+    let (tx, rx) = mpsc::channel::<Bytes>(4);
+    // Each chunk is one short blocking read; the wait for the client to take it holds no
+    // thread, so a slow or stalled download costs the blocking pool nothing.
+    tokio::spawn(async move {
+        let seeked = tokio::task::spawn_blocking(move || {
+            handle.seek(SeekFrom::Start(first as u64)).map(|_| handle)
+        })
+        .await;
+        let Ok(Ok(mut handle)) = seeked else { return };
+        let mut left = count;
+        while left > 0 {
+            let want = (64 * 1024).min(left as usize);
+            let read = tokio::task::spawn_blocking(move || {
+                let mut buffer = vec![0u8; want];
+                let n = handle.read(&mut buffer)?;
+                buffer.truncate(n);
+                Ok::<_, std::io::Error>((handle, buffer))
+            })
+            .await;
+            let Ok(Ok((back, chunk))) = read else { return };
+            handle = back;
+            if chunk.is_empty() {
+                return;
+            }
+            left -= chunk.len() as u64;
+            if tx.send(Bytes::from(chunk)).await.is_err() {
+                return;
+            }
+        }
+    });
+    let mut response = Response::new(Body::from_stream(Chunks(rx)));
+    *response.status_mut() = if partial {
+        StatusCode::PARTIAL_CONTENT
+    } else {
+        StatusCode::OK
+    };
+    let headers = response.headers_mut();
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+    headers.insert(header::CONTENT_LENGTH, HeaderValue::from(count));
+    headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    if partial {
+        headers.insert(
+            header::CONTENT_RANGE,
+            HeaderValue::from_str(&format!("bytes {first}-{last}/{len}")).expect("ascii"),
+        );
+    }
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=604800, immutable"),
+    );
+    response
+}
+
+/// A response body fed from a bounded channel: the reader fills it only as fast as the
+/// client takes it.
+struct Chunks(mpsc::Receiver<Bytes>);
+
+impl Stream for Chunks {
+    type Item = Result<Bytes, Infallible>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.0.poll_recv(cx).map(|chunk| chunk.map(Ok))
+    }
+}
+
 fn router(app: Shared) -> Router {
     Router::new()
         .route("/", get(page))
@@ -1403,6 +1744,24 @@ fn router(app: Shared) -> Router {
         )
         .route("/api/panels/", delete(panel_delete).fallback(forward))
         .route("/api/panels/{*id}", delete(panel_delete).fallback(forward))
+        .route("/api/search/status", get(search_status).fallback(forward))
+        .route("/api/search/frames", get(search_frames).fallback(forward))
+        .route("/api/search/indexed", get(search_indexed).fallback(forward))
+        .route("/api/search/suggest", get(search_suggest).fallback(forward))
+        .route(
+            "/api/search/collection",
+            get(search_collection).fallback(forward),
+        )
+        .route("/api/search/frame", get(search_frame).fallback(forward))
+        .route("/api/search/clip", get(search_clip).fallback(forward))
+        .route(
+            "/api/search/tokenize",
+            post(search_tokenize).fallback(forward),
+        )
+        .route("/api/search/pool", post(search_pool).fallback(forward))
+        .route("/api/search/queue", post(search_queue).fallback(forward))
+        .route("/api/search/why", post(search_why).fallback(forward))
+        .route("/api/search/run", post(search_run).fallback(forward))
         .fallback(forward)
         .with_state(app)
 }
@@ -1496,6 +1855,11 @@ pub fn run(args: &[String]) -> Result<(), Failure> {
         networks: Keyed::new(6),
         title_slots: AtomicUsize::new(0),
         keyword_slots: AtomicUsize::new(0),
+        search: Tab::new(
+            FrameConfig::from_env().map_err(crate::steps::failure)?,
+            store.clone(),
+            &dir,
+        ),
     });
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

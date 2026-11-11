@@ -21,6 +21,15 @@ each server's own files, then the reads again and the files. A new dashboard or 
 random id, so each later step names the id its own server handed back, and ids and a
 statement's `elapsed_ms` are masked before the comparison.
 
+The Search tab (`/api/search/*`) runs over a fixture: two of the store's movies get a seeded
+`frames.db` (one copy per server, since `queue` writes to it), an encoder on a local port that
+embeds every phrase as the same unit vector (and refuses the phrase `refuse me`), a Plex on a
+local port that names a three-second `testsrc` video as the first title's part 11, and a
+WordPiece tokenizer. Every route and refusal is asked of both servers; a frame and a clip are
+compared byte for byte with their `Range` variants and the headers `_send_file` sets; `why` is
+compared as parsed JSON with its numbers within 1e-5 (numpy's float32 BLAS and Rust sum the
+phrase similarity in different orders) and its order kept strict.
+
 A map or network drawn live with tags excluded is laid out by UMAP in Python and by holomap in
 Rust, so only the positions differ there: those routes are compared without positions and
 region labels (the titles, their count and years, the tags and their title counts, the
@@ -506,6 +515,392 @@ def query_tab(python: str, rust: str) -> tuple[list[str], list[dict[str, str]]]:
     return asked, differing
 
 
+# --- the Search tab -----------------------------------------------------------------------
+
+FRAME_DIMS = 768
+SEARCH_MODEL = "test/clip"
+#: (title slot, shot in_ms, t_ms, angle from the phrase vector)
+SEARCH_FRAMES = (
+    (0, 0, 0, 0.0),
+    (0, 0, 2000, 30.0),
+    (0, 5000, 5000, 60.0),
+    (1, 0, 0, 90.0),
+    (1, 0, 2000, 10.0),
+)
+FILE_HEADERS = ("Accept-Ranges", "Content-Range", "Cache-Control")
+
+
+def _serve_json(handler_class: type) -> str:
+    import http.server
+    import threading
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler_class)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return f"http://127.0.0.1:{server.server_port}"
+
+
+def search_fixture(
+    root: Path, store: Path, rs_bin: str, homes: dict[str, Path]
+) -> dict[str, object]:
+    """Seed the Search tab's world and return what the servers and the requests need."""
+    import http.server
+    import math
+    import sqlite3
+
+    import sqlite_vec
+    from tokenizers import Tokenizer, models, pre_tokenizers
+
+    with sqlite3.connect(f"file:{store}?mode=ro", uri=True) as conn:
+        titles = conn.execute(
+            "SELECT i.item_id, p.rating_key, p.section_id FROM items i "
+            "JOIN plex_items p USING (item_id) "
+            "WHERE i.type = 'movie' ORDER BY i.item_id LIMIT 3"
+        ).fetchall()
+        collection = conn.execute(
+            "SELECT collection_id FROM collection ORDER BY collection_id LIMIT 1"
+        ).fetchone()
+    if len(titles) < 3:
+        raise SystemExit("error: the store holds fewer than three movies with Plex rating keys")
+    ids = [str(t[0]) for t in titles]
+    keys = [str(t[1]) for t in titles]
+    sections = sorted({str(t[2]) for t in titles})
+
+    frames_dir = root / "frames"
+    subprocess.run(
+        [rs_bin, "frames", "migrate"],
+        env={**os.environ, "PLEXDB_FRAMES_DIR": str(frames_dir)},
+        check=True,
+        capture_output=True,
+    )
+    frames = sqlite3.connect(frames_dir / "frames.db")
+    frames.enable_load_extension(True)
+    sqlite_vec.load(frames)
+    for slot, part in ((0, 11), (1, 12)):
+        frames.execute(
+            "INSERT INTO frame_index_state (item_id, part_id, model, model_version, dims, quant, "
+            "duration_ms, vectors, indexed_at) "
+            "VALUES (?, ?, ?, 'v1', ?, 'int8', 10000, 3, '2026-01-02T03:04:05+00:00')",
+            (ids[slot], part, SEARCH_MODEL, FRAME_DIMS),
+        )
+    starts: dict[str, list[int]] = {}
+    for slot, shot_in, t_ms, degrees in SEARCH_FRAMES:
+        item_id = ids[slot]
+        ins = starts.setdefault(item_id, [])
+        if shot_in not in ins:
+            ins.append(shot_in)
+            frames.execute(
+                "INSERT INTO shots (item_id, shot_ix, in_ms, out_ms) VALUES (?, ?, ?, ?)",
+                (item_id, len(ins) - 1, shot_in, shot_in + 5000),
+            )
+        angle = math.radians(degrees)
+        vec = [round(127 * math.cos(angle)), round(127 * math.sin(angle))] + [0] * (FRAME_DIMS - 2)
+        frames.execute(
+            "INSERT INTO frame_vec (item_id, t_ms, shot_ix, vec) VALUES (?, ?, ?, vec_int8(?))",
+            (item_id, t_ms, ins.index(shot_in), json.dumps(vec)),
+        )
+    frames.commit()
+    frames.close()
+    # Each server writes its own frames.db (`queue`) and Phrase cache.
+    shutil.copytree(frames_dir, homes["rust"] / "frames")
+
+    tokenizer = Tokenizer(
+        models.WordPiece(
+            {
+                "[UNK]": 0,
+                "fire": 1,
+                "##fight": 2,
+                "sunny": 3,
+                "in": 4,
+                "los": 5,
+                "angeles": 6,
+                "a": 7,
+                "dog": 8,
+                "é": 9,
+            },
+            unk_token="[UNK]",
+        )
+    )
+    tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
+    # Outside both homes: the end-of-run file comparison looks at every `*.json` in them.
+    tokenizer_file = root / "fixture" / "tokenizer.json"
+    tokenizer_file.parent.mkdir()
+    tokenizer.save(str(tokenizer_file))
+
+    media = root / "media"
+    media.mkdir()
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=duration=3:size=64x48:rate=10",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-y",
+            str(media / "heat.mp4"),
+        ],
+        check=True,
+    )
+
+    unit = [1.0] + [0.0] * (FRAME_DIMS - 1)
+
+    class Encoder(http.server.BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            body = json.loads(
+                self.rfile.read(int(self.headers.get("Content-Length", "0"))) or b"{}"
+            )
+            texts = body.get("input") or []
+            if "refuse me" in texts:
+                self._send(500, {"error": "no model loaded"})
+                return
+            self._send(200, {"data": [{"index": i, "embedding": unit} for i in range(len(texts))]})
+
+        def _send(self, status: int, body: dict[str, object]) -> None:
+            data = json.dumps(body).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *_: object) -> None:
+            pass
+
+    class Plex(Encoder):
+        def do_GET(self) -> None:  # noqa: N802
+            path = self.path.split("?")[0]
+            if path.startswith("/library/sections"):
+                body = {
+                    "MediaContainer": {
+                        "Directory": [
+                            {"key": s, "type": "movie", "title": f"Library {s}"} for s in sections
+                        ]
+                    }
+                }
+            elif path == f"/library/metadata/{keys[0]}":
+                body = {
+                    "MediaContainer": {
+                        "Metadata": [
+                            {
+                                "ratingKey": keys[0],
+                                "Media": [{"Part": [{"id": 11, "file": "/library/heat.mp4"}]}],
+                            }
+                        ]
+                    }
+                }
+            else:
+                body = {"MediaContainer": {"Metadata": []}}
+            self._send(200, body)
+
+    env = {
+        "PLEXDB_FRAME_ENCODER_URL": _serve_json(Encoder),
+        "PLEXDB_FRAME_MODEL": SEARCH_MODEL,
+        "PLEXDB_FRAME_TOKENIZER": str(tokenizer_file),
+        "PLEX_URL": _serve_json(Plex),
+        "PLEX_TOKEN": "parity",
+        "PLEXDB_MEDIA_DIR": str(media),
+        "PLEX_SOURCE_ROOTS": "/library",
+    }
+    return {"ids": ids, "collection": collection[0] if collection else "nope", "env": env}
+
+
+def close_json(a: object, b: object, tolerance: float = 1e-5) -> bool:
+    """Equal, with every number within `tolerance` (absolute or relative), lists in order."""
+    if isinstance(a, bool) or isinstance(b, bool):
+        return a == b
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return abs(a - b) <= tolerance * max(1.0, abs(a), abs(b))
+    if isinstance(a, list) and isinstance(b, list):
+        return len(a) == len(b) and all(
+            close_json(x, y, tolerance) for x, y in zip(a, b, strict=True)
+        )
+    if isinstance(a, dict) and isinstance(b, dict):
+        return list(a) == list(b) and all(close_json(a[k], b[k], tolerance) for k in a)
+    return a == b
+
+
+def fetch_full(
+    base: str, route: str, headers: dict[str, str] | None = None
+) -> tuple[int, str, bytes, dict[str, str]]:
+    request = urllib.request.Request(base + route, headers=headers or {})
+    try:
+        with urllib.request.urlopen(request, timeout=TIMEOUT) as reply:
+            return (
+                reply.status,
+                reply.headers.get("Content-Type", ""),
+                reply.read(),
+                {h: reply.headers.get(h, "") for h in FILE_HEADERS},
+            )
+    except urllib.error.HTTPError as err:
+        return (
+            err.code,
+            err.headers.get("Content-Type", ""),
+            err.read(),
+            {h: err.headers.get(h, "") for h in FILE_HEADERS},
+        )
+
+
+def search_tab(
+    python: str, rust: str, fixture: dict[str, object]
+) -> tuple[list[str], list[dict[str, str]]]:
+    """Ask both servers the Search tab's routes; the steps asked and the ones that differ."""
+    ids: list[str] = fixture["ids"]  # type: ignore[assignment]
+    t1, t2, t3 = (quote(i) for i in ids)
+    cid = quote(str(fixture["collection"]))
+    asked: list[str] = []
+    differing: list[dict[str, str]] = []
+
+    def check(
+        label: str, py: tuple[int, str, bytes], rs: tuple[int, str, bytes], *, close: bool = False
+    ) -> None:
+        asked.append(label)
+        if close and py[0] == rs[0] == 200:
+            why = (
+                None
+                if close_json(json.loads(py[2]), json.loads(rs[2]))
+                else "parsed JSON differs past 1e-5"
+            )
+        else:
+            why = compare(label, py, rs)
+        if why is not None:
+            differing.append({"route": label[:200], "why": why})
+
+    def get(route: str) -> None:
+        check(route, fetch(python, route), fetch(rust, route))
+
+    def post(route: str, body: object, *, close: bool = False) -> None:
+        data = json.dumps(body).encode()
+        check(
+            f"POST {route} {json.dumps(body)[:120]}",
+            fetch(python, route, data, method="POST"),
+            fetch(rust, route, data, method="POST"),
+            close=close,
+        )
+
+    def file(route: str, range_header: str | None = None) -> None:
+        headers = {"Range": range_header} if range_header else {}
+        label = f"{route} Range={range_header!r}"
+        py = fetch_full(python, route, headers)
+        rs = fetch_full(rust, route, headers)
+        asked.append(label)
+        why = compare(label, py[:3], rs[:3])
+        if why is None and py[3] != rs[3]:
+            why = f"headers {py[3]} in Python, {rs[3]} in Rust"
+        if why is not None:
+            differing.append({"route": label[:200], "why": why})
+
+    for route in (
+        "/api/search/status",
+        "/api/search/frames",
+        "/api/search/indexed",
+        "/api/search/suggest?q=he",
+        "/api/search/suggest?q=h",
+        "/api/search/suggest?q=%20%20",
+        "/api/search/suggest",
+        f"/api/search/collection?id={cid}",
+        "/api/search/collection?id=nope",
+        "/api/search/collection",
+    ):
+        get(route)
+    post("/api/search/tokenize", {"texts": ["sunny firefight é", "a " * 76, ""]})
+    post("/api/search/tokenize", {"texts": "x"})
+    post("/api/search/tokenize", {"texts": ["x" * 4001]})
+    post("/api/search/pool", {"item_ids": [ids[0], ids[1], "nope", ids[0], ids[2]]})
+    post("/api/search/pool", {"item_ids": []})
+    post("/api/search/pool", {"item_ids": "x"})
+    post("/api/search/queue", {"item_ids": [ids[2], "nope"]})
+    post("/api/search/pool", {"item_ids": [ids[2]]})
+    get("/api/search/frames")
+    run = {
+        "phrase": "sunny firefight",
+        "pool": ids,
+        "negatives": ["dog"],
+        "weight": 0,
+        "temperature": 0.5,
+        "draw": {"n": 1, "seed": 3},
+    }
+    post("/api/search/run", run)
+    post(
+        "/api/search/run",
+        {"phrase": "  sunny firefight  ", "negatives": ["dog", ""], "weight": 1.5},
+    )
+    post("/api/search/run", {"phrase": "sunny firefight", "pool": [ids[2]]})
+    for bad in (
+        {"phrase": "--help", "pool": ids[:1]},
+        {"phrase": "x", "temperature": 0},
+        {"phrase": "x", "draw": {"n": 0}},
+        {"phrase": "x", "draw": {"n": 2.0}},
+        {"phrase": "x", "draw": []},
+        {"phrase": "x", "weight": "heavy"},
+        {"phrase": "x", "weight": True},
+        {"phrase": "x", "weight": 11},
+        {"phrase": ""},
+        {"phrase": 5},
+        {},
+        {"phrase": "x", "negatives": ["n"] * 21},
+        {"phrase": "x", "negatives": [1]},
+        {"phrase": "x", "pool": "p"},
+        {"phrase": "x", "pool": ["a" * 201]},
+        {"phrase": "x" * 4001},
+        {"phrase": "refuse me", "pool": ids[:1]},
+    ):
+        post("/api/search/run", bad)
+    post(
+        "/api/search/why", {"phrase": "sunny firefight", "item_id": ids[0], "in_ms": 0}, close=True
+    )
+    post(
+        "/api/search/why", {"phrase": "sunny firefight", "item_id": ids[1], "in_ms": 0}, close=True
+    )
+    for bad in (
+        {"phrase": "sunny firefight", "item_id": ids[0], "in_ms": 7},
+        {"phrase": "nobody searched this", "item_id": ids[0], "in_ms": 0},
+        {"item_id": ids[0], "in_ms": 0},
+        {"phrase": "x", "in_ms": 0},
+        {"phrase": "x", "item_id": ids[0], "in_ms": -1},
+        {"phrase": "x", "item_id": ids[0], "in_ms": 1.5},
+        {"phrase": "x", "item_id": ids[2], "in_ms": 0},
+    ):
+        post("/api/search/why", bad)
+    clip = f"/api/search/clip?item_id={t1}&part=11&in_ms=0&out_ms=2000"
+    file(f"/api/search/frame?item_id={t1}&part=11&t_ms=1000")
+    file(f"/api/search/frame?item_id={t1}&part=11&t_ms=1000&large=1")
+    file(clip)
+    for range_header in (
+        "bytes=4-7",
+        "bytes=-10",
+        "bytes=-0",
+        "bytes=-",
+        "bytes=0-3,5-6",
+        "bytes=10-",
+        "bytes=x-y",
+        "items=1-2",
+        "bytes=100000000-",
+    ):
+        file(clip, range_header)
+    for route in (
+        f"/api/search/frame?item_id={t1}&part=10&t_ms=1000",
+        f"/api/search/frame?item_id={t3}&part=0&t_ms=1000",
+        f"/api/search/frame?item_id={t1}&part=11&t_ms=20000",
+        f"/api/search/frame?item_id={t2}&part=12&t_ms=0",
+        f"/api/search/clip?item_id={t1}&part=11&in_ms=0&out_ms=200000",
+        f"/api/search/clip?item_id={t1}&part=11&in_ms=5&out_ms=5",
+        f"/api/search/clip?item_id={t1}&part=11&in_ms=x&out_ms=5",
+        f"/api/search/clip?item_id={t1}&part=11&in_ms=1&out_ms=1234567890123",
+        "/api/search/frame?part=11&t_ms=5",
+        "/api/search/frame?item_id=" + "x" * 201 + "&part=1&t_ms=5",
+        "/api/search/nope",
+    ):
+        file(route)
+    return asked, differing
+
+
 def send(
     base: str, step: tuple[str, dict[str, object] | bytes, str | None]
 ) -> tuple[int, str, bytes]:
@@ -526,6 +921,25 @@ def main(argv: list[str] | None = None) -> int:
     if not rs_bin:
         print("error: PLEXDB_RS_BIN is not set; `admin parity` builds and sets it", file=sys.stderr)
         return 1
+    read_bin = Path(rs_bin).with_name("plexdb-read")
+    if not read_bin.is_file():
+        # The Python Search tab runs the reader crate's binary; the same build dir carries it.
+        subprocess.run(
+            [
+                "cargo",
+                "build",
+                "-q",
+                "--release",
+                "--manifest-path",
+                str(REPO / "Cargo.toml"),
+                "-p",
+                "plexdb-reader",
+                "--bin",
+                "plexdb-read",
+            ],
+            env={**os.environ, "CARGO_TARGET_DIR": str(read_bin.parent.parent)},
+            check=True,
+        )
     store = args.store.resolve()
     if not store.is_file():
         print(f"error: no store at {store} — run `admin pull-baseline` first", file=sys.stderr)
@@ -545,9 +959,21 @@ def main(argv: list[str] | None = None) -> int:
         for home in homes.values():
             for name in sorted(decisions.glob("*.json")):
                 shutil.copy(name, home / name.name)
-        env = {**os.environ, "PLEXDB_PATH": str(root / "plexdb.db")}
+        fixture = search_fixture(root, store, rs_bin, homes)
+        env = {
+            **os.environ,
+            "PLEXDB_PATH": str(root / "plexdb.db"),
+            "PLEXDB_READ_BIN": str(read_bin),
+        }
         env.pop("PLEXDB_SNAPSHOT_PATH", None)
-        rust_env = {**env, "PLEXDB_EXPLORE_SAVED_PATH": str(homes["rust"] / "explore-queries.json")}
+        env.pop("PLEXDB_PHRASE_CACHE", None)
+        env.update(fixture["env"])  # type: ignore[arg-type]
+        env["PLEXDB_FRAMES_DIR"] = str(root / "frames")
+        rust_env = {
+            **env,
+            "PLEXDB_EXPLORE_SAVED_PATH": str(homes["rust"] / "explore-queries.json"),
+            "PLEXDB_FRAMES_DIR": str(homes["rust"] / "frames"),
+        }
         for step in ("refresh-map", "refresh-tagnetwork"):
             done = subprocess.run([rs_bin, step], env=env, capture_output=True, text=True)
             if done.returncode != 0:
@@ -582,6 +1008,9 @@ def main(argv: list[str] | None = None) -> int:
             query_asked, query_differing = query_tab(python, rust)
             asked += query_asked
             differing += query_differing
+            search_asked, search_differing = search_tab(python, rust, fixture)
+            asked += search_asked
+            differing += search_differing
         for name in sorted(
             {
                 *(p.name for p in homes["python"].glob("*.json")),

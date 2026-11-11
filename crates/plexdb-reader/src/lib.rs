@@ -67,7 +67,7 @@ pub use error::ReaderError;
 pub use model::{
     CollectionMembership, Edge, EnrichmentFact, TagNeighbour, TasteAttribute, TasteVector,
 };
-pub use phrase::{MAX_UNUSED_DAYS, PhraseCache};
+pub use phrase::{MAX_UNUSED_DAYS, PhraseCache, cached_vector};
 pub use schema::{SUPPORTED_FRAMES_VERSION, SUPPORTED_READER_SHAPE, check_frames, check_store};
 pub use search::{Capabilities, Search, ShotHit, ShotSearch};
 pub use url::Url;

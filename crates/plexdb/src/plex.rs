@@ -111,6 +111,31 @@ impl PlexClient {
     fn list(&self, path: &str, key: &str) -> Result<Vec<Value>, StoreError> {
         Ok(array(&self.container(path, &[])?, key))
     }
+
+    /// The file behind Plex part `part_id` of the item at `rating_key`, or `None` when the
+    /// item no longer lists that part (`plex_client.part_file`).
+    pub fn part_file(&self, rating_key: &str, part_id: i64) -> Result<Option<String>, StoreError> {
+        let Some(record) = self.metadata(rating_key)? else {
+            return Ok(None);
+        };
+        for media in array(&record, "Media") {
+            for part in array(&media, "Part") {
+                let id = match get(&part, "id") {
+                    Value::Number(n) => n.as_i64().unwrap_or(-1),
+                    Value::String(s) => s.trim().parse().unwrap_or(-1),
+                    _ => -1,
+                };
+                let file = get(&part, "file");
+                if id == part_id
+                    && let Some(text) = file.as_str()
+                    && !text.is_empty()
+                {
+                    return Ok(Some(text.to_string()));
+                }
+            }
+        }
+        Ok(None)
+    }
 }
 
 fn json_type(value: &Value) -> &'static str {

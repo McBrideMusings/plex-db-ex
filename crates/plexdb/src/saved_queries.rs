@@ -168,7 +168,7 @@ mod table {
 
 /// The sort key Python's `str.casefold` gives: each character's lower case, except those
 /// whose full case folding differs from it, which fold as the generated table says.
-fn casefold(text: &str) -> String {
+pub(crate) fn casefold(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
         match table::FOLDS.binary_search_by_key(&c, |(from, _)| *from) {

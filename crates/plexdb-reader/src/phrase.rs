@@ -7,7 +7,7 @@
 //! [`MAX_UNUSED_DAYS`] days is deleted before every lookup.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use rusqlite::{Connection, params};
@@ -35,6 +35,47 @@ pub struct PhraseCache {
     /// The model name the encoder accepts (`PLEXDB_FRAME_MODEL`). It is sent as the
     /// request's `model` (empty means unset: a phrase that needs the encoder fails); the answer must name the model the Frame index recorded.
     pub request_model: String,
+}
+
+/// The vector a search left in the Phrase cache at `path` for `phrase` under `model` and
+/// `model_version`, in this crate's spelling rule, read without writing the file. `None`
+/// when the file, the row, or a vector of `dims` floats is not there. The Search tab's
+/// why panel reads the phrase a search already embedded this way (ADR-0017).
+pub fn cached_vector(
+    path: &Path,
+    phrase: &str,
+    model: &str,
+    model_version: &str,
+    dims: usize,
+) -> Result<Option<Vec<f32>>, ReaderError> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let at = |source| ReaderError::PhraseCache {
+        path: path.to_path_buf(),
+        source,
+    };
+    let conn = Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(at)?;
+    let blob: Option<Vec<u8>> = conn
+        .query_row(
+            "SELECT vec FROM phrase_cache \
+             WHERE phrase = ?1 AND model = ?2 AND model_version = ?3",
+            params![crate::normalize_surface(phrase), model, model_version],
+            |row| row.get(0),
+        )
+        .map(Some)
+        .or_else(|err| match err {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(other),
+        })
+        .map_err(at)?;
+    Ok(blob
+        .filter(|blob| blob.len() == dims * 4)
+        .map(|blob| from_blob(&blob)))
 }
 
 /// The model a vector must come from, as `frame_index_state` records it.

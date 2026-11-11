@@ -262,6 +262,7 @@ fn status() -> Result<(), StoreError> {
             ffmpeg_found: which(&config.ffmpeg) && which(&config.ffprobe),
             decoder: decoder_report(&path, &config.decode),
         },
+        None,
     )?;
     println!("{}", dumps_indent2(&report));
     Ok(())

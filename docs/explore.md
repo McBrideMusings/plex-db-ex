@@ -16,7 +16,15 @@ doctor (`/api/doctor`, `/api/keywords`, `/api/doctor/titles`), and the Query tab
 `/api/recipes`, the saved queries (`GET`/`PUT`/`DELETE /api/saved`), the dashboards (`GET`/`PUT
 /api/dashboards`, `DELETE /api/dashboards/<id>`) and their panels (`PUT /api/panels`, `POST
 /api/panels/move`, `DELETE /api/panels/<id>`), each statement run by `crates/plexdb/src/query.rs`, two
-at a time. A `POST` writes `merge_decisions.json`,
+at a time, and the Search tab: every `/api/search/*` route (`status`, `frames`, `indexed`,
+`suggest`, `collection`, `tokenize`, `pool`, `queue`, `run`, `why`, `frame`, `clip`) from
+`crates/plexdb/src/explore_search.rs`, `explore_media.rs` and `explore_why.rs`. A search runs the
+reader crate in-process (`Reader::search_shots`, then `Reader::draw` for the picks); token boxes come
+from the `tokenizers` crate reading the same `tokenizer-<model>.json` or `PLEXDB_FRAME_TOKENIZER`;
+frames and clips are cut by ffmpeg into the same `clips/` cache beside the saved-queries file, two
+GiB least recently used, and streamed with `Range`; the why panel reads `frame_vec` and the Phrase
+cache (`plexdb_reader::cached_vector`). Every store read, Plex call, reader run and ffmpeg cut runs
+on tokio's blocking pool. A `POST` writes `merge_decisions.json`,
 `role_decisions.json`, `name_decisions.json` or `list_decisions.json` beside the saved-queries file
 (`PLEXDB_EXPLORE_SAVED_PATH`) as the Python explorer does, one entry per key, replaced by rename;
 it never writes the store (`crates/plexdb/src/decision_book.rs` writes the files and
@@ -26,7 +34,10 @@ message is serde's, not Python's. Every other route is forwarded to the Python e
 `--fallback` (or `PLEXDB_EXPLORE_FALLBACK`) until its slice moves; with none set it answers 404.
 `admin parity explore` starts both over one copy of the pulled store and lists every route whose
 answer differs; it also posts the same decisions to both and compares the replies, the reads after
-them and the four decision files, with the time of each decision masked. A map or network drawn live with noise excluded is laid out by holomap in Rust and
+them and the four decision files, with the time of each decision masked; it seeds a Search tab
+fixture (a `frames.db` per server, a local encoder and Plex, a `testsrc` video, a WordPiece
+tokenizer) and asks both every Search route, refusal and `Range` variant, comparing `why` as parsed
+JSON with its numbers within 1e-5 (numpy's float32 BLAS and Rust sum in different orders). A map or network drawn live with noise excluded is laid out by holomap in Rust and
 UMAP in Python, so that comparison leaves out positions and region labels. The page names the layout
 "holomap". The container still runs the Python explorer.
 
@@ -61,8 +72,7 @@ The Extras tab sits between Search and Doctor (`#tab=extras`, a library at `&xli
 the store and writes only `extra_decisions.json`, beside the other decisions files; the writer's next
 tick folds each decision, moves the file and marks it organized. These routes are served by
 `plexdb-rs explore` (`crates/plexdb/src/extras_ui.rs`); the container still runs the Python
-explorer until it is deleted, so the tab needs the Rust server in front, with the frame and clip
-routes forwarded.
+explorer until it is deleted, so the tab needs the Rust server in front.
 
 - **Libraries** (`GET /api/extras/status`): per library its root, layout template, declared fields,
   organized count, queue count and last scan (the latest `extra_file.last_seen`). Scan now is

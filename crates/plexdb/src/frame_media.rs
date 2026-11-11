@@ -53,6 +53,8 @@ impl MediaError {
 
 /// Frames cut out per ffmpeg process.
 const EXTRACT_CHUNK: usize = 24;
+/// The height of a harvested frame, and of the Search tab's thumbnails.
+pub const FRAME_HEIGHT: u32 = 224;
 /// How much of the file the hash reads.
 const HASH_BYTES: usize = 1 << 20;
 /// The longest one ffmpeg or ffprobe process may run: a full decode for scdet, minutes
@@ -707,7 +709,7 @@ impl FfmpegMedia {
         parse_chapters(&String::from_utf8_lossy(&done.stdout))
     }
 
-    fn cut_chunk(&self, path: &Path, chunk: &[i64]) -> Result<Jpegs, MediaError> {
+    fn cut_chunk(&self, path: &Path, chunk: &[i64], height: u32) -> Result<Jpegs, MediaError> {
         let tmp = tempfile::Builder::new()
             .prefix("plexdb-frames-")
             .tempdir()
@@ -744,7 +746,7 @@ impl FfmpegMedia {
                 "-frames:v".into(),
                 "1".into(),
                 "-vf".into(),
-                "scale=-2:224".into(),
+                format!("scale=-2:{height}"),
                 "-q:v".into(),
                 "3".into(),
                 "-y".into(),
@@ -863,6 +865,100 @@ impl FfmpegMedia {
     }
 }
 
+impl FfmpegMedia {
+    /// One JPEG `height` px tall at `t_ms`, or `None` when the file has no frame there
+    /// (`FfmpegMedia.frames(path, [t_ms], height=…)` in `plexdb/frame_harvest.py`).
+    pub fn frame_at(
+        &self,
+        path: &Path,
+        t_ms: i64,
+        height: u32,
+    ) -> Result<Option<Vec<u8>>, MediaError> {
+        Ok(self
+            .cut_chunk(path, &[t_ms], height)?
+            .into_iter()
+            .next()
+            .flatten())
+    }
+
+    /// The file's `[in_ms, out_ms)` window as a silent H.264 MP4 `width` px wide
+    /// (`FfmpegMedia.clip`). `+faststart` moves the index to the front, so a `<video>`
+    /// starts before the whole file has arrived.
+    pub fn clip(
+        &self,
+        path: &Path,
+        in_ms: i64,
+        out_ms: i64,
+        width: u32,
+    ) -> Result<Vec<u8>, MediaError> {
+        if out_ms <= in_ms {
+            return Err(MediaError::new(
+                format!(
+                    "{}: clip window {in_ms}-{out_ms} ms is empty",
+                    path.display()
+                ),
+                "clip window empty",
+            ));
+        }
+        let tmp = tempfile::Builder::new()
+            .prefix("plexdb-clip-")
+            .tempdir()
+            .map_err(|err| {
+                MediaError::new(format!("{}: {err}", path.display()), "scratch unavailable")
+            })?;
+        let target = tmp.path().join("clip.mp4");
+        let argv: Vec<String> = [
+            self.ffmpeg.as_str(),
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-ss",
+            &format!("{:.3}", in_ms as f64 / 1000.0),
+            "-i",
+            &path.to_string_lossy(),
+            "-t",
+            &format!("{:.3}", (out_ms - in_ms) as f64 / 1000.0),
+            "-map",
+            "0:v:0",
+            "-an",
+            "-sn",
+            "-dn",
+            "-vf",
+            &format!("scale={width}:-2"),
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "23",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            "-y",
+            &target.to_string_lossy(),
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let ran = run(&argv, &format!("{}: clip", path.display()), PROBE_TIMEOUT)?;
+        let bytes = std::fs::read(&target).ok();
+        match bytes {
+            Some(bytes) if ran.code == 0 => Ok(bytes),
+            _ => Err(MediaError::new(
+                format!(
+                    "{}: ffmpeg exited {}: {}",
+                    path.display(),
+                    ran.code,
+                    tail200(&ran.stderr)
+                ),
+                format!("ffmpeg clip cut exited {}", ran.code),
+            )),
+        }
+    }
+}
+
 /// `str.splitlines()`: split on every line boundary Python knows, dropping a final empty piece.
 pub fn py_splitlines(text: &str) -> Vec<&str> {
     let mut lines = Vec::new();
@@ -950,7 +1046,7 @@ impl MediaReader for FfmpegMedia {
     fn frames(&self, path: &Path, times_ms: &[i64]) -> Result<Jpegs, MediaError> {
         let mut out = Vec::with_capacity(times_ms.len());
         for chunk in times_ms.chunks(EXTRACT_CHUNK) {
-            out.extend(self.cut_chunk(path, chunk)?);
+            out.extend(self.cut_chunk(path, chunk, FRAME_HEIGHT)?);
         }
         Ok(out)
     }

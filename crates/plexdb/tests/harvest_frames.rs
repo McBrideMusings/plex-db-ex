@@ -800,6 +800,7 @@ fn status_lists_the_priority_libraries_in_order_with_how_many_are_indexed() {
             ffmpeg_found: true,
             decoder: "cpu".into(),
         },
+        None,
     )
     .expect("status");
     let json: serde_json::Value =
