@@ -8,8 +8,7 @@ its Cuts and Shots, embeds the sampled frames and replaces the title's rows in `
 `--limit`, or when the encoder does not answer, and prints why in its last line.
 
 `FfmpegMedia` is the other half: ffprobe and ffmpeg over a part's file under
-`PLEXDB_MEDIA_DIR`, read-only. The Search tab cuts a frame or a clip with it
-(`plexdb/explore_search.py`).
+`PLEXDB_MEDIA_DIR`, read-only.
 """
 
 from __future__ import annotations

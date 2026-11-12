@@ -1,6 +1,5 @@
 //! `fold-name-decisions`: a person's display name for a keyword, from Plex
-//! DB-EX's `name_decisions.json` into `keyword_names` (`plexdb/names.py`
-//! `fold_name_decisions`, ADR-0021).
+//! DB-EX's `name_decisions.json` into `keyword_names` (ADR-0021).
 
 use std::path::Path;
 

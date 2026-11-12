@@ -1,5 +1,4 @@
 //! The 2-D layout the Title map and the Tag network are drawn with
-//! (`plexdb/explore.py` `_embed_2d`, which used UMAP).
 //!
 //! Rows are sparse vectors, normalised to unit length and laid out with cosine distance by
 //! `holomap` 0.3.0 (maintainer mnmal-ai), the crate the owner picked from the plex-db-ex-f58.21

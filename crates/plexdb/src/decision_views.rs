@@ -1,6 +1,5 @@
 //! What Plex DB-EX's decision tabs show and record: the Merges tab, the Roles tab, display
-//! names, the Lists tab's decisions and the tag doctor (`plexdb/merge_review.py`,
-//! `role_review.py`, `names.py`, `list_decisions.py` and `explore.py`'s `title_doctor`).
+//! names, the Lists tab's decisions and the tag doctor.
 //!
 //! A person's click never touches the store (ADR-0007, ADR-0017): it goes into a decisions
 //! file ([`crate::decision_book`]) that a sweep folds in. Until then these functions lay the

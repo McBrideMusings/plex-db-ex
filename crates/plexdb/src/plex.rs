@@ -113,7 +113,7 @@ impl PlexClient {
     }
 
     /// The file behind Plex part `part_id` of the item at `rating_key`, or `None` when the
-    /// item no longer lists that part (`plex_client.part_file`).
+    /// item no longer lists that part.
     pub fn part_file(&self, rating_key: &str, part_id: i64) -> Result<Option<String>, StoreError> {
         let Some(record) = self.metadata(rating_key)? else {
             return Ok(None);

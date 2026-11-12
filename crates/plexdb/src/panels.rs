@@ -30,8 +30,7 @@ pub const PANELS_FILE: &str = "explore-panels.json";
 pub const HISTORY_FILE: &str = "panel-history.json";
 
 /// The Library health dashboard a missing panels file is first written with. An existing
-/// file, even one with no dashboards, is never seeded again. The explorer's Python seeds
-/// from the same panels until it moves; `tests/test_panels.py` holds the two together.
+/// file, even one with no dashboards, is never seeded again.
 pub const DEFAULT_DASHBOARDS: &str = include_str!("default_dashboards.json");
 
 /// A panel's `value` setting: every row counted, or one column of the first row.

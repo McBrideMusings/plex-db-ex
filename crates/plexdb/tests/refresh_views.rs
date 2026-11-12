@@ -237,3 +237,46 @@ fn publish_writes_a_self_contained_copy_and_replaces_it_on_a_second_run() {
     drop(copy);
     publish(&dir.path().join("plexdb.db"), &snapshot).expect("publish again");
 }
+
+/// The fingerprint is a published rule: `<recipe>|sha256(keyword rows)|sha256(merges)`, each
+/// field framed as `0x00` for NULL or `0x01`, a 4-byte big-endian length and the UTF-8 bytes.
+/// Framed here by hand, so a change to `keyword_views::fingerprint` cannot pass by agreeing
+/// with itself.
+#[test]
+fn the_map_fingerprint_is_the_framed_digest_the_rule_publishes() {
+    use sha2::{Digest, Sha256};
+    fn framed(sha: &mut Sha256, text: &str) {
+        sha.update([1u8]);
+        sha.update((text.len() as u32).to_be_bytes());
+        sha.update(text.as_bytes());
+    }
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let conn = common::store(dir.path());
+    add_title(&conn, "imdb:tt2", "movie", &["superhero", "heist"]);
+    add_title(&conn, "imdb:tt1", "movie", &["superhero"]);
+    add_title(&conn, "tvdb:9", "show", &["lawyer"]);
+    let mut keywords = Sha256::new();
+    for (id, value) in [
+        ("imdb:tt1", "superhero"),
+        ("imdb:tt2", "heist"),
+        ("imdb:tt2", "superhero"),
+    ] {
+        for field in [id, "tmdb", value, "2026-01-01T00:00:00+00:00"] {
+            framed(&mut keywords, field);
+        }
+    }
+    let merges = Sha256::new();
+    let expected = format!(
+        "{}|{}|{}",
+        refresh_map::MAP_RECIPE,
+        hex(&keywords.finalize()),
+        hex(&merges.finalize())
+    );
+    assert_eq!(
+        map_fingerprint(&conn, "movie").expect("fingerprint"),
+        expected
+    );
+}

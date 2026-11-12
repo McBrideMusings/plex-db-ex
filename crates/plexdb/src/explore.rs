@@ -1,11 +1,8 @@
-//! `plexdb-rs explore` — Plex DB-EX served from Rust: the page and its read-only keyword
-//! routes (`/api/tags`, `/api/titles`, `/api/cotags`, `/api/map`, `/api/tagnetwork`,
-//! `/api/title`), answering what `plexdb/explore.py` answers (ADR-0001, ADR-0005).
+//! `plexdb explore` — Plex DB-EX: the page and every route it calls (ADR-0001, ADR-0005).
+//! `plexdb schedule` runs it over the published snapshot; a person runs it over a pulled copy.
 //!
-//! Nothing here writes the store: every request opens it read-only. A route not yet moved
-//! from Python is forwarded, with its method, headers and body, to the Python explorer
-//! named by `--fallback`, so the one page keeps working while the routes move a slice at a
-//! time. Without `--fallback` such a route answers 404.
+//! Nothing here writes the store: every request opens it read-only. A path no route answers
+//! gets 404 with the path named.
 //!
 //! Computed answers are cached per store file, keyed on its modification time and size, so a
 //! newly published snapshot is picked up on the next request without a restart. One compute
@@ -18,12 +15,11 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context, Poll};
-use std::time::Duration;
 
 use axum::Router;
 use axum::body::{Body, Bytes};
 use axum::extract::{RawQuery, Request, State};
-use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
+use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::Response;
 use axum::routing::{delete, get, post, put};
 use futures_core::Stream;
@@ -64,10 +60,10 @@ pub const NAME: &str = "explore";
 const DEFAULT_HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 5194;
 
-/// The page: the one file `plexdb/explore.py` also serves.
+/// The page, compiled in from `plexdb/explore.html`.
 const PAGE: &str = include_str!("../../../plexdb/explore.html");
 
-/// The Query tab's starting points, the one file `plexdb/explore.py` also serves.
+/// The Query tab's starting points, compiled in from `plexdb/recipes.json`.
 const RECIPES: &str = include_str!("../../../plexdb/recipes.json");
 
 /// Concurrent `/api/title`, `/api/titles` and `/api/doctor` requests; a fifth is told to retry.
@@ -78,9 +74,6 @@ const KEYWORD_SLOTS: usize = 2;
 
 /// The longest request body a decision POST may carry.
 const MAX_BODY: usize = 1 << 20;
-
-/// How long a forwarded request may take: the Search tab's runs are the slow ones.
-const FALLBACK_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// A cache of computed values by key: one compute per key, and no key waits on another.
 /// Each entry carries the store generation it was computed for, so a newer generation
@@ -183,7 +176,6 @@ struct App {
     history: PathBuf,
     panels_lock: Mutex<()>,
     query_slots: QuerySlots,
-    fallback: Option<String>,
     indexes: Keyed<String, TagIndex>,
     spaces: Keyed<String, KeywordSpace>,
     maps: Keyed<(String, BTreeSet<String>), MapPayload>,
@@ -1237,100 +1229,18 @@ async fn panel_delete(State(app): State<Shared>, request: Request) -> Response {
     .await
 }
 
-/// Forward a request this server does not answer to the Python explorer.
-async fn forward(State(app): State<Shared>, request: Request) -> Response {
-    let path = request.uri().path().to_string();
-    let Some(fallback) = app.fallback.clone() else {
-        return json_reply(
-            StatusCode::NOT_FOUND,
-            &Json::object([("error", Json::Str(format!("no route {path}")))]),
-        );
-    };
-    let method = request.method().clone();
-    let target = match request.uri().path_and_query() {
-        Some(pq) => format!("{}{}", fallback.trim_end_matches('/'), pq),
-        None => format!("{}{path}", fallback.trim_end_matches('/')),
-    };
-    let headers = request.headers().clone();
-    let Ok(body) = axum::body::to_bytes(request.into_body(), 2 << 20).await else {
-        return failed(&ExploreError::Invalid("body is too large".into()));
-    };
-    match tokio::task::spawn_blocking(move || proxy(&method, &target, &headers, body.to_vec()))
-        .await
-    {
-        Ok(Ok(response)) => response,
-        Ok(Err(message)) => json_reply(
-            StatusCode::BAD_GATEWAY,
-            &Json::object([("error", Json::Str(message))]),
-        ),
-        Err(join) => failed(&ExploreError::Internal(format!(
-            "the request failed: {join}"
-        ))),
-    }
+/// A path no route answers: 404 with the path named.
+async fn no_route(request: Request) -> Response {
+    json_reply(
+        StatusCode::NOT_FOUND,
+        &Json::object([(
+            "error",
+            Json::Str(format!("no route {}", request.uri().path())),
+        )]),
+    )
 }
 
-/// Headers a forwarded request carries on: what the Python routes read.
-const FORWARDED: [&str; 3] = ["content-type", "range", "accept"];
-
-/// Headers a forwarded answer carries back.
-const RETURNED: [&str; 6] = [
-    "content-type",
-    "cache-control",
-    "accept-ranges",
-    "content-range",
-    "content-disposition",
-    "etag",
-];
-
-fn proxy(
-    method: &Method,
-    target: &str,
-    headers: &HeaderMap,
-    body: Vec<u8>,
-) -> Result<Response, String> {
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(FALLBACK_TIMEOUT))
-        .max_redirects(0)
-        .http_status_as_error(false)
-        .build()
-        .into();
-    let mut request = ureq::http::Request::builder()
-        .method(method.as_str())
-        .uri(target);
-    for name in FORWARDED {
-        if let Some(value) = headers.get(name) {
-            request = request.header(name, value.as_bytes());
-        }
-    }
-    let request = request
-        .body(body)
-        .map_err(|err| format!("cannot forward the request: {err}"))?;
-    let mut answer = agent
-        .run(request)
-        .map_err(|err| format!("the Python explorer did not answer: {err}"))?;
-    let status = StatusCode::from_u16(answer.status().as_u16())
-        .map_err(|err| format!("the Python explorer sent a bad status: {err}"))?;
-    let mut response_headers = HeaderMap::new();
-    for name in RETURNED {
-        if let Some(value) = answer.headers().get(name)
-            && let Ok(value) = HeaderValue::from_bytes(value.as_bytes())
-        {
-            response_headers.insert(header::HeaderName::from_static(name), value);
-        }
-    }
-    let data = answer
-        .body_mut()
-        .with_config()
-        .limit(u64::MAX)
-        .read_to_vec()
-        .map_err(|err| format!("the Python explorer's answer was cut off: {err}"))?;
-    let mut response = Response::new(Body::from(data));
-    *response.status_mut() = status;
-    *response.headers_mut() = response_headers;
-    Ok(response)
-}
-
-// --- the Search tab (`plexdb/explore_search.py`, routed by `_search_get`/`_search_post`) ---
+// --- the Search tab (`/api/search/*`) ---
 
 /// `_query_int`: a whole number of milliseconds, digits only, at most 12 of them.
 fn query_int(query: &Query, name: &str) -> Result<i64, ExploreError> {
@@ -1709,97 +1619,52 @@ fn router(app: Shared) -> Router {
         .route("/api/map", get(map))
         .route("/api/tagnetwork", get(tagnetwork))
         .route("/api/title", get(title))
-        .route(
-            "/api/merges",
-            get(merges_get).post(merges_post).fallback(forward),
-        )
-        .route(
-            "/api/roles",
-            get(roles_get).post(roles_post).fallback(forward),
-        )
-        .route("/api/names", post(names_post).fallback(forward))
-        .route("/api/lists", get(lists_get).fallback(forward))
-        .route("/api/list", get(list_get).fallback(forward))
-        .route(
-            "/api/list-decisions",
-            post(list_decisions_post).fallback(forward),
-        )
-        .route("/api/doctor", get(doctor).fallback(forward))
-        .route("/api/keywords", get(doctor_keywords).fallback(forward))
-        .route(
-            "/api/doctor/titles",
-            get(doctor_title_search).fallback(forward),
-        )
-        .route(
-            "/api/extras/status",
-            get(extras_status_get).fallback(forward),
-        )
-        .route("/api/extras/queue", get(extras_queue_get).fallback(forward))
-        .route("/api/extras/item", get(extras_item_get).fallback(forward))
-        .route("/api/extras/save", post(extras_save_post).fallback(forward))
-        .route("/api/extras/file", post(extras_file_post).fallback(forward))
-        .route("/api/extras/scan", post(extras_scan_post).fallback(forward))
-        .route(
-            "/api/extras/fetch",
-            post(extras_fetch_post).fallback(forward),
-        )
-        .route("/api/extras/items", get(extras_items_get).fallback(forward))
-        .route(
-            "/api/extras/scrapers",
-            get(extras_scrapers_get).fallback(forward),
-        )
-        .route(
-            "/api/extras/fields",
-            post(extras_fields_post).fallback(forward),
-        )
-        .route("/api/query", post(query_post).fallback(forward))
-        .route("/api/recipes", get(recipes_get).fallback(forward))
+        .route("/api/merges", get(merges_get).post(merges_post))
+        .route("/api/roles", get(roles_get).post(roles_post))
+        .route("/api/names", post(names_post))
+        .route("/api/lists", get(lists_get))
+        .route("/api/list", get(list_get))
+        .route("/api/list-decisions", post(list_decisions_post))
+        .route("/api/doctor", get(doctor))
+        .route("/api/keywords", get(doctor_keywords))
+        .route("/api/doctor/titles", get(doctor_title_search))
+        .route("/api/extras/status", get(extras_status_get))
+        .route("/api/extras/queue", get(extras_queue_get))
+        .route("/api/extras/item", get(extras_item_get))
+        .route("/api/extras/save", post(extras_save_post))
+        .route("/api/extras/file", post(extras_file_post))
+        .route("/api/extras/scan", post(extras_scan_post))
+        .route("/api/extras/fetch", post(extras_fetch_post))
+        .route("/api/extras/items", get(extras_items_get))
+        .route("/api/extras/scrapers", get(extras_scrapers_get))
+        .route("/api/extras/fields", post(extras_fields_post))
+        .route("/api/query", post(query_post))
+        .route("/api/recipes", get(recipes_get))
         .route(
             "/api/saved",
-            get(saved_get)
-                .put(saved_put)
-                .delete(saved_delete)
-                .fallback(forward),
+            get(saved_get).put(saved_put).delete(saved_delete),
         )
-        .route(
-            "/api/dashboards",
-            get(dashboards_get).put(dashboards_put).fallback(forward),
-        )
-        .route(
-            "/api/dashboards/",
-            delete(dashboard_delete).fallback(forward),
-        )
-        .route(
-            "/api/dashboards/{*id}",
-            delete(dashboard_delete).fallback(forward),
-        )
-        .route("/api/panels", put(panels_put).fallback(forward))
-        .route(
-            "/api/panels/move",
-            post(panel_move).delete(panel_delete).fallback(forward),
-        )
-        .route("/api/panels/", delete(panel_delete).fallback(forward))
-        .route("/api/panels/{*id}", delete(panel_delete).fallback(forward))
-        .route("/api/poster", get(poster).fallback(forward))
-        .route("/api/search/status", get(search_status).fallback(forward))
-        .route("/api/search/frames", get(search_frames).fallback(forward))
-        .route("/api/search/indexed", get(search_indexed).fallback(forward))
-        .route("/api/search/suggest", get(search_suggest).fallback(forward))
-        .route(
-            "/api/search/collection",
-            get(search_collection).fallback(forward),
-        )
-        .route("/api/search/frame", get(search_frame).fallback(forward))
-        .route("/api/search/clip", get(search_clip).fallback(forward))
-        .route(
-            "/api/search/tokenize",
-            post(search_tokenize).fallback(forward),
-        )
-        .route("/api/search/pool", post(search_pool).fallback(forward))
-        .route("/api/search/queue", post(search_queue).fallback(forward))
-        .route("/api/search/why", post(search_why).fallback(forward))
-        .route("/api/search/run", post(search_run).fallback(forward))
-        .fallback(forward)
+        .route("/api/dashboards", get(dashboards_get).put(dashboards_put))
+        .route("/api/dashboards/", delete(dashboard_delete))
+        .route("/api/dashboards/{*id}", delete(dashboard_delete))
+        .route("/api/panels", put(panels_put))
+        .route("/api/panels/move", post(panel_move).delete(panel_delete))
+        .route("/api/panels/", delete(panel_delete))
+        .route("/api/panels/{*id}", delete(panel_delete))
+        .route("/api/poster", get(poster))
+        .route("/api/search/status", get(search_status))
+        .route("/api/search/frames", get(search_frames))
+        .route("/api/search/indexed", get(search_indexed))
+        .route("/api/search/suggest", get(search_suggest))
+        .route("/api/search/collection", get(search_collection))
+        .route("/api/search/frame", get(search_frame))
+        .route("/api/search/clip", get(search_clip))
+        .route("/api/search/tokenize", post(search_tokenize))
+        .route("/api/search/pool", post(search_pool))
+        .route("/api/search/queue", post(search_queue))
+        .route("/api/search/why", post(search_why))
+        .route("/api/search/run", post(search_run))
+        .fallback(no_route)
         .with_state(app)
 }
 
@@ -1807,7 +1672,6 @@ struct Options {
     host: String,
     port: u16,
     store: Option<PathBuf>,
-    fallback: Option<String>,
 }
 
 fn parse_options(args: &[String]) -> Result<Options, Failure> {
@@ -1816,7 +1680,6 @@ fn parse_options(args: &[String]) -> Result<Options, Failure> {
         host: DEFAULT_HOST.to_string(),
         port: DEFAULT_PORT,
         store: None,
-        fallback: None,
     };
     let mut rest = args.iter();
     while let Some(flag) = rest.next() {
@@ -1839,10 +1702,9 @@ fn parse_options(args: &[String]) -> Result<Options, Failure> {
                     .map_err(|_| usage(format!("--port must be a port number, got {raw:?}")))?;
             }
             "--store" => options.store = Some(py_path(&value()?)),
-            "--fallback" => options.fallback = Some(value()?),
             other => {
                 return Err(usage(format!(
-                    "explore takes [--host H] [--port N] [--store PATH] [--fallback URL], got {other}"
+                    "explore takes [--host H] [--port N] [--store PATH], got {other}"
                 )));
             }
         }
@@ -1855,18 +1717,15 @@ pub fn run(args: &[String]) -> Result<(), Failure> {
     let options = parse_options(args)?;
     let config = Config::from_env().map_err(crate::steps::failure)?;
     let store = options.store.unwrap_or_else(|| config.store_path.clone());
+    // A container starts before its first sweep has published a snapshot; every request
+    // answers 503 until one lands, so the server starts anyway and says why the page is empty.
     if !store.exists() {
-        return Err(Failure::Failed(format!(
-            "no store at {} — run `admin pull-baseline`",
+        eprintln!(
+            "no store at {} yet — the next sweep publishes one (`admin pull-baseline` in a checkout)",
             store.display()
-        )));
+        );
     }
     let dir = decisions_dir(&store);
-    let fallback = options
-        .fallback
-        .or_else(|| std::env::var("PLEXDB_EXPLORE_FALLBACK").ok())
-        .map(|url| py_strip(&url).to_string())
-        .filter(|url| !url.is_empty());
     let frame_config = FrameConfig::from_env().map_err(crate::steps::failure)?;
     let app = Arc::new(App {
         store: store.clone(),
@@ -1885,7 +1744,6 @@ pub fn run(args: &[String]) -> Result<(), Failure> {
         history: dir.join(HISTORY_FILE),
         panels_lock: Mutex::new(()),
         query_slots: QuerySlots::default(),
-        fallback,
         indexes: Keyed::new(2),
         spaces: Keyed::new(2),
         maps: Keyed::new(6),

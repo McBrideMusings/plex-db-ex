@@ -1,5 +1,4 @@
 //! The Search tab's server side: the Frame index, searched from Plex DB-EX
-//! (`plexdb/explore_search.py`).
 //!
 //! The page only draws (ADR-0017): it never reaches Plex, the encoder or a tokenizer.
 //! Everything it shows comes through here.

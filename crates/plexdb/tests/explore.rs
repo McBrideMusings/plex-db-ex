@@ -1,11 +1,9 @@
 //! `plexdb-rs explore` against a store built by the real `plexdb migrate`: the page and the
-//! read-only keyword routes answer what `plexdb/explore.py` answers, a route not yet moved goes
-//! to the Python explorer named by `--fallback`, and the network streams its stages.
+//! read-only keyword routes, a path no route answers, and the network streaming its stages.
 
 mod common;
 
-use std::io::{BufRead, BufReader, Read, Write};
-use std::net::TcpListener;
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 
@@ -61,17 +59,13 @@ struct Explorer {
 }
 
 impl Explorer {
-    fn start(dir: &Path, fallback: Option<&str>) -> Self {
+    fn start(dir: &Path) -> Self {
         let mut command = Command::new(env!("CARGO_BIN_EXE_plexdb-rs"));
         command
             .args(["explore", "--port", "0", "--store"])
             .arg(dir.join("plexdb.db"))
             .env_remove("PLEXDB_EXPLORE_SAVED_PATH")
-            .env_remove("PLEXDB_EXPLORE_FALLBACK")
             .stdout(Stdio::piped());
-        if let Some(url) = fallback {
-            command.args(["--fallback", url]);
-        }
         let mut child = command.spawn().expect("start plexdb-rs explore");
         let mut line = String::new();
         BufReader::new(child.stdout.as_mut().expect("stdout"))
@@ -121,10 +115,10 @@ impl Drop for Explorer {
 }
 
 #[test]
-fn the_page_and_the_tag_table_answer_as_the_python_explorer_does() {
+fn the_page_and_the_tag_table_answer() {
     let dir = tempfile::tempdir().expect("tempdir");
     library(dir.path());
-    let explorer = Explorer::start(dir.path(), None);
+    let explorer = Explorer::start(dir.path());
 
     let (status, kind, page) = explorer.get("/");
     assert_eq!((status, kind.as_str()), (200, "text/html; charset=utf-8"));
@@ -170,7 +164,7 @@ fn the_page_and_the_tag_table_answer_as_the_python_explorer_does() {
 fn a_tags_titles_and_co_tags_come_from_the_folded_rows() {
     let dir = tempfile::tempdir().expect("tempdir");
     library(dir.path());
-    let explorer = Explorer::start(dir.path(), None);
+    let explorer = Explorer::start(dir.path());
 
     let titles = explorer.json("/api/titles?kind=movie&tag=theme1-sub2");
     let found = titles["titles"].as_array().expect("titles");
@@ -213,7 +207,7 @@ fn a_tags_titles_and_co_tags_come_from_the_folded_rows() {
 fn a_title_card_lists_its_keywords_and_nearest_titles() {
     let dir = tempfile::tempdir().expect("tempdir");
     library(dir.path());
-    let explorer = Explorer::start(dir.path(), None);
+    let explorer = Explorer::start(dir.path());
 
     let card = explorer.json("/api/title?item_id=fs:0-00");
     assert_eq!(card["title"], "Title fs:0-00");
@@ -252,7 +246,7 @@ fn a_title_card_lists_its_keywords_and_nearest_titles() {
 fn the_stored_map_is_served_and_an_excluded_one_is_drawn_live() {
     let dir = tempfile::tempdir().expect("tempdir");
     library(dir.path());
-    let explorer = Explorer::start(dir.path(), None);
+    let explorer = Explorer::start(dir.path());
 
     let stored = explorer.json("/api/map?kind=movie");
     assert_eq!(stored["stale"], false);
@@ -294,7 +288,7 @@ fn the_stored_map_is_served_and_an_excluded_one_is_drawn_live() {
 fn the_network_streams_its_stages_and_the_stored_one_is_a_single_line() {
     let dir = tempfile::tempdir().expect("tempdir");
     library(dir.path());
-    let explorer = Explorer::start(dir.path(), None);
+    let explorer = Explorer::start(dir.path());
     let lines = |route: &str| -> Vec<Value> {
         let (status, kind, body) = explorer.get(route);
         assert_eq!(
@@ -339,48 +333,30 @@ fn the_network_streams_its_stages_and_the_stored_one_is_a_single_line() {
 }
 
 #[test]
-fn a_route_not_yet_moved_goes_to_the_python_explorer() {
+fn a_path_no_route_answers_is_404_naming_it() {
     let dir = tempfile::tempdir().expect("tempdir");
     library(dir.path());
-    let python = TcpListener::bind("127.0.0.1:0").expect("a fake Python explorer");
-    let url = format!("http://{}", python.local_addr().expect("address"));
-    let fake = std::thread::spawn(move || {
-        let (mut stream, _) = python.accept().expect("a forwarded request");
-        let mut seen = Vec::new();
-        let mut buffer = [0u8; 4096];
-        while !seen.windows(4).any(|w| w == b"\r\n\r\n") {
-            let n = stream.read(&mut buffer).expect("read");
-            seen.extend_from_slice(&buffer[..n]);
-        }
-        let body = r#"{"queries":[]}"#;
-        write!(
-            stream,
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
-             Cache-Control: no-cache\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        )
-        .expect("answer");
-        String::from_utf8_lossy(&seen).into_owned()
-    });
-    let explorer = Explorer::start(dir.path(), Some(&url));
-
+    let explorer = Explorer::start(dir.path());
     let (status, kind, body) = explorer.get("/api/unmoved?x=1");
     assert_eq!(
         (status, kind.as_str(), body.as_str()),
-        (200, "application/json", r#"{"queries":[]}"#)
+        (
+            404,
+            "application/json",
+            r#"{"error":"no route /api/unmoved"}"#
+        )
     );
-    let request = fake.join().expect("the fake saw the request");
-    assert!(
-        request.starts_with("GET /api/unmoved?x=1 HTTP/1.1"),
-        "{request}"
-    );
+}
 
-    let alone = Explorer::start(dir.path(), None);
-    let (status, _, body) = alone.get("/api/unmoved");
-    assert_eq!(
-        (status, body.as_str()),
-        (404, r#"{"error":"no route /api/unmoved"}"#)
-    );
+#[test]
+fn it_starts_before_a_store_exists_and_answers_503_until_one_does() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let explorer = Explorer::start(dir.path());
+    let (status, _, body) = explorer.get("/api/tags?kind=movie");
+    assert_eq!(status, 503, "{body}");
+    assert!(body.contains("the next sweep publishes one"), "{body}");
+    let (status, _, _) = explorer.get("/");
+    assert_eq!(status, 200);
 }
 
 impl Explorer {
@@ -415,7 +391,7 @@ fn read_file(dir: &Path, name: &str) -> Value {
 fn a_name_shows_at_once_and_is_written_to_the_decisions_file() {
     let dir = tempfile::tempdir().expect("tempdir");
     library(dir.path());
-    let explorer = Explorer::start(dir.path(), None);
+    let explorer = Explorer::start(dir.path());
 
     let (status, reply) = explorer.post_json(
         "/api/names",
@@ -455,7 +431,7 @@ fn a_name_shows_at_once_and_is_written_to_the_decisions_file() {
 fn a_decision_post_refuses_what_it_cannot_record() {
     let dir = tempfile::tempdir().expect("tempdir");
     library(dir.path());
-    let explorer = Explorer::start(dir.path(), None);
+    let explorer = Explorer::start(dir.path());
 
     let (status, text) = explorer.post("/api/names", "text/plain", "{}");
     assert_eq!(status, 400);
@@ -498,7 +474,7 @@ fn a_merge_decision_lays_over_the_pair_until_the_sweep_folds_it() {
             [],
         )
         .expect("pair");
-    let explorer = Explorer::start(dir.path(), None);
+    let explorer = Explorer::start(dir.path());
 
     let before = explorer.json("/api/merges");
     assert_eq!(before["proposed"][0]["keyword_a"], "theme0");
@@ -540,7 +516,7 @@ fn a_role_decision_and_a_list_decision_wait_for_the_sweep() {
             [],
         )
         .expect("role");
-    let explorer = Explorer::start(dir.path(), None);
+    let explorer = Explorer::start(dir.path());
 
     let listing = explorer.json("/api/roles");
     assert_eq!(listing["keywords"][0]["keyword"], "theme0");
@@ -648,7 +624,7 @@ fn extras_world(dir: &Path) {
 fn extras_items_list_organized_extras_and_since_returns_only_later_changes() {
     let dir = tempfile::tempdir().expect("tempdir");
     extras_world(dir.path());
-    let explorer = Explorer::start(dir.path(), None);
+    let explorer = Explorer::start(dir.path());
 
     let all = explorer.json("/api/extras/items");
     let ids: Vec<&str> = all["items"]
@@ -697,7 +673,7 @@ fn extras_items_list_organized_extras_and_since_returns_only_later_changes() {
 fn extras_fields_put_person_values_ahead_of_scraper_and_path_values() {
     let dir = tempfile::tempdir().expect("tempdir");
     extras_world(dir.path());
-    let explorer = Explorer::start(dir.path(), None);
+    let explorer = Explorer::start(dir.path());
 
     let (status, reply) = explorer.post_json(
         "/api/extras/fields",
@@ -811,7 +787,7 @@ fn extras_ui_world(dir: &Path) -> std::path::PathBuf {
 fn extras_queue_lists_unsaved_extras_with_proposals_and_what_saving_would_do() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = extras_ui_world(dir.path());
-    let explorer = Explorer::start(dir.path(), None);
+    let explorer = Explorer::start(dir.path());
 
     let status = explorer.json("/api/extras/status");
     let clips = &status["libraries"][0];
@@ -861,7 +837,7 @@ fn extras_queue_lists_unsaved_extras_with_proposals_and_what_saving_would_do() {
 fn extras_save_records_decisions_only_for_a_complete_card_and_dry_run_records_nothing() {
     let dir = tempfile::tempdir().expect("tempdir");
     extras_ui_world(dir.path());
-    let explorer = Explorer::start(dir.path(), None);
+    let explorer = Explorer::start(dir.path());
     let decisions = dir.path().join("extra_decisions.json");
 
     let complete =
@@ -926,7 +902,7 @@ fn extras_save_records_decisions_only_for_a_complete_card_and_dry_run_records_no
 fn extras_doctor_lists_files_and_delete_and_split_are_refused_on_the_primary() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = extras_ui_world(dir.path());
-    let explorer = Explorer::start(dir.path(), None);
+    let explorer = Explorer::start(dir.path());
     let decisions = dir.path().join("extra_decisions.json");
 
     let item = explorer.json("/api/extras/item?item_id=fs:kept");
@@ -979,7 +955,7 @@ fn extras_doctor_lists_files_and_delete_and_split_are_refused_on_the_primary() {
 fn extras_scan_touches_the_decisions_file_the_tick_watches() {
     let dir = tempfile::tempdir().expect("tempdir");
     extras_ui_world(dir.path());
-    let explorer = Explorer::start(dir.path(), None);
+    let explorer = Explorer::start(dir.path());
     let decisions = dir.path().join("extra_decisions.json");
     assert!(!decisions.exists());
     let (status, reply) = explorer.post_json("/api/extras/scan", &json!({}));
@@ -1009,7 +985,7 @@ fn extras_fetch_records_a_decision_only_when_a_scraper_matches_the_source_url() 
     )
     .expect("url");
     drop(conn);
-    let explorer = Explorer::start(dir.path(), None);
+    let explorer = Explorer::start(dir.path());
 
     let queue = explorer.json("/api/extras/queue?library=Clips");
     assert_eq!(queue["items"][0]["scrapers"], json!(["demo"]));

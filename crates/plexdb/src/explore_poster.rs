@@ -1,5 +1,5 @@
 //! `/api/poster`: one title's Plex thumbnail, proxied so `PLEX_TOKEN` never reaches the
-//! browser (`plexdb/explore.py`'s `PosterProxy`). Plex DB-EX has no login, so the token stays
+//! browser. Plex DB-EX has no login, so the token stays
 //! server-side, and a count-capped cache and a fixed number of fetch slots bound how much of
 //! Plex an anonymous caller can spend.
 //!

@@ -35,8 +35,8 @@ fn main() -> ExitCode {
             println!("{}", usage());
             ExitCode::SUCCESS
         }
-        // The explorer is a server, not a sweep step: the sweep never plans it, and the
-        // Python `plexdb explore` stays the one a person runs until its routes have moved.
+        // The explorer is a server, not a sweep step: the sweep never plans it. `plexdb
+        // explore` and `plexdb schedule` both start this one.
         ["explore", ..] => match plexdb::explore::run(&args[1..]) {
             Ok(()) => ExitCode::SUCCESS,
             Err(failure) => report(failure),

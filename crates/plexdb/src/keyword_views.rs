@@ -1,10 +1,10 @@
 //! What the stored Title map and Tag network are drawn from: every keyword a title of one
 //! kind carries, with merged keywords folded into the one they merge with
-//! (`plexdb/explore.py` `keyword_rows`, `plexdb/merge_review.py` `merge_map`, ADR-0018), and
+//! (ADR-0018), and
 //! the fingerprint that says whether a stored view still matches those rows.
 //!
 //! The fingerprint is a published rule: Plex DB-EX compares a stored view's fingerprint with
-//! the one it computes from the store, so `plexdb/explore.py` computes the same bytes. It is
+//! the one it computes from the store. It is
 //! `<recipe>|<keyword digest>|<merge digest>`. Each digest is a SHA-256 over a sequence of
 //! rows; a row is its fields in order, each as one byte `0` for NULL, or `1`, the length as a
 //! big-endian `u32`, then the UTF-8 bytes. The keyword digest takes every keyword row of a

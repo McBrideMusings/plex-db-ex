@@ -78,6 +78,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if argv and not argv[0].startswith("-") and argv[0] not in _command_names(parser):
             # A name no Python module claims: a step that has moved to Rust, or
             # a typo argparse should report.
+            if argv[0] in rust.servers():
+                rust.execute(argv)
             if argv[0] in rust.names():
                 return rust.run(argv)
         args = parser.parse_args(argv)

@@ -1,5 +1,5 @@
 //! `refresh-tagnetwork`: redraw Plex DB-EX's stored default Tag network of each kind
-//! (`plexdb/tagnetwork.py`, `plexdb/explore.py` `tag_network`).
+//!.
 //!
 //! The network is every tag on at least [`NETWORK_MIN_DF`] titles, positioned by which titles
 //! carry it and linked to its [`NETWORK_EDGES_PER_NODE`] strongest co-tags. Nodes and edges
@@ -30,8 +30,7 @@ const NETWORK_MIN_DF: usize = 3;
 /// line to every tag it has ever shared one title with.
 const NETWORK_EDGES_PER_NODE: usize = 6;
 
-/// Names how a network is drawn, as `MAP_RECIPE` does the map's. `plexdb/explore.py` holds the
-/// same string.
+/// Names how a network is drawn, as `MAP_RECIPE` does the map's.
 pub const NETWORK_RECIPE: &str = "holomap-cosine-rp256-s0-full-df3-nn15-md0.1-sp1.0-uniform-epn6";
 
 pub fn network_fingerprint(conn: &Connection, kind: &str) -> rusqlite::Result<String> {

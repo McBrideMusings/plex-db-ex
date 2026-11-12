@@ -17,7 +17,6 @@ EXPECTED_COMMANDS = {
     "idle",
     "steps",
     "sweep",
-    "explore",
     "schedule",
 }
 
@@ -35,9 +34,6 @@ EXPECTED_COMMAND_ORDER = [
     # Every sweep step and which implementation runs it (`plexdb/commands/steps.py`).
     "steps",
     "sweep",
-    # Not a step of the sweep: a read-only browser view of what the steps above
-    # wrote (`plexdb/commands/explore.py`).
-    "explore",
     # Last, and not a step of the sweep — it wraps the whole run rather than
     # taking part in one (`plexdb/commands/schedule.py`).
     "schedule",

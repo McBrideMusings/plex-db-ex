@@ -1,4 +1,4 @@
-//! The Query tab's guarded statement (`run_query` in `plexdb/explore.py`): one SELECT against
+//! The Query tab's guarded statement: one SELECT against
 //! a fresh read-only connection, `query_only`, an authorizer that allows reads and nothing
 //! else, a value-length limit and a deadline checked as the statement runs.
 //!
@@ -57,7 +57,7 @@ pub enum Cell {
 }
 
 impl Cell {
-    /// `_cell` in `plexdb/explore.py`: a blob by its size, a non-finite float as its name.
+    /// A cell as the Query tab shows it: a blob by its size, a non-finite float as its name.
     pub fn json(&self) -> Json {
         match self {
             Cell::Null => Json::Null,

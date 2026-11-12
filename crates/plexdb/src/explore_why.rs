@@ -1,5 +1,4 @@
 //! Why a Shot matched: the Search tab's "Why?" inspector, computed from `frames.db`
-//! (`plexdb/explore_why.py`).
 //!
 //! Everything here is arithmetic on vectors the Frame index already holds plus the phrase
 //! vector the search left in the Phrase cache, so no encoder or model weights are involved

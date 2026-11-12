@@ -1,8 +1,6 @@
 """Reading crowd lists back out of the store: the list table and one list's detail.
 
-These two functions are the one procedure `plexdb lists`, `plexdb list` and the
-explorer's Lists tab all call, so what a person sees in a terminal and what the
-page shows cannot drift apart.
+These two functions are the one procedure `plexdb lists` and `plexdb list` call.
 
 **Nothing here is stored** (ADR-0012). Owned count, owned share, watched count
 and a keyword's over-representation are computed from what the source said and

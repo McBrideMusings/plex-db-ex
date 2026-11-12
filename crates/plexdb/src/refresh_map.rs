@@ -1,5 +1,5 @@
 //! `refresh-map`: redraw Plex DB-EX's stored default Title map of each kind
-//! (`plexdb/titlemap.py`, `plexdb/explore.py` `title_map` and `region_labels`).
+//!.
 //!
 //! With no noise excluded the map is a pure function of the keyword rows, so it is drawn
 //! once and kept, with its region labels, in `title_map`, `title_map_label` and
@@ -37,7 +37,7 @@ pub const SEED: u64 = 0;
 
 /// Names how a map is drawn. It is part of a stored map's fingerprint, so changing the
 /// layout, any constant above or the seed, and changing this string with it, makes every
-/// stored map stale and the next refresh redraws it. `plexdb/explore.py` holds the same string.
+/// stored map stale and the next refresh redraws it.
 pub const MAP_RECIPE: &str =
     "holomap-cosine-rp256-s0-full-df2-nn15-md0.1-sp1.0-uniform-labels2-9-min8";
 

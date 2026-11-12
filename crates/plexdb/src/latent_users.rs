@@ -637,7 +637,7 @@ fn shared_account_ids_from_env() -> Result<Vec<i64>, StoreError> {
         .collect()
 }
 
-/// The name of each real person Plex lists (`plex_client.valid_accounts`): Plex's id-0
+/// The name of each real person Plex lists: Plex's id-0
 /// placeholder and any blank name are left out.
 fn account_names(accounts: &[Value]) -> HashMap<i64, String> {
     accounts

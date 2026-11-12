@@ -1,4 +1,4 @@
-//! The Query tab's saved queries (`SavedQueries` in `plexdb/explore.py`): named queries in one
+//! The Query tab's saved queries: named queries in one
 //! JSON file beside the store, never inside it. The store has one writer (ADR-0001), so what
 //! the Query tab saves lives in a file of its own, replaced by rename so a reader never sees
 //! half of it. Plex DB-EX has no login, so [`upsert`] bounds how far an anonymous caller can

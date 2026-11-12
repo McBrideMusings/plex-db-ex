@@ -1,8 +1,6 @@
 //! What Plex DB-EX's read-only keyword routes answer with: the tag table and one tag's
-//! co-tags, the titles carrying a tag, the Title map, the Tag network and one title's card
-//! (`plexdb/explore.py` `build_index`, `cotags_json`, `titles_tagged`, `stored_map`,
-//! `title_map`, `tag_network`, `title_details`). Every function here reads a store
-//! connection and returns a value; the server in [`crate::explore`] owns the caching, the
+//! co-tags, the titles carrying a tag, the Title map, the Tag network and one title's card.
+//! Every function here reads a store connection and returns a value; the server in [`crate::explore`] owns the caching, the
 //! slots and the HTTP.
 //!
 //! Every keyword view reads `keyword_rows`, which folds a merged keyword into the one it
@@ -151,7 +149,7 @@ impl KeywordSets {
 
 /// The lift we can be confident of with `z` standard errors of evidence: the share of the
 /// anchor's titles carrying `other` taken at the Wilson lower bound instead of
-/// `shared / df_anchor`, over `other`'s share of all titles (`explore.cautious_lift`).
+/// `shared / df_anchor`, over `other`'s share of all titles.
 pub fn cautious_lift(
     shared: usize,
     titles: usize,

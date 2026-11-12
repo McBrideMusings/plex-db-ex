@@ -25,6 +25,7 @@ import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NoReturn
 
 from .config import Config
 from .errors import ConfigError, PlexdbError
@@ -39,8 +40,10 @@ __all__ = [
     "RustStepBusy",
     "RustStepError",
     "commands",
+    "execute",
     "names",
     "run",
+    "servers",
     "steps",
     "stream",
 ]
@@ -99,6 +102,13 @@ def commands() -> list[str]:
     return [str(name) for name in declared]
 
 
+def servers() -> list[str]:
+    """The commands that serve until stopped: `plexdb <name>` becomes the binary
+    (`execute`) rather than waiting on it as `run` does."""
+    declared = json.loads(STEPS_FILE.read_text(encoding="utf-8")).get("servers", [])
+    return [str(name) for name in declared]
+
+
 def names() -> set[str]:
     """Every name `plexdb-rs` runs: the sweep's steps and the commands outside it."""
     return {step.name for step in steps()} | set(commands())
@@ -142,6 +152,16 @@ def run(args: Sequence[str], config: Config | None = None) -> int:
         [binary(config), *args], env=env, stderr=subprocess.PIPE, text=True, check=False
     )
     return _check(done.returncode, done.stderr)
+
+
+def execute(args: Sequence[str], config: Config | None = None) -> NoReturn:
+    """Replace this process with `plexdb-rs <args>`: a server's log lines, its exit code and
+    Ctrl-C are then the binary's own, with no Python parent waiting between them."""
+    config = config or Config.from_env()
+    path = binary(config)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os.execve(path, [path, *args], _child_env(config))
 
 
 def stream(

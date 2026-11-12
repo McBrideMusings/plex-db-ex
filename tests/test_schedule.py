@@ -9,12 +9,19 @@ past midnight, the sweep that finishes inside its own scheduled minute, and a
 
 from __future__ import annotations
 
+import json
+import socket
+import threading
+import urllib.error
+import urllib.request
 from datetime import datetime
+from pathlib import Path
 
 import pytest
+from fixture_store import init, publish
 
 from plexdb import schedule
-from plexdb.errors import ConfigError
+from plexdb.errors import ConfigError, PlexdbError
 
 
 def test_parse_schedule_reads_hours_and_minutes() -> None:
@@ -205,3 +212,90 @@ def test_schedule_is_not_itself_a_step_of_the_sweep() -> None:
     from plexdb.commands import schedule as schedule_command
 
     assert not hasattr(schedule_command, "SWEEP")
+
+
+def _free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port: int = probe.getsockname()[1]
+        return port
+
+
+def _get(url: str) -> tuple[int, bytes]:
+    try:
+        with urllib.request.urlopen(url, timeout=30) as response:
+            return response.status, response.read()
+    except urllib.error.HTTPError as err:
+        return err.code, err.read()
+
+
+def test_the_explorer_serves_the_snapshot_once_one_is_published_and_reports_its_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On the host Plex DB-EX is a `plexdb-rs explore` child of `plexdb schedule` reading
+    the snapshot. Before the first sweep publishes one it answers 503; after, it serves the
+    snapshot without a restart; when it exits, the scheduler hears the exit code."""
+    store = tmp_path / "plexdb.db"
+    init(store)
+    snapshot = tmp_path / "snapshot" / "plexdb.snapshot.db"
+    snapshot.parent.mkdir()
+    port = _free_port()
+    monkeypatch.setenv(schedule.EXPLORE_PORT_VAR, str(port))
+    monkeypatch.setenv("PLEXDB_PATH", str(store))
+    monkeypatch.setenv("PLEXDB_SNAPSHOT_PATH", str(snapshot))
+    monkeypatch.setenv("PLEXDB_EXPLORE_SAVED_PATH", str(tmp_path / "explore" / "q.json"))
+    exited: list[int] = []
+    heard = threading.Event()
+
+    def on_exit(code: int) -> None:
+        exited.append(code)
+        heard.set()
+
+    child = schedule._start_explorer(on_exit=on_exit)
+    assert child is not None
+    try:
+        url = f"http://127.0.0.1:{port}/api/tags?kind=movie"
+        assert _get(url)[0] == 503
+        publish(store, snapshot)
+        status, body = _get(url)
+        assert status == 200, body
+        assert json.loads(body)["titles"] == 0
+        assert _get(f"http://127.0.0.1:{port}/api/extras/items")[0] == 200
+    finally:
+        child.terminate()
+        child.wait(timeout=10)
+    assert heard.wait(timeout=10)
+    assert exited == [child.returncode]
+
+
+def test_the_explorer_fails_the_scheduler_when_it_cannot_listen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with socket.socket() as taken:
+        taken.bind(("0.0.0.0", 0))
+        taken.listen()
+        port = taken.getsockname()[1]
+        monkeypatch.setenv(schedule.EXPLORE_PORT_VAR, str(port))
+        monkeypatch.setenv("PLEXDB_SNAPSHOT_PATH", str(tmp_path / "plexdb.snapshot.db"))
+        with pytest.raises(PlexdbError, match=f"before it listened on port {port}"):
+            schedule._start_explorer(on_exit=lambda code: None)
+
+
+def test_the_scheduler_refuses_an_explore_port_it_cannot_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(schedule.SCHEDULE_VAR, "03:30")
+    monkeypatch.setenv(schedule.EXPLORE_PORT_VAR, "http")
+    with pytest.raises(ConfigError, match=schedule.EXPLORE_PORT_VAR):
+        schedule.run_scheduler(
+            migrate=lambda: None, extras=lambda: None, walk_settings=lambda: None, iterations=0
+        )
+
+
+def test_the_scheduler_refuses_an_explore_port_without_a_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(schedule.EXPLORE_PORT_VAR, "5194")
+    monkeypatch.delenv("PLEXDB_SNAPSHOT_PATH", raising=False)
+    with pytest.raises(ConfigError, match="PLEXDB_SNAPSHOT_PATH"):
+        schedule._start_explorer(on_exit=lambda code: None)

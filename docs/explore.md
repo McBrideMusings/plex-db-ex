@@ -1,15 +1,20 @@
 # Plex DB-EX
 
 Plex DB-EX is the store's read-only browser page: `plexdb explore`, served by `admin dev explore`
-on `http://localhost:5194`. Its server is `plexdb/explore.py` and its one page is
-`plexdb/explore.html`; [`file-map.md`](./file-map.md) describes both.
+on `http://localhost:5194`. Its server is `plexdb-rs explore` (`crates/plexdb/src/explore.rs`) and
+its one page is `plexdb/explore.html`; [`file-map.md`](./file-map.md) describes both.
 
-## The Rust server
+## The server
 
-`plexdb-rs explore [--host H] [--port N] [--store PATH] [--fallback URL]` serves the same page and
-the read-only keyword routes (`/api/tags`, `/api/titles`, `/api/cotags`, `/api/map`,
-`/api/tagnetwork`, `/api/title`) from Rust, with the same answers byte for byte
-(`crates/plexdb/src/explore.rs`). It also serves the decision routes: the Merges tab
+`plexdb-rs explore [--host H] [--port N] [--store PATH]` serves the page and the read-only keyword
+routes (`/api/tags`, `/api/titles`, `/api/cotags`, `/api/map`, `/api/tagnetwork`, `/api/title`).
+`plexdb explore` (what `admin dev explore` runs) replaces itself with it; the page and the Query
+tab's `plexdb/recipes.json` are compiled into the binary. It starts when the store file does not
+exist yet, printing a warning to stderr, and answers 503 until a store lands. A path no route
+answers gets a 404 `{"error":"no route <path>"}`; a wrong method on a known path gets axum's 405.
+In the container `plexdb schedule` starts it as a child on `0.0.0.0` and `PLEXDB_EXPLORE_PORT`,
+reading the snapshot: a port it cannot bind fails the scheduler at startup, and if the child exits
+later the scheduler exits 1 so Docker's restart policy restarts the container. It also serves the decision routes: the Merges tab
 (`GET`/`POST /api/merges`), the Roles tab (`GET`/`POST /api/roles`), display names
 (`POST /api/names`), the Lists tab (`/api/lists`, `/api/list`, `POST /api/list-decisions`) and the tag
 doctor (`/api/doctor`, `/api/keywords`, `/api/doctor/titles`), and the Query tab: `POST /api/query`,
@@ -26,30 +31,18 @@ GiB least recently used, and streamed with `Range`; the why panel reads `frame_v
 cache (`plexdb_reader::cached_vector`). Every store read, Plex call, reader run and ffmpeg cut runs
 on tokio's blocking pool. A `POST` writes `merge_decisions.json`,
 `role_decisions.json`, `name_decisions.json` or `list_decisions.json` beside the saved-queries file
-(`PLEXDB_EXPLORE_SAVED_PATH`) as the Python explorer does, one entry per key, replaced by rename;
+(`PLEXDB_EXPLORE_SAVED_PATH`), one entry per key, replaced by rename;
 it never writes the store (`crates/plexdb/src/decision_book.rs` writes the files and
 `decision_views.rs` lays them over the tables). The doctor's `forms` and `names` objects list their
-keys in sorted order, where Python lists them in set order. A body that is not JSON gets a 400 whose
-message is serde's, not Python's. `/api/poster` fetches a title's Plex thumbnail by its newest
+keys in sorted order. A body that is not JSON gets a 400 whose message is serde's. `/api/poster` fetches a title's Plex thumbnail by its newest
 `plex_items.rating_key` with `PLEX_TOKEN` in a header (`crates/plexdb/src/explore_poster.rs`): 2,000
 posters cached in memory, 16 Plex fetches at once, 4 MiB at most, and a week's `Cache-Control` on
-the answer. Its refusals carry httpx's wording, with three differences from Python: a non-2xx
-answer names the status's standard reason phrase where httpx names the one Plex sent; a transport
+the answer. A non-2xx answer is refused naming the status's standard reason phrase; a transport
 failure other than an OS error or a timeout carries ureq's text; and the body is bounded at 60 s
-as a whole where httpx bounds each read at 10 s. A failure other than a timeout is tried once
-more, for a keep-alive connection Plex closed. Every other route is forwarded to the Python explorer at
-`--fallback` (or `PLEXDB_EXPLORE_FALLBACK`) until its slice moves; with none set it answers 404.
-`admin parity explore` starts both over one copy of the pulled store and lists every route whose
-answer differs; it also posts the same decisions to both and compares the replies, the reads after
-them and the four decision files, with the time of each decision masked; it seeds a Search tab
-fixture (a `frames.db` per server, a local encoder and Plex, a `testsrc` video, a WordPiece
-tokenizer) and asks both every Search route, refusal and `Range` variant, comparing `why` as parsed
-JSON with its numbers within 1e-5 (numpy's float32 BLAS and Rust sum in different orders); the
-same fake Plex answers nine poster cases (a poster, no `Content-Type`, a `Content-Type` with a
-parameter, a 204, a 404, a 500, a 302, exactly 4 MiB and one byte over), each asked twice, and two
-more server pairs ask for a poster with Plex unreachable and with `PLEX_URL` unset. A map or network drawn live with noise excluded is laid out by holomap in Rust and
-UMAP in Python, so that comparison leaves out positions and region labels. The page names the layout
-"holomap". The container still runs the Python explorer.
+as a whole. A failure other than a timeout is tried once more, for a keep-alive connection Plex
+closed.
+
+A map or network drawn live with noise excluded is laid out by holomap; the page names the layout "holomap".
 
 ## Extras routes
 
@@ -81,8 +74,7 @@ Three routes serve extras to consumers and the settings page ([ADR-0030](./adr/0
 The Extras tab sits between Search and Doctor (`#tab=extras`, a library at `&xlib=<name>`). It reads
 the store and writes only `extra_decisions.json`, beside the other decisions files; the writer's next
 tick folds each decision, moves the file and marks it organized. These routes are served by
-`plexdb-rs explore` (`crates/plexdb/src/extras_ui.rs`); the container still runs the Python
-explorer until it is deleted, so the tab needs the Rust server in front.
+`plexdb-rs explore` (`crates/plexdb/src/extras_ui.rs`).
 
 - **Libraries** (`GET /api/extras/status`): per library its root, layout template, declared fields,
   organized count, queue count and last scan (the latest `extra_file.last_seen`). Scan now is
@@ -114,7 +106,7 @@ explorer until it is deleted, so the tab needs the Rust server in front.
 - **Library health**: the seeded dashboard's fifth panel, "Extras with more than one file", is a table
   with `item_id` and `title` columns. A table panel with both columns links each title to the Doctor
   tab on that item and does not show the id. A panels file that already exists is not reseeded; add
-  the panel from the Query tab's Add panel with the SQL in `plexdb/panels.py`.
+  the panel from the Query tab's Add panel with the SQL in `crates/plexdb/src/default_dashboards.json`.
 
 ## Related tags
 
@@ -138,7 +130,7 @@ so moving the slider never asks the server again.
 
 **Lift** is `shared × N / (df_anchor × df_tag)`: how many times likelier the tag is on the selected
 tag's titles than on any title of the kind. A lift resting on two titles is mostly luck, so the
-table shows a **cautious lift** instead (`cautious_lift` in `explore.py`, `cautiousLift` in the
+table shows a **cautious lift** instead (`cautious_lift` in `crates/plexdb/src/explore_views.rs`, `cautiousLift` in the
 page, held to the same numbers by a test). It takes the selected tag's share at the Wilson lower
 bound with `z` standard errors of evidence.
 
@@ -246,8 +238,7 @@ for every one that is missing.
   own negative, with its own boxes and count), a negative-weight slider, a temperature slider (0 is
   off) and a draw control (count, seed, Draw). Closed while any is set, its summary names them, for
   example `3 negatives, weight 0.5 · temperature 0.010 · draw 1, seed 42`.
-- **Results.** `POST /api/search/run` runs `plexdb-read search` (`plexdb/shot_search.py` builds its
-  command line, the same code `plexdb search` uses) and returns the top 100 Shots by score, with each
+- **Results.** `POST /api/search/run` runs the reader's search in-process (`Reader::search_shots`) and returns the top 100 Shots by score, with each
   title, timecodes, three frames, phrase similarity, the strongest negative and its similarity, and
   with a temperature each Shot's odds. Draw runs the reader's draw a second time with the same
   inputs and marks the drawn rows, so the picks equal `plexdb search … --draw N --seed S`.
@@ -264,7 +255,7 @@ for every one that is missing.
   explorer's own server; it never reaches Plex, the encoder or a tokenizer (ADR-0017).
 - **Why?** The button beside Frames and Play opens a 440 px column on the right, and the rows narrow
   to one thumbnail each. `POST /api/search/why` (`{phrase, item_id, in_ms}`, built in
-  `plexdb/explore_why.py`) reads every indexed frame's int8 vector from `frames.db` once, keeps them
+  `crates/plexdb/src/explore_why.rs`) reads every indexed frame's int8 vector from `frames.db` once, keeps them
   until the file changes, and takes the phrase's vector from the Phrase cache that the search filled,
   so no encoder or model weights are involved. It returns the best frame of the Shot and its
   similarity, the median and top-1% (99th percentile) of the phrase's similarity over every indexed
@@ -281,7 +272,7 @@ for every one that is missing.
 login: anyone who reaches the explorer's port can call it. The container publishes that port on one
 host address only, `PLEXDB_EXPLORE_BIND` (`[[docker_run.ports]]` in `admin.toml`), and publishes
 nothing while that or `PLEXDB_EXPLORE_PORT` is unset. The route (`queue_missing` in
-`plexdb/explore_search.py`) adds `frame_queue` rows to `frames.db` with `queued_by` `explore`, only
+`crates/plexdb/src/explore_search.rs`) adds `frame_queue` rows to `frames.db` with `queued_by` `explore`, only
 for titles the explorer's store (the snapshot, in the container) lists in `items` and the Frame
 index holds as not indexed or `failed`; an id outside `items` is skipped, a title already queued
 keeps its place, and a call naming more than 5,000 ids is refused whole.
@@ -338,7 +329,7 @@ window.__clip = { period, seek(t) }
   waiting for the page's resize observer: `seek` re-measures the canvas first, and the
   whole-map frames refit to the new size.
 
-The `test_clip_*` tests in `tests/test_explore.py` hold the page to the seam and the resize rule
+The `test_clip_*` tests in `tests/test_explore_page.py` hold the page to the seam and the resize rule
 in a headless Chromium, as part of `admin vet`, and the `test_demo_*` tests hold `?demo` to a
 camera that moves on its own with no `window.__clip`. `admin build` fetches that browser.
 

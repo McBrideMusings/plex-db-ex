@@ -1,6 +1,6 @@
 //! `plexdb-rs explore`'s Search tab (`/api/search/*`) against a store, a seeded `frames.db`,
 //! a fake encoder, a fake Plex and a three-second `testsrc` video cut by the real ffmpeg:
-//! what `plexdb/explore_search.py` answers (tests/test_explore_search.py).
+//! what the Search tab's page asks of it.
 
 mod common;
 
@@ -250,7 +250,6 @@ impl Explorer {
         let mut child = Command::new(env!("CARGO_BIN_EXE_plexdb-rs"))
             .args(["explore", "--port", "0", "--store"])
             .arg(dir.join("plexdb.db"))
-            .env_remove("PLEXDB_EXPLORE_FALLBACK")
             .env_remove("PLEXDB_PHRASE_CACHE")
             .env(
                 "PLEXDB_EXPLORE_SAVED_PATH",
@@ -755,7 +754,6 @@ fn a_missing_frame_index_and_tokenizer_are_reported_not_guessed() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_plexdb-rs"))
         .args(["explore", "--port", "0", "--store"])
         .arg(dir.path().join("plexdb.db"))
-        .env_remove("PLEXDB_EXPLORE_FALLBACK")
         .env_remove("PLEXDB_FRAME_TOKENIZER")
         .env_remove("PLEXDB_FRAME_ENCODER_URL")
         .env_remove("PLEXDB_MEDIA_DIR")

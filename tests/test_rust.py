@@ -121,3 +121,39 @@ def test_a_broken_plexdb_rs_costs_only_its_own_steps(
     out = capsys.readouterr().out
     assert reported in out
     assert f"{status} 1" in out
+
+
+def test_plexdb_explore_becomes_the_rust_server_and_stops_cleanly_on_ctrl_c(store: Path) -> None:
+    """`plexdb explore` replaces itself with `plexdb-rs explore`: the process that answers is
+    the one that was started, and SIGINT (Ctrl-C) ends it with exit 0, not a traceback."""
+    import os
+    import signal
+    import sys
+    import urllib.request
+
+    child = subprocess.Popen(
+        [sys.executable, "-m", "plexdb.cli", "explore", "--port", "0", "--store", str(store)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env={**os.environ, "PLEXDB_PATH": str(store)},
+    )
+    try:
+        assert child.stdout is not None
+        line = child.stdout.readline()
+        assert line.startswith("Plex DB-EX on http://127.0.0.1:"), line
+        base = line.split()[3].rstrip("/")
+        with urllib.request.urlopen(f"{base}/api/tags?kind=movie", timeout=30) as answer:
+            assert answer.status == 200
+        command = subprocess.run(
+            ["ps", "-o", "comm=", "-p", str(child.pid)], capture_output=True, text=True
+        )
+        assert command.stdout.strip().endswith("plexdb-rs"), command.stdout
+        child.send_signal(signal.SIGINT)
+        _, errors = child.communicate(timeout=10)
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait()
+    assert child.returncode == 0, errors
+    assert "Traceback" not in errors

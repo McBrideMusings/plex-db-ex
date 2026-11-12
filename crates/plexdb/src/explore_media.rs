@@ -1,7 +1,6 @@
 //! The Search tab's frames and clips: cut by ffmpeg from the part's file under
 //! `PLEXDB_MEDIA_DIR` (found by asking Plex which file the part is), and kept in one
-//! least-recently-used cache under `<explore data>/clips` (`plexdb/explore_search.py`'s
-//! `MediaCache`, `_file`, `_cut`, `frame` and `clip`).
+//! least-recently-used cache under `<explore data>/clips`.
 //!
 //! Every ffmpeg run and every Plex call here blocks, so the server calls into this module
 //! from tokio's blocking pool only.

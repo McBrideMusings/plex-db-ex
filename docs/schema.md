@@ -242,7 +242,7 @@ own GUIDs derive the contested id keeps it, the other one moves off.
 the same keyword on the same item, `namespace`+`key` alone matches one row per source — a bare
 `COUNT(*)` or unfiltered `SELECT value` would count or list that keyword once per agreeing source
 instead of once per item. `crates/plexdb/src/latent_users.rs`'s `build_keyword_profile` and every keyword rollup
-in `plexdb/explore.py` (`build_index`, `titles_tagged`, `tag_network`, `title_map`,
+in `crates/plexdb/src/explore_views.rs` (`build_index`, `titles_tagged`, `tag_network`, `title_map`,
 `title_keywords`) dedupe this way.
 
 ## enrichment_cursor
@@ -806,8 +806,7 @@ value, `fetched_at`, in key order), and a SHA-256 digest of the merge fold, so a
 removed, re-stamped or re-valued, a title changing type, or a new merge verdict makes the stored
 map stale. A row is its fields in order, each as one byte `0` for NULL, or `1`, the UTF-8 length
 as a big-endian `u32` and the UTF-8 bytes; the merge fold's rows are `(keyword, target)` in
-keyword order. The rule is specified by `crates/plexdb/src/keyword_views.rs`, and `plexdb/explore.py`
-computes the same bytes.
+keyword order. The rule is specified by `crates/plexdb/src/keyword_views.rs`, and that file is the one copy.
 `unplaced` counts titles with keywords that share no tag with another title and so are off the
 map. `computed_at` is UTC.
 
@@ -934,9 +933,9 @@ judge asks about it again.
 
 **What counts as merged, and who applies it.** A pair is merged when `decision = 'accepted'`, or
 `decision` is NULL and `jev_score >= 0.9`. Merged pairs chain into groups, and each group folds into
-the member the most titles carry (`merge_review.merge_map`). Plex DB-EX's tag table, a tag's
+the member the most titles carry (`merge_map` in `crates/plexdb/src/keyword_views.rs`). Plex DB-EX's tag table, a tag's
 titles, the title map, its region labels and the tag network all read keywords through that fold
-(`explore.keyword_rows`); `enrichment` itself never changes.
+(`keyword_rows` in `crates/plexdb/src/keyword_views.rs`); `enrichment` itself never changes.
 
 The vectors are cached in `keyword-embeddings.bin` beside the store (not in it): one unit vector
 per surface text and the model that made it. A sweep embeds only the texts the cache lacks, so a

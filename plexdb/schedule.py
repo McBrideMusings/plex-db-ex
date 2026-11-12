@@ -30,10 +30,11 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import subprocess
+import threading
 import time
 from collections.abc import Callable
 from datetime import datetime, timedelta
-from pathlib import Path
 
 from .errors import ConfigError, PlexdbError
 
@@ -123,33 +124,41 @@ def _migrate_store() -> None:
         print(f"frames.db FAILED to migrate: {err}", flush=True)
 
 
-def _start_explorer() -> None:
+#: The port `plexdb schedule` serves Plex DB-EX on; unset serves nothing.
+EXPLORE_PORT_VAR = "PLEXDB_EXPLORE_PORT"
+
+
+def _stop_container(code: int) -> None:
+    """End the whole process with the explorer's exit code (1 if it exited 0), so the
+    container's restart policy starts it again."""
+    os._exit(code or 1)
+
+
+def _start_explorer(on_exit: Callable[[int], None] | None = None) -> subprocess.Popen[str] | None:
     """Serve Plex DB-EX over the published snapshot, if asked to.
 
-    Off unless `PLEXDB_EXPLORE_PORT` is set. It reads the snapshot, never the
-    live store: ADR-0007 is where readers look, and the snapshot is a file the
-    writer only ever replaces by rename, so a request cannot see it half-written.
-    Bound on every interface inside the container; which host address the port
-    reaches is `[[docker_run.ports]]`'s decision, not this process's.
+    Off unless `PLEXDB_EXPLORE_PORT` is set. It runs `plexdb-rs explore` as a child process
+    reading the snapshot, never the live store: ADR-0007 is where readers look, and the
+    snapshot is a file the writer only ever replaces by rename, so a request cannot see it
+    half-written. Before the first sweep publishes one, every request answers 503. Bound on
+    every interface inside the container; which host address the port reaches is
+    `[[docker_run.ports]]`'s decision, not this process's.
 
-    The Query tab's saved queries go to `PLEXDB_EXPLORE_SAVED_PATH` when set —
-    the container's own dedicated mount, never the snapshot's directory
-    (plex-db-ex-oyg.3) — and fall back to a file beside the snapshot when it
-    isn't, which is the dev/test case.
+    The child inherits this process's environment, so the saved queries and decision files go
+    where `PLEXDB_EXPLORE_SAVED_PATH` puts them and `/api/poster` uses this same
+    `PLEX_URL`/`PLEX_TOKEN` (docs/adr/0017).
 
-    A title's poster is proxied from Plex, server-side, using this same
-    process's own `PLEX_URL`/`PLEX_TOKEN` (plex-db-ex-oyg.2, docs/adr/0017) —
-    empty in dev without a `.env`, in which case `/api/poster` answers 503
-    rather than failing to start.
+    It returns once the child prints the address it listens on, so a port it cannot bind
+    fails the scheduler at startup. If the child exits later, `on_exit` gets its exit code;
+    the default ends this process, because a container that sweeps with no explorer looks
+    healthy and is not.
     """
+    from . import rust
     from .config import Config
-    from .decisions import EXPLORE_SAVED_PATH_VAR
-    from .explore import EXPLORE_PORT_VAR, data_dir, serve_in_background
-    from .explore_search import SearchTab
 
     raw = os.environ.get(EXPLORE_PORT_VAR, "").strip()
     if not raw:
-        return
+        return None
     if not raw.isdigit() or not 1 <= int(raw) <= 65535:
         raise ConfigError(f"{EXPLORE_PORT_VAR} must be a port number, got {raw!r}")
     cfg = Config.from_env()
@@ -159,22 +168,28 @@ def _start_explorer() -> None:
             f"{EXPLORE_PORT_VAR} is set but PLEXDB_SNAPSHOT_PATH is not; "
             "Plex DB-EX reads the published snapshot"
         )
-    saved_raw = os.environ.get(EXPLORE_SAVED_PATH_VAR, "").strip()
-    saved_path = Path(saved_raw).expanduser() if saved_raw else None
-    server = serve_in_background(
-        snapshot,
-        "0.0.0.0",
-        int(raw),
-        saved_path,
-        plex_url=cfg.plex_url,
-        plex_token=cfg.plex_token,
-        search=SearchTab(cfg, snapshot, data_dir(snapshot, saved_path)),
+    child = subprocess.Popen(
+        [rust.binary(cfg), "explore", "--host", "0.0.0.0", "--port", raw, "--store", str(snapshot)],
+        stdout=subprocess.PIPE,
+        text=True,
     )
-    where = saved_path or snapshot.with_name("explore-queries.json")
-    print(
-        f"Plex DB-EX on port {server.server_port}, reading {snapshot}, saved queries at {where}",
-        flush=True,
-    )
+    assert child.stdout is not None
+    listening = child.stdout.readline()
+    if not listening:
+        raise PlexdbError(f"Plex DB-EX exited {child.wait()} before it listened on port {raw}")
+    print(listening, end="", flush=True)
+    stop = _stop_container if on_exit is None else on_exit
+
+    def watch() -> None:
+        assert child.stdout is not None
+        for line in child.stdout:
+            print(line, end="", flush=True)
+        code = child.wait()
+        print(f"Plex DB-EX exited {code}; stopping so the container restarts", flush=True)
+        stop(code)
+
+    threading.Thread(target=watch, name="explore", daemon=True).start()
+    return child
 
 
 def _start_frame_harvester() -> None:
@@ -250,7 +265,7 @@ def run_scheduler(
     sleep: Callable[[float], None] | None = None,
     clock: Callable[[], datetime] | None = None,
     migrate: Callable[[], None] | None = None,
-    explore: Callable[[], None] | None = None,
+    explore: Callable[[], object] | None = None,
     frames: Callable[[], None] | None = None,
     extras: Callable[[], None] | None = None,
     audio: Callable[[], None] | None = None,
@@ -271,7 +286,7 @@ def run_scheduler(
     at startup makes that a stopped container instead of a nightly log line nobody reads.
 
     **Plex DB-EX starts after the migration**, when `PLEXDB_EXPLORE_PORT`
-    is set, and serves on its own thread for as long as the loop runs.
+    is set, as a `plexdb-rs explore` child that serves for as long as the loop runs.
 
     **The migration runs at startup, once the schedule parses.** It used to
     wait for the first sweep's own `migrate` step, which meant a freshly

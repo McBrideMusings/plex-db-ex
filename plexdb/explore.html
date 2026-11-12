@@ -2494,7 +2494,7 @@ const cotags = {
   sort: loadPref(CO_SORT_KEY, { key: "lift", dir: -1 }, v => v && v.key in CO_COLUMNS && (v.dir === 1 || v.dir === -1)),
 };
 
-// `cautious_lift` in explore.py, which a test holds this to: the lift we can be confident of with
+// `cautious_lift` in crates/plexdb/src/explore_views.rs, which a test holds this to: the lift we can be confident of with
 // `z` standard errors of evidence, the anchor's share taken at its Wilson lower bound. At z = 0 it
 // is the plain lift; a lift resting on few titles shrinks fastest as z grows.
 function cautiousLift(shared, titles, dfAnchor, dfOther, z) {
