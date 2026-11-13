@@ -90,8 +90,8 @@ few minutes out, start it, watch it fire — is unchanged.
 sweeps until the process died. `tests/test_schedule.py` asserts the absence.
 
 **The zone comes from the container's `TZ`.** `03:30` means 03:30 wherever the container thinks it
-is; with `TZ` unset that is UTC. The Unraid template carries it as a required variable for that
-reason.
+is; with `TZ` unset that is UTC. `[docker_run]` in `admin.toml` always sets it, defaulting to
+`America/New_York`, for that reason.
 
 **The first *sweep* is at the next scheduled time, never at startup.** That is what makes "set the
 schedule a few minutes out, start it, and watch" a real check that the schedule works, rather than
