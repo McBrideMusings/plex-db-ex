@@ -7,8 +7,6 @@ plex-db-ex/
 ├── .env.example           every variable, with placeholders; real values live in .env
 ├── Dockerfile             the writer packaged for the Unraid host (#43): linux/amd64 pinned in the FROM because it is always built on an arm64 Mac, ENTRYPOINT ["plexdb", "schedule"], no shell wrapper, and nothing here naming a step or a failure policy
 ├── .dockerignore          keeps data/ out of the build context — an image layer holding the store would put twenty months of watch history in every registry it is pushed to
-├── deploy/
-│   └── my-plexdb.xml      reference copy of the Unraid container template, copied to /boot/config/plugins/dockerMan/templates-user/ on the host (#47). Read by nothing here; committed so the mounts and which variables are secret are reviewable. Every credential default is empty, deliberately
 ├── Cargo.toml             Rust workspace manifest — members: crates/plexdb-keywords, crates/plexdb-schema, crates/plexdb-reader, crates/plexdb-store, crates/plexdb
 ├── crates/                the Rust workspace
 │   ├── plexdb-keywords/   keyword normalization in Rust (ADR-0016): `normalize_keyword` and simplemma 2.0.0's English plural folding (`src/simplemma.rs`, with the dictionary `dictionary/en.plzma` embedded unchanged), and `write_title_keywords` / `rederive_keywords` / `upsert_keyword_form` over `keyword_surfaces`, `keyword_forms` and `enrichment`. `tests/golden.rs` holds it to `tests/fixtures/keyword_normalization.json`, Python's output for every raw spelling a store held and every dictionary word ending in "s"

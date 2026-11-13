@@ -186,6 +186,14 @@ only after 10 minutes. `plexdb migrate` holds an exclusive `flock` on `plexdb.db
 beside the store from its backup through its verify and any rollback, because it commits the new
 version before verifying it; the check reads only while it can take that lock shared.
 
+The deploy also writes the Unraid Docker tab's template,
+`/boot/config/plugins/dockerMan/templates-user/my-plexdb.xml` on the host, from the same `docker
+run` arguments it just created the container with (`[install_template] generate = true` in
+`admin.toml`). The tab's Edit form and its "force update" both rebuild the container from that
+file, so an Apply there rebuilds the container the deploy built. The container's config lives in
+`[docker_run]` and `/boot/config/plexdb.env`; an edit made in the Edit form is overwritten by the
+next deploy.
+
 `admin host-exec` runs anything but `check` as `plexdb idle <command>` in one `docker exec`. That
 takes both locks exclusive without blocking and runs the command only if it got them, so a sweep
 cannot start between the check and the command; one that wakes meanwhile waits for the command to

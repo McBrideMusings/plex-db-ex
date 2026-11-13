@@ -2,7 +2,6 @@
 *.local.*
 .claude/skills/verify-project/
 data/
-deploy/
 tmp/
 node_modules/
 docs/.vitepress/cache
