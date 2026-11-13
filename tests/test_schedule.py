@@ -88,29 +88,95 @@ def test_run_scheduler_waits_before_the_first_sweep_and_then_repeats(
     assert ran == [0, 1]
 
 
-def test_run_scheduler_keeps_going_after_a_sweep_that_failed(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A non-zero sweep leaves the store one day staler; a stopped container
-    leaves it stale forever and says nothing."""
-    monkeypatch.setenv(schedule.SCHEDULE_VAR, "03:30")
-    ran: list[int] = []
+def test_next_attempt_after_a_success_is_the_scheduled_time() -> None:
+    now = datetime(2026, 11, 12, 3, 32)
+    assert schedule.next_attempt(now, (3, 30), failed=False) == (
+        datetime(2026, 11, 13, 3, 30),
+        False,
+    )
 
-    def failing_sweep() -> int:
-        ran.append(len(ran))
-        return 1
+
+def test_next_attempt_after_a_failure_is_an_hour_later() -> None:
+    now = datetime(2026, 11, 12, 3, 32)
+    assert schedule.next_attempt(now, (3, 30), failed=True) == (datetime(2026, 11, 12, 4, 32), True)
+
+
+def test_next_attempt_after_a_failure_never_passes_the_scheduled_time() -> None:
+    """Failed at 03:00 with the day's run due at 03:30: the day's run comes first,
+    and it is the scheduled run, not a retry."""
+    now = datetime(2026, 11, 12, 3, 0)
+    assert schedule.next_attempt(now, (3, 30), failed=True) == (
+        datetime(2026, 11, 12, 3, 30),
+        False,
+    )
+
+
+def test_run_scheduler_retries_a_failed_sweep_hourly_until_one_succeeds(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Plex hung from 03:30 to past 05:00: the 03:30 and 04:30 sweeps fail, the
+    05:30 retry publishes, and the loop is back on the daily schedule."""
+    monkeypatch.setenv(schedule.SCHEDULE_VAR, "03:30")
+    slept: list[float] = []
+    codes = iter([1, 1, 0, 0])
+    times = iter(
+        [
+            datetime(2026, 11, 12, 3, 0),
+            datetime(2026, 11, 12, 3, 30),
+            datetime(2026, 11, 12, 4, 30),
+            datetime(2026, 11, 12, 5, 30),
+        ]
+    )
 
     schedule.run_scheduler(
-        sweep=failing_sweep,
-        sleep=lambda _seconds: None,
-        clock=lambda: datetime(2026, 8, 11, 3, 0),
+        sweep=lambda: next(codes),
+        sleep=slept.append,
+        clock=lambda: next(times),
+        migrate=lambda: None,
+        extras=lambda: None,
+        walk_settings=lambda: None,
+        iterations=4,
+    )
+
+    assert slept == [1800.0, 3600.0, 3600.0, 79200.0]
+    waits = [line for line in capsys.readouterr().out.splitlines() if " at 2026-" in line]
+    assert waits == [
+        "next sweep at 2026-11-12T03:30:00 (1800s)",
+        "sweep retry at 2026-11-12T04:30:00 (3600s)",
+        "sweep retry at 2026-11-12T05:30:00 (3600s)",
+        "next sweep at 2026-11-13T03:30:00 (79200s)",
+    ]
+
+
+def test_run_scheduler_keeps_going_when_every_retry_fails(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A failure that never clears retries up to the next scheduled time, which
+    then runs as the day's sweep; a stopped container would say nothing."""
+    monkeypatch.setenv(schedule.SCHEDULE_VAR, "03:30")
+    slept: list[float] = []
+    times = iter(
+        [
+            datetime(2026, 11, 12, 1, 0),
+            datetime(2026, 11, 12, 1, 30),
+            datetime(2026, 11, 12, 2, 50),
+        ]
+    )
+
+    schedule.run_scheduler(
+        sweep=lambda: 1,
+        sleep=slept.append,
+        clock=lambda: next(times),
         migrate=lambda: None,
         extras=lambda: None,
         walk_settings=lambda: None,
         iterations=3,
     )
 
-    assert ran == [0, 1, 2]
+    assert slept == [9000.0, 3600.0, 2400.0]
+    out = capsys.readouterr().out
+    assert "sweep retry at 2026-11-12T02:30:00 (3600s)" in out
+    assert "next sweep at 2026-11-12T03:30:00 (2400s)" in out
 
 
 def test_run_scheduler_refuses_to_start_with_no_schedule_set(

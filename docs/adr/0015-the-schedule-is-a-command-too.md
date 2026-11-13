@@ -33,9 +33,13 @@ see. Nobody runs that test twice.
 
 **The entrypoint holds a clock and nothing else.** No list of steps, no order, no `|| true`, no
 opinion about which sources may fail — those stay in `sweep.py` where a command module declares its
-own `ORDER` and `SWEEP`. The one judgement `schedule` makes is that a sweep returning non-zero does
-not end the loop, and that is a property of the schedule rather than of any step: tomorrow's run is
-a fresh attempt against a store one day staler, which beats a stopped container nobody notices.
+own `ORDER` and `SWEEP`. The one judgement `schedule` makes is what follows a sweep returning
+non-zero, and that is a property of the schedule rather than of any step: the loop goes on, and the
+next attempt starts an hour later (`RETRY_AFTER`), never later than the next scheduled time. A
+required step fails when something outside the store is down — Plex hung, a source timed out — and
+that outage is usually over hours before tomorrow's run, so waiting a day would leave every reader on
+a snapshot a day staler than it needs to be. A stopped container would leave it stale and say
+nothing.
 
 **Overlap stays impossible for the reason ADR-0014 gives.** The sleep and the sweep are sequential
 statements in one process, and the next fire time is computed from the clock *after* the sweep

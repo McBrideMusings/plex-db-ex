@@ -17,10 +17,12 @@ running it.
 
 **What this deliberately does not hold.** No list of steps, no failure policy
 for a step, no order — those stay in `sweep.py` where a module declares its own
-`SWEEP` and `ORDER`. The one judgement made here is that a sweep returning
-non-zero does not stop the loop: the next day's run is a fresh attempt at a
-store that is one day staler, which is strictly better than a stopped container
-nobody notices. That is a property of the schedule, not of any step.
+`SWEEP` and `ORDER`. The one judgement made here is what follows a sweep that
+returned non-zero: the loop goes on, and the next attempt comes `RETRY_AFTER`
+later instead of at the next scheduled time, never later than that time. A
+required step fails when something outside the store is down — Plex hung, a
+source timed out — and the outage is usually over long before the next day's
+run. That is a property of the schedule, not of any step.
 
 The time is read in the process's local zone, so `TZ` in the container's
 environment is what decides when "03:30" is. A container with no `TZ` runs UTC.
@@ -38,10 +40,20 @@ from datetime import datetime, timedelta
 
 from .errors import ConfigError, PlexdbError
 
-__all__ = ["SCHEDULE_VAR", "next_fire", "parse_schedule", "run_scheduler"]
+__all__ = [
+    "RETRY_AFTER",
+    "SCHEDULE_VAR",
+    "next_attempt",
+    "next_fire",
+    "parse_schedule",
+    "run_scheduler",
+]
 
 #: The environment variable carrying the daily run time, `HH:MM`, 24-hour.
 SCHEDULE_VAR = "PLEXDB_SCHEDULE"
+
+#: How long after a failed sweep the next attempt starts.
+RETRY_AFTER = timedelta(hours=1)
 
 
 def parse_schedule(raw: str) -> tuple[int, int]:
@@ -76,6 +88,20 @@ def next_fire(now: datetime, at: tuple[int, int]) -> datetime:
     if candidate <= now:
         candidate += timedelta(days=1)
     return candidate
+
+
+def next_attempt(now: datetime, at: tuple[int, int], *, failed: bool) -> tuple[datetime, bool]:
+    """When the next sweep starts, and whether it is a retry of a failed one.
+
+    After a success, or before the first sweep, it is `next_fire`. After a
+    failure it is `RETRY_AFTER` from `now`, unless the scheduled time comes
+    first: then that is the next attempt, and it is not a retry but the day's
+    own run.
+    """
+    scheduled = next_fire(now, at)
+    if failed and now + RETRY_AFTER < scheduled:
+        return now + RETRY_AFTER, True
+    return scheduled, False
 
 
 #: The settings the sweep's required `walk` step cannot run without
@@ -298,6 +324,11 @@ def run_scheduler(
     nobody deployed for. It is a no-op on a store already current, so a restart
     loop cannot fill the disk with copies.
 
+    **A failed sweep is retried every `RETRY_AFTER`** until one succeeds or the
+    next scheduled time arrives, which runs as usual. Each retry logs
+    `sweep retry at <time> (<seconds>s)`. An exception out of the sweep is not a
+    sweep that failed: it ends the loop and the container with it.
+
     Never runs a *sweep* at startup, which is unchanged. The first sweep is at
     the next scheduled time, which is what makes "set the schedule a few minutes
     out and watch it" a real check that the schedule works rather than a check
@@ -334,13 +365,16 @@ def run_scheduler(
     do_audio()
 
     completed = 0
+    failed = False
     while iterations is None or completed < iterations:
         now = now_fn()
-        target = next_fire(now, at)
+        target, retry = next_attempt(now, at, failed=failed)
         wait = (target - now).total_seconds()
-        print(f"next sweep at {target.isoformat(timespec='seconds')} ({wait:.0f}s)", flush=True)
+        when = f"at {target.isoformat(timespec='seconds')} ({wait:.0f}s)"
+        print(f"sweep retry {when}" if retry else f"next sweep {when}", flush=True)
         do_sleep(wait)
         code = do_sweep()
         print(f"sweep exited {code}", flush=True)
+        failed = code != 0
         completed += 1
     return 0
