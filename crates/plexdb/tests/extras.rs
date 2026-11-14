@@ -552,3 +552,73 @@ fn a_verdict_follows_a_moved_file_and_goes_when_the_file_is_replaced() {
     walk(&mut w, "2026-10-27T00:20:00+00:00");
     assert_eq!(count(&w.conn, "SELECT COUNT(*) FROM extra_check"), 0);
 }
+
+/// A checker whose every probe parses and reports 215.4 s.
+struct Measures;
+
+impl plexdb::check_files::FileChecker for Measures {
+    fn probe(
+        &self,
+        _: &Path,
+    ) -> Result<plexdb::check_files::Probe, plexdb::frame_media::MediaError> {
+        Ok(plexdb::check_files::Probe::Report(serde_json::json!({
+            "streams": [{"codec_type": "video"}, {"codec_type": "audio"}],
+            "format": {"duration": "215.400000"}
+        })))
+    }
+
+    fn decode(&self, _: &Path) -> Result<String, plexdb::frame_media::MediaError> {
+        Ok(String::new())
+    }
+}
+
+fn listed(conn: &Connection, since: Option<&str>) -> serde_json::Value {
+    let answer = plexdb::extras_views::extras_items(conn, since).expect("items");
+    serde_json::from_str(&plexdb::pyjson::dumps_compact(&answer)).expect("json")
+}
+
+#[test]
+fn the_header_probe_gives_an_extra_its_length_and_new_bytes_take_it_away() {
+    let mut w = world();
+    fold(&mut w).expect("fold");
+    let old = put(&w, "a/song.mkv", "content one");
+    walk(&mut w, T1);
+    let before = listed(&w.conn, None);
+    assert_eq!(before["items"][0]["duration_ms"], serde_json::Value::Null);
+    let cursor = before["cursor"].as_str().expect("cursor").to_string();
+
+    let checked_at = "2026-10-27T00:05:00+00:00";
+    let here = |file: &str| Ok(std::path::PathBuf::from(file));
+    plexdb::check_files::check_files(&w.conn, &Measures, &here, None, 0, checked_at)
+        .expect("check");
+
+    // A reader holding the walk's cursor is handed the extra again, with its length.
+    let after = listed(&w.conn, Some(&cursor));
+    assert_eq!(
+        after["items"].as_array().expect("items").len(),
+        1,
+        "{after}"
+    );
+    assert_eq!(after["items"][0]["duration_ms"], 215_400);
+    assert_eq!(after["items"][0]["changed_at"], checked_at);
+
+    // A move keeps the bytes, so it keeps the length.
+    let new = format!("{}/musicvideos/b/renamed.mkv", w.root);
+    fs::create_dir_all(Path::new(&new).parent().expect("parent")).expect("dirs");
+    fs::rename(&old, &new).expect("move");
+    walk(&mut w, T2);
+    let length =
+        format!("SELECT COUNT(*) FROM extra_file WHERE path = '{new}' AND duration_ms = 215400");
+    assert_eq!(count(&w.conn, &length), 1);
+
+    // New bytes have no length until check-files reads them.
+    fs::write(&new, "replaced with other, longer bytes").expect("replace");
+    walk(&mut w, "2026-10-27T00:20:00+00:00");
+    assert_eq!(
+        count(
+            &w.conn,
+            "SELECT COUNT(*) FROM extra_file WHERE duration_ms IS NOT NULL"
+        ),
+        0
+    );
+}

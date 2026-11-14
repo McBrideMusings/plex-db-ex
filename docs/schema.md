@@ -1545,8 +1545,11 @@ and is what scrapers match on.
 An extra has an `fs:` id and no `plex_items`, `plays` or `enrichment` rows. A reader that means the titles Plex lists therefore filters `items.type` to `movie`, `show` or `episode`, or joins `plex_items`, `plays` or `enrichment`; `plexdb check`'s `fs: identities` count and `repair-fs-identities` leave out every `extra_item` row.
 
 `extra_file` is one row per file. An item has exactly one `primary_file = 1` row, plus one per
-exact copy or near duplicate folded into it. `sha256` is of the whole file; `height` and
-`duration_ms` describe its video, NULL until known. `missing_since` is the UTC time a walk first
+exact copy or near duplicate folded into it. `sha256` is of the whole file; `height` describes
+its video, NULL until known. `duration_ms` is the length `check-files`' `header` probe read
+(ffprobe's `format.duration`), written pass or fail, and NULL until that probe has run or when it
+reported none; `extras-walk` clears it with the checks when the file's bytes change.
+`missing_since` is the UTC time a walk first
 did not find the file, cleared when it returns. `extra_merge` records each near duplicate folded
 into another item with the Frame-index similarity that folded it (`extras-near`, below): the folded item's files move to the kept item as non-primary files and its `items` and `extra_item` rows are deleted. A Split gives the file its own item back under the same `fs:` id and deletes the row. `extra_moved` is one row per rename an organize made;
 `plexdb extras undo <move_id>` reverses one. `extra_check` holds `check-files`' verdicts with
@@ -1555,7 +1558,8 @@ extension (mkv, mp4, m4v, mov, avi, wmv, flv, webm, mpg, mpeg, ts, m2ts, mts, vo
 `missing_since` is NULL the way it judges a part: the path is read as it stands (an extras root sits
 under `PLEX_SOURCE_ROOTS` on this process's own mount, so nothing maps it), a file with no `header`
 row is probed, and `decode` runs over `PLEXDB_DECODE_BATCH` extras, counted apart from the parts'
-batch. `duration_ms`, once something fills it, is held to the same 2%. A moved file keeps its checks
+batch. An extra is never held to the 2% duration rule; its probe records the length instead. A
+moved file keeps its checks
 (`ON UPDATE CASCADE`); `extras-walk` deletes a path's checks when it re-reads the file because its
 size or mtime changed, so the new bytes are judged by the next night's `check-files` (it runs before
 `extras-walk` in a sweep). Extras are checked even where `PLEXDB_MEDIA_DIR` is unset. A file the run could not judge gets no row.
@@ -1875,13 +1879,22 @@ copy for convenience, with no foreign key; a reader resolves the item through `e
 
 The candidate is an item's primary `extra_file` row with `missing_since IS NULL`, size from
 `extra_file.size`, read under `PLEXDB_MEDIA_DIR` through the same path mapping as the Frame
-harvester. Nothing fills `extra_file.duration_ms`, so an extra with none is probed with `ffprobe`
-(`PLEXDB_FFPROBE`) once its file is reachable: a duration over 30 minutes, or none, is `excluded`;
-a probe error is `failed`. The probe never writes `duration_ms`. A recorded duration is used as it
+harvester. An extra `check-files` has not probed yet has no `extra_file.duration_ms`, so it is
+probed with `ffprobe` (`PLEXDB_FFPROBE`) once its file is reachable: a duration over 30 minutes,
+or none, is `excluded`; a probe error is `failed`. This probe never writes `duration_ms`;
+`check-files` does. A recorded duration is used as it
 is, as for a Plex part.
 
 `plexdb-reader`'s `audio_facts_for(item_id)` and `audio_facts_for_many(ids)` also resolve an extra:
 its primary `extra_file` row (not missing) joined to `audio_extra` joined to `audio_facts`.
+
+## Version 31 — an extra's length from its header probe
+
+No table or column, and `reader_shape` stays 30. `check-files` now writes the duration its
+`header` probe reads into `extra_file.duration_ms`. The migration deletes the `header` verdict of
+every `extra_file` row whose `duration_ms` is NULL, so the next `check-files` probes each such file
+once and records both. An extra's `changed_at` in `/api/extras/items` includes its primary file's
+`header` probe time, so a reader holding a cursor sees the new length.
 
 ## The original language of a title
 

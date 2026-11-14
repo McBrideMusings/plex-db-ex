@@ -9,7 +9,11 @@
 //! - parses (ffprobe exits 0 with a report),
 //! - is not empty on disk,
 //! - has a video stream and an audio stream, and
-//! - has a duration within 2% of the one recorded for it.
+//! - has a duration within 2% of the one Plex recorded for it (a part only).
+//!
+//! **An extra's length is the probe's.** Plex records a part's duration; nothing records
+//! an extra's, so the header probe writes the duration it reads into
+//! `extra_file.duration_ms`, pass or fail, and leaves it NULL when the report carries none.
 //!
 //! **Probe once per change.** A file is probed only when it has no `header` row.
 //! `media-walk` replaces a changed record's parts whole, and `extras-walk` deletes an
@@ -147,22 +151,37 @@ pub fn rule_failures(report: &Value, recorded_duration_ms: Option<i64>) -> Vec<S
     failures
 }
 
-/// `None` when the file at `path` passes, else why it fails. A [`MediaError`] or an I/O
-/// error means the file was not judged.
+/// What one header probe found: why the file fails (`None` when it passes), and the
+/// duration ffprobe reported (`None` when it reported none).
+struct Judged {
+    error: Option<String>,
+    duration_ms: Option<i64>,
+}
+
+/// Judge the file at `path`. A [`MediaError`] or an I/O error means the file was not judged.
 fn judge(
     media: &dyn FileChecker,
     path: &Path,
     recorded_duration_ms: Option<i64>,
-) -> Result<Option<String>, ()> {
+) -> Result<Judged, ()> {
     let size = std::fs::metadata(path).map_err(|_| ())?.len();
     if size == 0 {
-        return Ok(Some("file is empty".into()));
+        return Ok(Judged {
+            error: Some("file is empty".into()),
+            duration_ms: None,
+        });
     }
     match media.probe(path).map_err(|_| ())? {
-        Probe::Rejected(why) => Ok(Some(format!("does not parse: {why}"))),
+        Probe::Rejected(why) => Ok(Judged {
+            error: Some(format!("does not parse: {why}")),
+            duration_ms: None,
+        }),
         Probe::Report(report) => {
             let failures = rule_failures(&report, recorded_duration_ms);
-            Ok((!failures.is_empty()).then(|| failures.join("; ")))
+            Ok(Judged {
+                error: (!failures.is_empty()).then(|| failures.join("; ")),
+                duration_ms: duration_ms(&report),
+            })
         }
     }
 }
@@ -178,6 +197,9 @@ struct Table {
     /// Only files with a video extension are judged. An extras library lists every file
     /// under its root, a `.nfo` or `.jpg` beside a video included.
     video_only: bool,
+    /// Writes the duration a header probe read (`?1`) onto the row keyed `?2`, for a table
+    /// whose durations nothing else records.
+    record_duration: Option<&'static str>,
 }
 
 /// Extensions of the files ffprobe is asked about in a [`Table::video_only`] table.
@@ -207,12 +229,14 @@ const PARTS: Table = Table {
                    ON c.part_id = p.part_id AND c.kind = 'decode' \
                    ORDER BY c.checked_at IS NOT NULL, c.checked_at, p.part_id",
     video_only: false,
+    record_duration: None,
 };
 
 const EXTRAS: Table = Table {
     name: "extra_check",
     key: "path",
-    pending: "SELECT f.path, f.path, f.duration_ms FROM extra_file f \
+    // An extra's recorded length is its own probe's, so there is none to hold it to.
+    pending: "SELECT f.path, f.path, NULL FROM extra_file f \
               WHERE f.missing_since IS NULL AND NOT EXISTS \
               (SELECT 1 FROM extra_check c WHERE c.path = f.path AND c.kind = 'header') \
               ORDER BY f.path",
@@ -220,6 +244,7 @@ const EXTRAS: Table = Table {
                    ON c.path = f.path AND c.kind = 'decode' WHERE f.missing_since IS NULL \
                    ORDER BY c.checked_at IS NOT NULL, c.checked_at, f.path",
     video_only: true,
+    record_duration: Some("UPDATE extra_file SET duration_ms = ?1 WHERE path = ?2"),
 };
 
 /// A row key, which is a part id or a path.
@@ -294,13 +319,18 @@ fn check_table(
             stats.skipped += 1;
             continue;
         };
-        let Ok(error) = judge(media, &path, recorded) else {
+        let Ok(judged) = judge(media, &path, recorded) else {
             stats.skipped += 1;
             continue;
         };
-        write_verdict(conn, table, &key, "header", now, error.as_deref())?;
+        // The duration goes in before the verdict: a run cut off between the two leaves
+        // no `header` row, so the file is probed again rather than left with no length.
+        if let Some(sql) = table.record_duration {
+            conn.execute(sql, rusqlite::params![judged.duration_ms, key])?;
+        }
+        write_verdict(conn, table, &key, "header", now, judged.error.as_deref())?;
         stats.checked += 1;
-        if error.is_some() {
+        if judged.error.is_some() {
             stats.failed += 1;
         } else {
             stats.passed += 1;
@@ -565,7 +595,7 @@ mod tests {
             if self.rejects.iter().any(|name| path.ends_with(name)) {
                 return Ok(Probe::Rejected("moov atom not found".into()));
             }
-            Ok(Probe::Report(report(&["video", "audio"], Some("2.0"))))
+            Ok(Probe::Report(report(&["video", "audio"], Some("2.03"))))
         }
 
         fn decode(&self, path: &Path) -> Result<String, MediaError> {
@@ -671,6 +701,41 @@ mod tests {
             verdict(&conn, &sql(&bad)),
             (0, Some("does not parse: moov atom not found".into()))
         );
+    }
+
+    #[test]
+    fn an_extras_header_probe_records_its_duration_and_a_parts_does_not() {
+        let dir = tempfile::tempdir().expect("dir");
+        let conn = store(dir.path());
+        let good = touch(dir.path(), "good.mp4");
+        let bad = touch(dir.path(), "truncated.mp4");
+        extra(&conn, &good);
+        extra(&conn, &bad);
+        part(&conn, 1, &touch(dir.path(), "part.mp4"));
+        let mut media = Fake::new();
+        media.rejects = vec!["truncated.mp4"];
+
+        check_files(&conn, &media, &here, None, 0, NOW).expect("run");
+
+        let length = |path: &str| -> Option<i64> {
+            conn.query_row(
+                "SELECT duration_ms FROM extra_file WHERE path = ?",
+                [path],
+                |row| row.get(0),
+            )
+            .expect("length")
+        };
+        // The fake reports 2.03 s for every file it can parse, inside 2% of the part's 2.0 s.
+        assert_eq!(length(&good), Some(2030));
+        assert_eq!(length(&bad), None);
+        let part_length: i64 = conn
+            .query_row(
+                "SELECT duration_ms FROM media_part WHERE part_id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("part");
+        assert_eq!(part_length, 2000, "Plex's duration stays as Plex wrote it");
     }
 
     #[test]

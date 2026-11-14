@@ -12,11 +12,14 @@ use crate::staleness::parse_micros;
 pub const MAX_IDS: usize = 1000;
 
 /// Every moment something about an extra changed, joined by `|`: its first sighting, its
-/// organizing, its primary file going missing, each file joining it, and each field or tag
-/// value written for it. The writer stamps in the local offset and other writers in UTC, so the
+/// organizing, its primary file going missing, its primary file's header probe (which
+/// records its `duration_ms`), each file joining it, and each field or tag value written for
+/// it. The writer stamps in the local offset and other writers in UTC, so the
 /// latest is picked by instant in [`changed_at`], never by text.
 const MOMENTS: &str = "ei.first_seen || '|' || COALESCE(ei.organized_at, '') || '|' || \
     COALESCE(pf.missing_since, '') || '|' || \
+    COALESCE((SELECT c.checked_at FROM extra_check c \
+              WHERE c.path = pf.path AND c.kind = 'header'), '') || '|' || \
     COALESCE((SELECT group_concat(first_seen, '|') FROM extra_file f \
               WHERE f.item_id = ei.item_id), '') || '|' || \
     COALESCE((SELECT group_concat(merged_at, '|') FROM extra_merge m \

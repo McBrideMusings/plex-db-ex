@@ -21,9 +21,10 @@
 //! file's size is unchanged. `unreachable`: the file could not be stat'ed or read; retried
 //! after an hour, doubling to a day. `excluded`: no duration, or longer than
 //! [`MAX_DURATION_MS`] (the analyzer decodes the whole track into memory). A Plex part's
-//! duration is known to the store, so it is decided without opening the file. Nothing fills
-//! `extra_file.duration_ms`, so an extra with none is probed with ffprobe
-//! (`PLEXDB_FFPROBE`) once it is reachable; the probe never writes the column.
+//! duration is known to the store, so it is decided without opening the file, and so is an
+//! extra's once `check-files` has recorded it in `extra_file.duration_ms`. An extra it has
+//! not probed yet is probed here with ffprobe (`PLEXDB_FFPROBE`) once it is reachable; this
+//! probe never writes the column.
 //!
 //! **Names that match nothing.** A listed name that is neither a section title nor an extras
 //! library is reported (in the run's report line and in `plexdb audio status`) and skipped;

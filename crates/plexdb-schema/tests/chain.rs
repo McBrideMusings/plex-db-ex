@@ -821,3 +821,40 @@ fn v30_adds_the_two_audio_extra_tables_stamps_reader_shape_30_and_cascades_a_pat
         );
     }
 }
+
+#[test]
+fn v31_reopens_the_header_verdict_of_every_extra_with_no_length_and_no_other() {
+    let mut conn = store_at(30);
+    conn.execute_batch(
+        "INSERT INTO items (item_id, type, title) VALUES ('fs:a', 'extra', 'A');
+         INSERT INTO extra_library (name, root, type, declared_at)
+             VALUES ('Music Videos', '/mv', 'video', 't');
+         INSERT INTO extra_item (item_id, library, organized, first_seen)
+             VALUES ('fs:a', 'Music Videos', 1, 't');
+         INSERT INTO extra_file (path, item_id, primary_file, duration_ms, first_seen, last_seen)
+             VALUES ('/mv/unknown.mkv', 'fs:a', 1, NULL, 't', 't'),
+                    ('/mv/known.mkv', 'fs:a', 0, 215400, 't', 't');
+         INSERT INTO extra_check (path, kind, checked_at, ok, error) VALUES
+             ('/mv/unknown.mkv', 'header', 't', 1, NULL),
+             ('/mv/unknown.mkv', 'decode', 't', 1, NULL),
+             ('/mv/known.mkv', 'header', 't', 1, NULL);",
+    )
+    .expect("seed");
+
+    apply(&mut conn).expect("apply");
+
+    assert_eq!(
+        text(
+            &conn,
+            "SELECT path, kind FROM extra_check ORDER BY path, kind"
+        ),
+        vec![
+            vec![s("/mv/known.mkv"), s("header")],
+            vec![s("/mv/unknown.mkv"), s("decode")],
+        ]
+    );
+    assert_eq!(
+        text(&conn, "SELECT CAST(version AS TEXT) FROM reader_shape"),
+        vec![vec![s("30")]]
+    );
+}

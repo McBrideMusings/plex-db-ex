@@ -173,12 +173,13 @@ pub fn apply(
                 )?;
             } else if let Some(sha) = hashes.get(&file.path) {
                 stats.returned += back as usize;
+                // A verdict and a duration are about the bytes they were read from; the next
+                // check-files reads both again.
                 tx.execute(
                     "UPDATE extra_file SET size = ?, mtime = ?, sha256 = ?, last_seen = ?, \
-                     missing_since = NULL WHERE path = ?",
+                     missing_since = NULL, duration_ms = NULL WHERE path = ?",
                     params![file.size, file.mtime, sha, now, file.path],
                 )?;
-                // A verdict is about the bytes it judged.
                 tx.execute("DELETE FROM extra_check WHERE path = ?", [&file.path])?;
             } else {
                 stats.unreadable += 1;

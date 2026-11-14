@@ -55,8 +55,9 @@ Three routes serve extras to consumers and the settings page ([ADR-0030](./adr/0
   `source_url` and `changed_at`. The answer also carries `cursor`, the latest `changed_at`
   returned; pass it as `since` to get only extras changed after it. With no `since` every
   organized extra is listed. A `since` that is not a timestamp gets a 400. An extra changes when it
-  is first seen, organized, loses its primary file, gains a file, or has a field or tag value
-  written; a file that returns after going missing changes nothing by itself. Stamps are compared as
+  is first seen, organized, loses its primary file, has its primary file probed by `check-files`
+  (which records `duration_ms`), gains a file, or has a field or tag value written; a file that
+  returns after going missing changes nothing by itself. Stamps are compared as
   instants, whatever offset they were written in. The writer stamps a tick before it commits, so a
   change committed after a reader fetched a later cursor is not returned again.
 - `POST /api/extras/fields` with `{"ids": [...]}` (at most 1000, `Content-Type: application/json`)
