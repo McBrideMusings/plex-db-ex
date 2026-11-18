@@ -4,10 +4,11 @@ outline: deep
 
 # Schema
 
-The SQLite schema **is** the public API of this project. One process writes it; every consumer
-opens the same file read-only ([ADR-0001](./adr/0001-one-writer-many-readers-sqlite-file-is-the-interface)).
-A migration that changes what a reader reads breaks every reader at once; one that only adds
-breaks none of them (see [Reader shape](#reader-shape)).
+The SQLite schema behind the store. One process writes it; the explorer and `plexdb-read` open it
+read-only, and every other program reads it through [the store API](./api)
+([ADR-0031](./adr/0031-readers-reach-the-store-only-through-the-http-api)). A migration that
+changes what the reader crate reads fails its open until the crate follows it; one that only adds
+changes nothing it reads (see [Reader shape](#reader-shape)).
 
 ## Versioning
 

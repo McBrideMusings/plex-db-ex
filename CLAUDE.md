@@ -17,8 +17,10 @@ store only for what Plex cannot carry (ADR-0005).
 
 **One writer.** The `plexdb` writer is the only thing that writes `plexdb.db`. It is moving
 from the Python package to one Rust binary a sweep step at a time, and both take the same writer
-lock, so one process writes at a time (ADR-0001). Every other consumer opens it read-only. The schema is the public API — a schema change breaks every
-consumer at once, with no version negotiation (ADR-0001).
+lock, so one process writes at a time (ADR-0001). Every other program reads the store through
+the explorer's HTTP API (`/api/store/*`, [`docs/api.md`](docs/api.md)) and opens no store file:
+those routes and their JSON shapes are the public API, and the tables behind them may change
+without a reader noticing (ADR-0031).
 
 **`item_id` is not a TMDb id.** It is the opaque first-hit-wins string
 `imdb:tt1375666` → `tmdb:…` → `tvdb:…` → `plex:…`, else `fs:<hash>` (ADR-0002). The rule is
@@ -68,7 +70,8 @@ Keep these in sync as you work:
 
 | File | Update when |
 |---|---|
-| `docs/schema.md` | Any table, column, or refresh rule changes — this is the public API |
+| `docs/api.md` | Any `/api/store/*` route, request or reply changes — this is the public API |
+| `docs/schema.md` | Any table, column, or refresh rule changes |
 | `docs/CONTEXT.md` | A term resolves, or an existing one turns out to mean something else |
 | `docs/adr/` | A decision is made that is hard to reverse and would surprise a future reader |
 | `docs/PRD.md` | Scope or product behaviour changes |

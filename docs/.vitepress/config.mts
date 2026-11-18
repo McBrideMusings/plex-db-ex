@@ -35,6 +35,7 @@ export default defineConfig({
             { text: 'The baseline store', link: '/baseline' },
             { text: 'Development practice', link: '/development' },
             { text: 'Plex DB-EX', link: '/explore' },
+            { text: 'The store API', link: '/api' },
             { text: 'Original spec', link: '/spec' },
             { text: 'Vocabulary', link: '/CONTEXT' },
             { text: 'Decisions', link: '/adr/' },

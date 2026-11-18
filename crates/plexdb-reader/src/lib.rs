@@ -52,6 +52,7 @@
 //!
 //! [adr-0003]: https://github.com/McBrideMusings/plex-db-ex/blob/main/docs/adr/0003-rust-reader-crate-behind-a-plugin-capability-grant.md
 
+mod call;
 mod error;
 mod model;
 mod phrase;
@@ -63,6 +64,7 @@ use std::path::Path;
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Row};
 
+pub use call::{Call, Needs};
 pub use error::ReaderError;
 pub use model::{
     CollectionMembership, Edge, EnrichmentFact, TagNeighbour, TasteAttribute, TasteVector,

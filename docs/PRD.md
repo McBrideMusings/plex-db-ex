@@ -31,8 +31,8 @@ privately.
 
 A single SQLite file holding the metadata Plex cannot carry: namespaced enrichment tags,
 ranked item-to-item affinity edges, weighted collection membership, and a per-user watch-history
-ledger. One process writes it; every consumer opens it read-only, and the schema is the contract
-between them.
+ledger. One process writes it; every consumer reads it through the explorer's HTTP API, whose
+routes and JSON shapes are the contract between them ([ADR-0031](./adr/0031-readers-reach-the-store-only-through-the-http-api)).
 
 The store's only hard dependency is a Plex server. Every other source — TMDB, Trakt, Tautulli,
 MDBList, Wikidata, Reddit — is an optional adapter, and the store degrades rather than fails when

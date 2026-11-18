@@ -1,5 +1,7 @@
 # Readers get a snapshot, not the live store
 
+Superseded by [ADR-0031](./0031-readers-reach-the-store-only-through-the-http-api) where it says consumers open the snapshot: the explorer opens it, and every consumer asks the explorer.
+
 The writer keeps its store in WAL mode and, at the end of a sweep, publishes a consistent
 single-file copy with `VACUUM INTO`. Consumers open **that copy**, read-only. Nothing but the
 writer ever touches the live database file.

@@ -55,6 +55,8 @@ use crate::saved_queries;
 use crate::sources::Sources;
 use crate::steps::Failure;
 
+mod store;
+
 pub const NAME: &str = "explore";
 
 const DEFAULT_HOST: &str = "127.0.0.1";
@@ -183,6 +185,8 @@ struct App {
     networks: Keyed<(String, BTreeSet<String>), Network>,
     title_slots: AtomicUsize,
     keyword_slots: AtomicUsize,
+    /// `/api/store/*` requests running now.
+    store_slots: AtomicUsize,
     /// The Search tab (`/api/search/*`).
     search: Tab,
     /// `/api/poster`'s Plex client, cache and fetch slots.
@@ -1664,6 +1668,29 @@ fn router(app: Shared) -> Router {
         .route("/api/search/queue", post(search_queue))
         .route("/api/search/why", post(search_why))
         .route("/api/search/run", post(search_run))
+        .route(
+            "/api/store/enrichment",
+            get(store::enrichment_get).post(store::enrichment_post),
+        )
+        .route(
+            "/api/store/audio-facts",
+            get(store::audio_facts_get).post(store::audio_facts_post),
+        )
+        .route("/api/store/keyword", get(store::keyword_get))
+        .route("/api/store/surfaces", get(store::surfaces_get))
+        .route("/api/store/display-name", get(store::display_name_get))
+        .route("/api/store/edges/from", get(store::edges_from_get))
+        .route("/api/store/edges/to", get(store::edges_to_get))
+        .route("/api/store/tag-neighbours", get(store::tag_neighbours_get))
+        .route("/api/store/collections", get(store::collections_get))
+        .route("/api/store/taste", get(store::taste_get))
+        .route("/api/store/taste/pooled", get(store::taste_pooled_get))
+        .route("/api/store/watched", get(store::watched_get))
+        .route("/api/store/watched/all", get(store::watched_all_get))
+        .route("/api/store/search", post(store::search_post))
+        .route("/api/store/cuts", get(store::cuts_get))
+        .route("/api/store/chapters", get(store::chapters_get))
+        .route("/api/store/capabilities", get(store::capabilities_get))
         .fallback(no_route)
         .with_state(app)
 }
@@ -1751,6 +1778,7 @@ pub fn run(args: &[String]) -> Result<(), Failure> {
         networks: Keyed::new(6),
         title_slots: AtomicUsize::new(0),
         keyword_slots: AtomicUsize::new(0),
+        store_slots: AtomicUsize::new(0),
         posters: Posters::new(&frame_config.plex_url, &frame_config.plex_token),
         search: Tab::new(frame_config, store.clone(), &dir),
     });

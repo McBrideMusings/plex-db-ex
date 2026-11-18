@@ -442,7 +442,7 @@ impl Tab {
 
     // -- configuration, shown to the person ------------------------------------------
 
-    fn frames_file(&self) -> Result<PathBuf, ExploreError> {
+    pub(crate) fn frames_file(&self) -> Result<PathBuf, ExploreError> {
         let Some(path) = self.config.frames_path() else {
             return Err(unavailable(
                 "PLEXDB_FRAMES_DIR is not set, so there is no Frame index to search",
@@ -1079,7 +1079,7 @@ impl Tab {
 
     // -- searching -----------------------------------------------------------------------
 
-    fn phrase_cache(&self, frames_file: &Path) -> Result<PhraseCache, ExploreError> {
+    pub(crate) fn phrase_cache(&self, frames_file: &Path) -> Result<PhraseCache, ExploreError> {
         if self.config.encoder_url.is_empty() {
             return Err(unavailable(
                 "PLEXDB_FRAME_ENCODER_URL is not set, so a new phrase cannot be embedded",

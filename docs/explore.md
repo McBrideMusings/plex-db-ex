@@ -70,6 +70,14 @@ Three routes serve extras to consumers and the settings page ([ADR-0030](./adr/0
   `name`, `match` (its regexes), `run`, `auto`, `executable`, `runs_ok`, `runs_failed`, `last`
   (`ran_at`, `item_id`, `ok`, `error`, or null) and `problem` (why a folder cannot run, else null).
 
+## Store routes
+
+`/api/store/*` serves every fact the reader crate reads, one route per accessor, and is the only
+way a program outside this repo reads the store ([ADR-0031](./adr/0031-readers-reach-the-store-only-through-the-http-api)).
+Each route and its JSON reply is in [The store API](./api). Every request writes one line to the
+container log, `explore: store <route> <arguments> status=<code> ms=<elapsed>`, with a list of ids
+given as its length.
+
 ## The Extras tab
 
 The Extras tab sits between Search and Doctor (`#tab=extras`, a library at `&xlib=<name>`). It reads

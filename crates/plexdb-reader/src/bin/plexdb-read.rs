@@ -2,8 +2,8 @@
 //! subcommand per accessor, JSON on stdout, a message on stderr and a non-zero
 //! exit on any error.
 //!
-//! This is the one search implementation the Python side (`plexdb search`) and
-//! the Plex DB-EX Search tab call, so they cannot disagree with a Rust consumer.
+//! Each subcommand is a [`Call`], the same value Plex DB-EX's `/api/store/*` routes
+//! answer, so the command line and the HTTP API cannot disagree (ADR-0031).
 //!
 //! Where the files are comes from a flag, else the environment:
 //!
@@ -20,8 +20,7 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use plexdb_reader::{PhraseCache, Reader, Search, Url};
-use serde::Serialize;
+use plexdb_reader::{Call, PhraseCache, Reader, Url};
 
 const USAGE: &str = "usage: plexdb-read [--snapshot P] [--frames P] [--phrase-cache P] \
 [--encoder-url U] [--encoder-model M] <subcommand> [args]
@@ -29,11 +28,14 @@ const USAGE: &str = "usage: plexdb-read [--snapshot P] [--frames P] [--phrase-ca
 subcommands:
   enrichment-for <item_id> <namespace>
   enrichment-for-many <namespace> <item_id>...
+  audio-facts-for <item_id>
+  audio-facts-for-many <item_id>...
   keyword-for-surface <surface>
   surfaces-for-keyword <keyword>
   display-name <keyword>
   edges-from <item_id> <edge_type>
   edges-to <item_id> <edge_type>
+  tag-neighbours <kind> <tag>
   collections-for <item_id>
   taste-vector-for <account_id>
   watched-units-for <account_id>
@@ -161,12 +163,6 @@ fn open(args: &Args) -> Result<Reader, Failure> {
     Ok(Reader::open(snapshot, frames.as_deref(), phrases)?)
 }
 
-/// Serialised straight to text: going through `Value` would widen every `f32`
-/// to an `f64` and print digits the similarity never had.
-fn json<T: Serialize>(value: &T) -> Result<String, Failure> {
-    Ok(serde_json::to_string(value)?)
-}
-
 fn pool_ids(args: &Args) -> Result<Vec<String>, Failure> {
     let mut ids: Vec<String> = args
         .list("--pool")
@@ -192,36 +188,72 @@ fn pool_ids(args: &Args) -> Result<Vec<String>, Failure> {
 
 fn run(raw: Vec<String>) -> Result<String, Failure> {
     let args = Args::parse(raw)?;
-    let command = args.arg(0, "subcommand")?.to_string();
+    let call = call(&args)?;
     let reader = open(&args)?;
-    match command.as_str() {
-        "enrichment-for" => {
-            json(&reader.enrichment_for(args.arg(1, "item_id")?, args.arg(2, "namespace")?)?)
-        }
-        "enrichment-for-many" => {
-            let ids = args.positional[2.min(args.positional.len())..]
-                .iter()
-                .map(String::as_str);
-            json(&reader.enrichment_for_many(ids, args.arg(1, "namespace")?)?)
-        }
-        "keyword-for-surface" => json(&reader.keyword_for_surface(args.arg(1, "surface")?)?),
-        "surfaces-for-keyword" => json(&reader.surfaces_for_keyword(args.arg(1, "keyword")?)?),
-        "display-name" => json(&reader.display_name(args.arg(1, "keyword")?)?),
-        "edges-from" => {
-            json(&reader.edges_from(args.arg(1, "item_id")?, args.arg(2, "edge_type")?)?)
-        }
-        "edges-to" => json(&reader.edges_to(args.arg(1, "item_id")?, args.arg(2, "edge_type")?)?),
-        "collections-for" => json(&reader.collections_for(args.arg(1, "item_id")?)?),
-        "taste-vector-for" => json(&reader.taste_vector_for(account(&args)?)?),
-        "watched-units-for" => json(&reader.watched_units_for(account(&args)?)?),
-        "watched-units" => json(&reader.watched_units()?),
-        "pooled-taste-vector" => json(&reader.pooled_taste_vector()?),
-        "cuts" => json(&reader.cuts(args.arg(1, "item_id")?)?),
-        "chapters" => json(&reader.chapters(args.arg(1, "item_id")?)?),
-        "capabilities" => json(&reader.capabilities()),
-        "search" => search(&reader, &args),
-        other => Err(Failure::Usage(format!("unknown subcommand {other}"))),
-    }
+    Ok(reader.answer(&call)?)
+}
+
+/// The subcommand and its arguments as the [`Call`] it names.
+fn call(args: &Args) -> Result<Call, Failure> {
+    let text = |n: usize, name: &str| args.arg(n, name).map(str::to_string);
+    let rest = |from: usize| -> Vec<String> {
+        args.positional[from.min(args.positional.len())..].to_vec()
+    };
+    Ok(match args.arg(0, "subcommand")? {
+        "enrichment-for" => Call::EnrichmentFor {
+            item_id: text(1, "item_id")?,
+            namespace: text(2, "namespace")?,
+        },
+        "enrichment-for-many" => Call::EnrichmentForMany {
+            namespace: text(1, "namespace")?,
+            item_ids: rest(2),
+        },
+        "audio-facts-for" => Call::AudioFactsFor {
+            item_id: text(1, "item_id")?,
+        },
+        "audio-facts-for-many" => Call::AudioFactsForMany { item_ids: rest(1) },
+        "keyword-for-surface" => Call::KeywordForSurface {
+            surface: text(1, "surface")?,
+        },
+        "surfaces-for-keyword" => Call::SurfacesForKeyword {
+            keyword: text(1, "keyword")?,
+        },
+        "display-name" => Call::DisplayName {
+            keyword: text(1, "keyword")?,
+        },
+        "edges-from" => Call::EdgesFrom {
+            item_id: text(1, "item_id")?,
+            edge_type: text(2, "edge_type")?,
+        },
+        "edges-to" => Call::EdgesTo {
+            item_id: text(1, "item_id")?,
+            edge_type: text(2, "edge_type")?,
+        },
+        "tag-neighbours" => Call::TagNeighbours {
+            kind: text(1, "kind")?,
+            tag: text(2, "tag")?,
+        },
+        "collections-for" => Call::CollectionsFor {
+            item_id: text(1, "item_id")?,
+        },
+        "taste-vector-for" => Call::TasteVectorFor {
+            account: account(args)?,
+        },
+        "watched-units-for" => Call::WatchedUnitsFor {
+            account: account(args)?,
+        },
+        "watched-units" => Call::WatchedUnits,
+        "pooled-taste-vector" => Call::PooledTasteVector,
+        "cuts" => Call::Cuts {
+            item_id: text(1, "item_id")?,
+        },
+        "chapters" => Call::Chapters {
+            item_id: text(1, "item_id")?,
+        },
+        "capabilities" => Call::Capabilities,
+        "search" => search(args)?,
+        other => return Err(Failure::Usage(format!("unknown subcommand {other}"))),
+    })
 }
 
 fn account(args: &Args) -> Result<i64, Failure> {
@@ -230,28 +262,26 @@ fn account(args: &Args) -> Result<i64, Failure> {
         .map_err(|_| Failure::Usage(format!("<account_id> is not a number: {raw}")))
 }
 
-fn search(reader: &Reader, args: &Args) -> Result<String, Failure> {
+fn search(args: &Args) -> Result<Call, Failure> {
     if let Some(extra) = args.positional.get(2) {
         return Err(Failure::Usage(format!(
             "unexpected argument {extra}: --pool and --not take one value each, repeat the flag"
         )));
     }
-    let pool = pool_ids(args)?;
-    let pool: Vec<&str> = pool.iter().map(String::as_str).collect();
-    let q = Search {
-        pool: &pool,
-        phrase: args.arg(1, "phrase")?,
-        negatives: &args.list("--not"),
-        weight: args.number("--weight")?,
-        temperature: args.number("--temperature")?,
-    };
     let draw = args.number::<usize>("--draw")?;
     let seed = args.number::<u64>("--seed")?;
     if draw.is_none() && seed.is_some() {
         return Err(Failure::Usage("--seed needs --draw".into()));
     }
-    let found = reader.search_drawn(&q, draw, seed.unwrap_or(0))?;
-    json(&found)
+    Ok(Call::Search {
+        pool: pool_ids(args)?,
+        phrase: args.arg(1, "phrase")?.to_string(),
+        negatives: args.list("--not").into_iter().map(str::to_string).collect(),
+        weight: args.number("--weight")?,
+        temperature: args.number("--temperature")?,
+        draw,
+        seed: seed.unwrap_or(0),
+    })
 }
 
 fn main() -> ExitCode {

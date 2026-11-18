@@ -818,3 +818,115 @@ fn a_missing_frame_index_and_tokenizer_are_reported_not_guessed() {
     let (status, out) = explorer.get("/api/search/frame?item_id=x&part=1&t_ms=0");
     assert_eq!(status, 404, "{out}");
 }
+
+/// `/api/store/search`, `/api/store/cuts`, `/api/store/chapters` and `/api/store/capabilities`
+/// answer exactly what `Reader::answer` gives for the same call (ADR-0031).
+#[test]
+fn the_store_routes_over_the_frame_index_answer_what_the_reader_answers() {
+    use plexdb_reader::{Call, PhraseCache, Reader, Url};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let frames_dir = world(dir.path());
+    let frames_path = frames_dir.join("frames.db");
+    let frames = open_frames(&frames_path).expect("open frames");
+    for (t_ms, source) in [
+        (0, "scdet"),
+        (1500, "scdet"),
+        (3000, "chapter"),
+        (6000, "scdet"),
+    ] {
+        frames
+            .execute(
+                "INSERT INTO cuts (item_id, t_ms, source) VALUES ('imdb:tt1', ?, ?)",
+                (t_ms, source),
+            )
+            .expect("cut");
+    }
+    drop(frames);
+    let media = video(dir.path());
+    let encoder = encoder(Arc::new(AtomicBool::new(false)));
+    let plex = plex();
+    let explorer = Explorer::start(dir.path(), &frames_dir, &media, &encoder, &plex);
+
+    let search = json!({
+        "pool": ["imdb:tt1", "imdb:tt2", "imdb:tt3"],
+        "phrase": "a man in a suit",
+        "negatives": ["rain"],
+        "temperature": 0.1,
+    });
+    let (status, ranked) = explorer.post("/api/store/search", &search);
+    assert_eq!(status, 200, "{ranked}");
+    let drawn_body = json!({
+        "pool": ["imdb:tt1", "imdb:tt2", "imdb:tt3"],
+        "phrase": "a man in a suit",
+        "negatives": ["rain"],
+        "temperature": 0.1,
+        "draw": {"n": 2, "seed": 7},
+    });
+    let (status, drawn) = explorer.post("/api/store/search", &drawn_body);
+    assert_eq!(status, 200, "{drawn}");
+
+    // The explorer embedded both phrases into its cache; the reader reads them from it.
+    let reader = Reader::open(
+        dir.path().join("plexdb.db"),
+        Some(frames_path.as_path()),
+        Some(PhraseCache {
+            path: frames_dir.join("phrases.db"),
+            encoder_url: Url::parse(&encoder).expect("url"),
+            request_model: MODEL.to_string(),
+        }),
+    )
+    .expect("open the reader");
+    let call = |draw: Option<usize>, seed: u64| Call::Search {
+        pool: vec!["imdb:tt1".into(), "imdb:tt2".into(), "imdb:tt3".into()],
+        phrase: "a man in a suit".into(),
+        negatives: vec!["rain".into()],
+        weight: None,
+        temperature: Some(0.1),
+        draw,
+        seed,
+    };
+    let expect = |c: &Call| -> Value {
+        serde_json::from_str(&reader.answer(c).expect("the reader answers")).expect("JSON")
+    };
+    assert_eq!(ranked, expect(&call(None, 0)));
+    assert_eq!(
+        (ranked["pool"].as_u64(), ranked["indexed"].as_u64()),
+        (Some(3), Some(2))
+    );
+    assert_eq!(ranked["model"], MODEL);
+    assert_eq!(
+        ranked["shots"].as_array().map(Vec::len),
+        Some(3),
+        "{ranked}"
+    );
+    assert_eq!(drawn, expect(&call(Some(2), 7)));
+    assert_eq!(drawn["shots"].as_array().map(Vec::len), Some(2), "{drawn}");
+
+    let (status, cuts) = explorer.get("/api/store/cuts?item_id=imdb:tt1");
+    assert_eq!(status, 200, "{cuts}");
+    assert_eq!(cuts, json!([1500, 3000, 6000]));
+    assert_eq!(
+        cuts,
+        expect(&Call::Cuts {
+            item_id: "imdb:tt1".into()
+        })
+    );
+    let (status, chapters) = explorer.get("/api/store/chapters?item_id=imdb:tt1");
+    assert_eq!((status, chapters), (200, json!([3000])));
+    let (status, nothing) = explorer.get("/api/store/cuts?item_id=imdb:tt3");
+    assert_eq!((status, nothing), (200, json!([])));
+
+    let (status, capabilities) = explorer.get("/api/store/capabilities");
+    assert_eq!((status, capabilities), (200, json!({"search": true})));
+
+    // A bad temperature is the reader's own refusal, as a 400.
+    let mut bad = search.clone();
+    bad["temperature"] = json!(-1);
+    let (status, out) = explorer.post("/api/store/search", &bad);
+    assert_eq!(status, 400, "{out}");
+    assert_eq!(
+        out["error"],
+        "invalid search: temperature must be a number above 0"
+    );
+}

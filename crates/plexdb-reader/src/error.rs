@@ -99,4 +99,7 @@ pub enum ReaderError {
         #[source]
         source: serde_json::Error,
     },
+
+    #[error("could not write the answer as JSON: {0}")]
+    Reply(#[source] serde_json::Error),
 }

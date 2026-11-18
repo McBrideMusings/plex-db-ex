@@ -147,11 +147,12 @@ every Reader. Readers never touch the live Store.
 _Avoid_: replica, backup, export
 
 **Reader**:
-Any process that opens the Snapshot and the Frame index read-only. A Reader writes no file of
-the Store's; its Phrase cache belongs to its caller.
+A process in this repo that opens the Snapshot and the Frame index read-only — the explorer and
+`plexdb-read`, through the reader crate. A Reader writes no file of the Store's; its Phrase cache
+belongs to its caller. A Consumer is never a Reader: it calls the store API (ADR-0031).
 
 **Consumer**:
-A project that uses the Store — today `etv-station` (via plugin, and over Plex DB-EX's extras HTTP routes for organized extras) and `curator`.
+A project that uses the Store — today `etv-station` and `curator` — through Plex DB-EX's HTTP routes (`/api/store/*` and `/api/extras/*`), never by opening a Store file.
 
 **Sweep**:
 One scheduled run of the Writer: every Step in order, ending in a published Snapshot. Runs
@@ -224,3 +225,5 @@ A saved query with a chart and a recorded value; the Sweep records that value ea
 - [ADR-0008](./adr/0008-the-walk-never-repoints-an-existing-item-id.md) — the walk never
   repoints an existing `item_id` when a title's GUID set changes; it keeps the identity and
   records the new GUID alongside it.
+- [ADR-0031](./adr/0031-readers-reach-the-store-only-through-the-http-api.md) — Consumers
+  reach the Store only through the explorer's HTTP API; its routes are the public interface.
