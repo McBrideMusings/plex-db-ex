@@ -1,9 +1,8 @@
-//! `plexdb-read` — the reader crate's accessors as a command line: one
-//! subcommand per accessor, JSON on stdout, a message on stderr and a non-zero
-//! exit on any error.
+//! `plexdb-read` — the store API as a command line: one route path in, its JSON
+//! reply on stdout, a message on stderr and a non-zero exit on any error.
 //!
-//! Each subcommand is a [`Call`], the same value Plex DB-EX's `/api/store/*` routes
-//! answer, so the command line and the HTTP API cannot disagree (ADR-0031).
+//! The path is read by [`Call::parse`], the same table Plex DB-EX's store routes
+//! use, so the command line and the HTTP API cannot disagree (ADR-0031).
 //!
 //! Where the files are comes from a flag, else the environment:
 //!
@@ -23,32 +22,14 @@ use std::process::ExitCode;
 use plexdb_reader::{Call, PhraseCache, Reader, Url};
 
 const USAGE: &str = "usage: plexdb-read [--snapshot P] [--frames P] [--phrase-cache P] \
-[--encoder-url U] [--encoder-model M] <subcommand> [args]
+[--encoder-url U] [--encoder-model M] <path>[?query] [--body JSON | --body-file P|-]
 
-subcommands:
-  enrichment-for <item_id> <namespace>
-  enrichment-for-many <namespace> <item_id>...
-  audio-facts-for <item_id>
-  audio-facts-for-many <item_id>...
-  keyword-for-surface <surface>
-  surfaces-for-keyword <keyword>
-  display-name <keyword>
-  edges-from <item_id> <edge_type>
-  edges-to <item_id> <edge_type>
-  tag-neighbours <kind> <tag>
-  collections-for <item_id>
-  taste-vector-for <account_id>
-  watched-units-for <account_id>
-  watched-units
-  pooled-taste-vector
-  cuts <item_id>
-  chapters <item_id>
-  capabilities
-  search <phrase> (--pool <item_id> [--pool ...] | --pool-file <path|->)
-         [--not <phrase> [--not ...]] [--weight w] [--temperature T] [--draw n --seed s]
-
---pool and --not take one value each and repeat: --pool a --pool b --not x --not y.
-Flags may come before or after the phrase.
+<path> is a store API route, the same path Plex DB-EX answers (docs/api.md):
+  /items?type=movie&include=enrichment&limit=500
+  /items/imdb:tt0113277/edges?type=tmdb_similar&direction=in
+  /accounts/1/taste
+  /keywords/heist/pairs
+With --body or --body-file the request is a POST (`/searches`); without, a GET.
 --help prints this and exits 0.";
 
 enum Failure {
@@ -96,22 +77,6 @@ impl Args {
             .get(name)
             .and_then(|v| v.last())
             .map(String::as_str)
-    }
-
-    fn list(&self, name: &str) -> Vec<&str> {
-        self.flags
-            .get(name)
-            .map(|v| v.iter().map(String::as_str).collect())
-            .unwrap_or_default()
-    }
-
-    fn number<T: std::str::FromStr>(&self, name: &str) -> Result<Option<T>, Failure> {
-        self.flag(name)
-            .map(|v| {
-                v.parse::<T>()
-                    .map_err(|_| Failure::Usage(format!("{name} is not a number: {v}")))
-            })
-            .transpose()
     }
 
     /// The `n`th positional, named for the usage error.
@@ -163,29 +128,6 @@ fn open(args: &Args) -> Result<Reader, Failure> {
     Ok(Reader::open(snapshot, frames.as_deref(), phrases)?)
 }
 
-fn pool_ids(args: &Args) -> Result<Vec<String>, Failure> {
-    let mut ids: Vec<String> = args
-        .list("--pool")
-        .into_iter()
-        .map(str::to_string)
-        .collect();
-    if let Some(path) = args.flag("--pool-file") {
-        let mut text = String::new();
-        if path == "-" {
-            std::io::stdin().read_to_string(&mut text)?;
-        } else {
-            text = std::fs::read_to_string(path)?;
-        }
-        ids.extend(
-            text.lines()
-                .map(str::trim)
-                .filter(|l| !l.is_empty())
-                .map(str::to_string),
-        );
-    }
-    Ok(ids)
-}
-
 fn run(raw: Vec<String>) -> Result<String, Failure> {
     let args = Args::parse(raw)?;
     let call = call(&args)?;
@@ -193,95 +135,34 @@ fn run(raw: Vec<String>) -> Result<String, Failure> {
     Ok(reader.answer(&call)?)
 }
 
-/// The subcommand and its arguments as the [`Call`] it names.
+/// The path, query and body as the [`Call`] they name.
 fn call(args: &Args) -> Result<Call, Failure> {
-    let text = |n: usize, name: &str| args.arg(n, name).map(str::to_string);
-    let rest = |from: usize| -> Vec<String> {
-        args.positional[from.min(args.positional.len())..].to_vec()
+    let target = args.arg(0, "path")?;
+    if let Some(extra) = args.positional.get(1) {
+        return Err(Failure::Usage(format!("unexpected argument {extra}")));
+    }
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    let body = match (args.flag("--body"), args.flag("--body-file")) {
+        (Some(_), Some(_)) => {
+            return Err(Failure::Usage(
+                "--body and --body-file are one or the other".into(),
+            ));
+        }
+        (Some(text), None) => Some(text.to_string()),
+        (None, Some("-")) => {
+            let mut text = String::new();
+            std::io::stdin().read_to_string(&mut text)?;
+            Some(text)
+        }
+        (None, Some(path)) => Some(std::fs::read_to_string(path)?),
+        (None, None) => None,
     };
-    Ok(match args.arg(0, "subcommand")? {
-        "enrichment-for" => Call::EnrichmentFor {
-            item_id: text(1, "item_id")?,
-            namespace: text(2, "namespace")?,
-        },
-        "enrichment-for-many" => Call::EnrichmentForMany {
-            namespace: text(1, "namespace")?,
-            item_ids: rest(2),
-        },
-        "audio-facts-for" => Call::AudioFactsFor {
-            item_id: text(1, "item_id")?,
-        },
-        "audio-facts-for-many" => Call::AudioFactsForMany { item_ids: rest(1) },
-        "keyword-for-surface" => Call::KeywordForSurface {
-            surface: text(1, "surface")?,
-        },
-        "surfaces-for-keyword" => Call::SurfacesForKeyword {
-            keyword: text(1, "keyword")?,
-        },
-        "display-name" => Call::DisplayName {
-            keyword: text(1, "keyword")?,
-        },
-        "edges-from" => Call::EdgesFrom {
-            item_id: text(1, "item_id")?,
-            edge_type: text(2, "edge_type")?,
-        },
-        "edges-to" => Call::EdgesTo {
-            item_id: text(1, "item_id")?,
-            edge_type: text(2, "edge_type")?,
-        },
-        "tag-neighbours" => Call::TagNeighbours {
-            kind: text(1, "kind")?,
-            tag: text(2, "tag")?,
-        },
-        "collections-for" => Call::CollectionsFor {
-            item_id: text(1, "item_id")?,
-        },
-        "taste-vector-for" => Call::TasteVectorFor {
-            account: account(args)?,
-        },
-        "watched-units-for" => Call::WatchedUnitsFor {
-            account: account(args)?,
-        },
-        "watched-units" => Call::WatchedUnits,
-        "pooled-taste-vector" => Call::PooledTasteVector,
-        "cuts" => Call::Cuts {
-            item_id: text(1, "item_id")?,
-        },
-        "chapters" => Call::Chapters {
-            item_id: text(1, "item_id")?,
-        },
-        "capabilities" => Call::Capabilities,
-        "search" => search(args)?,
-        other => return Err(Failure::Usage(format!("unknown subcommand {other}"))),
-    })
-}
-
-fn account(args: &Args) -> Result<i64, Failure> {
-    let raw = args.arg(1, "account_id")?;
-    raw.parse()
-        .map_err(|_| Failure::Usage(format!("<account_id> is not a number: {raw}")))
-}
-
-fn search(args: &Args) -> Result<Call, Failure> {
-    if let Some(extra) = args.positional.get(2) {
-        return Err(Failure::Usage(format!(
-            "unexpected argument {extra}: --pool and --not take one value each, repeat the flag"
-        )));
-    }
-    let draw = args.number::<usize>("--draw")?;
-    let seed = args.number::<u64>("--seed")?;
-    if draw.is_none() && seed.is_some() {
-        return Err(Failure::Usage("--seed needs --draw".into()));
-    }
-    Ok(Call::Search {
-        pool: pool_ids(args)?,
-        phrase: args.arg(1, "phrase")?.to_string(),
-        negatives: args.list("--not").into_iter().map(str::to_string).collect(),
-        weight: args.number("--weight")?,
-        temperature: args.number("--temperature")?,
-        draw,
-        seed: seed.unwrap_or(0),
-    })
+    let body: Option<serde_json::Value> = body
+        .map(|text| serde_json::from_str(&text))
+        .transpose()
+        .map_err(|e| Failure::Usage(format!("the body is not JSON: {e}")))?;
+    let method = if body.is_some() { "POST" } else { "GET" };
+    Ok(Call::parse(method, path, query, body.as_ref())?)
 }
 
 fn main() -> ExitCode {

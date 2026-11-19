@@ -1,6 +1,6 @@
 # A typed Rust reader crate, exposed to Rhai plugins behind a capability grant
 
-Superseded by [ADR-0031](./0031-readers-reach-the-store-only-through-the-http-api): no program outside this repo links `plexdb-reader`; `etv-station` reaches the same facts over the explorer's `/api/store/*` routes.
+Superseded by [ADR-0031](./0031-readers-reach-the-store-only-through-the-http-api): no program outside this repo links `plexdb-reader`; `etv-station` reaches the same facts over the explorer's store API.
 
 This repo ships `plexdb-reader`, a read-only Rust crate. `etv-station`'s core links it and
 exposes its methods — `keywords_for(item_id)`, `edges_from(item_id, edge_type)` and the

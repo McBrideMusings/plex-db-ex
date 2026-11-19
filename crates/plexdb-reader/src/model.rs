@@ -102,3 +102,162 @@ pub struct TasteVector {
     pub attributes: Vec<TasteAttribute>,
     pub shows_without_seasons: Vec<String>,
 }
+
+/// One title — a row of `items` — with the related facts a request's `include` asked for.
+///
+/// Each included field is absent unless asked for; asked for, a list is `[]` and audio
+/// facts are `null` when the store holds none.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Item {
+    pub item_id: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub title: String,
+    pub title_sort: Option<String>,
+    pub show_title: Option<String>,
+    pub show_item_id: Option<String>,
+    pub season: Option<i64>,
+    pub episode: Option<i64>,
+    pub year: Option<i64>,
+    pub duration_ms: Option<i64>,
+    pub content_rating: Option<String>,
+    pub studio: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enrichment: Option<Vec<EnrichmentFact>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_ids: Option<Vec<ExternalId>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_facts: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plex: Option<Vec<PlexEntry>>,
+}
+
+/// One id a source gives a title — a row of `external_ids`. `kind` scopes the id to a
+/// media type (schema v5); `last_seen` is when a scan last observed it (schema v8).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ExternalId {
+    pub ns: String,
+    pub value: String,
+    pub kind: String,
+    pub last_seen: String,
+}
+
+/// One Plex library entry that resolves to a title — a row of `plex_items`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PlexEntry {
+    pub rating_key: String,
+    pub section_id: String,
+    pub last_seen: String,
+}
+
+/// One file Plex lists for a title — a row of `media_part`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MediaPart {
+    pub part_id: i64,
+    pub item_id: String,
+    pub rating_key: String,
+    pub file: String,
+    pub size: Option<i64>,
+    pub container: Option<String>,
+    pub video_codec: Option<String>,
+    pub audio_codec: Option<String>,
+    pub height: Option<i64>,
+    pub bitrate: Option<i64>,
+    pub duration_ms: Option<i64>,
+    pub plex_updated_at: Option<i64>,
+    pub fetched_at: String,
+}
+
+/// One play — a row of `plays`, without the client's IP address and device identifier,
+/// which describe the household's network rather than what was watched, and without the
+/// ingest's own keys (`tautulli_id`, `rating_key`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Play {
+    pub history_key: String,
+    pub item_id: String,
+    pub plex_account_id: i64,
+    pub platform: Option<String>,
+    /// Unix seconds.
+    pub viewed_at: i64,
+    pub percent_complete: Option<i64>,
+    pub paused_counter: Option<i64>,
+    pub seconds_watched: Option<i64>,
+}
+
+/// One Plex account the store has plays for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Account {
+    pub account_id: i64,
+    pub plays: i64,
+    /// Unix seconds of the newest play.
+    pub last_viewed_at: i64,
+}
+
+/// One stored keyword: every raw spelling recorded for it (`keyword_forms`) and the
+/// display name a person gave it (`keyword_names`), for display only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Keyword {
+    pub keyword: String,
+    pub name: Option<String>,
+    pub surfaces: Vec<String>,
+}
+
+/// The judge's verdict and a person's decision on whether two keywords mean the same —
+/// a row of `keyword_pairs`, `keyword_a < keyword_b`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct KeywordPair {
+    pub keyword_a: String,
+    pub keyword_b: String,
+    pub jev_score: Option<f64>,
+    pub jev_model: Option<String>,
+    pub judged_at: Option<String>,
+    pub jev_error: Option<String>,
+    pub decision: Option<String>,
+    pub decided_at: Option<String>,
+}
+
+/// What the store records about the roles one keyword plays.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct KeywordRoles {
+    pub keyword: String,
+    /// A source's score for each role — rows of `keyword_roles`.
+    pub verdicts: Vec<RoleVerdict>,
+    /// A person's decision on each role — rows of `keyword_role_decisions`.
+    pub decisions: Vec<RoleDecision>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RoleVerdict {
+    pub role: String,
+    pub source: String,
+    pub score: Option<f64>,
+    pub model: Option<String>,
+    pub error: Option<String>,
+    pub stated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RoleDecision {
+    pub role: String,
+    pub decision: String,
+    pub decided_at: String,
+}
+
+/// A source stating that a title carries a keyword in a role — a row of
+/// `keyword_role_statements`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RoleStatement {
+    pub keyword: String,
+    pub role: String,
+    pub source: String,
+    pub stated_at: String,
+}
+
+/// One page of a list: `next` is the cursor to pass as `after` for the page after it,
+/// `null` on the last page.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Page<T> {
+    pub data: Vec<T>,
+    pub has_more: bool,
+    pub next: Option<String>,
+}

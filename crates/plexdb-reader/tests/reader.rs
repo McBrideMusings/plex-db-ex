@@ -14,7 +14,7 @@ fn enrichment_round_trips_filtered_by_namespace() {
 
     let reader = Reader::open(&path, None, None).expect("open the fixture store");
     let facts = reader
-        .enrichment_for("imdb:tt1", "keywords")
+        .enrichment_for("imdb:tt1", Some("keywords"))
         .expect("query enrichment");
 
     let values: Vec<&str> = facts.iter().map(|f| f.value.as_str()).collect();
@@ -23,7 +23,7 @@ fn enrichment_round_trips_filtered_by_namespace() {
 
     // A namespace with nothing recorded comes back empty, not an error.
     let empty = reader
-        .enrichment_for("imdb:tt1", "no_such_namespace")
+        .enrichment_for("imdb:tt1", Some("no_such_namespace"))
         .expect("query an empty namespace");
     assert!(empty.is_empty());
 }
@@ -37,7 +37,7 @@ fn enrichment_for_many_groups_facts_by_id_matching_the_single_item_accessor() {
 
     let ids = ["imdb:tt1", "imdb:tt2", "imdb:tt3", "imdb:does-not-exist"];
     let grouped = reader
-        .enrichment_for_many(ids, "keywords")
+        .enrichment_for_many(ids, Some("keywords"))
         .expect("bulk query");
 
     // An id with no rows in the namespace is absent from the map — never an
@@ -54,7 +54,7 @@ fn enrichment_for_many_groups_facts_by_id_matching_the_single_item_accessor() {
     // returns for that id.
     for id in ["imdb:tt1", "imdb:tt2", "imdb:tt3"] {
         let single = reader
-            .enrichment_for(id, "keywords")
+            .enrichment_for(id, Some("keywords"))
             .expect("single-item query");
         assert_eq!(
             grouped.get(id).expect("id must be present"),
@@ -73,10 +73,10 @@ fn enrichment_for_many_deduplicates_a_repeated_id() {
 
     // imdb:tt1 passed twice must not double its facts in the result.
     let grouped = reader
-        .enrichment_for_many(["imdb:tt1", "imdb:tt1"], "keywords")
+        .enrichment_for_many(["imdb:tt1", "imdb:tt1"], Some("keywords"))
         .expect("bulk query with a repeated id");
     let single = reader
-        .enrichment_for("imdb:tt1", "keywords")
+        .enrichment_for("imdb:tt1", Some("keywords"))
         .expect("single-item query");
     assert_eq!(
         grouped.get("imdb:tt1").expect("id must be present"),
@@ -93,7 +93,7 @@ fn enrichment_for_many_of_empty_input_is_empty_without_erroring() {
     let reader = Reader::open(&path, None, None).expect("open the fixture store");
 
     let grouped = reader
-        .enrichment_for_many(std::iter::empty(), "keywords")
+        .enrichment_for_many(std::iter::empty(), Some("keywords"))
         .expect("empty input must not be an error");
     assert!(grouped.is_empty());
 }
@@ -107,10 +107,10 @@ fn enrichment_for_many_is_stable_across_calls() {
 
     let ids = ["imdb:tt1", "imdb:tt2", "imdb:tt3"];
     let first = reader
-        .enrichment_for_many(ids, "keywords")
+        .enrichment_for_many(ids, Some("keywords"))
         .expect("first bulk query");
     let second = reader
-        .enrichment_for_many(ids, "keywords")
+        .enrichment_for_many(ids, Some("keywords"))
         .expect("second bulk query against unchanged data");
     assert_eq!(
         first, second,
@@ -127,14 +127,14 @@ fn a_keyword_two_sources_carry_appears_once_and_takes_the_newer_stamp() {
 
     // The fixture stores tt1's `heist` twice, once per source.
     let single = reader
-        .enrichment_for("imdb:tt1", "keywords")
+        .enrichment_for("imdb:tt1", Some("keywords"))
         .expect("single-item query");
     let heists: Vec<_> = single.iter().filter(|f| f.value == "heist").collect();
     assert_eq!(heists.len(), 1, "heist must appear once, got {single:?}");
     assert_eq!(heists[0].fetched_at, "2026-02-01T00:00:00+00:00");
 
     let grouped = reader
-        .enrichment_for_many(["imdb:tt1"], "keywords")
+        .enrichment_for_many(["imdb:tt1"], Some("keywords"))
         .expect("bulk query");
     assert_eq!(grouped["imdb:tt1"], single);
 }
@@ -223,7 +223,7 @@ fn edges_are_queryable_in_both_directions_filtered_by_type() {
     let reader = Reader::open(&path, None, None).expect("open the fixture store");
 
     let outgoing = reader
-        .edges_from("imdb:tt1", "tmdb_similar")
+        .edges_from("imdb:tt1", Some("tmdb_similar"))
         .expect("query outgoing edges");
     assert_eq!(
         outgoing
@@ -235,7 +235,7 @@ fn edges_are_queryable_in_both_directions_filtered_by_type() {
     );
 
     let incoming = reader
-        .edges_to("imdb:tt1", "tmdb_recommendations")
+        .edges_to("imdb:tt1", Some("tmdb_recommendations"))
         .expect("query incoming edges");
     assert_eq!(incoming.len(), 1);
     assert_eq!(incoming[0].from_id, "imdb:tt2");
@@ -243,7 +243,7 @@ fn edges_are_queryable_in_both_directions_filtered_by_type() {
     // Filtered by type: tt1 -> {tt2, tt3} are `tmdb_similar`, not
     // `tmdb_recommendations` — a wrong-type query must not leak them.
     let none = reader
-        .edges_from("imdb:tt1", "tmdb_recommendations")
+        .edges_from("imdb:tt1", Some("tmdb_recommendations"))
         .expect("query a type with no matches");
     assert!(none.is_empty());
 }
@@ -741,7 +741,10 @@ fn watched_units_names_every_unit_an_account_ever_played() {
     common::build_fixture(&path);
     let reader = Reader::open(&path, None, None).expect("open the fixture store");
 
-    let watched = reader.watched_units_for(42).expect("watched units");
+    let watched = reader
+        .watched_units(Some(42), None, 1000)
+        .expect("watched units")
+        .data;
     assert_eq!(
         watched,
         vec![
@@ -774,8 +777,9 @@ fn watched_units_names_every_unit_an_account_ever_played() {
     // An account with no plays gets an empty list, not an error.
     assert!(
         reader
-            .watched_units_for(9999)
+            .watched_units(Some(9999), None, 1000)
             .expect("an account with no plays")
+            .data
             .is_empty()
     );
 }
@@ -793,8 +797,45 @@ fn pooled_watched_units_covers_every_account() {
     // own are identical — the assertion that pooling is a superset, checked
     // where the two happen to coincide.
     assert_eq!(
-        reader.watched_units().expect("house watched units"),
-        reader.watched_units_for(42).expect("account 42's"),
+        reader
+            .watched_units(None, None, 1000)
+            .expect("house watched units"),
+        reader
+            .watched_units(Some(42), None, 1000)
+            .expect("account 42's"),
+    );
+}
+
+/// A page of watched units continues after its cursor: two pages of two and one of one
+/// hold the five units once each, in order, and only the last says no more follow.
+#[test]
+fn watched_units_pages_through_next() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("plexdb.db");
+    common::build_fixture(&path);
+    let reader = Reader::open(&path, None, None).expect("open the fixture store");
+
+    let mut seen = Vec::new();
+    let mut after: Option<String> = None;
+    let mut pages = Vec::new();
+    loop {
+        let page = reader
+            .watched_units(Some(42), after.as_deref(), 2)
+            .expect("a page");
+        pages.push((page.data.len(), page.has_more));
+        seen.extend(page.data);
+        match page.next {
+            Some(next) => after = Some(next),
+            None => break,
+        }
+    }
+    assert_eq!(pages, vec![(2, true), (2, true), (1, false)]);
+    assert_eq!(
+        seen,
+        reader
+            .watched_units(Some(42), None, 1000)
+            .expect("one page")
+            .data
     );
 }
 

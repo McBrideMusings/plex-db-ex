@@ -1,7 +1,8 @@
-//! `plexdb-rs explore`'s `/api/store/*` routes against a store built by the real `plexdb
-//! migrate`: each answers exactly what `Reader::answer` gives for the same call, which is what
-//! `plexdb-read` prints, and refuses a request it cannot read with a 400 naming the field.
-//! The Frame index routes are tested beside the Search tab, in `explore_search.rs`.
+//! `plexdb-rs explore`'s store routes against a store built by the real `plexdb migrate`:
+//! each answers exactly what `Reader::answer` gives for the call `Call::parse` reads from
+//! the same path, which is what `plexdb-read` prints; every list walks to its end through
+//! `next`; and a request the API cannot read is refused with a status naming why. The Frame
+//! index routes are tested beside the Search tab, in `explore_search.rs`.
 
 mod common;
 
@@ -36,7 +37,24 @@ fn world(dir: &Path) {
              ('imdb:tt2', 'keywords', 'tmdb', 'keyword', 'car chase', '{T}'),
              ('tvdb:9', 'keywords', 'tmdb', 'keyword', 'police', '{T}');
          INSERT INTO keyword_forms (surface, keyword) VALUES
-             ('Heist', 'heist'), ('heists', 'heist'), ('Los Angeles', 'los angeles');
+             ('Heist', 'heist'), ('heists', 'heist'), ('Los Angeles', 'los angeles'),
+             ('AC/DC', 'ac/dc'), ('100%', '100%'), ('What?', 'what?');
+         INSERT INTO keyword_pairs (keyword_a, keyword_b, jev_score, jev_model, judged_at,
+                                    decision, decided_at) VALUES
+             ('heist', 'heists', 0.97, 'jev', '{T}', 'accepted', '{T}'),
+             ('ac/dc', 'heist', 0.02, 'jev', '{T}', NULL, NULL),
+             ('heist', 'los angeles', 0.10, 'jev', '{T}', 'rejected', '{T}');
+         INSERT INTO keyword_roles (keyword, role, source, score, model, stated_at) VALUES
+             ('heist', 'theme', 'jev', 0.9, 'jev', '{T}'), ('heist', 'tone', 'jev', 0.2, 'jev', '{T}');
+         INSERT INTO keyword_role_decisions (keyword, role, decision, decided_at) VALUES
+             ('heist', 'theme', 'accepted', '{T}');
+         INSERT INTO keyword_role_statements (item_id, keyword, role, source, stated_at) VALUES
+             ('imdb:tt1', 'los angeles', 'region', 'anilist', '{T}');
+         INSERT INTO external_ids (item_id, ns, value, kind, last_seen) VALUES
+             ('imdb:tt1', 'imdb', 'tt1', 'movie', '{T}'), ('imdb:tt1', 'tmdb', '949', 'movie', '{T}');
+         INSERT INTO plex_items (rating_key, item_id, section_id, last_seen) VALUES
+             ('rk1', 'imdb:tt1', '1', '{T}'), ('rk2', 'imdb:tt2', '1', '{T}'),
+             ('rk3', 'imdb:tt3', '2', '{T}');
          INSERT INTO keyword_names (keyword, name, decided_at) VALUES ('heist', 'Heist films', '{T}');
          INSERT INTO edges (from_id, to_id, edge_type, rank, fetched_at) VALUES
              ('imdb:tt1', 'imdb:tt2', 'tmdb_similar', 1, '{T}'),
@@ -60,7 +78,8 @@ fn world(dir: &Path) {
              ('p1', 'imdb:tt1', 1, 1700000000),
              ('p2', 'tvdb:9-1-1', 1, 1700000100),
              ('p3', 'tvdb:9-1-2', 1, 1700000200),
-             ('p4', 'imdb:tt2', 7, 1700000300);"
+             ('p4', 'imdb:tt2', 7, 1700000300);
+         UPDATE plays SET ip = '10.0.0.9', client_identifier = 'tv-1' WHERE history_key = 'p1';"
     ))
     .expect("seed the world");
 }
@@ -150,20 +169,78 @@ fn reader(dir: &Path) -> Reader {
     Reader::open(dir.join("plexdb.db"), None, None).expect("open the store")
 }
 
-/// The route answers 200 with exactly the bytes `Reader::answer` gives for `call`.
-fn same(reply: (u16, String), reader: &Reader, call: &Call) -> Value {
-    let (status, body) = reply;
-    assert_eq!(status, 200, "{call:?}: {body}");
+/// The call `Call::parse` reads from `target`, a GET path with its query.
+fn call(target: &str) -> Call {
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    Call::parse("GET", path, query, None).unwrap_or_else(|e| panic!("{target}: {e}"))
+}
+
+/// The route answers 200 with exactly the bytes `Reader::answer` gives for its call.
+fn same(explorer: &Explorer, reader: &Reader, target: &str) -> Value {
+    let (status, body) = explorer.get(target);
+    assert_eq!(status, 200, "{target}: {body}");
     assert_eq!(
         body,
-        reader.answer(call).expect("the reader answers"),
-        "{call:?}"
+        reader.answer(&call(target)).expect("the reader answers"),
+        "{target}"
     );
     serde_json::from_str(&body).expect("JSON")
 }
 
+/// Walk a list from its first page through `next` to the end, `limit` rows a page; every
+/// page but the last is full and says more follow.
+fn walk(explorer: &Explorer, reader: &Reader, route: &str, limit: usize) -> Vec<Value> {
+    let mut rows = Vec::new();
+    let mut after: Option<String> = None;
+    loop {
+        let sep = if route.contains('?') { '&' } else { '?' };
+        let mut target = format!("{route}{sep}limit={limit}");
+        if let Some(after) = &after {
+            target.push_str("&after=");
+            target.push_str(&urlencode(after));
+        }
+        let page = same(explorer, reader, &target);
+        let data = page["data"].as_array().expect("data").clone();
+        let has_more = page["has_more"].as_bool().expect("has_more");
+        match page["next"].as_str() {
+            Some(next) => {
+                assert!(has_more, "{target}: next without has_more");
+                assert_eq!(
+                    data.len(),
+                    limit,
+                    "{target}: a page before the last is full"
+                );
+                after = Some(next.to_string());
+                rows.extend(data);
+            }
+            None => {
+                assert!(!has_more, "{target}: has_more without next");
+                rows.extend(data);
+                return rows;
+            }
+        }
+    }
+}
+
+fn urlencode(text: &str) -> String {
+    text.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b':' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
 fn s(text: &str) -> String {
     text.to_string()
+}
+
+fn ids(rows: &[Value], field: &str) -> Vec<String> {
+    rows.iter()
+        .map(|row| row[field].as_str().expect("a text field").to_string())
+        .collect()
 }
 
 #[test]
@@ -173,14 +250,36 @@ fn every_store_route_answers_what_the_reader_answers() {
     let explorer = Explorer::start(dir.path());
     let r = reader(dir.path());
 
-    // enrichment_for: one (key, value) per pair, newest fetched_at, (key, value) order
+    // a title, and a title with every include
+    let got = same(&explorer, &r, "/items/imdb:tt1");
+    assert_eq!(got["title"], "Heat");
+    assert_eq!(got["type"], "movie");
+    assert!(got.get("enrichment").is_none(), "{got}");
     let got = same(
-        explorer.get("/api/store/enrichment?item_id=imdb:tt1&namespace=keywords"),
+        &explorer,
         &r,
-        &Call::EnrichmentFor {
-            item_id: s("imdb:tt1"),
-            namespace: s("keywords"),
-        },
+        "/items/imdb:tt1?include=enrichment,external_ids,audio_facts,plex&namespace=keywords",
+    );
+    assert_eq!(got["enrichment"].as_array().map(Vec::len), Some(2));
+    assert_eq!(got["external_ids"][1]["value"], "949");
+    assert_eq!(got["audio_facts"], json!({"bpm": 92, "key": "A minor"}));
+    assert_eq!(
+        got["plex"],
+        json!([{"rating_key": "rk1", "section_id": "1", "last_seen": T}])
+    );
+    let got = same(
+        &explorer,
+        &r,
+        "/items/imdb:tt3?include=audio_facts,enrichment",
+    );
+    assert_eq!(got["audio_facts"], Value::Null);
+    assert_eq!(got["enrichment"], json!([]));
+
+    // enrichment: one (key, value) per pair, newest fetched_at; every namespace without one
+    let got = same(
+        &explorer,
+        &r,
+        "/items/imdb:tt1/enrichment?namespace=keywords",
     );
     assert_eq!(
         got,
@@ -189,223 +288,260 @@ fn every_store_route_answers_what_the_reader_answers() {
             {"namespace": "keywords", "key": "keyword", "value": "los angeles", "fetched_at": T},
         ])
     );
-    // an id with nothing recorded is an empty list
-    let got = same(
-        explorer.get("/api/store/enrichment?item_id=imdb:tt9&namespace=keywords"),
-        &r,
-        &Call::EnrichmentFor {
-            item_id: s("imdb:tt9"),
-            namespace: s("keywords"),
-        },
-    );
-    assert_eq!(got, json!([]));
+    assert_eq!(same(&explorer, &r, "/items/imdb:tt1/enrichment"), got);
+    assert_eq!(same(&explorer, &r, "/items/imdb:tt3/enrichment"), json!([]));
 
-    // enrichment_for_many: keyed by id, an id with nothing absent, a repeat counted once
-    let got = same(
-        explorer.post(
-            "/api/store/enrichment",
-            &json!({"item_ids": ["imdb:tt2", "imdb:tt1", "imdb:tt9", "imdb:tt2"], "namespace": "keywords"}),
-        ),
-        &r,
-        &Call::EnrichmentForMany {
-            item_ids: vec![s("imdb:tt2"), s("imdb:tt1"), s("imdb:tt9"), s("imdb:tt2")],
-            namespace: s("keywords"),
-        },
+    // edges: out by default, in on request, every type without one
+    let got = same(&explorer, &r, "/items/imdb:tt1/edges?type=tmdb_similar");
+    assert_eq!(
+        ids(got.as_array().expect("list"), "to_id"),
+        ["imdb:tt2", "imdb:tt3"]
     );
-    let keys: Vec<&String> = got.as_object().expect("object").keys().collect();
-    assert_eq!(keys, ["imdb:tt1", "imdb:tt2"]);
-    assert_eq!(got["imdb:tt2"].as_array().map(Vec::len), Some(2));
+    assert_eq!(same(&explorer, &r, "/items/imdb:tt1/edges"), got);
+    let got = same(&explorer, &r, "/items/imdb:tt2/edges?direction=in");
+    assert_eq!(
+        ids(got.as_array().expect("list"), "from_id"),
+        ["imdb:tt1", "imdb:tt3"]
+    );
 
-    // audio_facts_for: the analyzer's object as stored, null for a title never analyzed
-    let got = same(
-        explorer.get("/api/store/audio-facts?item_id=imdb:tt1"),
-        &r,
-        &Call::AudioFactsFor {
-            item_id: s("imdb:tt1"),
-        },
-    );
-    assert_eq!(got, json!({"bpm": 92, "key": "A minor"}));
-    let got = same(
-        explorer.get("/api/store/audio-facts?item_id=imdb:tt2"),
-        &r,
-        &Call::AudioFactsFor {
-            item_id: s("imdb:tt2"),
-        },
-    );
-    assert_eq!(got, Value::Null);
-    let got = same(
-        explorer.post(
-            "/api/store/audio-facts",
-            &json!({"item_ids": ["imdb:tt1", "imdb:tt2"]}),
-        ),
-        &r,
-        &Call::AudioFactsForMany {
-            item_ids: vec![s("imdb:tt1"), s("imdb:tt2")],
-        },
-    );
-    assert_eq!(got, json!({"imdb:tt1": {"bpm": 92, "key": "A minor"}}));
-
-    // keywords: a spelling to its stored keyword, a keyword to its spellings, a person's name
-    let got = same(
-        explorer.get("/api/store/keyword?surface=HEISTS"),
-        &r,
-        &Call::KeywordForSurface {
-            surface: s("HEISTS"),
-        },
-    );
-    assert_eq!(got, json!("heist"));
-    let got = same(
-        explorer.get("/api/store/keyword?surface=nothing+like+it"),
-        &r,
-        &Call::KeywordForSurface {
-            surface: s("nothing like it"),
-        },
-    );
-    assert_eq!(got, Value::Null);
-    let got = same(
-        explorer.get("/api/store/surfaces?keyword=heist"),
-        &r,
-        &Call::SurfacesForKeyword {
-            keyword: s("heist"),
-        },
-    );
-    assert_eq!(got, json!(["Heist", "heists"]));
-    let got = same(
-        explorer.get("/api/store/display-name?keyword=heist"),
-        &r,
-        &Call::DisplayName {
-            keyword: s("heist"),
-        },
-    );
-    assert_eq!(got, json!("Heist films"));
-    let got = same(
-        explorer.get("/api/store/display-name?keyword=police"),
-        &r,
-        &Call::DisplayName {
-            keyword: s("police"),
-        },
-    );
-    assert_eq!(got, Value::Null);
-
-    // edges, both directions, ranked ascending
-    let got = same(
-        explorer.get("/api/store/edges/from?item_id=imdb:tt1&edge_type=tmdb_similar"),
-        &r,
-        &Call::EdgesFrom {
-            item_id: s("imdb:tt1"),
-            edge_type: s("tmdb_similar"),
-        },
-    );
-    let to: Vec<&str> = got
-        .as_array()
-        .expect("list")
-        .iter()
-        .filter_map(|e| e["to_id"].as_str())
-        .collect();
-    assert_eq!(to, ["imdb:tt2", "imdb:tt3"]);
-    let got = same(
-        explorer.get("/api/store/edges/to?item_id=imdb:tt2&edge_type=tmdb_similar"),
-        &r,
-        &Call::EdgesTo {
-            item_id: s("imdb:tt2"),
-            edge_type: s("tmdb_similar"),
-        },
-    );
-    assert_eq!(got.as_array().map(Vec::len), Some(2));
-
-    // the tag network seen from one tag
-    let got = same(
-        explorer.get("/api/store/tag-neighbours?kind=movie&tag=heist"),
-        &r,
-        &Call::TagNeighbours {
-            kind: s("movie"),
-            tag: s("heist"),
-        },
+    // what else is filed under a title
+    let got = same(&explorer, &r, "/items/imdb:tt1/collections");
+    assert_eq!(got[0]["name"], "Heist films");
+    assert_eq!(got[0]["mentions"], Value::Null);
+    assert_eq!(
+        same(&explorer, &r, "/items/imdb:tt1/audio-facts"),
+        json!({"bpm": 92, "key": "A minor"})
     );
     assert_eq!(
+        same(&explorer, &r, "/items/imdb:tt2/audio-facts"),
+        Value::Null
+    );
+    let got = same(&explorer, &r, "/items/imdb:tt1/external-ids");
+    assert_eq!(got.as_array().map(Vec::len), Some(2));
+    assert_eq!(
+        same(&explorer, &r, "/items/imdb:tt1/plex")[0]["section_id"],
+        "1"
+    );
+    let got = same(&explorer, &r, "/items/imdb:tt1/media-parts");
+    assert_eq!(got[0]["file"], "/m/heat.mkv");
+    let got = same(&explorer, &r, "/items/imdb:tt1/plays");
+    assert_eq!(ids(got.as_array().expect("list"), "history_key"), ["p1"]);
+    assert!(
+        got[0].get("ip").is_none() && got[0].get("client_identifier").is_none(),
+        "{got}"
+    );
+    let got = same(&explorer, &r, "/items/imdb:tt1/role-statements");
+    assert_eq!(
         got,
-        json!([{"tag": "car chase", "shared": 1, "df": 1}, {"tag": "los angeles", "shared": 1, "df": 1}])
+        json!([{"keyword": "los angeles", "role": "region", "source": "anilist", "stated_at": T}])
     );
 
-    // crowd lists, a missing mentions kept as null
-    let got = same(
-        explorer.get("/api/store/collections?item_id=imdb:tt1"),
-        &r,
-        &Call::CollectionsFor {
-            item_id: s("imdb:tt1"),
-        },
+    // the house and its accounts
+    assert_eq!(
+        same(&explorer, &r, "/accounts"),
+        json!([
+            {"account_id": 1, "plays": 3, "last_viewed_at": 1700000200},
+            {"account_id": 7, "plays": 1, "last_viewed_at": 1700000300},
+        ])
     );
-    assert_eq!(got[0]["name"], "Heist films");
-    assert_eq!(got[0]["rank"], 1);
-    assert_eq!(got[0]["mentions"], Value::Null);
-
-    // watch history: one account's, and the house's
-    let got = same(
-        explorer.get("/api/store/watched?account=1"),
-        &r,
-        &Call::WatchedUnitsFor { account: 1 },
-    );
-    assert_eq!(got, json!(["imdb:tt1", "tvdb:9"]));
-    let got = same(
-        explorer.get("/api/store/watched?account=99"),
-        &r,
-        &Call::WatchedUnitsFor { account: 99 },
-    );
-    assert_eq!(got, json!([]));
-    let got = same(
-        explorer.get("/api/store/watched/all"),
-        &r,
-        &Call::WatchedUnits,
-    );
-    assert_eq!(got, json!(["imdb:tt1", "imdb:tt2", "tvdb:9"]));
-    let got = same(
-        explorer.get("/api/store/taste?account=1"),
-        &r,
-        &Call::TasteVectorFor { account: 1 },
-    );
+    let got = same(&explorer, &r, "/accounts/1/taste");
     assert!(
         got["attributes"]
             .as_array()
             .is_some_and(|a| a.iter().any(|x| x["value"] == "police")),
         "{got}"
     );
-    let got = same(
-        explorer.get("/api/store/taste/pooled"),
-        &r,
-        &Call::PooledTasteVector,
-    );
+    let got = same(&explorer, &r, "/taste");
     assert!(
         got["attributes"]
             .as_array()
             .is_some_and(|a| a.iter().any(|x| x["value"] == "car chase")),
         "{got}"
     );
+    assert_eq!(
+        same(&explorer, &r, "/accounts/1/watched")["data"],
+        json!(["imdb:tt1", "tvdb:9"])
+    );
+    assert_eq!(
+        same(&explorer, &r, "/watched")["data"],
+        json!(["imdb:tt1", "imdb:tt2", "tvdb:9"])
+    );
+
+    // keywords: one with its spellings and name, a spelling looked up, pairs and roles
+    assert_eq!(
+        same(&explorer, &r, "/keywords/heist"),
+        json!({"keyword": "heist", "name": "Heist films", "surfaces": ["Heist", "heists"]})
+    );
+    let got = same(&explorer, &r, "/keywords?surface=HEISTS");
+    assert_eq!(
+        ids(got["data"].as_array().expect("data"), "keyword"),
+        ["heist"]
+    );
+    assert_eq!(
+        same(&explorer, &r, "/keywords?surface=nothing+like+it")["data"],
+        json!([])
+    );
+    let got = same(&explorer, &r, "/keywords/heist/pairs");
+    assert_eq!(
+        ids(got.as_array().expect("list"), "keyword_b"),
+        ["heist", "heists", "los angeles"]
+    );
+    let got = same(&explorer, &r, "/keywords/heist/roles");
+    assert_eq!(got["verdicts"].as_array().map(Vec::len), Some(2));
+    assert_eq!(
+        got["decisions"],
+        json!([{"role": "theme", "decision": "accepted", "decided_at": T}])
+    );
+    // a keyword holding `/`, `%` or `?` is one encoded path segment
+    assert_eq!(
+        same(&explorer, &r, "/keywords/ac%2Fdc")["surfaces"],
+        json!(["AC/DC"])
+    );
+    assert_eq!(same(&explorer, &r, "/keywords/100%25")["keyword"], "100%");
+    assert_eq!(same(&explorer, &r, "/keywords/what%3F/pairs"), json!([]));
+    assert_eq!(
+        same(&explorer, &r, "/keywords/ac%2Fdc/pairs")[0]["keyword_b"],
+        "heist"
+    );
+    let got = same(&explorer, &r, "/keyword-pairs?decision=undecided");
+    assert_eq!(
+        ids(got["data"].as_array().expect("data"), "keyword_a"),
+        ["ac/dc"]
+    );
+
+    // the tag network seen from one tag
+    assert_eq!(
+        same(&explorer, &r, "/tags/heist/neighbours?kind=movie"),
+        json!([{"tag": "car chase", "shared": 1, "df": 1}, {"tag": "los angeles", "shared": 1, "df": 1}])
+    );
 
     // with no Frame index configured, the explorer says it cannot search
-    let got = same(
-        explorer.get("/api/store/capabilities"),
-        &r,
-        &Call::Capabilities,
+    assert_eq!(
+        same(&explorer, &r, "/capabilities"),
+        json!({"search": false})
     );
-    assert_eq!(got, json!({"search": false}));
-    let (status, body) = explorer.get("/api/store/cuts?item_id=imdb:tt1");
+    let (status, body) = explorer.get("/items/imdb:tt1/cuts");
     assert_eq!(status, 503, "{body}");
 
-    // one log line per request, with raw values and the status
+    // one log line per request: method, path and query as sent, status, size or reason
     let log = explorer.stop();
     assert!(
         log.contains(
-            "explore: store enrichment item_id=imdb:tt1 namespace=keywords status=200 ms="
+            "explore: store GET /items/imdb:tt1/enrichment?namespace=keywords status=200 ms="
         ),
         "{log}"
     );
+    assert!(log.contains(" bytes="), "{log}");
     assert!(
-        log.contains("explore: store enrichment-many ids=4 namespace=keywords status=200"),
+        log.contains("explore: store GET /items/imdb:tt1/cuts status=503 ms="),
         "{log}"
     );
-    assert!(
-        log.contains("explore: store cuts item_id=imdb:tt1 status=503"),
-        "{log}"
+}
+
+#[test]
+fn every_list_walks_to_its_end_through_next() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    world(dir.path());
+    let explorer = Explorer::start(dir.path());
+    let r = reader(dir.path());
+
+    let every_item = [
+        "imdb:tt1",
+        "imdb:tt2",
+        "imdb:tt3",
+        "tvdb:9",
+        "tvdb:9-1-1",
+        "tvdb:9-1-2",
+    ];
+    for limit in [1, 2, 4, 6, 7] {
+        assert_eq!(
+            ids(&walk(&explorer, &r, "/items", limit), "item_id"),
+            every_item
+        );
+    }
+    // filters, and the whole-pool read with its facts
+    let movies = walk(
+        &explorer,
+        &r,
+        "/items?type=movie&include=enrichment&namespace=keywords",
+        2,
+    );
+    assert_eq!(
+        ids(&movies, "item_id"),
+        ["imdb:tt1", "imdb:tt2", "imdb:tt3"]
+    );
+    let facts: Vec<(String, String)> = movies
+        .iter()
+        .flat_map(|m| {
+            let id = m["item_id"].as_str().expect("id").to_string();
+            m["enrichment"]
+                .as_array()
+                .expect("enrichment")
+                .iter()
+                .map(move |f| (id.clone(), f["value"].as_str().expect("value").to_string()))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(
+        facts,
+        [
+            (s("imdb:tt1"), s("heist")),
+            (s("imdb:tt1"), s("los angeles")),
+            (s("imdb:tt2"), s("car chase")),
+            (s("imdb:tt2"), s("heist")),
+        ]
+    );
+    assert_eq!(
+        ids(&walk(&explorer, &r, "/items?library=1", 1), "item_id"),
+        ["imdb:tt1", "imdb:tt2"]
+    );
+    assert_eq!(
+        ids(&walk(&explorer, &r, "/items?show=tvdb:9", 1), "item_id"),
+        ["tvdb:9-1-1", "tvdb:9-1-2"]
+    );
+    assert_eq!(
+        walk(&explorer, &r, "/items?type=season", 3),
+        Vec::<Value>::new()
+    );
+
+    assert_eq!(
+        ids(&walk(&explorer, &r, "/plays", 1), "history_key"),
+        ["p1", "p2", "p3", "p4"]
+    );
+    assert_eq!(
+        ids(
+            &walk(&explorer, &r, "/plays?account=1&since=1700000100", 1),
+            "history_key"
+        ),
+        ["p2", "p3"]
+    );
+    assert_eq!(
+        walk(&explorer, &r, "/watched", 1),
+        [json!("imdb:tt1"), json!("imdb:tt2"), json!("tvdb:9")]
+    );
+    assert_eq!(
+        walk(&explorer, &r, "/accounts/7/watched", 1),
+        [json!("imdb:tt2")]
+    );
+    assert_eq!(
+        ids(&walk(&explorer, &r, "/keywords", 2), "keyword"),
+        ["100%", "ac/dc", "heist", "los angeles", "what?"]
+    );
+    let pairs = walk(&explorer, &r, "/keyword-pairs", 1);
+    assert_eq!(ids(&pairs, "keyword_a"), ["ac/dc", "heist", "heist"]);
+    assert_eq!(ids(&pairs, "keyword_b"), ["heist", "heists", "los angeles"]);
+    assert_eq!(
+        ids(
+            &walk(&explorer, &r, "/keyword-pairs?decision=accepted", 1),
+            "keyword_b"
+        ),
+        ["heists"]
+    );
+    // an `after` that names no row still starts after it: the cursor is a key, not a row
+    let got = same(&explorer, &r, "/items?after=imdb:tt15");
+    assert_eq!(
+        ids(got["data"].as_array().expect("data"), "item_id")[0],
+        "imdb:tt2"
     );
 }
 
@@ -419,46 +555,126 @@ fn a_store_route_refuses_a_request_it_cannot_read() {
         let body: Value = serde_json::from_str(&body).expect("JSON");
         (status, body["error"].as_str().unwrap_or("").to_string())
     };
+    let get = |target: &str| error(explorer.get(target));
+
+    // what the store does not hold is a 404
     assert_eq!(
-        error(explorer.get("/api/store/enrichment?item_id=imdb:tt1")),
-        (400, s("namespace is required"))
+        get("/items/imdb:tt9"),
+        (404, s("the store holds no item imdb:tt9"))
     );
     assert_eq!(
-        error(explorer.get("/api/store/edges/from?edge_type=tmdb_similar")),
-        (400, s("item_id is required"))
+        get("/items/imdb:tt9/edges"),
+        (404, s("the store holds no item imdb:tt9"))
     );
     assert_eq!(
-        error(explorer.get("/api/store/taste?account=owner")),
-        (400, s("account must be a Plex account id, a whole number"))
+        get("/accounts/99/taste"),
+        (404, s("the store has no plays by account 99"))
+    );
+    assert_eq!(get("/accounts/99/watched").0, 404);
+    assert_eq!(get("/keywords/nothing").0, 404);
+    assert_eq!(get("/keywords/nothing/roles").0, 404);
+    assert_eq!(get("/tags/nothing/neighbours?kind=movie").0, 404);
+    assert_eq!(
+        get("/items/imdb:tt1/nothing"),
+        (404, s("no store route answers /items/imdb:tt1/nothing"))
+    );
+    // the RPC routes are gone
+    assert_eq!(
+        get("/api/store/enrichment?item_id=imdb:tt1&namespace=keywords").0,
+        404
     );
     assert_eq!(
         error(explorer.post(
             "/api/store/enrichment",
-            &json!({"item_ids": "imdb:tt1", "namespace": "keywords"})
-        )),
-        (400, s("item_ids must be a list of at most 20000 item ids"))
+            &json!({"item_ids": ["imdb:tt1"], "namespace": "keywords"})
+        ))
+        .0,
+        404
+    );
+
+    // a request it cannot read is a 400 naming the parameter
+    assert_eq!(
+        get("/items?limit=0"),
+        (
+            400,
+            s("limit must be a whole number from 1 to 1000, got \"0\"")
+        )
+    );
+    assert_eq!(get("/items?limit=1001").0, 400);
+    assert_eq!(get("/items?limit=ten").0, 400);
+    assert_eq!(
+        get("/items?include=posters"),
+        (
+            400,
+            s("include takes enrichment, external_ids, audio_facts and plex, got \"posters\"")
+        )
     );
     assert_eq!(
-        error(explorer.post("/api/store/audio-facts", &json!({}))),
-        (400, s("item_ids must be a list of at most 20000 item ids"))
+        get("/items?namespace=keywords"),
+        (
+            400,
+            s("namespace narrows include=enrichment, which is not asked for")
+        )
     );
-    let too_many: Vec<String> = (0..20_001).map(|i| format!("fs:{i}")).collect();
     assert_eq!(
-        error(explorer.post("/api/store/audio-facts", &json!({"item_ids": too_many}))).0,
-        400
+        get("/items/imdb:tt1/edges?edge_type=tmdb_similar"),
+        (
+            400,
+            s("unknown parameter edge_type: this route takes type, direction")
+        )
     );
+    assert_eq!(get("/items/imdb:tt1/edges?direction=sideways").0, 400);
+    assert_eq!(
+        get("/items?type=movie&type=show"),
+        (400, s("type is given twice"))
+    );
+    assert_eq!(get("/accounts/owner/taste").0, 400);
+    assert_eq!(get("/plays?account=owner").0, 400);
+    assert_eq!(get("/tags/heist/neighbours"), (400, s("kind is required")));
+    assert_eq!(get("/keyword-pairs?decision=maybe").0, 400);
+    assert_eq!(get("/keyword-pairs?after=heist").0, 400);
+
+    // a read is a GET, a search a POST
+    let (status, body) = error(explorer.post("/items", &json!({})));
+    assert_eq!((status, body.as_str()), (405, "/items answers GET only"));
+    assert_eq!(get("/searches"), (405, s("/searches answers POST only")));
+
     // search without a Frame index: the body is read first, then the missing index is a 503
     assert_eq!(
-        error(explorer.post("/api/store/search", &json!({"pool": ["imdb:tt1"]}))),
+        error(explorer.post("/searches", &json!({"pool": ["imdb:tt1"]}))),
         (400, s("phrase must be text of at most 500 characters"))
     );
     assert_eq!(
         error(explorer.post(
-            "/api/store/search",
+            "/searches",
+            &json!({"pool": "imdb:tt1", "phrase": "a heist"})
+        )),
+        (400, s("pool must be a list of at most 20000 item ids"))
+    );
+    assert_eq!(
+        error(explorer.post(
+            "/searches",
+            &json!({"pool": ["imdb:tt1"], "phrase": "x", "seed": 1})
+        ))
+        .0,
+        400
+    );
+    assert_eq!(
+        error(explorer.post(
+            "/searches",
             &json!({"pool": ["imdb:tt1"], "phrase": "a heist"})
         ))
         .0,
         503
+    );
+    let log = explorer.stop();
+    assert!(
+        log.contains("explore: store GET /items?limit=0 status=400 ms="),
+        "{log}"
+    );
+    assert!(
+        log.contains("error=\"limit must be a whole number"),
+        "{log}"
     );
 }
 
@@ -466,7 +682,7 @@ fn a_store_route_refuses_a_request_it_cannot_read() {
 fn a_store_route_is_503_until_a_store_exists() {
     let dir = tempfile::tempdir().expect("tempdir");
     let explorer = Explorer::start(dir.path());
-    let (status, body) = explorer.get("/api/store/watched/all");
+    let (status, body) = explorer.get("/watched");
     assert_eq!(status, 503, "{body}");
     assert!(body.contains("no store at"), "{body}");
 }

@@ -56,6 +56,7 @@ mod call;
 mod error;
 mod model;
 mod phrase;
+mod rows;
 mod schema;
 mod search;
 
@@ -64,12 +65,15 @@ use std::path::Path;
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Row};
 
-pub use call::{Call, Needs};
+pub use call::{Call, DEFAULT_LIMIT, Direction, Include, ItemFilter, MAX_LIMIT, Needs, PageArgs};
 pub use error::ReaderError;
 pub use model::{
-    CollectionMembership, Edge, EnrichmentFact, TagNeighbour, TasteAttribute, TasteVector,
+    Account, CollectionMembership, Edge, EnrichmentFact, ExternalId, Item, Keyword, KeywordPair,
+    KeywordRoles, MediaPart, Page, Play, PlexEntry, RoleDecision, RoleStatement, RoleVerdict,
+    TagNeighbour, TasteAttribute, TasteVector,
 };
 pub use phrase::{MAX_UNUSED_DAYS, PhraseCache, cached_vector};
+use rows::{fetch, page};
 pub use schema::{SUPPORTED_FRAMES_VERSION, SUPPORTED_READER_SHAPE, check_frames, check_store};
 pub use search::{Capabilities, Search, ShotHit, ShotSearch};
 pub use url::Url;
@@ -184,8 +188,9 @@ impl Reader {
         })
     }
 
-    /// Every enrichment fact recorded for `item_id` under `namespace`, in
-    /// `(key, value)` order. Empty, not an error, when nothing is recorded.
+    /// Every enrichment fact recorded for `item_id` under `namespace`, or under every
+    /// namespace when it is `None`, in `(namespace, key, value)` order. Empty, not an
+    /// error, when nothing is recorded.
     ///
     /// Each `(key, value)` comes back once, however many sources list it (the
     /// store's primary key carries `source`, ADR-0016); `source` is never
@@ -193,14 +198,14 @@ impl Reader {
     pub fn enrichment_for(
         &self,
         item_id: &str,
-        namespace: &str,
+        namespace: Option<&str>,
     ) -> Result<Vec<EnrichmentFact>, ReaderError> {
         let mut stmt = self.conn.prepare(
             "SELECT namespace, key, value, MAX(fetched_at) \
              FROM enrichment \
-             WHERE item_id = ?1 AND namespace = ?2 \
+             WHERE item_id = ?1 AND (?2 IS NULL OR namespace = ?2) \
              GROUP BY namespace, key, value \
-             ORDER BY key, value",
+             ORDER BY namespace, key, value",
         )?;
         let rows = stmt
             .query_map((item_id, namespace), Self::enrichment_row)?
@@ -208,9 +213,9 @@ impl Reader {
         Ok(rows)
     }
 
-    /// Every enrichment fact recorded under `namespace` for any of
-    /// `item_ids`, grouped by `item_id`. Within each id's group the facts are
-    /// in `(key, value)` order — for any single id, that group is
+    /// Every enrichment fact recorded under `namespace` (every namespace when
+    /// `None`) for any of `item_ids`, grouped by `item_id`. Within each id's group
+    /// the facts are in `(namespace, key, value)` order — for any single id, that group is
     /// byte-identical to what [`Self::enrichment_for`] returns for that id.
     /// An id with no rows in the namespace is simply absent from the result
     /// (2,373 of this store's movies have no TMDB keywords, and that is
@@ -234,7 +239,7 @@ impl Reader {
     pub fn enrichment_for_many<'a>(
         &self,
         item_ids: impl IntoIterator<Item = &'a str>,
-        namespace: &str,
+        namespace: Option<&str>,
     ) -> Result<BTreeMap<String, Vec<EnrichmentFact>>, ReaderError> {
         // Deduplicated: an id repeated in the input must not land in two
         // different chunks' `IN` lists and have its facts counted twice.
@@ -266,13 +271,18 @@ impl Reader {
             let sql = format!(
                 "SELECT namespace, key, value, MAX(fetched_at), item_id \
                  FROM enrichment \
-                 WHERE item_id IN ({placeholders}) AND namespace = ? \
+                 WHERE (?1 IS NULL OR namespace = ?1) AND item_id IN ({placeholders}) \
                  GROUP BY item_id, namespace, key, value \
-                 ORDER BY item_id, key, value"
+                 ORDER BY item_id, namespace, key, value"
             );
             let mut stmt = self.conn.prepare(&sql)?;
-            let params =
-                rusqlite::params_from_iter(chunk.iter().copied().chain(std::iter::once(namespace)));
+            let params = rusqlite::params_from_iter(
+                std::iter::once(rusqlite::types::Value::from(namespace.map(str::to_string))).chain(
+                    chunk
+                        .iter()
+                        .map(|id| rusqlite::types::Value::from(id.to_string())),
+                ),
+            );
             let rows = stmt
                 .query_map(params, |row| {
                     Ok((row.get::<_, String>(4)?, Self::enrichment_row(row)?))
@@ -448,25 +458,35 @@ impl Reader {
         Ok(name)
     }
 
-    /// Edges of `edge_type` pointing *out of* `item_id`, ranked ascending.
-    pub fn edges_from(&self, item_id: &str, edge_type: &str) -> Result<Vec<Edge>, ReaderError> {
+    /// Edges of `edge_type` (every type when `None`) pointing *out of* `item_id`,
+    /// by type, then rank ascending.
+    pub fn edges_from(
+        &self,
+        item_id: &str,
+        edge_type: Option<&str>,
+    ) -> Result<Vec<Edge>, ReaderError> {
         self.query_edges(
             "SELECT from_id, to_id, edge_type, rank, fetched_at \
              FROM edges \
-             WHERE from_id = ?1 AND edge_type = ?2 \
-             ORDER BY rank",
+             WHERE from_id = ?1 AND (?2 IS NULL OR edge_type = ?2) \
+             ORDER BY edge_type, rank, to_id",
             item_id,
             edge_type,
         )
     }
 
-    /// Edges of `edge_type` pointing *into* `item_id`, ranked ascending.
-    pub fn edges_to(&self, item_id: &str, edge_type: &str) -> Result<Vec<Edge>, ReaderError> {
+    /// Edges of `edge_type` (every type when `None`) pointing *into* `item_id`,
+    /// by type, then rank ascending.
+    pub fn edges_to(
+        &self,
+        item_id: &str,
+        edge_type: Option<&str>,
+    ) -> Result<Vec<Edge>, ReaderError> {
         self.query_edges(
             "SELECT from_id, to_id, edge_type, rank, fetched_at \
              FROM edges \
-             WHERE to_id = ?1 AND edge_type = ?2 \
-             ORDER BY rank",
+             WHERE to_id = ?1 AND (?2 IS NULL OR edge_type = ?2) \
+             ORDER BY edge_type, rank, from_id",
             item_id,
             edge_type,
         )
@@ -479,7 +499,7 @@ impl Reader {
         &self,
         sql: &str,
         item_id: &str,
-        edge_type: &str,
+        edge_type: Option<&str>,
     ) -> Result<Vec<Edge>, ReaderError> {
         let mut stmt = self.conn.prepare(sql)?;
         let rows = stmt
@@ -600,36 +620,30 @@ impl Reader {
     /// abandonment floor belongs to the taste rollup, where a weak signal must
     /// not move a weight; it is the wrong rule for a membership test.
     ///
-    /// Sorted, so the result is deterministic. Empty, not an error, for an
-    /// account with no plays.
-    pub fn watched_units_for(&self, plex_account_id: i64) -> Result<Vec<String>, ReaderError> {
+    /// One page of them, sorted: the units after `after`, at most `limit`, one
+    /// account's when `plex_account_id` is given, else the house's — every account
+    /// pooled, the same rollup and the same one-play bar.
+    pub fn watched_units(
+        &self,
+        plex_account_id: Option<i64>,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<Page<String>, ReaderError> {
         let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT COALESCE(i.show_item_id, p.item_id) AS unit \
-             FROM plays p \
-             JOIN items i ON i.item_id = p.item_id \
-             WHERE p.plex_account_id = ?1 \
-             ORDER BY unit",
+            "SELECT unit FROM ( \
+               SELECT DISTINCT COALESCE(i.show_item_id, p.item_id) AS unit \
+               FROM plays p \
+               JOIN items i ON i.item_id = p.item_id \
+               WHERE ?1 IS NULL OR p.plex_account_id = ?1 \
+             ) WHERE unit > ?2 ORDER BY unit LIMIT ?3",
         )?;
         let units = stmt
-            .query_map([plex_account_id], |row| row.get::<_, String>(0))?
+            .query_map(
+                rusqlite::params![plex_account_id, after.unwrap_or(""), fetch(limit)],
+                |row| row.get::<_, String>(0),
+            )?
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(units)
-    }
-
-    /// The same, pooled across every account — what the *house* has seen,
-    /// rather than one person. Same unit rollup and the same one-play bar as
-    /// [`Self::watched_units_for`].
-    pub fn watched_units(&self) -> Result<Vec<String>, ReaderError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT COALESCE(i.show_item_id, p.item_id) AS unit \
-             FROM plays p \
-             JOIN items i ON i.item_id = p.item_id \
-             ORDER BY unit",
-        )?;
-        let units = stmt
-            .query_map([], |row| row.get::<_, String>(0))?
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(units)
+        Ok(page(units, limit, Clone::clone))
     }
 
     /// The Layer 2 rollup pooled across every account, weighted per
@@ -951,7 +965,7 @@ mod tests {
 
         let ids: Vec<String> = (0..10).map(|i| format!("id{i}")).collect();
         let result = reader
-            .enrichment_for_many(ids.iter().map(String::as_str), "ns")
+            .enrichment_for_many(ids.iter().map(String::as_str), Some("ns"))
             .expect("a set larger than the variable limit must still succeed by chunking");
 
         assert_eq!(result.len(), 10, "every id must be present");

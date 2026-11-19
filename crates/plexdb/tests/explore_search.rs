@@ -819,8 +819,8 @@ fn a_missing_frame_index_and_tokenizer_are_reported_not_guessed() {
     assert_eq!(status, 404, "{out}");
 }
 
-/// `/api/store/search`, `/api/store/cuts`, `/api/store/chapters` and `/api/store/capabilities`
-/// answer exactly what `Reader::answer` gives for the same call (ADR-0031).
+/// `POST /searches`, `/items/{id}/cuts`, `/items/{id}/chapters` and `/capabilities` answer
+/// exactly what `Reader::answer` gives for the same call (ADR-0031).
 #[test]
 fn the_store_routes_over_the_frame_index_answer_what_the_reader_answers() {
     use plexdb_reader::{Call, PhraseCache, Reader, Url};
@@ -854,7 +854,7 @@ fn the_store_routes_over_the_frame_index_answer_what_the_reader_answers() {
         "negatives": ["rain"],
         "temperature": 0.1,
     });
-    let (status, ranked) = explorer.post("/api/store/search", &search);
+    let (status, ranked) = explorer.post("/searches", &search);
     assert_eq!(status, 200, "{ranked}");
     let drawn_body = json!({
         "pool": ["imdb:tt1", "imdb:tt2", "imdb:tt3"],
@@ -863,7 +863,7 @@ fn the_store_routes_over_the_frame_index_answer_what_the_reader_answers() {
         "temperature": 0.1,
         "draw": {"n": 2, "seed": 7},
     });
-    let (status, drawn) = explorer.post("/api/store/search", &drawn_body);
+    let (status, drawn) = explorer.post("/searches", &drawn_body);
     assert_eq!(status, 200, "{drawn}");
 
     // The explorer embedded both phrases into its cache; the reader reads them from it.
@@ -903,7 +903,7 @@ fn the_store_routes_over_the_frame_index_answer_what_the_reader_answers() {
     assert_eq!(drawn, expect(&call(Some(2), 7)));
     assert_eq!(drawn["shots"].as_array().map(Vec::len), Some(2), "{drawn}");
 
-    let (status, cuts) = explorer.get("/api/store/cuts?item_id=imdb:tt1");
+    let (status, cuts) = explorer.get("/items/imdb:tt1/cuts");
     assert_eq!(status, 200, "{cuts}");
     assert_eq!(cuts, json!([1500, 3000, 6000]));
     assert_eq!(
@@ -912,18 +912,18 @@ fn the_store_routes_over_the_frame_index_answer_what_the_reader_answers() {
             item_id: "imdb:tt1".into()
         })
     );
-    let (status, chapters) = explorer.get("/api/store/chapters?item_id=imdb:tt1");
+    let (status, chapters) = explorer.get("/items/imdb:tt1/chapters");
     assert_eq!((status, chapters), (200, json!([3000])));
-    let (status, nothing) = explorer.get("/api/store/cuts?item_id=imdb:tt3");
+    let (status, nothing) = explorer.get("/items/imdb:tt3/cuts");
     assert_eq!((status, nothing), (200, json!([])));
 
-    let (status, capabilities) = explorer.get("/api/store/capabilities");
+    let (status, capabilities) = explorer.get("/capabilities");
     assert_eq!((status, capabilities), (200, json!({"search": true})));
 
     // A bad temperature is the reader's own refusal, as a 400.
     let mut bad = search.clone();
     bad["temperature"] = json!(-1);
-    let (status, out) = explorer.post("/api/store/search", &bad);
+    let (status, out) = explorer.post("/searches", &bad);
     assert_eq!(status, 400, "{out}");
     assert_eq!(
         out["error"],

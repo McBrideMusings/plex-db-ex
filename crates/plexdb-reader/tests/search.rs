@@ -243,7 +243,12 @@ fn fixture() -> Fixture {
     register_vec();
     let dir = tempfile::tempdir().expect("tempdir");
     let snapshot = dir.path().join("plexdb.db");
-    common::build_fixture(&snapshot);
+    common::build_fixture(&snapshot)
+        .execute_batch(
+            "INSERT INTO items (item_id, type, title) VALUES \
+             ('imdb:a', 'movie', 'A'), ('imdb:b', 'movie', 'B')",
+        )
+        .expect("the indexed titles are items");
     let frames_dir = dir.path().join("frames");
     let status = Command::new("uv")
         .args(["run", "plexdb", "frames", "migrate"])
@@ -794,28 +799,9 @@ fn path_str(p: &Path) -> &str {
 fn plexdb_read_prints_the_search_as_json_and_fails_with_a_message() {
     let fx = fixture();
     let enc = FakeEncoder::start();
-    let (ok, out, err) = read_bin(
-        &fx,
-        &enc.url,
-        &[
-            "search",
-            "cat",
-            "--pool",
-            "imdb:a",
-            "--pool",
-            "imdb:b",
-            "--not",
-            "dog",
-            "--weight",
-            "0.5",
-            "--temperature",
-            "0.2",
-            "--draw",
-            "2",
-            "--seed",
-            "4",
-        ],
-    );
+    let body = r#"{"pool": ["imdb:a", "imdb:b"], "phrase": "cat", "negatives": ["dog"],
+                   "weight": 0.5, "temperature": 0.2, "draw": {"n": 2, "seed": 4}}"#;
+    let (ok, out, err) = read_bin(&fx, &enc.url, &["/searches", "--body", body]);
     assert!(ok, "{err}");
     let json: Value = serde_json::from_str(&out).expect("JSON on stdout");
     assert_eq!(json["pool"], 2);
@@ -838,41 +824,48 @@ fn plexdb_read_prints_the_search_as_json_and_fails_with_a_message() {
         serde_json::from_str(&serde_json::to_string(&expected).expect("to_string")).expect("parse");
     assert_eq!(json, expected);
 
+    // The body may come first and the path last; a GET route given a body is refused.
     let (ok, out, err) = read_bin(
         &fx,
         &enc.url,
         &[
-            "search", "--pool", "imdb:a", "--pool", "imdb:b", "cat", "--not", "--dog",
+            "--body",
+            r#"{"pool": ["imdb:a"], "phrase": "cat"}"#,
+            "/searches",
         ],
     );
     assert!(ok, "{err}");
-    let flags_first: Value = serde_json::from_str(&out).expect("JSON on stdout");
-    assert_eq!(flags_first["pool"], 2);
+    let body_first: Value = serde_json::from_str(&out).expect("JSON on stdout");
+    assert_eq!(body_first["pool"], 1);
 
-    let (ok, _, err) = read_bin(
-        &fx,
-        &enc.url,
-        &["search", "cat", "--pool", "imdb:a", "imdb:b"],
-    );
+    let (ok, _, err) = read_bin(&fx, &enc.url, &["/searches", "imdb:b"]);
     assert!(!ok);
     assert!(err.contains("unexpected argument imdb:b"), "{err}");
+
+    let (ok, _, err) = read_bin(&fx, &enc.url, &["/items/imdb:a/cuts", "--body", "{}"]);
+    assert!(!ok);
+    assert!(err.contains("answers GET only"), "{err}");
 
     let (ok, out, _) = read_bin(&fx, &enc.url, &["--help"]);
     assert!(ok);
     assert!(out.starts_with("usage: plexdb-read"), "{out}");
 
-    let (ok, out, _) = read_bin(&fx, &enc.url, &["cuts", "imdb:a"]);
+    let (ok, out, _) = read_bin(&fx, &enc.url, &["/items/imdb:a/cuts"]);
     assert!(ok);
     assert_eq!(out.trim(), "[10000,20000]");
 
-    let (ok, out, _) = read_bin(&fx, &enc.url, &["capabilities"]);
+    let (ok, out, _) = read_bin(&fx, &enc.url, &["/capabilities"]);
     assert!(ok);
     assert_eq!(out.trim(), r#"{"search":true}"#);
 
     let (ok, out, err) = read_bin(
         &fx,
         &refused_url(),
-        &["search", "unseen phrase", "--pool", "imdb:a"],
+        &[
+            "/searches",
+            "--body",
+            r#"{"pool": ["imdb:a"], "phrase": "unseen phrase"}"#,
+        ],
     );
     assert!(!ok);
     assert!(out.is_empty());

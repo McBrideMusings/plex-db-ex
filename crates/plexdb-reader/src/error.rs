@@ -100,6 +100,19 @@ pub enum ReaderError {
         source: serde_json::Error,
     },
 
+    /// A request [`crate::Call::parse`] cannot read: a missing, unknown or malformed
+    /// parameter or body field.
+    #[error("{0}")]
+    BadRequest(String),
+
+    /// A path no route answers, or a resource the store does not hold.
+    #[error("{0}")]
+    NotFound(String),
+
+    /// A route asked for with a method it does not answer.
+    #[error("{0}")]
+    MethodNotAllowed(String),
+
     #[error("could not write the answer as JSON: {0}")]
     Reply(#[source] serde_json::Error),
 }

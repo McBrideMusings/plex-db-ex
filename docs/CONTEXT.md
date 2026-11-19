@@ -152,7 +152,7 @@ A process in this repo that opens the Snapshot and the Frame index read-only —
 belongs to its caller. A Consumer is never a Reader: it calls the store API (ADR-0031).
 
 **Consumer**:
-A project that uses the Store — today `etv-station` and `curator` — through Plex DB-EX's HTTP routes (`/api/store/*` and `/api/extras/*`), never by opening a Store file.
+A project that uses the Store — today `etv-station` and `curator` — through Plex DB-EX's HTTP routes (the store API in `docs/api.md`, and `/api/extras/*`), never by opening a Store file.
 
 **Sweep**:
 One scheduled run of the Writer: every Step in order, ending in a published Snapshot. Runs

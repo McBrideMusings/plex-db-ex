@@ -185,7 +185,7 @@ struct App {
     networks: Keyed<(String, BTreeSet<String>), Network>,
     title_slots: AtomicUsize,
     keyword_slots: AtomicUsize,
-    /// `/api/store/*` requests running now.
+    /// Store API requests running now.
     store_slots: AtomicUsize,
     /// The Search tab (`/api/search/*`).
     search: Tab,
@@ -1668,29 +1668,7 @@ fn router(app: Shared) -> Router {
         .route("/api/search/queue", post(search_queue))
         .route("/api/search/why", post(search_why))
         .route("/api/search/run", post(search_run))
-        .route(
-            "/api/store/enrichment",
-            get(store::enrichment_get).post(store::enrichment_post),
-        )
-        .route(
-            "/api/store/audio-facts",
-            get(store::audio_facts_get).post(store::audio_facts_post),
-        )
-        .route("/api/store/keyword", get(store::keyword_get))
-        .route("/api/store/surfaces", get(store::surfaces_get))
-        .route("/api/store/display-name", get(store::display_name_get))
-        .route("/api/store/edges/from", get(store::edges_from_get))
-        .route("/api/store/edges/to", get(store::edges_to_get))
-        .route("/api/store/tag-neighbours", get(store::tag_neighbours_get))
-        .route("/api/store/collections", get(store::collections_get))
-        .route("/api/store/taste", get(store::taste_get))
-        .route("/api/store/taste/pooled", get(store::taste_pooled_get))
-        .route("/api/store/watched", get(store::watched_get))
-        .route("/api/store/watched/all", get(store::watched_all_get))
-        .route("/api/store/search", post(store::search_post))
-        .route("/api/store/cuts", get(store::cuts_get))
-        .route("/api/store/chapters", get(store::chapters_get))
-        .route("/api/store/capabilities", get(store::capabilities_get))
+        .merge(store::routes())
         .fallback(no_route)
         .with_state(app)
 }

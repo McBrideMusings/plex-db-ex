@@ -72,11 +72,13 @@ Three routes serve extras to consumers and the settings page ([ADR-0030](./adr/0
 
 ## Store routes
 
-`/api/store/*` serves every fact the reader crate reads, one route per accessor, and is the only
-way a program outside this repo reads the store ([ADR-0031](./adr/0031-readers-reach-the-store-only-through-the-http-api)).
+The store API serves every fact the store holds for consumers as a resource — `/items`, `/plays`,
+`/accounts`, `/taste`, `/watched`, `/keywords`, `/keyword-pairs`, `/tags`, `/capabilities` and
+`POST /searches` at the root of the explorer's port — and is the only way a program outside this
+repo reads the store ([ADR-0031](./adr/0031-readers-reach-the-store-only-through-the-http-api)).
 Each route and its JSON reply is in [The store API](./api). Every request writes one line to the
-container log, `explore: store <route> <arguments> status=<code> ms=<elapsed>`, with a list of ids
-given as its length.
+container log, `explore: store <method> <path?query> status=<code> ms=<elapsed> bytes=<reply size>`,
+or `error="<message>"` in place of the size when it is refused.
 
 ## The Extras tab
 

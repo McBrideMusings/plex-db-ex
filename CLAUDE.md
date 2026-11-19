@@ -18,7 +18,7 @@ store only for what Plex cannot carry (ADR-0005).
 **One writer.** The `plexdb` writer is the only thing that writes `plexdb.db`. It is moving
 from the Python package to one Rust binary a sweep step at a time, and both take the same writer
 lock, so one process writes at a time (ADR-0001). Every other program reads the store through
-the explorer's HTTP API (`/api/store/*`, [`docs/api.md`](docs/api.md)) and opens no store file:
+the explorer's HTTP API (the store API, [`docs/api.md`](docs/api.md)) and opens no store file:
 those routes and their JSON shapes are the public API, and the tables behind them may change
 without a reader noticing (ADR-0031).
 
@@ -70,7 +70,7 @@ Keep these in sync as you work:
 
 | File | Update when |
 |---|---|
-| `docs/api.md` | Any `/api/store/*` route, request or reply changes — this is the public API |
+| `docs/api.md` | Any store API route, request or reply changes — this is the public API |
 | `docs/schema.md` | Any table, column, or refresh rule changes |
 | `docs/CONTEXT.md` | A term resolves, or an existing one turns out to mean something else |
 | `docs/adr/` | A decision is made that is hard to reverse and would surprise a future reader |

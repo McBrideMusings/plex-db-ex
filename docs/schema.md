@@ -2334,18 +2334,18 @@ unreachable encoder, or a 5xx, is `EncoderUnavailable`; any other non-200 or an 
 `EncoderFailed`. The reader's HTTP client has no TLS, so an `https://` encoder URL is
 `EncoderUnavailable`.
 
-**`plexdb-read`** is the crate's command line: one subcommand per accessor, JSON on stdout, a
-message on stderr and a non-zero exit on error (2 for a usage error). It reads `--snapshot`,
-`--frames`, `--phrase-cache` and `--encoder-url`, or `PLEXDB_SNAPSHOT_PATH`, `PLEXDB_FRAMES_DIR`,
-`PLEXDB_PHRASE_CACHE` and `PLEXDB_FRAME_ENCODER_URL`. `search` prints a `ShotSearch`:
+**`plexdb-read`** is the crate's command line: it takes one store API path
+([The store API](./api)) and prints that route's JSON reply on stdout, a message on stderr and a
+non-zero exit on error (2 for a usage error). It reads `--snapshot`, `--frames`, `--phrase-cache`
+and `--encoder-url`, or `PLEXDB_SNAPSHOT_PATH`, `PLEXDB_FRAMES_DIR`, `PLEXDB_PHRASE_CACHE` and
+`PLEXDB_FRAME_ENCODER_URL`. A search is the one POST, its body given with `--body` or
+`--body-file` (`-` is standard input), and prints a `ShotSearch`:
 
 ```text
-plexdb-read search <phrase> (--pool <item_id> [--pool ...] | --pool-file <path|->)
-                   [--not <phrase> [--not ...]] [--weight w] [--temperature T] [--draw n --seed s]
+plexdb-read /searches --body '{"pool": ["imdb:tt0113277", "imdb:tt0110912"], "phrase": "rain at night"}'
 ```
 
-`--pool` and `--not` take one value each and repeat (`--pool a --pool b`), so flags and the phrase
-go in any order. `plexdb-read --help` prints the usage and exits 0.
+`plexdb-read --help` prints the usage and exits 0.
 
 ```json
 {"shots": [{"item_id": "imdb:tt0113277", "in_ms": 0, "out_ms": 3000, "frames": [[0, 0.29]],
@@ -2356,13 +2356,12 @@ go in any order. `plexdb-read --help` prints the usage and exits 0.
 `p` is absent without a temperature. With `--draw`, `shots` holds the drawn Shots.
 
 **`plexdb search <phrase>`** runs the reader crate's search (`Reader::search_drawn`, the one
-implementation `plexdb-read search` also calls) with the files from the environment: the
+implementation `plexdb-read /searches` also calls) with the files from the environment: the
 Snapshot (`PLEXDB_SNAPSHOT_PATH`, else `PLEXDB_PATH`), `frames.db`, the Phrase cache
 (`PLEXDB_PHRASE_CACHE`, else `phrases.db` in `PLEXDB_FRAMES_DIR`) and `PLEXDB_FRAME_ENCODER_URL`.
 It takes `--pool` or `--pool-file` (item_ids; `-` is standard input), `--not` (both repeat, one value per flag), `--weight`,
 `--temperature`, `--draw` and `--seed`, and prints the JSON above. It runs inside `plexdb-rs`, so
-it needs no `plexdb-read` binary; the Plex DB-EX Search tab still starts `plexdb-read`
-(`PLEXDB_READ_BIN`).
+it needs no `plexdb-read` binary.
 
 ## Reading the store to build collections
 
