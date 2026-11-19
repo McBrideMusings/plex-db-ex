@@ -3,6 +3,8 @@
 
 #![allow(dead_code)]
 
+pub mod audio;
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
