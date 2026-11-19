@@ -119,6 +119,24 @@ fn the_list_table_counts_what_is_owned_and_watched_and_lists_the_unfetched_last(
 }
 
 #[test]
+fn two_memberships_at_one_rank_resolve_the_entry_once_to_the_lower_item_id() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let conn = store(dir.path());
+    fixture(&conn);
+    run(
+        &conn,
+        "INSERT INTO collection_membership (collection_id, item_id, rank, observed_at)
+           VALUES ('mdblist:14', 'm7', 3, '2026-10-01T00:00:00+00:00');",
+    );
+    let row = &list_table(&conn, None).expect("the table")[0];
+    assert_eq!((&row["entry_count"], &row["owned"]), (&json!(5), &json!(4)));
+    let detail = list_detail(&conn, URL).expect("detail").expect("a list");
+    let entries = detail["entries"].as_array().expect("entries");
+    assert_eq!(entries.len(), 5);
+    assert_eq!(entries[2]["title"], json!("Movie 3"));
+}
+
+#[test]
 fn a_list_detail_names_every_entry_and_the_keywords_the_list_over_represents() {
     let dir = tempfile::tempdir().expect("tempdir");
     let conn = store(dir.path());

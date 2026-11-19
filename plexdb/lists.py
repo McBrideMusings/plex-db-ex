@@ -37,16 +37,21 @@ MIN_KEYWORD_LIFT = 3.0
 #: The most keywords a list's detail names, strongest lift first.
 MAX_KEYWORDS = 20
 
+#: Joins, not correlated subqueries: `collection_membership` has no index on `rank`, so a
+#: per-entry subquery scans every member of the list once per entry.
+#: `MIN(item_id)` keeps the item a primary-key-order scan found first when two members
+#: share a rank.
 _RESOLVED = """
-WITH resolved AS (
+WITH ranked AS (
+    SELECT collection_id, rank, MIN(item_id) AS item_id FROM collection_membership
+    GROUP BY collection_id, rank
+),
+resolved AS (
     SELECT e.collection_id, e.rank, e.ns, e.value, e.kind, e.title, e.year,
-           COALESCE(
-               (SELECT x.item_id FROM external_ids x
-                 WHERE x.ns = e.ns AND x.value = e.value AND x.kind = e.kind),
-               (SELECT m.item_id FROM collection_membership m
-                 WHERE m.collection_id = e.collection_id AND m.rank = e.rank)
-           ) AS item_id
+           COALESCE(x.item_id, m.item_id) AS item_id
     FROM collection_entry e
+    LEFT JOIN external_ids x ON x.ns = e.ns AND x.value = e.value AND x.kind = e.kind
+    LEFT JOIN ranked m ON m.collection_id = e.collection_id AND m.rank = e.rank
 )
 """
 
