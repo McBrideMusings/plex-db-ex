@@ -224,10 +224,10 @@ A saved query with a chart and a recorded value; the Sweep records that value ea
 
 ## Relationships
 
-- A **Consumer** is a **Reader**, a **Writer**, or both.
+- A **Consumer** is never a **Reader** or a **Writer**: it calls the store API (ADR-0031).
 - **Layer 2** is derived from **Layer 1** plus watch history; it is never persisted.
-- The Store's SQLite schema is the interface between **Writer** and **Reader** — there is
-  no server, no IPC, and no language coupling.
+- The store API's routes and JSON shapes are the interface between the Store and every
+  **Consumer**; the tables behind them may change without a Consumer noticing (ADR-0031).
 
 ## Decisions so far
 
