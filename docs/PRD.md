@@ -128,8 +128,8 @@ one.** ([ADR-0004](./adr/0004-the-store-owns-watch-history))
 rating key and a `plex://` agent GUID — the weakest tier in the derivation order — so the
 external GUIDs an `item_id` is built from only exist where somebody has walked the library. The
 store does its own walk rather than reading a consumer's database, which is what lets each tool
-depend on Plex instead of on each other.
-([ADR-0005](./adr/0005-the-store-walks-plex-itself-and-augments-never-replaces))
+depend on its library instead of on each other.
+([ADR-0032](./adr/0032-a-store-extends-one-library-read-through-a-library-source))
 
 **Layer 2 has no schema.** The taste vector is computed by the Reader crate at request time and
 never persisted. Revisit only if profiling says otherwise.

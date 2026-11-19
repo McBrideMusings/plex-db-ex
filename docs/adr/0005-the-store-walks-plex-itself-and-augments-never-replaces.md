@@ -1,5 +1,7 @@
 # The store walks Plex itself, and augments Plex rather than replacing it
 
+Superseded by [ADR-0032](./0032-a-store-extends-one-library-read-through-a-library-source): the store walks the one library its library source names, Plex built in and any other through a Rhai source adapter.
+
 The store's only required dependency is a Plex server. It walks the library sections through
 the Plex API and writes its own `items` rows, `external_ids`, and a `plex_rating_key → item_id`
 map, so `plexdb.db` answers every question from one file without reaching into any consumer's

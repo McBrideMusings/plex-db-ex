@@ -476,7 +476,7 @@ recommending simply isn't in the new set. `rank` is the source's own ordering, s
 never collapsed to a boolean — so a #2 recommendation stays distinguishable from a #20.
 
 **Both `from_id` and `to_id` reference `items`.** `items` is populated only by `plexdb walk`
-([ADR-0005](./adr/0005-the-store-walks-plex-itself-and-augments-never-replaces)), so a
+([ADR-0032](./adr/0032-a-store-extends-one-library-read-through-a-library-source)), so a
 recommendation pointing at a title this library has never walked has no `item_id` to land on. Such
 a result is dropped and counted, never stored under an invented id
 ([ADR-0009](./adr/0009-an-edge-only-connects-two-items-this-store-already-knows)).
@@ -716,7 +716,7 @@ of its lists `dynamic`, meaning the source regenerates them, and appending to on
 accumulate every title that had ever passed through it.
 
 **Membership holds only titles this store already walked.** `item_id` references `items`, which
-`plexdb walk` alone populates (ADR-0005), so a list entry naming a title nobody walked has no
+`plexdb walk` alone populates (ADR-0032), so a list entry naming a title nobody walked has no
 membership row and is never stored under an invented id
 ([ADR-0009](./adr/0009-an-edge-only-connects-two-items-this-store-already-knows)). Measured on the
 author's library: 50 lists produced 11,896 memberships and left 15,237 entries outside the library.
@@ -1269,7 +1269,7 @@ person's until an `excluded` or `removed` decision ends it.
 did, and the reason. A fetch that succeeds deletes the row. It is bookkeeping, never a fact
 ([ADR-0013](./adr/0013-bookkeeping-never-shares-a-table-with-facts)), and it is not an
 `enrichment_cursor` row because that table is keyed by `items`, and a list is not an item
-([ADR-0023](./adr/0023-the-store-holds-facts-about-plex-library-items-and-declared-extras-and-nothing-else),
+([ADR-0032](./adr/0032-a-store-extends-one-library-read-through-a-library-source),
 [ADR-0028](./adr/0028-list-decisions-and-fetch-attempts-are-keyed-by-list-url)).
 
 **Refresh rule.** Only the Rust writer's `fold-list-decisions` step (`plexdb-rs`) writes `list_decision`, from

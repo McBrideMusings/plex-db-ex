@@ -1,5 +1,7 @@
 # The store owns watch history: Plex is the required source, Tautulli an optional adapter
 
+Superseded by [ADR-0032](./0032-a-store-extends-one-library-read-through-a-library-source) where it names Plex as the required source of plays: the store's library source supplies them, and Plex is the built-in one.
+
 The store ingests watch history itself, into a `plays` table keyed by `item_id`. Plex's own
 history is the required source and works alone. A pluggable history-source interface — the
 same seam the spec already specifies for per-user external taste sources — has a Tautulli

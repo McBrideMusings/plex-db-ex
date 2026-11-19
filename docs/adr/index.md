@@ -36,3 +36,4 @@ ADR wins; [the PRD](../PRD) already reflects them.
 | [0029](./0029-a-dashboard-panel-is-a-persons-saved-query-and-its-nightly-value-lives-beside-the-store) | A dashboard panel is a person's saved query, and its nightly value lives beside the store |
 | [0030](./0030-an-extras-library-is-a-declared-folder-the-writer-walks-and-a-person-organizes) | An extras library is a declared folder the writer walks and a person organizes |
 | [0031](./0031-readers-reach-the-store-only-through-the-http-api) | Readers reach the store only through the HTTP API |
+| [0032](./0032-a-store-extends-one-library-read-through-a-library-source) | A store extends one library, read through a library source |

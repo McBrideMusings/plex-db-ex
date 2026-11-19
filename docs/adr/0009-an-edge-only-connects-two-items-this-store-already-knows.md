@@ -10,7 +10,7 @@ stored in a form that bypasses the foreign key.
 TMDB's `/recommendations` and `/similar` endpoints return titles freely, with no notion of what a
 given Plex library owns. A real request against a title with 20 recommendations routinely returns
 several this library has never walked. `items` is populated exclusively by `plexdb walk`
-([ADR-0005](./0005-the-store-walks-plex-itself-and-augments-never-replaces)) — nothing else may
+([ADR-0032](./0032-a-store-extends-one-library-read-through-a-library-source)) — nothing else may
 insert a row there — so a recommended title with no walked counterpart has no `item_id` the schema
 recognises. Something has to give: enforce the foreign key and drop the edge, or represent the
 target some other way.

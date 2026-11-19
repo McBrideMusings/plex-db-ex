@@ -1,7 +1,8 @@
 # plex-db-ex
 
-A queryable metadata and affinity store layered over a Plex library, written by one
-process and read by several. Plex stays authoritative for library contents and playback.
+A queryable metadata and affinity store layered over one media library — Plex, or another
+library read through a Source adapter — written by one process and read by several. The
+library stays authoritative for its contents and playback.
 
 ## Language
 
@@ -85,8 +86,8 @@ One recorded watch event — a title, a Plex account, a client, a timestamp, and
 completion data the configured history source could supply.
 
 **History source**:
-An adapter supplying Plays. Plex is required and always present; Tautulli is optional and
-adds IP, completion percentage, and paused time.
+An adapter supplying Plays. The Library source is required and always present; Tautulli is
+optional and adds IP, completion percentage, and paused time to a Plex library's plays.
 
 **Fingerprint**:
 The tuple used to split a shared Plex account into latent users — client machine ID,
@@ -140,6 +141,29 @@ _Avoid_: inbox, pending, unsorted
 
 **Writer**:
 The single process permitted to write the Store.
+
+**Library source**:
+The one library a Store extends, read through the seam the Writer walks — Plex, built in and the
+default, or a Source adapter. The Store's only required dependency (ADR-0032).
+_Avoid_: backend, provider, Plex (for the general case)
+
+**Source adapter**:
+A Rhai script, loaded at runtime from a folder outside every checkout, that reads a non-Plex
+library and emits items, plays, signal types and signals through the host functions the Writer
+registers, and nothing else.
+_Avoid_: plugin, connector, scraper
+
+**Signal type**:
+A kind of explicit quality mark a Library source declares each walk: a label, what it is about
+(item, performer, studio or tag), whether it is an event, a scalar or a flag, its range and step,
+and how to draw it. Changing a type's scale makes a new type.
+_Avoid_: rating kind, metric
+
+**Signal**:
+One explicit quality mark a person gave — a star rating, a like, a favorite — recorded as a
+Signal type, a subject, an account, a value and a time. Kept apart from Plays; the Store never
+interprets its value (ADR-0012).
+_Avoid_: score, rating (for the general case), preference
 
 **Snapshot**:
 A consistent single-file copy of the Store, published by the Writer and opened read-only by
@@ -217,7 +241,7 @@ A saved query with a chart and a recorded value; the Sweep records that value ea
 - [ADR-0004](./adr/0004-the-store-owns-watch-history.md) — the Store owns watch history;
   Plex is the required source, Tautulli an optional adapter.
 - [ADR-0005](./adr/0005-the-store-walks-plex-itself-and-augments-never-replaces.md) — the
-  Store walks Plex itself and augments Plex rather than replacing it.
+  Store walks Plex itself and augments Plex rather than replacing it; superseded by ADR-0032.
 - [ADR-0006](./adr/0006-the-identity-fixture-is-the-published-spec-of-the-rule.md) — the
   identity fixture is the published specification of the derivation rule.
 - [ADR-0007](./adr/0007-readers-get-a-snapshot-not-the-live-store.md) — Readers get a
@@ -227,3 +251,6 @@ A saved query with a chart and a recorded value; the Sweep records that value ea
   records the new GUID alongside it.
 - [ADR-0031](./adr/0031-readers-reach-the-store-only-through-the-http-api.md) — Consumers
   reach the Store only through the explorer's HTTP API; its routes are the public interface.
+- [ADR-0032](./adr/0032-a-store-extends-one-library-read-through-a-library-source.md) — a
+  Store extends one library, read through its Library source: Plex built in, any other through
+  a Source adapter.
