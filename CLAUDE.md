@@ -13,9 +13,9 @@ spec.
 **The library source is the only required dependency.** A store extends one library, read
 through its library source: Plex, built in and the default, or a Rhai source adapter (ADR-0032).
 Everything else — Tautulli, TMDB, Trakt, MDBList, Reddit — is an optional source behind an
-adapter. Code that assumes Tautulli is present is a bug. A consumer
-talks to the library source directly for anything it can answer and reaches this store only for
-what it cannot carry.
+adapter. Code that assumes Tautulli is present is a bug (ADR-0004). A consumer talks to the
+library source directly for anything it can answer and reaches this store only for what it
+cannot carry.
 
 **One writer.** The `plexdb` writer is the only thing that writes `plexdb.db`. It is moving
 from the Python package to one Rust binary a sweep step at a time, and both take the same writer
